@@ -29,6 +29,7 @@ No application database, microphone, or external integration is involved.
 
 Add real TypeScript server, web, SDK, MCP, MySQL, Effect interruption/cleanup and browser checks with each corresponding implementation slice.
 Add Python only to an isolated client-SDK job when that client exists.
+Run deterministic performance smoke/correctness checks in normal CI; keep Rust comparisons and regression timing gates on a controlled benchmark host.
 Do not add permanently passing placeholders for missing components.
 The handoff validator deliberately permits new application directories; it still validates the planning and reference documents.
 Introduce application deployment only after a deployment target and its operational permissions are explicitly configured.

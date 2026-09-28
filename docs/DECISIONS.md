@@ -4,6 +4,7 @@
 
 - Use TypeScript + stable Effect v3 on Node.js for all application services and repository tooling; retain a thin Python client SDK.
 - Use one Node application image with API and worker entrypoints, browser WebSocket PCM ingest, MySQL-backed durable jobs, and the official TypeScript MCP SDK.
+- Target workload-specific Rust performance with optimized TypeScript; require matched benchmarks and report gaps without changing application language silently.
 - Build a fresh application; include no legacy application code.
 - Start with a website using microphone access on room computers and laptops.
 - No Electron/native application or mandatory system-audio capture.

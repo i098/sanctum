@@ -12,6 +12,8 @@ Agents do most reading and writing; the human interface stays fullscreen and min
 Use TypeScript on Node.js 24 LTS with stable Effect v3, React/Vite, MySQL, R2 and Pipedream.
 One Node application image serves API, MCP and authenticated WebSocket audio; a second entrypoint runs durable MySQL-backed jobs.
 Keep browser capture, playback cancellation and archive recovery explicit; Effect is orchestration, not a speech engine.
+Optimize TypeScript for the named workloads in plan section 04: typed binary buffers, bounded queues, minimal copying and Effect outside per-sample loops.
+Require reproducible latency/throughput/CPU/memory comparisons before claiming Rust-level performance; never weaken correctness to improve a score.
 Keep the promised Python SDK as a thin client only.
 Use npm and the checked lockfile; the application runtime has no Python service dependency.
 Keep only three integration gateways in model context: search, inspect one selected action, and request execution.

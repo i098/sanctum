@@ -11,6 +11,7 @@ Reference links are historical evidence and product context, not implementation 
 
 - TypeScript + stable Effect v3 on Node.js; npm lockfile; one application image for API and worker entrypoints.
 - Python belongs only to the promised client SDK; capture, server, workers and MCP use TypeScript.
+- Performance: follow plan section 04; keep hot audio loops plain TypeScript and publish matched benchmark evidence before claiming Rust parity.
 - Website first: browser microphone permission, no installed application requirement.
 - The capture tab must stay open; do not claim recording after browser closure or OS sleep.
 - Fullscreen listening view with the approved irregular waveform; no permanent dashboard/sidebar.

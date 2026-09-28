@@ -10,6 +10,7 @@ These checks are a proposed suite to implement, not tests already present in the
 
 - [ ] Create the React/Vite and TypeScript + Effect service structure described in the plan; do not copy the old repository.
 - [ ] Add dependency manifests, local development commands, and synthetic fixtures.
+- [ ] Define performance workload/configuration and benchmark result format, including named reference hardware and CPU/RAM limits; keep missing measurements explicitly unverified.
 - [ ] Add a local application check entrypoint with external side effects disabled in tests; retain existing documentation checks.
 - [ ] Pin stable Effect v3 and compatible peers; use scoped concrete layers and test cleanup/cancellation before building dependent flows.
 
@@ -41,7 +42,7 @@ Depends on: T02.
 
 - [ ] Generate/store versioned profile embeddings in MySQL with model/dimension metadata.
 - [ ] Implement scoped batched exact cosine ranking and appropriate result verification.
-- [ ] Benchmark O(N × dimensions) latency and memory against a stated directory-size target.
+- [ ] Benchmark O(N × dimensions) latency, memory and event-loop impact against a stated directory-size target; compare with the same Rust algorithm/precision before claiming parity.
 
 Files: `server/src/matcher.ts`, matching schema migration, TypeScript provider configuration, `server/tests/semantic-matching.test.ts`, `scripts/benchmark-matching.ts`.
 Verify: labeled ranking fixtures, invalid vectors, model/dimension mismatch, tenant isolation, and scale measurements.
@@ -80,7 +81,7 @@ Depends on: T01, T05.
 - [ ] Distinguish buffered data from R2-confirmed data and expose eviction/quota failures honestly.
 
 Files: `web-app/src/lib/capture/recorder.ts`, `web-app/src/lib/capture/recording-worklet.ts`, `web-app/src/lib/capture/buffer.ts`, `web-app/tests/capture-buffer.test.ts`.
-Verify: sample-count fixture, reload recovery, storage denied/cleared/full, no cleanup of unacknowledged chunks.
+Verify: sample-count fixture, reload recovery, storage denied/cleared/full, no cleanup of unacknowledged chunks, bounded allocations and no buffer reuse before consumer completion.
 Depends on: T06.
 
 ## T08. Register listeners and recoverable source manifests
@@ -286,9 +287,11 @@ Depends on: T24.
 
 - [ ] Run all local behavior, contract, SDK and browser, migration, and failure-recovery checks.
 - [ ] Run approved model/audio comparison and stage a 24-hour soak before claiming live 24/7 verification.
+- [ ] Implement the section 04 matched Rust/TypeScript benchmark harness, publish per-workload results and source/fixture hashes, and verify saturation, tail latency, CPU/RSS and long-run memory bounds.
+- [ ] Add deterministic performance smoke checks to CI; keep noisy comparative gates on a controlled benchmark host.
 - [ ] Report implemented/tested/web-built/migrated/deployed/live-verified separately with evidence and remaining blockers.
 
-Files: `scripts/check-app.ts`, `scripts/replay-capture.ts`, `server/tests/fixtures/day.json`, `docs/operations.md`, `docs/release-evidence.md`.
+Files: `scripts/check-app.ts`, `scripts/replay-capture.ts`, `server/tests/fixtures/day.json`, `scripts/benchmark.ts`, `benchmarks/`, `docs/operations.md`, `docs/release-evidence.md`.
 Verify: every acceptance row in the plan has a pass, failure, or explicit unrun reason; no unexplained skipped work.
 Depends on: T25.
 

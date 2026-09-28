@@ -150,6 +150,45 @@ Use only JSON-representable wire types; domain-only transforms stay behind the w
 Adapt MCP SDK validation requirements at its boundary and test JSON Schema equivalence; do not maintain a second independently edited business schema.
 The SDK's required Zod boundary dependency is acceptable; it must not become a second domain model.
 
+### Performance contract: optimized TypeScript, measured against Rust
+
+Treat workload-specific Rust parity as an engineering target, not a property supplied by TypeScript or Effect.
+Preserve an all-TypeScript application; benchmark-only Rust reference code is not an application dependency.
+Do not add native extensions, a Rust service or WebAssembly to make a failed TypeScript comparison disappear without an explicit architecture decision.
+
+Keep the data path small:
+
+- Decode PCM with Buffer, Uint8Array, Int16Array and DataView; keep binary payloads binary instead of base64 or JSON arrays.
+- Reuse bounded buffers where profiling shows allocation pressure; define ownership and lifetime before sharing views or transferring ArrayBuffers.
+- Never overwrite a buffer while an asynchronous socket, recording writer or worker still owns its bytes; account for detached buffers after transfer.
+- Validate every untrusted frame's header, byte length, source range and authorization, then pass the decoded representation without repeating expensive full-schema transforms at each internal call.
+- Put Effect around sessions, batches, provider requests and durable jobs; keep sample loops and waveform drawing as plain typed-array code, without per-sample fibers, effects or schema objects.
+- Keep AudioWorklet callbacks free of logging, network calls, database work and unbounded allocation; move formatting and asynchronous work outside the audio callback.
+- Keep waveform samples outside React state and update Canvas through requestAnimationFrame; React receives low-rate semantic state changes only.
+- Bound every queue, cache, pool and batch by bytes/items and define overload behavior; never trade silent audio loss or false archive acknowledgements for benchmark speed.
+- Use streaming I/O and scoped database queries; inspect query plans, avoid N+1 reads and avoid repeatedly serializing full transcripts or copying whole recordings.
+- Keep CPU-heavy ranking/resampling/assembly away from live ingest; introduce a fixed-size worker-thread pool only when profiles justify it, never a new worker per frame or request.
+- Preserve numeric precision, tenant isolation, cancellation, source fidelity and action idempotency while optimizing.
+
+Benchmark the application before claiming parity:
+
+1. Commit deterministic synthetic fixtures and a machine-readable workload manifest: hardware, OS, Node/V8 and Rust/compiler versions, release flags, CPU/RAM limits, frame format/rate, payload sizes, dataset size, concurrency, cache state and durability semantics.
+2. Exercise the same work in both implementations: PCM decode/validation/dispatch, transcript ingest, scoped context reads/writes, archive streaming, and exact cosine ranking with the same algorithm and numeric precision.
+3. Compare the actual Effect service path with a competent Rust release build, including equivalent auth, validation, queue bounds, database operations and completion semantics; do not compare a full service against an echo handler.
+4. Use deterministic provider stubs to isolate application overhead; run separate live-provider tests and report provider latency separately so network waits cannot hide a slow runtime.
+5. Measure cold start and steady state separately, warm V8 before steady-state sampling, repeat runs, and record throughput, p50/p95/p99 latency, error rate, dropped samples, CPU, RSS, heap/external-buffer memory, GC time and event-loop delay.
+6. Sweep offered load through saturation and test slow consumers and reconnect storms; measure from scheduled arrival time so stalled clients cannot hide tail latency by sending less work.
+7. Proposed starting parity tolerance: at least 90% of Rust throughput and no more than 110% of Rust p95/p99 latency at the same offered load, with identical correctness/error criteria and declared CPU/RAM limits.
+8. Report each workload separately, including CPU/RSS ratios and statistical variation; do not call the whole application Rust-equivalent because one I/O test is close.
+9. Commit baseline results, fixture hashes and reproduction commands; investigate regressions from profiles, make the smallest justified change, then rerun correctness and performance checks.
+
+The 10% tolerance is a proposed initial engineering gate, not measured performance or a universal Rust-equivalence threshold.
+Capacity and absolute latency/memory budgets must name their reference hardware and workload in the benchmark manifest before results can pass; missing configuration is an explicit unrun gate.
+Use Node perf_hooks and CPU/heap profiles for diagnosis; Effect concurrency does not move synchronous CPU work to another thread.
+During the 24-hour soak, queue depth and retained memory must remain within configured bounds and return toward baseline after work drains.
+Run deterministic benchmark correctness/smoke checks in ordinary CI; use a controlled machine for comparative performance gates because shared hosted-runner timings vary.
+No benchmark result exists in this handoff; parity remains unverified until the application and matched reference run.
+
 ### Browser listener
 
 Create the React/Vite website and browser `navigator.mediaDevices.getUserMedia` microphone access.
@@ -801,6 +840,7 @@ Do not add agent co-author attribution to commits.
 | Agent writes | Two clients read the same revision; both submit updates; stale write gets 409, provenance persists, idempotent retry does not duplicate data. |
 | Actions | Expired/revoked/mismatched grants block execution. Ambiguous timeouts become unknown. Matching receipts prevent duplicate sends/bookings. |
 | UI | Fullscreen waveform matches the accepted design; no permanent dashboard. Test keyboard/focus, small laptop, reduced motion, reconnect, upload backlog, errors, and source-linked playback. |
+| Performance | Matched Rust/TypeScript workload reports, declared hardware/budgets, CPU/RSS and tail latency, saturation/recovery, no loss of correctness; parity is unverified without evidence. |
 | Effect lifecycle | Cancel provider calls, interrupt sockets, exhaust pools, crash workers and use a test clock for leases/retries; no leaked fibers, sockets or connections, and accepted jobs remain recoverable. |
 | SDK/MCP | Run both SDK examples and real MCP discovery/read/write/conflict/revoke flows with separate principals. Schemas and errors match the shared API. |
 | Compatibility | Notes, exports, matching, meeting links, and requested speech remain available under the new access model. |
@@ -839,6 +879,9 @@ Python paths in these historical source URLs describe the reference system only.
 - [Browser microphone access](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
 - [Screen Wake Lock](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API)
 - [Browser storage persistence](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist)
+- [Node.js worker threads](https://nodejs.org/docs/latest-v24.x/api/worker_threads.html)
+- [Node.js performance hooks](https://nodejs.org/docs/latest-v24.x/api/perf_hooks.html)
+- [Node.js event-loop guidance](https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop)
 - [Node.js TypeScript execution](https://nodejs.org/docs/latest-v24.x/api/typescript.html)
 - [Effect v3 HTTP contracts](https://effect.website/docs/v3/api/platform/HttpApi)
 - [Effect MySQL adapter](https://effect.website/docs/v3/api/sql-mysql2/MysqlClient)

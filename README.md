@@ -75,6 +75,7 @@ Give your coding agent this instruction:
 
 One Node.js image runs separate API and worker processes; MySQL stores durable jobs.
 Python is only a client SDK option, not a server dependency.
+Performance target: optimized TypeScript with workload-specific Rust comparisons; no parity result is claimed before implementation and measurement.
 Model and speaker-attribution choices remain evaluation-gated; provider claims are not application benchmarks.
 The full selection is in [plan section 04](tasks/plan.md#04-chosen-technology-stack-and-runtime).
 
