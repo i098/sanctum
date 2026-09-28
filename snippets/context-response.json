@@ -1,0 +1,21 @@
+{
+  "meeting_id": "meeting-uuid",
+  "revision": 42,
+  "as_of": "2026-09-26T17:24:00Z",
+  "timezone": "America/Los_Angeles",
+  "source_watermark": {"epoch_id": "epoch-uuid", "sample_end": 23040000},
+  "items": [
+    {
+      "id": "context-item-uuid",
+      "revision": 1,
+      "kind": "decision",
+      "text": "Keep pilot access limited to the current test group.",
+      "state": "committed",
+      "event_at": "2026-09-26T17:08:16Z",
+      "author": {"type": "system", "id": "extractor-principal"},
+      "sources": [{"segment_id": "segment-uuid", "start_ms": 496000, "end_ms": 501000}]
+    }
+  ],
+  "changes_cursor": "opaque-cursor",
+  "truncated": false
+}

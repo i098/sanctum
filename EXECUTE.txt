@@ -1,0 +1,1133 @@
+# Build Sanctum from this handoff
+
+Implement a new application in `undeemed/sanctum` using tasks/plan.md and tasks/todo.md.
+This repository intentionally contains no old application code.
+Do not fetch or copy the old source as a shortcut.
+Recreate the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.
+
+Deliver a website-first ambient listener for room computers and laptops.
+It remains silent until requested, automatically separates meetings, saves complete transcripts and private R2 recordings, builds time-aware selective memory, performs research and previously authorized Pipedream actions, and exposes shared context through TypeScript/Python SDKs and authenticated remote MCP.
+Agents do most reading and writing; the human interface stays fullscreen and minimal.
+
+Use the selected MySQL/React/FastAPI/Pipecat/R2/Pipedream stack.
+Keep only three integration gateways in model context: search, inspect one selected action, and request execution.
+Implement actual behavior and tests, not only the illustrative interface.
+
+Read docs/DECISIONS.md before dependent work.
+Website capture, MySQL, R2, silent behavior, automatic meeting boundaries, and the visual direction are settled.
+The sign-in provider and recording policies have not yet been selected.
+Do not silently invent these policies; complete independent implementation and fixtures while they remain open.
+No prior data import or legacy API compatibility is required unless separately requested.
+
+Work through the checklist in vertical slices with internal verification checkpoints.
+Resolve ordinary code decisions autonomously within this contract.
+Preserve source timing, tenant isolation, evidence provenance, revisions, and idempotent receipts.
+Never send real integration writes during test replay.
+
+The old source was reviewed at `42nights/sanctum@49aef4a49fa5facc485d5858690860fd028491d7`; this is provenance only.
+Provider research was collected in September 2026 and must be verified against current official docs before dependency/model selection.
+Do not claim unrun model benchmarks, real delivery, or production uptime from local mocks.
+
+Run the handoff validator before and after modifying planning files.
+Replace planning examples with complete, runnable SDK examples when implementation exists.
+Finish with explicit implemented/tested/web-built/deployed/live-verified states and supporting evidence.
+Production recording, migrations, paid provisioning, outbound actions, package publication, and deployment need their own authorization.
+
+
+---
+
+# Sanctum: clean-build implementation contract
+
+Prepared 2026-09-26; repackaged for a clean build on 2026-09-28.
+Reference system: `42nights/sanctum` at `49aef4a49fa5facc485d5858690860fd028491d7`.
+Target repository: `undeemed/sanctum`.
+Build from an empty application tree; do not clone, copy, vendor, or import the old application source.
+Old file paths below are historical evidence only, never instructions to copy files.
+The binding visual contract is `docs/DESIGN.md` with the independently authored references in `design/`.
+This is an implementation handoff, not implemented or deployed software.
+The approved visual direction is described in `docs/DESIGN.md` and illustrated by independently authored design references.
+
+## 01. Deliverable and fixed decisions
+
+Deliver one integrated clean build: a silent ambient listener, isolated automatic meetings, complete recording/transcript evidence, selective time-aware context, authorized background work, and shared agent access.
+Build a website first, using browser microphone access on room computers and laptops.
+Both use the same account, meeting identifiers, API, context model, and current WebRTC capture path.
+Opening or closing a review overlay must not stop capture; closing the browser tab stops microphone capture.
+No installed application, Electron shell, browser extension, or native capture component is in this version.
+A sleeping or powered-off device cannot record; display and store a capture gap rather than claiming otherwise.
+
+Preserve the existing fluctuating blue-white waveform, with roughly 33 irregular needle regions, asymmetric underside, ink bleed, and soft glow.
+Keep the primary screen fullscreen with sparse edge controls; meetings and agent settings are secondary overlays.
+Agents do most context reading and writing through SDK/MCP.
+Retain research, requested speech, matching, Pipedream integrations, notes, export, and post-meeting work.
+Residency and batch concepts are not part of the primary information model.
+
+Confirmed behavior:
+
+- Capture is silent until a direct request opens a spoken-response window.
+- Research and previously authorized actions may run without speaking.
+- Detect meeting boundaries automatically; allow manual split and merge.
+- Keep complete meeting transcripts and audio recordings in private R2 storage.
+- Memory selection never deletes the source transcript or recording.
+- Date, time, timezone, speaker attribution, provenance, and access scope are part of context.
+- People and external agents share one authoritative context store.
+
+The implementation must include actual backend behavior, working browser capture, a working UI, SDKs, MCP, migrations, and meaningful tests.
+A mock dashboard or an API-shaped stub does not satisfy this contract.
+
+## 02. Decisions and activation requirements
+
+### Confirmed
+
+- Capture surface: website microphone access on both room computers and laptops; keep the listener tab open.
+- Default UI: fullscreen listening, preserving the current waveform.
+- Storage: MySQL 8.4 LTS with InnoDB for structured data; Cloudflare R2 for audio.
+- MySQL is the only runtime structured store. Legacy data import is outside this first clean build unless separately requested.
+- Integrations: Pipedream with catalog discovery and the specified Google operations.
+- Interaction: silent background operation; speak only in a requested interaction.
+
+### Still to choose
+
+- Browser microphone input is the initial scope; system-audio capture and native background behavior are not required.
+- Identity issuer: proposed default is Google OIDC for human login, separate from Pipedream action credentials; allow deployment to supply its existing issuer instead.
+- Saved meeting retention: how long confirmed recordings and transcripts are kept before automatic deletion; no automatic expiry has been authorized.
+- Unassigned audio buffer: how long to hold captured speech before it has been assigned to a meeting, if the policy archives detected meetings only. This is separate from the offline upload recovery queue.
+- Speech outside a detected meeting: requires an explicit archive policy before unattended production capture is enabled.
+
+Do not invent these answers while implementing.
+Complete independent work and keep dependent integration clearly marked until the answer exists.
+For local tests, use fixture identities, a disposable database, synthetic audio, and a local object-store fake.
+For production activation, require explicit workspace timezone, selected microphone, storage credentials, outside-meeting policy, and a working identity issuer.
+Do not automatically create paid services, publish packages, run production migrations, or activate recording merely by executing this brief.
+
+### Recommended engineering defaults — proposals, not measured optima
+
+- Archive independent 30-second PCM16 WAV chunks from the microphone using the actual capture sample rate; resample only through a verified conversion.
+- Commit browser recovery data to IndexedDB about every 2 seconds; distinguish browser-buffered data from R2-confirmed data.
+- Bound the browser recovery buffer by available quota and an application cap; on exhaustion, visibly pause capture rather than silently discard unuploaded data.
+- Device heartbeat every 15 seconds; ownership lease expires after 45 seconds.
+- One coalesced context job per active meeting, after 25 seconds with new speech or four new turns.
+- A five-minute speech gap can trigger boundary evaluation; it does not itself establish that a meeting ended.
+- Signed playback URLs expire after five minutes; new URLs require a fresh access check.
+- Completed recordings/transcripts have no automatic expiration until a retention policy is selected.
+
+These values are acceptance-test inputs and calibration starting points.
+Keep them in a small configuration object, not scattered literals or a large user-facing settings system.
+
+## 03. Clean-build boundary
+
+This repository intentionally contains no legacy application code.
+The earlier system informed the product requirements, but its architecture is not a foundation to reproduce.
+Use the selected stack and recreate the approved visual behavior independently.
+
+Keep the useful behaviors: silent capture, requested speech, complete sources, selective memory, research, matching, and permitted integration actions.
+Replace demo-specific concepts with scoped team meetings.
+Avoid the old failure modes: global room state, connection-owned background jobs, repeated full transcripts in prompts, capture saved only at session end, and automatic spoken status updates.
+
+Do not add a Postgres driver, pgvector, old residency data, old prompts/persona files, old credentials, or old API compatibility routes.
+Use synthetic fixtures rather than copying private seed recordings, contacts, or transcripts.
+Importing historical data is a separate optional migration project, not an initial acceptance gate.
+
+## 04. Chosen technology stack and runtime
+
+### Technology selection
+
+Use this stack for the website-first implementation.
+Implement the chosen technologies from scratch; add a library only for a requested capability.
+Pin exact compatible versions during implementation rather than copying unverified version numbers into a new lockfile.
+
+| Layer | Chosen technology | Purpose and status |
+| --- | --- | --- |
+| Website | React + TypeScript + Vite + Tailwind CSS | New frontend; follow the design tokens and approved fullscreen listening contract. |
+| Waveform | Canvas 2D + Web Audio API | Recreate the specified irregular waveform and connect it to the real microphone analyser. |
+| Microphone | Browser `getUserMedia` | HTTPS microphone permission; no installed application. |
+| Live media | WebRTC + Pipecat SmallWebRTC | New low-latency media pipeline with scoped identity and reconnect behavior. |
+| Recording buffer | AudioWorklet + independent PCM16 WAV chunks + IndexedDB | Bounded browser recovery queue; only R2 acknowledgement means remote durability. |
+| API | Python 3.12 + FastAPI + Pydantic | Shared validated API/domain logic for website, SDKs, MCP, and workers. |
+| Database | MySQL 8.4 LTS + InnoDB | Authoritative meetings, sources, context revisions, memberships, grants, receipts, and jobs. |
+| Python database driver | MySQL Connector/Python with its built-in connection pool | Use dictionary cursors, connection pooling, and explicit transaction boundaries. |
+| Retrieval | MySQL FULLTEXT plus exact batched cosine ranking with NumPy for semantic matching | Implement semantic matching using embeddings stored in MySQL; no pgvector dependency or new vector service in the baseline. |
+| Recording archive | Cloudflare R2 through its S3 API; boto3 server-side | Private audio objects, manifests, and signed playback access. |
+| Background processing | Python worker + MySQL InnoDB job/lease table | Durable work and retries without a separate queue product. |
+| Fast LLM | Cerebras `qwen-3.8-27b` | Target for requested voice and structured notes/memory; evaluate quality before switching production defaults. |
+| Planner and research | Anthropic client with an explicitly configured model | Implement hosted web search and tool continuations through the official API. |
+| Transcription | Deepgram Nova-3 streaming through Pipecat | Explicit model target; verify language/input requirements in the replay suite. |
+| Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 as evaluated upgrade targets | Live speaker labels and optional recording correction; enrollment/user confirmation maps labels to names. |
+| Speech output | Cartesia Sonic-3 | Requested speech output, strictly gated by a direct request. Google voice cloning is not required. |
+| External integrations | Pipedream Connect + Proxy/component actions | Account handling, relevant tool discovery, and authorized execution across its catalog. |
+| Human authentication | OIDC through Authlib; Google OIDC proposed as the default issuer | Separate login from Pipedream action credentials; actual issuer configuration remains an activation choice. |
+| Remote agent access | Python FastMCP mounted with FastAPI | Explicit MCP tools over the same domain functions and authorization checks. |
+| SDKs | TypeScript with native fetch; Python with HTTPX | Thin typed clients generated from the shared OpenAPI contract, plus ergonomic helpers. |
+| Tests | Python unittest; Vitest for web logic; Playwright for browser flows | Focus on isolation, audio recovery, silence, source alignment, and actual user/agent behavior. |
+| Hosting | Docker Compose + Caddy | Build the website into the API image and run the worker from the same codebase. |
+
+Auth issuer and model-quality gates are explicit configuration/validation decisions, not reasons to replace the selected architecture.
+
+
+### Browser listener
+
+Create the React/Vite website and browser `navigator.mediaDevices.getUserMedia` microphone access.
+Production microphone access requires HTTPS and user permission; localhost is suitable for development.
+The room computer and laptop open the same URL, choose an authorized workspace and microphone, and start listening.
+No installed app or installation step is needed.
+
+Keep the capture controller above the review-overlay/router lifecycle so opening Notes, Agents, or Settings does not recreate the microphone stream.
+Use one browser WebRTC/Pipecat media path.
+Use Web Audio for the recreated waveform and a bounded recording tap, with IndexedDB for pending-upload recovery data.
+Keep credentials in a secure browser session; provider/R2/Pipedream secrets remain server-side.
+
+The capture tab must stay open and the device must remain awake for continuous microphone capture.
+A hidden tab may continue recording when the browser permits it, but browser suspension, discard, process exit, or OS sleep can interrupt it.
+Do not promise native-style background recording or capture after tab close.
+Service workers are not a substitute for a live microphone document.
+Offer Screen Wake Lock where supported during active visible capture, handle rejection/release, and re-request when visible again if the user still wants it.
+Wake Lock does not override lid closure, user sleep, or every browser/OS policy.
+
+### Cloud API image
+
+FastAPI serves `/api/v1`, the web review UI, and an explicitly defined MCP adapter.
+The same image has a worker entrypoint for context generation, final notes, R2 assembly, batch diarization, memory distillation, and authorized actions.
+Run the worker as a separate process/container using the same code and MySQL-backed job table.
+Already accepted background jobs continue if the browser closes.
+Do not add Redis, Kafka, Temporal, a separate vector database, or an agent framework for this revamp.
+MySQL is the only structured production database.
+
+### Cloud media image
+
+Implement Pipecat, Deepgram, Cartesia, and authenticated WebRTC signaling/media.
+Design offer/session setup with authorized listener, capture-epoch, and source-clock metadata.
+A WebRTC connection ID remains a transport identifier, never the meeting identity.
+Add reconnect and timestamp mapping around this path; keep this the only live media transport in the website version.
+Business work is dispatched durably through the API instead of being owned by the media connection.
+
+### Storage
+
+MySQL owns identity scope, meetings, transcript/source pointers, selected context, jobs, integration accounts, grants, and receipts.
+R2 owns private audio objects and assembled per-meeting playback files.
+Development/test uses an isolated MySQL 8.4 container with a dedicated volume; production connects to the chosen MySQL host.
+Define backups and recovery before cutover; adding a MySQL target does not authorize provisioning a paid service.
+IndexedDB holds pending browser uploads and recovery metadata, subject to browser quota and eviction policy.
+Only acknowledged R2 objects with manifest records count as remotely saved recordings.
+Pipedream owns external app credentials and supported integration execution.
+
+## 05. Browser capture, handoff, and recovery
+
+### Listener identities and ownership
+
+Register a browser listener under an authenticated workspace and principal.
+Persist a listener/device identifier in origin storage, while accepting that browser storage can be cleared.
+A capture epoch identifies one continuous sample clock; network reconnect alone does not need to create another epoch.
+A page reload, device change, or stopped/recreated microphone stream creates a new epoch and records its gap/transition.
+Record source track, sample rate, sample offset, captured-at UTC, local timezone, and server-received-at separately.
+Derive elapsed time from monotonic/sample clocks, not wall-clock subtraction.
+
+Prevent accidental duplicate recording by tabs in the same browser using browser coordination where supported plus an authoritative server lease.
+Use capture-group leases only when room and laptop listeners intentionally represent the same meeting.
+Bind a group through an explicit room assignment, approved calendar identity, or meeting join operation.
+Do not merge different meetings merely because they overlap in time, mention the same company, or sound similar.
+A configured room listener can be preferred; an already open, permissioned laptop listener can take over when its ownership policy allows it.
+The server cannot remotely activate a closed tab or bypass the browser microphone permission flow.
+Use an incrementing ownership generation to reject stale live-state writes after handoff.
+Retain overlapping evidence for reconciliation and avoid issuing duplicate actions.
+
+### Live path
+
+The user starts listening through an explicit control, then grants microphone permission if needed.
+Handle permission pending/denied, no matching input, hardware errors, and unsupported constraints separately.
+Connect the same microphone stream to the WebRTC transport, waveform analyser, and recording tap.
+Offer metadata carries the listener, epoch, track identity, sample-rate/time anchor, and ownership generation.
+The media service maps ASR offsets to the capture epoch; test alignment and clock drift against known audio fixtures.
+Use source timestamps/sample ranges as durable identities rather than append time or a WebRTC peer ID.
+
+Persist final transcript segments and source watermarks continuously.
+Partial ASR text can appear visually but is not a committed fact and must not trigger irreversible actions.
+Requested speech still uses the audio output path through the request-only speech gate.
+
+### Browser recovery buffer
+
+Use an AudioWorklet/recording tap to produce PCM and independent WAV archive chunks; record the actual sample rate and implement any required conversion explicitly.
+Commit pending chunk/journal records to IndexedDB in bounded transactions instead of retaining an entire meeting in JavaScript memory.
+Use `navigator.storage.estimate()` to monitor available capacity and optionally request persistent storage with `navigator.storage.persist()`.
+A request for persistence can be denied; quota, clearing, and browser eviction remain real failure modes.
+Do not describe an IndexedDB commit as a guaranteed filesystem fsync or promise zero data loss after browser/OS failure.
+
+Upload chunks while the page remains active through the authenticated backend upload endpoint.
+Validate listener ownership, range, size, and hash before writing to R2.
+Provider credentials never enter browser code.
+A repeated chunk ID with the same hash returns the original receipt; a different hash returns a conflict.
+Remote acknowledgement requires both the R2 object and the database manifest.
+If R2 succeeded and the database write failed, a retry reconciles the object and completes its manifest.
+Remove a browser-buffered chunk only after the remote receipt is stored locally.
+
+When the page reloads, recover pending records if browser storage is still available and the user can authenticate to their owning workspace.
+Never upload another signed-in user's pending data under a new account merely because the browser is shared.
+If storage is missing, full, or inaccessible, expose the missing/pending range and pause or degrade honestly.
+Keep states distinct: capturing, buffered locally, uploading, saved remotely, interrupted, and missing.
+
+### Offline and transcript reconciliation
+
+While the page remains active, capture offline into the bounded recovery buffer.
+Once quota is exhausted, stop visibly rather than erase earlier unuploaded audio.
+After reconnect, upload pending chunks and batch-transcribe ranges without final live transcription.
+Reconcile epoch/track/sample ranges to avoid duplicate text when live ASR later returns.
+Do not replay archived audio through room speakers or rerun completed external actions.
+
+### Input scope and audio validity
+
+The initial website version captures the selected microphone only.
+Do not add mandatory screen sharing or claim access to all laptop/system audio through microphone permission.
+If system audio becomes a later requirement, design it as a separate explicit browser-supported capture flow.
+Keep Sanctum's generated speech timing distinguishable so echo cannot become a new human request.
+Use independent valid WAV files initially; arbitrary MediaRecorder WebM fragments cannot be assumed to concatenate into a valid recording.
+
+### Pause, close, sleep, and resume
+
+Pause stops microphone tracks after checkpointing available buffered data; resume reacquires permission/stream as needed and creates a fresh epoch.
+Closing a review overlay leaves capture running.
+Closing the tab/browser stops capture; do not rely on `beforeunload` or `sendBeacon` to save the final large audio buffer.
+Use continuous commits/uploads and server heartbeats so the last confirmed range is already known.
+The server marks a disconnected listener interrupted after its lease expires, while accepted jobs continue.
+On visibility return or reconnection, inspect the actual track/connection state, recover pending uploads, and show an explicit resume control when capture must restart.
+Record sleep/discard gaps instead of treating the whole elapsed interval as recorded audio.
+
+## 06. Meeting state and boundary correction
+
+Maintain separate listener, meeting, processing, and action state.
+Listener states: stopped, starting, listening, reconnecting, paused, degraded.
+Meeting states: provisional, active, closing, closed, interrupted.
+Processing state tracks transcript coverage, notes readiness, memory commit, and recording completeness independently.
+
+Start a provisional conversation after coherent speech appears.
+Promote it to an active meeting when continued speech or explicit context establishes a conversation.
+Use a small boundary decision schema: continue, start, close, or split; include source ranges, evidence, reason, and uncertainty.
+Available signals include conversation gaps, explicit starts/ends, speaker changes, calendar hints when authorized, and topic continuity.
+A topic change or a silence timeout alone does not justify a hard boundary.
+Keep low-confidence boundaries provisional and expose a correction control in Review.
+
+A close operation first seals the meeting's source range and persists its terminal capture watermark.
+It then schedules final transcription reconciliation, notes, diarization refinement, and memory commit.
+The listener stays active and can open the next meeting while previous jobs finish.
+Closing never queues a spoken sign-off.
+
+Split/merge is a transactional source-range reassignment with a boundary revision and audit event.
+Use half-open source intervals so a sample/word has one canonical meeting owner for a revision.
+Rebuild derived summaries and invalidate context snapshots after a correction.
+Do not delete original sources or replay prior side effects.
+Preserve action IDs and original receipts; link them to revised meeting context without claiming they executed again.
+Meetings with incompatible permissions cannot merge unless an authorized user first resolves access explicitly.
+Prevent old recording URLs from exposing audio outside the revised boundary: assembled files are revisioned, and new URLs reference the current allowed cut.
+Existing signed URLs remain usable until expiry, which is why their lifetime is short.
+
+## 07. Proposed data model
+
+Use UUIDs for public identifiers and enforce workspace ownership on every reference.
+Use `DATETIME(6)` in UTC for new wall-clock fields, store IANA timezone separately, and retain integer sample offsets for audio ranges.
+Set every database connection to UTC and normalize Python timestamps at the boundary; MySQL DATETIME does not store a timezone.
+Use native `JSON` for typed payloads, not as a substitute for ownership columns or uniqueness constraints.
+Use explicit case-sensitive/binary collation for identifiers and idempotency keys; choose and test text-search collation separately.
+Use `utf8mb4` for human text, bounded indexed identifier columns, and matching column types for composite ownership foreign keys.
+Every owned table includes `workspace_id`; cross-table references must enforce matching workspace ownership.
+
+| Table or change | Required fields and invariants |
+| --- | --- |
+| `workspaces` | ID, name, IANA timezone, context event counter, permission revision, configured capture/retention policy. |
+| `principals` + `workspace_members` | Human/agent/device principal; verified issuer/subject or credential identity; explicit workspace membership and role. Never infer membership from an email domain. |
+| `meetings` | Workspace, listener/group, lifecycle state, title, start/end UTC, boundary revision, source coverage, notes JSON/revision, processing state. Use a meeting-native schema. |
+| `meeting_access` | Session/principal or approved workspace-visible scope; restrictive default for migrated unknown ownership. |
+| `listeners` | Device identity, mode, selected sources, heartbeat, lease owner/generation, current capture epoch, browser capabilities, health. |
+| `recording_chunks` | Epoch/track/sequence, sample start/count/rate, UTC anchor, byte length, SHA-256, R2 object key, upload state. Unique source identity; hash conflicts return 409. |
+| `meeting_ranges` | Meeting/source intervals plus boundary revision; used for split/merge and safe audio assembly. |
+| `transcript_segments` | Immutable source range, text, speaker track, ASR provenance, partial/final status, transcription revision. Corrections create revisions rather than erasing evidence. |
+| `speaker_tracks` | Provider stream/label, source ranges, optional verified person mapping, attribution revision and confidence when supplied. Label IDs never imply identity across stream restarts. |
+| `voice_enrollments` | Optional explicit enrollment, principal/workspace scope, provider reference, consent/version/revocation metadata. Never expose voiceprints through ordinary context reads. |
+| `profile_embeddings` | Workspace/profile/kind, embedding model, dimension, normalized float32 bytes, source revision. Support needs/offers matching; reject zero/invalid/mismatched vectors. |
+| `context_items` | Stable item ID, immutable revision, kind, content, source refs, event/validity times, author, scope, provisional/committed/superseded state, supersedes pointer. Unique item/revision. |
+| `context_events` | Workspace sequence, meeting/item IDs, change kind, actor, source revision, permission revision, timestamp. Written atomically with the context change. |
+| `agent_credentials` | Credential hash, owner, allowed workspaces/meetings/scopes, expiry, revocation, last use. Plain tokens returned once, never stored or logged. |
+| `integration_accounts` | Stable owner identity, Pipedream external user/account IDs, app slug, workspace, status, owner and workspace mapping. |
+| `action_grants` | Grant owner, action/app/account scope, exact resource/recipient restrictions, expiry/revocation, version. A prompt cannot create a grant. |
+| `actions` | Canonical action ID, meeting/workspace, request idempotency key, normalized args hash, grant/version, execution state, provider receipt, attempt metadata, reconciliation state. |
+| `jobs` | Kind, ownership/source revision, unique work key, status, available-at, lease token/until, attempts, result/error. One pending coalesced context job per meeting. |
+
+Use an InnoDB row lock when incrementing each workspace's context-event counter and append the event in the same transaction.
+This produces a committed order for change cursors; a bare global sequence allocated before commit can otherwise expose holes to readers.
+Use `expected_revision` for context edits and boundary corrections; reject stale writes with the current revision.
+Do not use fuzzy task hashes as the only idempotency guarantee for money, email, calendar, or other external writes.
+Keep heuristic dedupe as a suggestion layer above stable action IDs and receipts.
+
+### MySQL-specific SQL and job semantics
+
+Use MySQL 8.4 LTS as the selected baseline and pin a supported patch during implementation.
+All transactional tables use InnoDB.
+Connector/Python returns dictionary rows through explicit dictionary cursors; normalize JSON decoding in one boundary helper rather than assuming psycopg's row/JSON behavior.
+Use its built-in fixed-size pool and turn pool exhaustion into bounded backpressure, not an unhandled error or an unbounded new connection.
+Return connections and reset transaction state on every success/failure path; keep synchronous driver calls off the async media event loop.
+
+Claim jobs inside a short transaction using `SELECT ... FOR UPDATE SKIP LOCKED`, then write owner/lease/generation and commit before calling a model or provider.
+Use an index beginning with eligible status and available time; verify the actual query plan and lock behavior under concurrent workers.
+Use SKIP LOCKED for the queue, not for consistency-critical context reads.
+Fence completion updates by the acquired lease generation and retry deadlocked database transactions with a bounded policy.
+Do not retry an external side effect merely because its subsequent database transaction failed.
+
+Use MySQL-native SQL:
+
+- Replace `ON CONFLICT` with `INSERT ... ON DUPLICATE KEY UPDATE` using supported row aliases, or an explicit no-op insert path with the intended uniqueness semantics.
+- Replace `ILIKE`, `ANY`, `::jsonb`, `::timestamptz`, JSONB operators/functions, and Postgres regex/date syntax with tested MySQL equivalents or existing Python transformations.
+- Prefer normalized participant/access relations for indexed ownership/person lookups; native JSON remains appropriate for typed document payloads.
+- Replace GIN/HNSW/pgvector-specific indexes and operators rather than leaving hidden Postgres dependencies.
+- Test null ordering, Unicode, case/accent behavior, timezones, booleans, JSON null, empty lists, and duplicate-key behavior against synthetic behavior fixtures.
+- Do not assume MySQL DDL can be rolled back as a multi-statement transaction: schema operations can implicitly commit.
+- Use a migration ledger, an execution lock, explicit preconditions, and restart-safe steps; inspect partial completion before retrying.
+
+[MySQL locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html), [upserts](https://dev.mysql.com/doc/refman/8.4/en/insert-on-duplicate.html), [implicit commits](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html), [Connector/Python pooling](https://dev.mysql.com/doc/connector-python/en/connector-python-connection-pooling.html).
+
+## 08. Time-aware context and selective memory
+
+Context input contains current UTC, workspace timezone, capture/event time, ingestion time, meeting start/elapsed time, confirmed participants, recent final transcript, current decisions, open questions, authorized prior memory, and action receipts.
+Resolve relative time expressions against the utterance's event time in its meeting timezone.
+Preserve the original phrase, normalized time, anchor, and ambiguity.
+Do not resolve a delayed recording's "tomorrow" against the day the background job runs.
+Ambiguous dates must remain unresolved for actions that require exact scheduling.
+
+Build context from bounded new evidence plus the current working snapshot.
+Persist the last processed source watermark; retries with the same input revision are idempotent.
+Allow one context job to run at a time per meeting, and coalesce arrivals while it runs.
+A slow model must not block capture or produce an unbounded queue of stale summaries.
+
+Suggested fact kinds: decision, commitment, constraint, project fact, preference, open question, research observation.
+Each candidate cites exact transcript segment IDs or external source artifacts.
+Validate that source IDs exist, are authorized, and support any verbatim quote before committing.
+Keep model-derived inferences distinguishable from spoken facts and human corrections.
+Extracted commitments do not become executed tasks without a matching action grant.
+
+Reuse Jcyber's separation between source evidence, selected atoms, working context, and durable knowledge.
+Do not reuse its current SQLite stub as a shared production service: it retrieves one JSON payload by engagement key and ignores supplied scope.
+Use MySQL FULLTEXT for lexical context search, with explicit fallback behavior for short terms and supported languages.
+Implement semantic people/needs/offers matching: store embeddings with model/dimension metadata in MySQL, then compute exact cosine top-k in bounded batches using NumPy.
+Apply workspace/access filters before loading vectors, and stream batches rather than loading every tenant into a global matrix.
+This is O(N × dimensions), not an ANN index; measure latency and recall at the configured directory size and agreed growth target.
+Do not silently drop semantic matching or replace it with keyword-only search.
+If exact ranking fails the measured scale target, flag that result and choose a separately approved vector index before claiming parity.
+Always apply access scope in retrieval queries before data reaches the model.
+Cache context using workspace, meeting, principal access fingerprint, permission revision, and source/context revision.
+Never use a global `state:all` cache for tenant data.
+
+At meeting close or explicit checkpoint, distill settled facts into committed memory.
+Keep active meeting context available to agents before final commit.
+One canonical structured summary feeds notes, email discussion sections, and exports; tool receipts provide action outcomes.
+Failures retain the full sources and expose pending/failed status instead of activating demo heuristics.
+
+## 09. Model and speaker pipeline
+
+### LLM roles
+
+| Role | Initial implementation choice | Gate |
+| --- | --- | --- |
+| Requested voice response | Cerebras `qwen-3.8-27b`, reasoning disabled, short streamed response. | Compare first audible response and tool fidelity against labeled behavior fixtures. |
+| Notes and memory extraction | Same Qwen model, strict schema, low or no reasoning selected by evaluation. | Grounding, omissions, contradictions, names, and date resolution. |
+| Planner | Explicit role setting; retain explicitly configured Claude provider until Qwen passes action-selection replay. | No unauthorized action or material regression in labeled fixtures. |
+| Research executor | Use Anthropic-hosted search with correct tool continuation handling initially. | A provider URL swap cannot replace hosted web search or `pause_turn`. |
+| Speech transcription | Deepgram initially, with explicit model/version. | Word timing and recall on actual room/laptop audio. |
+| TTS | Use Cartesia initially. | All output must pass the request-only speech gate. |
+
+Make provider/model selection explicit by role; do not select a provider merely because its API key happens to exist.
+Use small concrete client functions and validated result models, not a universal agent framework.
+Missing keys or provider errors must produce visible failures, never invented notes or successful mock actions.
+Pin the selected model ID and record it with generated artifacts for reproducibility.
+Add bounded retries for transport/rate-limit failures; do not retry malformed factual output indefinitely.
+
+### Speaker attribution
+
+Implement structured speaker tracks before adding another diarization provider.
+Benchmark existing Deepgram streaming diarization against pyannote Live-1.
+Use Precision-3 for a later correction pass over complete recordings if its measured improvement justifies the additional call.
+Keep ASR and diarization sample-time alignment explicit, including provider-stream offsets.
+Deepgram's current streaming diarizer is v1; its v2 diarizer is batch-only.
+Live-1 currently limits a stream to five hours and disconnects after five seconds without audio; rotate streams proactively and preserve application meeting IDs.
+Do not carry `SPEAKER_00` across streams as if it identified a person.
+
+Use explicit enrollment or user-confirmed mappings for names.
+Prefer an unknown speaker over a false name when evidence is weak.
+A voice match is evidence for attribution, never authentication for SDK, MCP, or Pipedream actions.
+Record attribution corrections so notes/memory can be recomputed without rewriting raw audio.
+
+Google's new Gemini 3.8 voice replication is an optional future output-voice choice, not a speaker-identification dependency.
+It is excluded from the critical path of this revamp unless the user separately chooses a custom assistant voice.
+
+## 10. Pipedream and authorized execution
+
+Implement one Pipedream client shared by API and worker operations.
+Support raw-byte Drive uploads, distinguish upstream errors, cache status safely, and enforce stored recipient restrictions.
+Use stable workspace/member connection identities, with explicit account selection for each meeting.
+Never silently reuse the last room occupant's connected account.
+
+### Progressive tool discovery: three fixed integration tools
+
+The model receives three Sanctum integration gateway definitions, not hundreds of Pipedream tools.
+Pipedream's component catalog stays server-side and is queried only when a task needs an integration.
+These gateway names are Sanctum's proposed API, not claims about Pipedream's native tool names.
+
+| Gateway | Model supplies | Model receives |
+| --- | --- | --- |
+| `search_integration_actions` | Intent, optional app filter, bounded limit. | At most five compact matches: action ID, app, one-line purpose, connection state, and effect category. No parameter schemas yet. |
+| `get_integration_action` | Selected action ID, partial configuration, and optional field/options cursor. | The selected operation's versioned input requirements, required fields, relevant account-bound options, and any missing configuration. |
+| `request_action` | Selected action ID, validated configuration reference/version, arguments, meeting scope, and idempotency key. | Persisted action ID and status; actual execution follows the same grant/receipt path as other actions. |
+
+Example: a request to create a tracking issue first searches for that intent, inspects the single chosen issue-creation action, and submits its arguments.
+Other apps and their schemas never enter this task's prompt.
+If the selected operation is already known and its schema is current, reuse its task-local configuration and skip discovery.
+
+Enforce prompt-size boundaries in code:
+
+- Keep MCP `tools/list` and internal LLM tool definitions independent of catalog size: eleven core tools in this plan, including the three integration gateways.
+- Search defaults to three matches and has a hard maximum of five; return compact metadata only and a refinement hint when no match is useful.
+- Search connected and permitted apps by default; an explicit request for an unconnected app can return a connection-required hint without enabling execution.
+- Load schema/configuration for one selected action at a time; page remote options and large optional-field sets instead of returning every channel, project, contact, or folder.
+- Keep full authoritative validation server-side; mark paged schema/configuration responses as incomplete until required configuration is resolved.
+- Bound discovery/configuration output by a configurable byte/token budget; if a necessary schema cannot fit safely, return a structured configuration-required result rather than silently truncating it or dumping the catalog.
+- Cache public component metadata by version; cache account-dependent configuration by principal, workspace, account, and connection/permission revision.
+- Revalidate component version, final arguments, account access, and action grant before execution; discovery is not authorization.
+- Do not append catalog results or every visited schema to durable meeting context. Persist concise receipts/artifact references and keep selected tool details in the current task only.
+- Bound large action results too; return a receipt/summary and a scoped artifact reference for further reading.
+
+Use Pipedream's documented component search/configuration/execution APIs underneath these gateways.
+Resolve dynamic props and account-specific option IDs before submission; do not make the model invent identifiers.
+Do not connect the full Pipedream MCP catalog directly to every model turn or register one Sanctum tool per integration.
+The complete catalog remains searchable without fixed Google-only task enums.
+
+Acceptance: a fixture with 10,000 catalog entries still produces the same eleven-tool MCP list, no more than five discovery hits, and only the selected action's configuration in task context.
+Test missing connections, large option lists, schema changes, stale configuration, revoked grants, and oversized results.
+[Pipedream discovery/configuration reference](https://pipedream.com/docs/connect/components).
+
+All work enters one action gateway: authenticate actor, authorize meeting, resolve account, validate operation/schema/arguments, match a stored grant, establish idempotency, persist request, then execute.
+Use a broad operation string plus validated provider schema for the long tail; preserve concrete handlers for Gmail, Calendar, Drive, research, and matching behavior.
+Never accept arbitrary target URLs or supplied account IDs as authority from model output.
+
+Execution states: proposed, awaiting_authorization, queued, running, succeeded, failed, unknown, cancelled.
+A timeout after request submission is `unknown` until reconciled, not automatically failed-and-retryable.
+Use provider idempotency keys where supported.
+Where an operation has no idempotency/reconciliation mechanism, stop automatic replay after an ambiguous result and require resolution.
+Do not promise exactly-once behavior across every third-party API.
+Store provider receipts and actual artifacts separately from model summaries.
+Check grant revocation/version again immediately before a queued external write.
+Post-meeting completion updates context/activity silently.
+
+## 11. Identity, authorization, and isolation
+
+Add an authenticated human/workspace model before exposing multi-team context or SDK/MCP writes.
+Pipedream action linking is separate from user authentication.
+Use a maintained OIDC client and verified issuer, audience, signature, expiry, state, and PKCE handling.
+Prefer the deployment's existing issuer; proposed default is Google OIDC with separate login scopes/client from Pipedream's action credentials.
+Membership is stored explicitly; a matching email domain or spoken company name grants no access.
+
+Use browser sessions in secure HttpOnly cookies with CSRF protection for mutations.
+SDK automation uses revocable hashed tokens bound to a principal, workspace/meeting allowlist, and scopes.
+Remote MCP uses delegated OAuth and the same authorization functions.
+Use maintained FastMCP auth/provider facilities rather than hand-writing an OAuth server; configure durable production token storage and stable signing material.
+Verify any proxy-issued token's resource audience and map its validated subject to a Sanctum principal.
+Do not forward arbitrary upstream OAuth tokens as Sanctum API credentials.
+
+Minimum scopes: `context:read`, `context:write`, `recordings:read`, `actions:request`, `actions:execute`, `workspace:admin`.
+A write-capable agent does not automatically get recordings or action execution.
+Device ingest credentials are narrower than human or agent credentials.
+Authenticate WebRTC offer/control requests with the browser session and CSRF protection; bind each peer to the authorized listener and ownership generation.
+Do not place long-lived credentials in signaling URLs or data-channel messages.
+
+Enforce scope in REST, MCP, background workers, caches, exports, search, and signed audio access.
+Replace global live-state reads with authorized workspace/listener views.
+Keep authorization consistent across every route and background operation.
+
+## 12. API contract
+
+Use one FastAPI `/api/v1` contract with explicit operation IDs and JSON Schema models.
+Keep wire fields in snake_case to match existing Python/JSON conventions; SDK method names may be idiomatic without inventing a second data model.
+List endpoints use opaque cursor pagination and bounded limits.
+A missing or unauthorized resource returns the same outward result where revealing existence would leak data.
+Standard errors include code, message, request_id, retryable, and typed details without secrets.
+
+| Method and route | Behavior | Access |
+| --- | --- | --- |
+| `POST /api/v1/listeners` | Register a room/laptop device and its source capabilities. | Device enrollment / admin |
+| `POST /api/offer` | WebRTC signaling with listener/epoch anchors, authenticated identity, and source watermarks. | Authorized browser listener |
+| `POST /api/v1/listeners/{id}/heartbeat` | Update health and renew the capture-group lease. | Device ingest |
+| `PUT /api/v1/listeners/{id}/chunks/{chunk_id}` | Validate/upload a bounded audio chunk and return a durable receipt. | Device ingest |
+| `GET /api/v1/meetings` | Filter accessible meetings by date, participant, status. | Context read |
+| `GET /api/v1/meetings/{id}` | Lifecycle, processing watermarks, source coverage, revision. | Context read |
+| `POST /api/v1/meetings/{id}/close` | Seal source boundary and enqueue final work; listener remains active. | Authorized meeting mutation |
+| `POST /api/v1/meetings/{id}/split` | Revision-checked range split with audit record. | Authorized meeting mutation |
+| `POST /api/v1/meetings/merge` | Revision-checked merge after access compatibility validation. | Authorized meeting mutation |
+| `GET /api/v1/meetings/{id}/transcript` | Paginated final segments and requested revisions. | Context read |
+| `GET /api/v1/meetings/{id}/context` | Bounded, source-linked snapshot and its revision. | Context read |
+| `GET /api/v1/context/search` | Authorized text/optional semantic retrieval. | Context read |
+| `POST /api/v1/context/items` | Add attributed evidence, observation, or memory candidate. | Context write |
+| `PATCH /api/v1/context/items/{id}` | Add a revision/supersession; require expected revision. | Context write |
+| `GET /api/v1/context/changes` | Return durable application changes after a cursor. | Context read |
+| `GET /api/v1/sources/{id}` | Read exact cited text/source metadata. | Source's access scope |
+| `POST /api/v1/meetings/{id}/recording-access` | Issue short-lived URL for an authorized audio cut. | Recordings read |
+| `POST /api/v1/meetings/{id}/requests` | Explicit human/agent question; speech requires separate allowed output intent. | Context read/request |
+| `GET /api/v1/integrations/actions` | Return at most five compact Pipedream action matches without schemas. | Allowed connector discovery |
+| `POST /api/v1/integrations/actions/{id}/schema` | Resolve one action schema, dynamic configuration, and paginated options in the actor/account scope. | Allowed connector discovery |
+| `POST /api/v1/actions` | Validate, authorize, persist, and enqueue requested work. | Actions request; execution grant |
+| `GET /api/v1/actions/{id}` | Return actual status and receipt. | Owning scope |
+| `POST /api/v1/agents` | Create an agent principal and scoped credential. | Workspace admin |
+| `DELETE /api/v1/agents/{id}/credentials/{key_id}` | Revoke a credential and invalidate cached access. | Credential owner/admin |
+| `GET /healthz` and `GET /readyz` | Process health and dependency readiness without tenant content. | Operational policy |
+
+The adapter for SDK/MCP reads the same service functions as the UI.
+Do not auto-expose every FastAPI route as an MCP tool: admin, capture, and destructive routes require deliberate inclusion.
+
+### Context response example — proposed contract
+
+```json
+{
+  "meeting_id": "meeting-uuid",
+  "revision": 42,
+  "as_of": "2026-09-26T17:24:00Z",
+  "timezone": "America/Los_Angeles",
+  "source_watermark": {"epoch_id": "epoch-uuid", "sample_end": 23040000},
+  "items": [
+    {
+      "id": "context-item-uuid",
+      "revision": 1,
+      "kind": "decision",
+      "text": "Keep pilot access limited to the current test group.",
+      "state": "committed",
+      "event_at": "2026-09-26T17:08:16Z",
+      "author": {"type": "system", "id": "extractor-principal"},
+      "sources": [{"segment_id": "segment-uuid", "start_ms": 496000, "end_ms": 501000}]
+    }
+  ],
+  "changes_cursor": "opaque-cursor",
+  "truncated": false
+}
+```
+
+The values above are examples, not production data.
+For a requested historic time, filter both event/validity time and revisions known by that time; expose unresolved conflicts rather than fabricating one answer.
+
+## 13. SDK and MCP delivery
+
+Create TypeScript and Python packages over the same OpenAPI schema.
+Ship generated DTOs plus small handwritten helpers for pagination, context snapshots, retries, changes, and action receipts.
+Avoid a framework dependency in consumers beyond a normal HTTP client.
+Provide sync/async Python clients where justified by the backend users, and an async TypeScript client.
+Document timeouts, cancellation, rate limiting, idempotency, and conflict recovery.
+
+A successful SDK write accepts an idempotency key and returns the created item/action and revision.
+Retried reads are safe; retried writes require the same key and payload hash.
+409 conflicts include the current revision and do not silently overwrite another agent's contribution.
+Changes cursors belong to the application, carry access scope, and have a documented reset response when expired or invalidated.
+A revoked permission must invalidate access even if the caller has an old cursor or cached snapshot.
+
+Example target SDK experience:
+
+```typescript
+const context = await sanctum.context.get({ meeting_id });
+const result = await sanctum.context.add({
+  meeting_id,
+  expected_revision: context.revision,
+  kind: "research_observation",
+  text: "Option B supports the required retention controls.",
+  sources: [{ artifact_id: report.id }],
+  idempotency_key: runId,
+});
+```
+
+This is a target interface, not an already-published package.
+Provide complete runnable examples once the implementation exists: read a meeting, cite a source, append research, handle a conflict, consume changes, request an authorized action, revoke an agent.
+
+Mount a remote MCP endpoint at `/mcp` using maintained Python FastMCP integrated with FastAPI lifecycle/auth.
+Keep dedicated tools for list_meetings, get_context, search_context, get_source, get_context_changes, add_context, revise_context, request_action, get_action, search_integration_actions, and get_integration_action.
+Expose source/context resources as an optional convenience; tool access remains sufficient for clients without resource support.
+Return structured content with bounded text summaries, source IDs, revisions, and tool error flags.
+Declare tool annotations accurately; annotations are not authorization controls.
+
+Target the current 2026-07-28 MCP behavior supported by the pinned SDK and test compatible older clients explicitly.
+Do not copy an obsolete GET/SSE session transport into a new server without version-aware compatibility.
+Test connection, OAuth, discovery, schemas, actual tool execution, cancellation, and two concurrent principals.
+An MCP protocol session is never a meeting, workspace, or identity boundary.
+
+## 14. Fullscreen UI implementation
+
+Recreate the visual contract in `docs/DESIGN.md` independently.
+The SVG/HTML files in `design/` are newly authored visual references, not application source or copied legacy components.
+The original approved appearance is a near-black full-viewport stage with a thin irregular blue-white waveform across the center.
+Preserve its sparse header, small status copy, subtle glow, quiet footer controls, and large empty areas.
+Do not replace it with a sidebar dashboard, rounded equalizer bars, card grid, large title, or speaking orb.
+
+Implement a new Canvas 2D renderer with irregular needle peaks, asymmetric lower contour, small broad bases, and smooth attack/decay.
+Feed it real microphone levels; keep animation time independent from transcript/model latency.
+Suspend visual animation when hidden and respect reduced-motion preference without stopping capture.
+The preview waveform is illustrative; production must never simulate input or show fake healthy recording status.
+
+Keep capture lifecycle outside overlay mount/unmount.
+Review, Agents, and Settings are secondary dialogs, with accessible focus handling and Escape-to-close.
+The main screen contains pause/resume, review, agents, settings, and fullscreen controls only.
+No automatic sound effects, greetings, completion notices, or sign-offs.
+Every TTS response requires a direct-request speech gate; explicit recording playback remains available.
+
+Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
+Source timestamps connect notes to transcript and authorized playback.
+Expose speaker correction, meeting split/merge, and memory revisions without deleting evidence.
+Agents exposes connection scopes and revocation; Settings exposes sign-in, workspace/timezone, microphone, integrations, and retention.
+Test real denied, paused, interrupted, uploading, saved, and degraded states.
+
+## 15. Proposed new project layout
+
+No application directories exist in this handoff repository yet.
+Create these during implementation; do not obtain them by copying the previous repository.
+
+| New area | Responsibility |
+| --- | --- |
+| `backend/app.py`, `backend/api_v1.py` | FastAPI lifecycle, routes, shared OpenAPI contract. |
+| `backend/db.py`, `backend/migrations/` | MySQL pool, transactions, explicit versioned schema migrations. |
+| `backend/auth.py`, `backend/agents.py` | Human/agent principals, workspace membership, scopes, revocation. |
+| `backend/listeners.py`, `backend/meetings.py`, `backend/boundaries.py` | Listener leases, meeting ranges, detection and corrections. |
+| `backend/transcripts.py`, `backend/recordings.py`, `backend/speakers.py` | Source evidence, R2 manifests/playback, speaker attribution. |
+| `backend/context.py`, `backend/matcher.py` | Time-aware memory/retrieval and semantic matching. |
+| `backend/jobs.py`, `backend/worker.py` | Durable processing, leases, retries and completion. |
+| `backend/planner.py`, `backend/executor.py`, `backend/action_service.py` | Bounded planning, research, authorized actions and receipts. |
+| `shared/config.py`, `shared/pipedream_client.py` | Shared role configuration and one connector client. |
+| `realtime/server.py`, `realtime/ingest.py`, `realtime/speech_gate.py` | Pipecat/WebRTC, source timing, request-only audio output. |
+| `web-app/src/pages/listen/` | New fullscreen waveform, controls, and review/agent dialogs. |
+| `web-app/src/lib/capture/` | Browser microphone controller, recording tap, IndexedDB queue, uploader. |
+| `sdk/typescript/`, `sdk/python/` | Thin SDKs and examples generated from the same API contract. |
+| `tests/`, `scripts/`, deployment files | Behavior fixtures, verification, local development, containers and routing. |
+
+Use pnpm workspaces for `web-app` and `sdk/typescript`.
+Start Python at version 3.12 and verify dependency compatibility before locking FastAPI, Pydantic, Pipecat, and FastMCP.
+Keep boundaries concrete; avoid speculative service layers, generic agent frameworks, or a separate vector service.
+
+## 16. New schema, deployment, and recovery
+
+Create fresh MySQL/InnoDB schemas through explicit versioned migrations.
+No historical database import is required for this clean build.
+Test empty-database setup, repeated migration invocation, partial DDL completion, constraints, and recovery.
+MySQL DDL can implicitly commit; use a version ledger, execution lock, and restart-safe steps.
+Do not apply schema DDL independently on every API worker startup.
+
+Use only synthetic fixtures in the repository.
+If legacy records are later requested, treat that as a separate authorized importer with ownership mapping, type conversion, row/hash validation, and a cutover plan.
+The old PostgreSQL/Neon database and all external systems remain untouched by this handoff.
+
+Stage one workspace and an open browser listener first.
+Verify microphone permission, recording completeness, timestamp alignment, silent operation, isolation, matching, SDK/MCP, and external-action receipts.
+Production activation requires deployment configuration and explicit authorization; creating this repository does not authorize it.
+
+Rollback restores a previously validated application version compatible with the current schema and stops new dispatch when necessary.
+Preserve data and R2 objects; do not reverse-drop tables as a rollback technique.
+Reconcile running/unknown actions before another worker resumes them.
+Avoid forced page reloads during capture; checkpoint available browser data and show any unavoidable gap.
+
+## 17. Configuration and local commands
+
+Configuration groups:
+
+| Group | Required values |
+| --- | --- |
+| Core | MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, TLS configuration, public app URL, workspace timezone, environment, API/media ports. |
+| Identity | Issuer/client metadata, resource audiences, callback URLs, session/credential secret references, MCP auth configuration. |
+| Audio | Selected microphone, browser buffer quota/cap, archive format, source-clock metadata, stream rotation policy. |
+| R2 | Account endpoint, bucket, scoped access credentials, private-object prefix; secrets server-side only. |
+| Models | Explicit provider/model for voice, extraction, planner, research; provider keys; request budgets. |
+| Speaker | Diarization provider/version, optional pyannote key, enrollment policy. |
+| Pipedream | Project/environment/client credentials; principal/account mappings. |
+| Operations | Job concurrency, request limits, recording policy, metrics/log redaction, feature rollout scope. |
+
+The executor must add the scripts below and make them real; they do not exist in the current checkout.
+Use separate terminals/processes managed by the launcher, not a blocking shell sleep loop.
+Before serving, verify the assigned ports are unused.
+
+```bash
+python3 scripts/dev.py --api-port 7102 --media-port 7103 --web-port 3102
+python3 -m unittest discover -s tests -p 'test_*.py'
+pnpm --dir web-app build
+pnpm --dir web-app test
+pnpm --dir sdk/typescript test
+python3 -m unittest discover -s sdk/python/tests -p 'test_*.py'
+python3 scripts/check_contracts.py
+python3 scripts/replay_capture.py --fixture tests/fixtures/day.json --accelerated
+```
+
+Use a disposable test database for automatic migrations during tests.
+Production migration execution remains a separate explicit action.
+If a Sentrux baseline exists in the actual execution checkout, run `sentrux gate .` and preserve its score.
+Keep quality tools local; do not change CI unless requested.
+Use no-mistakes only when its branch/commit/push/PR workflow is authorized; run it in the background and monitor its status.
+Do not add agent co-author attribution to commits.
+
+## 18. Verification and completion evidence
+
+| Area | Required check |
+| --- | --- |
+| Silence | Feed ordinary speech, background research, action success/failure, auto close, reconnect, and UI transitions; emitted assistant audio/SFX count stays zero. A requested answer is the positive control. |
+| Capture | Open/close Review without stopping capture. Close/reload the tab, discard it, revoke permissions, and unplug the microphone; the source gap/state must be truthful. |
+| Durability | Crash between IndexedDB commit, R2 write, DB manifest, and buffer cleanup; no R2-acknowledged source range disappears. Repeated chunk/hash is idempotent; conflicting hash rejects. |
+| Offline | Replay network loss and provider outage; local recording remains bounded, uploads recover, transcript replay dedupes. |
+| Meetings | Back-to-back meetings, long pauses, topic changes, explicit close, uncertain boundary, split and merge preserve source coverage and do not replay actions. |
+| Dual-device | Room and laptop in one approved group hand off through lease/fencing; separate groups never merge. Concurrent old owner is rejected. |
+| Time | Midnight, DST transition, timezone change, delayed upload, skewed clock, and "tomorrow/next Friday" remain tied to the correct event time or explicit ambiguity. |
+| Speakers | Unknown and enrolled speakers, interruptions, overlap, similar voices, speaker echo, reconnect, and provider rotation; false identity is measured separately from ASR errors. |
+| MySQL schema | Empty setup, version ledger, partial DDL recovery, constraints, UTC/JSON/Unicode round trips, semantic ranking, and worker locking. |
+| Isolation | Two teams with colliding names/IDs exercise REST, MCP, search, caches, jobs, playback, exports, and Pipedream account selection without data crossover. |
+| Agent writes | Two clients read the same revision; both submit updates; stale write gets 409, provenance persists, idempotent retry does not duplicate data. |
+| Actions | Expired/revoked/mismatched grants block execution. Ambiguous timeouts become unknown. Matching receipts prevent duplicate sends/bookings. |
+| UI | Fullscreen waveform matches the accepted design; no permanent dashboard. Test keyboard/focus, small laptop, reduced motion, reconnect, upload backlog, errors, and source-linked playback. |
+| SDK/MCP | Run both SDK examples and real MCP discovery/read/write/conflict/revoke flows with separate principals. Schemas and errors match the shared API. |
+| Compatibility | Notes, exports, matching, meeting links, and requested speech remain available under the new access model. |
+
+Use synthetic fixtures for deterministic tests and approved real meeting recordings for model comparison.
+No real email, calendar event, or other external side effect may be sent by a replay test.
+Test an accelerated 24-hour capture trace plus a real staging soak; accelerated replay does not prove 24 hours of wall-clock uptime.
+Require a 24-hour staging soak before describing the system as live-verified for 24/7 operation.
+If execution time or credentials prevent that soak, deliver implemented/local-tested status with the specific remaining live gate.
+
+Completion report must state separately: implemented, locally tested, model-evaluated, web-built, migrated, deployed, and live-verified.
+Attach logs/results for the checks actually run and list all unrun gates with reasons.
+A build passing is not evidence of microphone permissions, model quality, real integration delivery, or production uptime.
+
+## 19. Ordered delivery and one-shot execution
+
+Use the task checklist in `tasks/todo.md` as the execution order.
+One-shot means one cohesive implementation effort with internal checkpoints and one final handoff, not one enormous untested patch.
+Resolve failures and ordinary implementation details autonomously within the approved scope.
+Each checkpoint leaves a runnable vertical slice; do not expose incomplete capture/action behavior behind optimistic success labels.
+
+Start with ownership/auth and the capture durability path, then meetings/context, then actions/agent access, then the preserved UI and web delivery.
+The validated UI is a constraint, not an invitation to redesign it again.
+Keep tests near the behavior they protect and inspect the actual app after each UI change.
+
+## 20. Evidence and authoritative references
+
+Repository evidence is pinned to the reference commit above; it is not a source tree to import.
+
+- [Sanctum waveform implementation](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/web-app/src/pages/kiosk/engine.ts#L117)
+- [Sanctum media/session lifecycle](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/realtime/server.py#L1216)
+- [Sanctum current schema](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/backend/app.py#L71)
+- [Jcyber memory contract](https://github.com/undeemed/Jcyber/blob/29a8583b523b1965b75a3232673ee6918dff050a/schema/tencentdb/memory-interface.md)
+- [Jcyber actual SQLite backend](https://github.com/undeemed/Jcyber/blob/29a8583b523b1965b75a3232673ee6918dff050a/deploy/memory_core.py)
+- [Browser microphone access](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+- [Screen Wake Lock](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API)
+- [Browser storage persistence](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist)
+- [Pipecat audio recording utility](https://docs.pipecat.ai/api-reference/server/utilities/audio/audio-buffer-processor)
+- [Pipedream component execution](https://pipedream.com/docs/connect/components)
+- [MySQL 8.4 FULLTEXT](https://dev.mysql.com/doc/refman/8.4/en/fulltext-search.html)
+- [MySQL JSON](https://dev.mysql.com/doc/refman/8.4/en/json.html)
+- [R2 upload methods](https://developers.cloudflare.com/r2/objects/upload-objects/)
+- [R2 signed access](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
+- [Cerebras reasoning controls](https://inference-docs.cerebras.ai/capabilities/reasoning)
+- [Cerebras structured output](https://inference-docs.cerebras.ai/capabilities/structured-outputs)
+- [Deepgram diarization versions](https://developers.deepgram.com/docs/diarization)
+- [pyannote Live-1 protocol and limits](https://docs.pyannote.ai/tutorials/streaming-real-time)
+- [pyannote Precision-3 release](https://www.pyannote.ai/changelog/precision-3)
+- [FastMCP with FastAPI](https://gofastmcp.com/integrations/fastapi)
+- [FastMCP OAuth proxy](https://gofastmcp.com/servers/auth/oauth-proxy)
+- [MCP 2026-07-28 transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+- [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+
+All new schemas, route names, module boundaries, thresholds, and SDK examples in this plan are proposed implementation contracts.
+They are not claims that the current repository already provides those capabilities.
+
+
+---
+
+# Clean-build execution checklist
+
+Run these slices in order unless an independent check can run alongside the current slice.
+The full behavioral contract is `tasks/plan.md`; the approved visual reference is `docs/DESIGN.md` and `design/listener-reference.html`.
+Paths below are repository-relative proposed edit targets.
+Every task must end with its verification result, not only code changes.
+These checks are a proposed suite to implement, not tests already present in the baseline.
+
+## T01. Establish the new project and checks
+
+- [ ] Create the React/Vite and Python service structure described in the plan; do not copy the old repository.
+- [ ] Add dependency manifests, local development commands, and synthetic fixtures.
+- [ ] Add a local check entrypoint with external side effects disabled in tests.
+
+Files: root manifests, `web-app/package.json`, Python configuration, `scripts/check.py`, `tests/test_baseline.py`.
+Verify: empty project builds; local test command runs; fixtures never call live integrations.
+Depends on: none.
+
+## T02. Create MySQL schemas and connection handling
+
+- [ ] Add versioned InnoDB schemas and a migration ledger for the new domain.
+- [ ] Implement Connector/Python pooling, UTC handling, explicit transactions, and dictionary rows.
+- [ ] Make schema setup restart-safe without assuming rollback of multi-statement DDL.
+
+Files: `backend/migrations/001_initial.sql`, `backend/migrate.py`, `backend/db.py`, `tests/test_migrations.py`.
+Verify: fresh database, repeated setup, interrupted DDL, constraints, UTC/JSON/Unicode round trips.
+Depends on: T01.
+
+## T03. Implement scoped persistence operations
+
+- [ ] Add repositories for workspace/principal/meeting ownership using parameterized MySQL queries.
+- [ ] Define uniqueness, upsert, pagination, and revision semantics explicitly.
+- [ ] Test case-sensitive identifiers and isolation from the first query layer.
+
+Files: `backend/store.py`, `backend/models.py`, `tests/test_store.py`.
+Verify: two workspaces, duplicate keys, empty results, revision conflicts, and correct transaction rollback for DML.
+Depends on: T02.
+
+## T04. Implement semantic matching
+
+- [ ] Generate/store versioned profile embeddings in MySQL with model/dimension metadata.
+- [ ] Implement scoped batched exact cosine ranking and appropriate result verification.
+- [ ] Benchmark O(N × dimensions) latency and memory against a stated directory-size target.
+
+Files: `backend/matcher.py`, matching schema migration, runtime requirements, `tests/test_semantic_matching.py`, `scripts/benchmark_matching.py`.
+Verify: labeled ranking fixtures, invalid vectors, model/dimension mismatch, tenant isolation, and scale measurements.
+Depends on: T03.
+
+## T05. Enforce a shared authorization boundary
+
+- [ ] Implement verified human identity and workspace membership; distinguish login from Pipedream action linking.
+- [ ] Add credential principal/scope resolution and consistent resource access checks.
+- [ ] Apply the same authorization functions to all API routes and worker jobs.
+
+Files: `backend/auth.py`, `backend/app.py`, `backend/agents.py`, `backend/cache.py`, `tests/test_authorization.py`.
+Verify: two workspaces, colliding names, expired/revoked credentials, missing session membership, and denied cross-workspace access.
+Depends on: T04; production issuer configuration remains a live gate.
+
+## Checkpoint A. Identity and migration safety
+
+- [ ] MySQL schema and transactions preserve explicit ownership and semantic matching records.
+- [ ] Every API surface enforces ownership.
+- [ ] No cached response can cross principal/workspace scope.
+
+## T06. Establish browser microphone capture
+
+- [ ] Implement the React website and browser microphone permission flow on room computers and laptops.
+- [ ] Keep the capture controller independent of overlay mounts; closing a tab stops capture and produces an interrupted state.
+- [ ] Handle secure-context, permission pending/denied, missing/dead input, and optional Wake Lock behavior.
+
+Files: `web-app/src/lib/capture/controller.ts`, `web-app/src/pages/listen/engine.ts`, `web-app/src/lib/capture/permissions.ts`, `web-app/tests/capture-lifecycle.test.ts`.
+Verify: permission grant/denial/revocation, input unplug, overlay close, tab reload, sleep/discard recovery; no native install required.
+Depends on: T01, T05.
+
+## T07. Buffer independent audio chunks in the browser
+
+- [ ] Tap the selected microphone, preserve source/sample clocks, and produce independent valid WAV chunks.
+- [ ] Commit bounded recovery records to IndexedDB and monitor quota; persistent storage is requested only where supported.
+- [ ] Distinguish buffered data from R2-confirmed data and expose eviction/quota failures honestly.
+
+Files: `web-app/src/lib/capture/recorder.ts`, `web-app/src/lib/capture/recording-worklet.ts`, `web-app/src/lib/capture/buffer.ts`, `web-app/tests/capture-buffer.test.ts`.
+Verify: sample-count fixture, reload recovery, storage denied/cleared/full, no cleanup of unacknowledged chunks.
+Depends on: T06.
+
+## T08. Register listeners and recoverable source manifests
+
+- [ ] Add listeners, capture epochs, ownership generations, and recording manifests.
+- [ ] Authenticate device registration, heartbeats, and authorized WebRTC offer bindings.
+- [ ] Return source watermarks so reconnect resumes instead of restarting the meeting.
+
+Files: `backend/migrations/002_capture.sql`, `backend/listeners.py`, `backend/app.py`, `tests/test_listeners.py`.
+Verify: unauthorized signaling rejection; stale ownership generation; reconnect with identical epoch; two independent rooms.
+Depends on: T05.
+
+## T09. Upload audio to R2 with durable receipts
+
+- [ ] Add chunk ingest validation and server-side R2 writes, manifest commit, and reconciliation.
+- [ ] Implement browser retry/receipt journaling and local cleanup only after acknowledgement.
+- [ ] Keep object credentials server-side and distinguish locally saved from remotely saved data.
+
+Files: `backend/recordings.py`, `web-app/src/lib/capture/uploader.ts`, `tests/test_recording_uploads.py`, `web-app/tests/uploader.test.ts`.
+Verify: R2 success/DB failure; repeated identical chunk; conflicting hash; timeout; offline backlog recovery.
+Depends on: T07, T08; real R2 credentials only for a separate authorized live check.
+
+## T10. Implement scoped WebRTC and reconnect
+
+- [ ] Implement Pipecat/WebRTC and bind authenticated listener/epoch/source-clock metadata during signaling.
+- [ ] Persist structured final transcription segments; keep partials provisional.
+- [ ] Reconnect through source watermarks without equating peer IDs with meeting IDs.
+
+Files: `realtime/ingest.py`, `realtime/server.py`, `backend/transcripts.py`, `backend/migrations/003_transcripts.sql`, `tests/test_ingest.py`.
+Verify: repeated/out-of-order final segments, reconnect, recording/ASR alignment, provider outage, unauthorized offer denial.
+Depends on: T08.
+
+## T11. Reconcile offline transcript coverage
+
+- [ ] Schedule batch transcription for uploaded source ranges missing final ASR coverage.
+- [ ] Deduplicate live and replayed source spans by epoch/track/range and retain correction history.
+- [ ] Preserve gap markers and never replay historical audio into room speakers or action execution.
+
+Files: `backend/transcripts.py`, `backend/jobs.py`, `backend/worker.py`, `backend/migrations/004_jobs.sql`, `tests/test_transcript_recovery.py`.
+Verify: upload before/after live final; provider retry; duplicate batch delivery; process crash during reconciliation.
+Depends on: T09, T10.
+
+## Checkpoint B. Real capture vertical slice
+
+- [ ] Browser capture buffers pending data, uploads, and produces retrievable transcript/source records.
+- [ ] Closing a review overlay does not stop capture; closing the tab is detected as an interruption.
+- [ ] Simulated offline/crash replay preserves remotely acknowledged evidence and accurately reports unavailable browser-buffered data.
+
+## T12. Implement automatic meeting lifecycle
+
+- [ ] Create provisional/active/closing/closed/interrupted meetings independently of listener lifetime.
+- [ ] Evaluate boundaries from evidence and context; keep uncertain boundaries revisable.
+- [ ] Close capture ranges immediately and schedule final work separately from action draining.
+
+Files: `backend/meetings.py`, `backend/boundaries.py`, `backend/migrations/005_meeting_ranges.sql`, `realtime/server.py`, `tests/test_meeting_boundaries.py`.
+Verify: pause versus true boundary, explicit close, back-to-back conversations, new speech during old meeting processing.
+Depends on: T11.
+
+## T13. Add boundary correction and safe recording playback
+
+- [ ] Implement revision-checked split/merge transactions and recompute derived source ownership.
+- [ ] Assemble or stream an authorized per-meeting audio cut; never grant a URL to another meeting's audio.
+- [ ] Preserve prior action IDs/receipts when meeting boundaries move.
+
+Files: `backend/meetings.py`, `backend/recordings.py`, `tests/test_boundary_corrections.py`, `tests/test_playback_access.py`.
+Verify: sample coverage, incompatible access scopes, stale revisions, old/new playback cuts, no repeated side effects.
+Depends on: T12.
+
+## T14. Make speaker attribution structured and correctable
+
+- [ ] Persist provider-local speaker tracks, timestamps, and attribution revisions.
+- [ ] Implement optional pyannote live and batch adapters behind explicit configuration.
+- [ ] Support unknown labels, explicit person mapping/enrollment, and provider stream rotation.
+
+Files: `realtime/speakers.py`, `backend/speakers.py`, `backend/migrations/006_speakers.sql`, `tests/test_speakers.py`, `scripts/evaluate_speakers.py`.
+Verify: overlap, reconnect/rotation, similar voices, unknown participants, map correction, no voice-based authorization.
+Depends on: T10, T13.
+
+## T15. Centralize model roles and extract canonical notes
+
+- [ ] Add explicit role settings and validated structured extraction with correctly handled hosted research tools.
+- [ ] Generate one canonical summary for notes, email discussion sections, and exports.
+- [ ] Remove silent live fallback to demo content and keep failures recoverable from source data.
+
+Files: `shared/config.py`, `backend/llm.py`, `backend/context.py`, `backend/planner.py`, `tests/test_extraction.py`.
+Verify: schema/grounding/date fixtures; candidate output comparison against labeled fixtures; unavailable provider without fake success.
+Depends on: T12.
+
+## T16. Build versioned time-aware shared context
+
+- [ ] Add attributed context items, source refs, temporal fields, and immutable revisions.
+- [ ] Add committed-order change events, access-bound cursors, and optimistic concurrency.
+- [ ] Build bounded authorized retrieval and Jcyber-inspired memory distillation; coalesce active context jobs.
+
+Files: `backend/migrations/007_context.sql`, `backend/context.py`, `backend/cache.py`, `tests/test_context.py`, `tests/test_context_changes.py`.
+Verify: two-agent conflict, midnight/DST/delayed upload, source access, revoked cursor, missing source, distillation retry.
+Depends on: T05, T11, T15.
+
+## Checkpoint C. Meeting context is trustworthy
+
+- [ ] Transcript, audio, attribution, boundaries, and context revisions align.
+- [ ] Memory selection does not alter raw evidence.
+- [ ] Actor/source/time scope survives corrections and retries.
+
+## T17. Implement Pipedream discovery and execution access
+
+- [ ] Implement one Connect client for discovery, account scope, and Google/Drive operations.
+- [ ] Expose only search, inspect, and request-action gateways: at most five metadata search hits, one selected action schema/configuration, and bounded paginated options.
+- [ ] Bind connected accounts to stable principals and explicit meeting/workspace permissions.
+
+Files: `shared/pipedream_client.py`, `backend/agents.py`, `backend/integrations.py`, `tests/test_pipedream.py`.
+Verify: a 10,000-action fixture does not expand the eleven-tool MCP surface; check account isolation, Drive bytes, missing connections, provider failure, dynamic schema, stale configuration, paginated options, and output budgets.
+Depends on: T05.
+
+## T18. Persist grants, actions, and receipts
+
+- [ ] Add stored action grants and a shared execution gateway for internal/external agents.
+- [ ] Use stable idempotency keys, job leases, revocation checks, and provider receipt reconciliation.
+- [ ] Represent ambiguous completion as unknown and block unsafe automatic replay.
+
+Files: `backend/migrations/008_actions.sql`, `backend/action_service.py`, `backend/executor.py`, `tests/test_actions.py`.
+Verify: mismatched/expired/revoked grants; duplicated requests; timeout after upstream success; no real sends in tests.
+Depends on: T11, T16, T17.
+
+## T19. Make background work independent of media connections
+
+- [ ] Run context, memory, notes, research, and external actions through durable jobs with explicit work keys.
+- [ ] Keep capture nonblocking and recover worker leases after restart.
+- [ ] Implement bounded rate/budget states that can resume instead of silently stopping work after a fixed cycle count.
+
+Files: `backend/worker.py`, `backend/jobs.py`, `tests/test_worker_recovery.py`.
+Verify: kill media and worker independently; late completion; concurrent claim; stale lease; budget pause and resume.
+Depends on: T16, T18.
+
+## T20. Enforce silence across all output paths
+
+- [ ] Add a request-scoped speech gate immediately before audio emission.
+- [ ] Cover direct responses, tool responses, meeting close, and action completion so only requested speech is emitted.
+- [ ] Keep passive frontend transitions silent while supporting explicit user playback.
+
+Files: `realtime/speech_gate.py`, `realtime/server.py`, `backend/worker.py`, `web-app/src/pages/listen/engine.ts`, `tests/test_silence.py`.
+Verify: zero unsolicited speech/SFX across ordinary capture and all background transitions; requested reply positive control.
+Depends on: T10, T19.
+
+## T21. Deliver fullscreen listening and review overlays
+
+- [ ] Recreate the approved waveform independently; connect it to real capture state and analyser levels.
+- [ ] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
+- [ ] Keep capture independent of overlay visibility; implement focus, keyboard, reduced-motion, and error behavior.
+
+Files: `web-app/src/pages/listen/engine.ts`, `web-app/src/pages/listen/waveform.ts`, `web-app/src/pages/listen/index.tsx`, `web-app/src/pages/listen/listen.css`, `web-app/src/pages/listen/ReviewDialog.tsx`.
+Verify: accepted-preview visual comparison, 1280×720 and narrow layout, overlay open/close, source seek, capture interruption truthfulness.
+Depends on: T06, T13, T16, T20.
+
+## T22. Add scoped REST contracts and generated SDKs
+
+- [ ] Publish explicit v1 OpenAPI models, operation IDs, pagination, error shapes, idempotency, and conflicts.
+- [ ] Implement TypeScript/Python clients and runnable examples using generated DTOs.
+- [ ] Verify UI and both SDKs call the same domain behavior.
+
+Files: `backend/api_v1.py`, `scripts/generate_sdks.py`, `sdk/typescript/`, `sdk/python/`, `tests/test_api_contract.py`.
+Verify: contract snapshot, pagination, cancellation, safe retries, context read/write/conflict, changes replay, action receipt retrieval.
+Depends on: T16, T18.
+Subdivide package scaffolding into smaller edits if a single edit wave exceeds the five-file guideline.
+
+## T23. Add authenticated MCP and agent management
+
+- [ ] Mount explicit tools over shared services; include source/context resources where useful.
+- [ ] Wire delegated OAuth with durable credential storage, audience checks, and scope mapping.
+- [ ] Add agent permission/revoke UI and test real MCP clients with different principals.
+
+Files: `backend/mcp_server.py`, `backend/auth.py`, `web-app/src/pages/listen/AgentsDialog.tsx`, `tests/test_mcp.py`, `sdk/examples/`.
+Verify: auth/discovery/schema/read/write/conflict/revoke; client-version compatibility; no admin/capture routes auto-exposed.
+Depends on: T05, T21, T22.
+
+## Checkpoint D. Human and agent interfaces agree
+
+- [ ] Fullscreen listener works without a permanent dashboard.
+- [ ] Both SDKs and MCP see the same authorized context revisions and receipts.
+- [ ] Revocation and stale writes are verified, not only documented.
+
+## T24. Build and serve the complete website
+
+- [ ] Serve the website over HTTPS with microphone permissions policy, secure session cookies, and appropriate CSP.
+- [ ] Build frontend assets into the API image; package shared modules in API/media images.
+- [ ] Add worker command, persistent storage, reverse-proxy routes, and configurable local ports.
+
+Files: `web-app/vite.config.ts`, `backend/Dockerfile`, `realtime/Dockerfile`, `docker-compose.yml`, `Caddyfile`.
+Verify: fresh browser visit, HTTPS microphone permission, WebRTC routing, API/MCP routing, worker restart, page reconnect, and secret-free web assets.
+Depends on: T19, T21, T23.
+
+## T25. Complete multi-listener handoff and capability coverage
+
+- [ ] Verify capture-group membership, room preference, ownership lease, and laptop takeover.
+- [ ] Verify notes, matching, exports, meeting links, and scoped account mapping.
+- [ ] Rehearse safe release rollback with recorded sources and action receipts preserved.
+
+Files: `backend/listeners.py`, `web-app/src/lib/capture/controller.ts`, `backend/api_v1.py`, `tests/test_handoff.py`, `tests/test_capabilities.py`.
+Verify: simultaneous room/laptop, network partition, stale owner, different private meeting, account isolation and meeting deep links.
+Depends on: T24.
+
+## T26. Validate, soak, and hand off
+
+- [ ] Run all local behavior, contract, SDK and browser, migration, and failure-recovery checks.
+- [ ] Run approved model/audio comparison and stage a 24-hour soak before claiming live 24/7 verification.
+- [ ] Report implemented/tested/web-built/migrated/deployed/live-verified separately with evidence and remaining blockers.
+
+Files: `scripts/check.py`, `scripts/replay_capture.py`, `tests/fixtures/day.json`, `docs/operations.md`, `docs/release-evidence.md`.
+Verify: every acceptance row in the plan has a pass, failure, or explicit unrun reason; no unexplained skipped work.
+Depends on: T25.
+
+## Final boundaries
+
+- [ ] Source changes reviewed; Sentrux gate run if the execution checkout has a baseline.
+- [ ] CI configuration remains unchanged unless the user requested it.
+- [ ] Production migrations, deployment, package publication, and recording activation occur only within explicit authorization.
+- [ ] Existing handoff material and any future stored recordings/sessions are preserved.
+- [ ] No false claim of real-world model quality, delivered side effects, or 24-hour uptime from mocked tests.

@@ -1,0 +1,142 @@
+from pathlib import Path
+import html, json, re
+root=Path(__file__).resolve().parents[1]
+plan=(root/'tasks/plan.md').read_text(encoding='utf-8')
+todo=(root/'tasks/todo.md').read_text(encoding='utf-8')
+handoff=(root/'HANDOFF.md').read_text(encoding='utf-8')
+code_blocks=[]
+def inline(s):
+    tokens={}
+    def hold(m):
+        key=f'@@CODE{len(tokens)}@@';tokens[key]='<code>'+html.escape(m.group(1))+'</code>';return key
+    s=re.sub(r'`([^`]+)`',hold,s)
+    s=html.escape(s)
+    s=re.sub(r'\[([^\]]+)\]\(([^)]+)\)',lambda m:'<a href="'+html.escape(html.unescape(m.group(2)),quote=True)+'">'+m.group(1)+'</a>',s)
+    s=re.sub(r'\*\*([^*]+)\*\*',r'<strong>\1</strong>',s)
+    for k,v in tokens.items():s=s.replace(k,v)
+    return s
+
+def md(text):
+    lines=text.splitlines();out=[];i=0
+    while i<len(lines):
+        line=lines[i]
+        if not line.strip():i+=1;continue
+        if line.startswith('```'):
+            lang=line[3:].strip();i+=1;body=[]
+            while i<len(lines) and not lines[i].startswith('```'):body.append(lines[i]);i+=1
+            idx=len(code_blocks);names={'json':'context-response.json','typescript':'sdk-example.ts','bash':'check-commands.sh'}
+            name=names.get(lang,f'example-{idx}.txt');contents='\n'.join(body)+'\n';code_blocks.append({'id':f'code-{idx}','name':name,'contents':contents})
+            (root/'snippets').mkdir(exist_ok=True);(root/'snippets'/name).write_text(contents,encoding='utf-8')
+            out.append(f'<div class="code-intro"><span>Proposed contract · {html.escape(name)}</span><a href="snippets/{name}" download>Download</a></div><div id="code-{idx}" class="code-view"><p class="small">Loading syntax view…</p></div>');i+=1;continue
+        if line.startswith('|'):
+            rows=[]
+            while i<len(lines) and lines[i].startswith('|'):
+                parts=[p.strip() for p in lines[i].strip('|').split('|')]
+                if not all(re.fullmatch(r'[-: ]+',p) for p in parts):rows.append(parts)
+                i+=1
+            head=rows.pop(0);out.append('<div class="table-wrap"><table><thead><tr>'+''.join('<th>'+inline(x)+'</th>' for x in head)+'</tr></thead><tbody>'+''.join('<tr>'+''.join('<td>'+inline(c)+'</td>' for c in r)+'</tr>' for r in rows)+'</tbody></table></div>');continue
+        if line.startswith('#'):
+            level=len(line)-len(line.lstrip('#'));level=min(level,5);out.append(f'<h{level}>'+inline(line.lstrip('#').strip())+f'</h{level}>');i+=1;continue
+        if line.startswith('- '):
+            items=[]
+            while i<len(lines) and lines[i].startswith('- '):
+                v=lines[i][2:];check=v.startswith('[ ] ');v=v[4:] if check else v
+                items.append(('<li class="check"><span aria-hidden="true">□</span><span>' if check else '<li>')+inline(v)+('</span></li>' if check else '</li>'));i+=1
+            out.append('<ul>'+''.join(items)+'</ul>');continue
+        if re.match(r'\d+\. ',line):
+            items=[]
+            while i<len(lines) and re.match(r'\d+\. ',lines[i]):items.append('<li>'+inline(re.sub(r'^\d+\. ','',lines[i]))+'</li>');i+=1
+            out.append('<ol>'+''.join(items)+'</ol>');continue
+        body=[]
+        while i<len(lines) and lines[i].strip() and not re.match(r'^(#|\||```|- |\d+\. )',lines[i]):body.append(lines[i]);i+=1
+        out.append('<p>'+inline(' '.join(body))+'</p>')
+    return '\n'.join(out)
+sections=[]
+for n,m in enumerate(re.finditer(r'^## (\d{2})\. (.+)$',plan,re.M)):
+    start=m.end();nxt=re.search(r'^## \d{2}\. ',plan[start:],re.M);end=start+nxt.start() if nxt else len(plan)
+    number,title=m.group(1),m.group(2)
+    sections.append({'id':'s'+number,'number':number,'title':title,'html':md(plan[start:end])})
+assert len(sections)==20
+# Task groups stay searchable, with individual acceptance criteria exposed on expansion.
+task_parts=re.split(r'(?=^## )',todo,flags=re.M);task_html=[]
+for part in task_parts[1:]:
+    title,_,body=part.partition('\n');title=title[3:]
+    slug='t'+re.sub(r'[^a-z0-9]+','-',title.lower()).strip('-')
+    task_html.append(f'<details class="task" id="{slug}"><summary>{html.escape(title)}</summary><div class="detail-body">{md(body)}</div></details>')
+task_count=len([x for x in task_parts if x.startswith('## T')]);assert task_count==26
+navigation=''.join(f'<button type="button" data-target="{s["id"]}"><span>{s["number"]}</span>{html.escape(s["title"])}</button>' for s in sections)
+section_html=''.join(f'<details class="section" id="{s["id"]}"'+(' open' if s['id'] in ('s01','s02') else '')+f'><summary><span class="section-number">{s["number"]}</span><h2>{html.escape(s["title"])}</h2></summary><div class="detail-body">{s["html"]}</div></details>' for s in sections)
+full_prompt=handoff+'\n\n---\n\n'+plan+'\n\n---\n\n'+todo
+(root/'EXECUTE.txt').write_text(full_prompt)
+body='''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sanctum — one-shot revamp blueprint</title>
+<style>
+:root{color-scheme:dark;--bg:#0a0c10;--panel:#12161e;--panel2:#171c26;--line:#222936;--ink:#e7ecf3;--soft:#a7adb8;--muted:#8b919c;--accent:#22d3c5;--blue:#3d7dff;--amber:#f2a23b;font:15px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}a{color:#8db7ff;text-underline-offset:4px}button,input,select{font:inherit}button{padding:9px 13px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);cursor:pointer}button:hover{background:var(--panel2)}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}h1{font-size:clamp(32px,4vw,50px);line-height:1.2;letter-spacing:-.025em;margin:10px 0 18px;padding:3px 0}h2{font-size:21px;line-height:1.4;letter-spacing:-.015em;margin:0}h3{font-size:18px;margin:25px 0 12px}h4,h5{font-size:15px;line-height:1.5;margin:24px 0 10px}p{color:var(--soft);margin:0 0 15px}strong{color:var(--ink)}code{font-family:ui-monospace,"SFMono-Regular",monospace;font-size:.88em;overflow-wrap:anywhere;color:var(--accent)}ul,ol{padding-left:23px;color:var(--soft);margin:12px 0 20px}li{margin:8px 0}.layout{display:grid;grid-template-columns:245px minmax(0,1fr);max-width:1540px;margin:auto}.index{position:sticky;top:0;align-self:start;max-height:100svh;overflow:auto;padding:28px 19px 30px;border-right:1px solid var(--line)}.brand{font-size:16px;font-weight:650;letter-spacing:.06em;margin-bottom:18px}.index a,.index button{display:flex;gap:10px;font-size:11px;color:var(--muted);text-decoration:none;padding:6px 3px;line-height:1.5}.index button{width:100%;background:none;border:0;text-align:left;border-radius:3px}.index a:hover,.index button:hover{color:var(--ink)}.index a span,.index button span{color:var(--accent);font-family:ui-monospace,monospace;flex:0 0 20px}.index .extra{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}.content{min-width:0;padding:38px 38px 70px}.eyebrow{color:var(--accent);font:11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.14em}.lead{font-size:17px;max-width:900px}.meta{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0;margin:23px 0}.meta strong{font-size:17px;margin-right:5px}.toolbar{display:flex;gap:9px;flex-wrap:wrap;margin:22px 0}.toolbar .primary{border-color:#235750;color:var(--accent)}.small{font-size:12px;color:var(--muted)}.notice{border-left:3px solid var(--amber);background:var(--panel);padding:17px 20px;margin:20px 0}.notice p:last-child{margin-bottom:0}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:27px 0 18px}input[type=search]{min-width:160px;flex:1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink)}.controls button{font-size:12px}.section{border-top:1px solid var(--line);scroll-margin-top:20px}.section:not([open])>.detail-body,.task:not([open])>.detail-body{display:none}.section>summary{display:flex;align-items:baseline;gap:17px;cursor:pointer;list-style:none;padding:22px 0}.section>summary::-webkit-details-marker{display:none}.section>summary:after{content:'+';color:var(--muted);margin-left:auto;font-size:20px}.section[open]>summary:after{content:'−'}.section-number{font:12px ui-monospace,monospace;color:var(--accent);flex:0 0 22px}.detail-body{padding:0 0 25px 39px;min-width:0}.detail-body>*{min-width:0}.table-wrap{overflow:auto;margin:20px 0;max-width:100%}table{border-collapse:collapse;width:100%;min-width:570px;text-align:left}th{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.07em;background:var(--panel)}td,th{border:1px solid var(--line);padding:12px 13px;vertical-align:top;overflow-wrap:anywhere}td{font-size:13px;color:var(--soft)}td:first-child{min-width:160px}td code{font-size:12px}.code-intro{display:flex;gap:15px;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:24px}.code-view{border:1px solid var(--line);border-radius:6px;margin:10px 0 22px;overflow:auto;min-width:0}.code-view>.small{padding:16px}.task{border:1px solid var(--line);border-radius:7px;margin:10px 0;background:var(--panel)}.task>summary{cursor:pointer;padding:15px 17px;font-weight:550;font-size:14px}.task .detail-body{padding:0 18px 18px}.check{list-style:none;display:flex;gap:10px;margin-left:-20px}.check>span:first-child{color:var(--muted)}.check>span:last-child{min-width:0}.diagram{background:var(--panel);padding:22px 12px;border:1px solid var(--line);border-radius:7px;margin:20px 0;overflow:auto}.mermaid{margin:0;text-align:center}.mermaid svg{max-width:100%;height:auto}.preview{width:100%;height:480px;border:1px solid var(--line);border-radius:7px;background:var(--bg);margin:17px 0}.split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.split>*{min-width:0}.overview{padding:22px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}.overview h3{margin:0 0 12px}.overview p:last-child{margin-bottom:0}.gate-form{display:grid;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:22px;margin:22px 0}.gate-form label{display:grid;gap:7px;font-size:13px;color:var(--soft)}select,input[type=text]{width:100%;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:9px;color:var(--ink)}#copy-status,#decision-status{font-size:12px;color:var(--accent);min-height:20px}.handoff-text{width:100%;min-height:200px;padding:15px;border:1px solid var(--line);background:var(--panel);color:var(--soft);border-radius:6px;font:12px/1.7 ui-monospace,monospace;resize:vertical}.footer{font-size:11px;color:var(--muted);margin-top:35px}.anchor-block{scroll-margin-top:20px;margin-top:36px;padding-top:24px;border-top:1px solid var(--line)}[hidden]{display:none!important}@media(max-width:1000px){.layout{grid-template-columns:185px minmax(0,1fr)}.content{padding:28px 22px 50px}.index{padding:25px 14px}.index a,.index button{font-size:10px}.split{grid-template-columns:minmax(0,1fr)}.detail-body{padding-left:0}.preview{height:430px}}@media(max-width:720px){.layout{display:block}.index{position:static;max-height:none;padding:14px 17px;border:0;border-bottom:1px solid var(--line)}.index nav{display:none}.brand{margin:0}.content{padding:25px 17px 45px}.section>summary{gap:10px}.section h2{font-size:18px}.preview{height:430px}.section-number{flex-basis:19px}.toolbar button{font-size:12px}}
+</style></head><body><div class="layout"><aside class="index"><div class="brand">✦ SANCTUM</div><nav aria-label="Implementation sections"><button type="button" data-target="top">Overview</button>NAVIGATION<div class="extra"><a href="#architecture">System map</a><a href="#visual">Approved visual direction</a><a href="#tasks">TASKCOUNT delivery tasks</a><a href="#decisions">Activation choices</a><a href="#handoff">One-shot handoff</a></div></nav></aside><main class="content">
+<header id="top"><div class="eyebrow">Clean-build blueprint · 28 September 2026</div><h1>One listener.<br>Shared context. Quiet execution.</h1><p class="lead">A complete website-first revamp contract for room computers and laptops, using browser microphone access and preserving the fullscreen waveform.
+Capture, R2 evidence, automatic meetings, time-aware memory, Pipedream actions, SDKs, and MCP are specified together.</p><div class="meta"><span><strong>TASKCOUNT</strong> ordered tasks</span><span><strong>20</strong> implementation sections</span><span>Baseline <code>49aef4a</code></span><span>Handoff only · no application source</span></div><div class="toolbar"><button class="primary" id="copy-all">Copy complete one-shot brief</button><a href="EXECUTE.txt" download>Download brief</a><a href="tasks/plan.md" download>Implementation Markdown</a><a href="tasks/todo.md" download>Task checklist</a><a href="https://github.com/undeemed/sanctum/archive/refs/heads/main.zip" download>Download complete bundle</a></div><div id="copy-status" role="status"></div></header>
+<div class="notice"><p><strong>One-shot means one integrated delivery with checks throughout.</strong>
+The website and microphone scope are confirmed.
+Keep the capture tab open and device awake; server-side agent work continues independently.
+Identity configuration and archive policy remain explicit activation choices.</p></div>
+<div class="split"><div class="overview"><h3>Keep what defines Sanctum</h3><p>Original fluctuating waveform, silent default, requested speech, existing capabilities, Pipedream, React, and Pipecat. MySQL is the selected structured store; R2 holds recordings.</p></div><div class="overview"><h3>Change ownership of work</h3><p>Review overlays do not interrupt the browser microphone.
+Closing the capture tab ends recording.
+Durable jobs and shared context remain on the server.</p></div></div>
+<section id="architecture" class="anchor-block"><h2>System map</h2><div class="diagram"><div class="mermaid">
+flowchart TD
+  APP["Website: room computer or laptop"] --> SPOOL["IndexedDB: pending audio chunks"]
+  APP --> MEDIA["Existing WebRTC + Pipecat"]
+  SPOOL --> API["Shared API + authorization"]
+  API --> R2["Private R2 recordings"]
+  MEDIA --> API
+  API --> MYSQL["MySQL: sources, meetings, context, jobs"]
+  MYSQL --> WORKER["Durable background worker"]
+  WORKER --> PD["Pipedream: authorized actions"]
+  WORKER --> MYSQL
+  MYSQL --> CONTEXT["Versioned, scoped context"]
+  CONTEXT --> SDK["TypeScript + Python SDKs"]
+  CONTEXT --> MCP["Remote MCP"]
+  CONTEXT --> UI["Fullscreen listener + review overlays"]
+</div></div><p class="small">Two cloud code images, with a separate worker process from the API image.
+The browser captures while its tab remains active.
+R2-confirmed source evidence and server-side jobs survive capture interruptions.</p></section>
+<section id="visual" class="anchor-block"><h2>Approved visual direction</h2><p>Fullscreen listening first.
+Use the current kiosk waveform geometry, not a new dashboard aesthetic.</p><iframe class="preview" src="design/listener-reference.html" title="Approved fullscreen listening design" loading="lazy" allow="fullscreen"></iframe><p class="small">Independent illustration matching the approved visual contract.
+Simulated audio only; no microphone access.
+<a href="design/listener-reference.html" target="_blank" rel="noreferrer">Open at full size</a>.</p></section>
+<div class="controls"><input type="search" id="search" placeholder="Search the implementation contract…" aria-label="Search implementation sections"><button id="expand">Expand all sections</button><button id="collapse">Collapse sections</button></div>
+SECTIONS
+<section id="tasks" class="anchor-block"><h2>Ordered implementation tasks</h2><p>Each slice includes touched files, dependencies, acceptance criteria, and a verification step.
+The checkpoints are internal quality gates, not routine permission prompts.</p>TASKS</section>
+<section id="decisions" class="anchor-block"><h2>Activation choices</h2><p>Website-first capture on room computers and laptops is settled.
+Use this form to resolve remaining deployment choices; selections stay local until queued.</p><form class="gate-form" id="decision-form" data-lavish-question="oneshot-activation"><p class="small"><strong>Confirmed:</strong> website-first microphone capture on room computers and laptops. No installed application.</p><label>Sign-in provider<input type="text" name="identity" placeholder="Google OIDC, or the existing issuer to reuse" required></label><label>Speech outside detected meetings<select name="outside" required><option value="">Select an archive policy</option><option>Keep all captured speech as provisional conversations</option><option>Archive identified meetings only; keep unassigned speech temporarily</option></select></label><label>How long should saved recordings and transcripts be kept?<input type="text" name="retention" placeholder="Until I delete them, or a fixed number of days" required><span class="small">This controls automatic deletion of confirmed meeting records. No automatic expiry has been selected.</span></label><label id="unassigned-duration" hidden>How long may speech wait before being assigned to a meeting?<input type="text" name="unassigned_duration" placeholder="For example: 30 minutes"><span class="small">Only applies when archiving detected meetings. This is audio whose meeting is not yet known, not a recording waiting for upload.</span></label><button type="submit">Queue these decisions</button><div id="decision-status" role="status">No choices submitted.</div></form><p class="small">Queuing choices does not run migrations, provision cloud services, publish packages, or activate recording.</p></section>
+<section id="handoff" class="anchor-block"><h2>Copy-ready execution handoff</h2><p>The top button copies this handoff plus the full implementation contract and all TASKCOUNT tasks.
+The repository includes independent visual references and the complete implementation plan.</p><textarea id="handoff-text" class="handoff-text" readonly aria-label="One-shot handoff prompt">HANDOFF</textarea><p class="small">The executor must report code, local tests, model evaluation, packaging, migration, deployment, and 24/7 verification separately.</p></section>
+<footer class="footer">Design source: the user's approved Sanctum fullscreen direction and documented design-token palette.
+Lavish presents the implementation plan; the application repositories remain unchanged.</footer>
+</main></div>
+<script id="bundle-data" type="application/json">BUNDLEDATA</script>
+<script>
+const data=JSON.parse(document.querySelector('#bundle-data').textContent);
+const sections=[...document.querySelectorAll('details.section')];
+const search=document.querySelector('#search');
+document.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>{const target=document.getElementById(b.dataset.target);search.value='';sections.forEach(s=>s.hidden=false);if(target.matches('details'))target.open=true;target.scrollIntoView({block:'start'});});
+search.addEventListener('input',()=>{const q=search.value.trim().toLowerCase();for(const s of sections){s.hidden=!!q&&!s.textContent.toLowerCase().includes(q);if(q&&!s.hidden)s.open=true;}});
+document.querySelector('#expand').onclick=()=>sections.forEach(s=>s.open=true);
+document.querySelector('#collapse').onclick=()=>sections.forEach(s=>s.open=false);
+function reveal(){const target=document.getElementById(location.hash.slice(1));if(!target)return;if(target.matches('details')){search.value='';sections.forEach(s=>s.hidden=false);target.open=true;}target.scrollIntoView({block:'start'});}
+addEventListener('hashchange',reveal);if(location.hash)reveal();
+document.querySelector('#copy-all').onclick=async()=>{const status=document.querySelector('#copy-status');try{await navigator.clipboard.writeText(data.full_prompt);status.textContent='Copied: handoff, full implementation contract, and TASKCOUNT tasks.';}catch{status.textContent='Clipboard unavailable. Download the complete brief instead.';}};
+const outsidePolicy=document.querySelector('select[name="outside"]');outsidePolicy.addEventListener('change',()=>{const needed=outsidePolicy.value.includes('temporarily');const wrapper=document.querySelector('#unassigned-duration');wrapper.hidden=!needed;wrapper.querySelector('input').required=needed;wrapper.querySelector('input').disabled=!needed;});
+document.querySelector('#unassigned-duration input').disabled=true;
+document.querySelector('#decision-form').onsubmit=e=>{e.preventDefault();const values=Object.fromEntries(new FormData(e.currentTarget));const prompt='Update the Sanctum one-shot plan with these deployment decisions: '+Object.entries(values).map(([k,v])=>k+': '+v).join('; ')+'. Website microphone capture on room computers and laptops is required; native applications and system-audio capture are outside this version. These are plan decisions, not authorization to deploy, migrate production, or activate recording.';const status=document.querySelector('#decision-status');if(window.lavish?.queuePrompt){window.lavish.queuePrompt(prompt,{tag:'decision',text:'One-shot deployment choices',queueKey:'oneshot-activation',element:e.currentTarget,data:values});status.textContent='Queued. Use Send to Agent to submit.';}else{status.textContent='Selections are local. Share them with the agent to update the plan.';}};
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:true,securityLevel:'strict',theme:'base',themeVariables:{background:'#12161e',primaryColor:'#171c26',primaryTextColor:'#e7ecf3',primaryBorderColor:'#3d7dff',lineColor:'#8b919c',edgeLabelBackground:'#12161e',fontFamily:'system-ui',fontSize:'15px'},flowchart:{htmlLabels:false,curve:'basis',useMaxWidth:true}});
+try{const {File}=await import('https://esm.sh/@pierre/diffs@1.2.10?bundle');for(const c of data.code_blocks){const host=document.getElementById(c.id);host.replaceChildren();new File({theme:{light:'github-light',dark:'github-dark'},themeType:'dark',overflow:'wrap'}).render({containerWrapper:host,file:{name:c.name,contents:c.contents}});}}catch{for(const c of data.code_blocks){const host=document.getElementById(c.id);host.textContent='Syntax viewer unavailable. Use the Download link above or the full Markdown contract.';host.style.padding='16px';}}
+</script></body></html>'''
+body=body.replace('TASKCOUNT',str(task_count)).replace('NAVIGATION',navigation).replace('SECTIONS',section_html).replace('TASKS',''.join(task_html)).replace('HANDOFF',html.escape(handoff)).replace('BUNDLEDATA',json.dumps({'full_prompt':full_prompt,'code_blocks':code_blocks}).replace('</','<\\/'))
+(root/'index.html').write_text(body)
+assert all((root/'snippets'/c['name']).exists() for c in code_blocks)
+print(json.dumps({'sections':len(sections),'tasks':task_count,'code_blocks':len(code_blocks),'html_bytes':len(body.encode()),'brief_words':len(full_prompt.split())}))
