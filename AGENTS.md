@@ -27,7 +27,9 @@ Use current official provider documentation and pin compatible dependencies.
 Implement concrete modules and reuse platform features; avoid speculative frameworks.
 Use synthetic fixtures and stub external writes in tests.
 Do not copy private recordings, contacts, seed data, tokens, or environment files from the reference system.
-Keep quality tooling local unless asked to modify CI.
+The repository CI validates the handoff and deploys documentation.
+Extend it with real application checks as corresponding implementation is added; avoid placeholder tests.
+Use read-only permissions for pull-request checks and keep production secrets out of documentation CI.
 If a Sentrux baseline exists by implementation time, run its gate and preserve the score.
 Do not add AI/agent co-author attribution to commits.
 
