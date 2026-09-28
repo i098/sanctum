@@ -1,0 +1,20 @@
+{
+  "name": "sanctum-handoff",
+  "private": true,
+  "type": "module",
+  "description": "Sanctum implementation blueprint and documentation tools",
+  "engines": { "node": ">=24.12.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && node scripts/handoff.ts check",
+    "docs:render": "node scripts/handoff.ts render",
+    "docs:build": "node scripts/handoff.ts build"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "fast-xml-parser": "5.11.1",
+    "parse5": "8.0.1",
+    "typescript": "7.0.2"
+  }
+}

@@ -9,6 +9,8 @@ Reference links are historical evidence and product context, not implementation 
 
 ## Product invariants
 
+- TypeScript + stable Effect v3 on Node.js; npm lockfile; one application image for API and worker entrypoints.
+- Python belongs only to the promised client SDK; capture, server, workers and MCP use TypeScript.
 - Website first: browser microphone permission, no installed application requirement.
 - The capture tab must stay open; do not claim recording after browser closure or OS sleep.
 - Fullscreen listening view with the approved irregular waveform; no permanent dashboard/sidebar.
@@ -22,6 +24,8 @@ Reference links are historical evidence and product context, not implementation 
 
 ## Execution
 
+Run `npm run docs:render` after editing handoff sources, then `npm run check` and `npm run docs:build`.
+The checked template is `scripts/handoff-template.html`; generated HTML/brief/snippets must not be hand-edited.
 Follow the ordered checklist and finish its local checks before reporting a slice complete.
 Use current official provider documentation and pin compatible dependencies.
 Implement concrete modules and reuse platform features; avoid speculative frameworks.

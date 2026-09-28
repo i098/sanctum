@@ -1,6 +1,6 @@
 # Sanctum: clean-build implementation contract
 
-Prepared 2026-09-26; repackaged for a clean build on 2026-09-28.
+Prepared 2026-09-26; clean-build contract revised for TypeScript + Effect on 2026-09-28.
 Reference system: `42nights/sanctum` at `49aef4a49fa5facc485d5858690860fd028491d7`.
 Target repository: `undeemed/sanctum`.
 Build from an empty application tree; do not clone, copy, vendor, or import the old application source.
@@ -13,7 +13,7 @@ The approved visual direction is described in `docs/DESIGN.md` and illustrated b
 
 Deliver one integrated clean build: a silent ambient listener, isolated automatic meetings, complete recording/transcript evidence, selective time-aware context, authorized background work, and shared agent access.
 Build a website first, using browser microphone access on room computers and laptops.
-Both use the same account, meeting identifiers, API, context model, and current WebRTC capture path.
+Both use the same account, meeting identifiers, API, context model, and authenticated WebSocket capture path.
 Opening or closing a review overlay must not stop capture; closing the browser tab stops microphone capture.
 No installed application, Electron shell, browser extension, or native capture component is in this version.
 A sleeping or powered-off device cannot record; display and store a capture gap rather than claiming otherwise.
@@ -43,6 +43,8 @@ A mock dashboard or an API-shaped stub does not satisfy this contract.
 
 - Capture surface: website microphone access on both room computers and laptops; keep the listener tab open.
 - Default UI: fullscreen listening, preserving the current waveform.
+- Runtime: TypeScript on Node.js 24 LTS with stable Effect v3; one application image with API and worker entrypoints.
+- Media: browser AudioWorklet to authenticated WebSocket ingest; cloud speech APIs, with no separate media service.
 - Storage: MySQL 8.4 LTS with InnoDB for structured data; Cloudflare R2 for audio.
 - MySQL is the only runtime structured store. Legacy data import is outside this first clean build unless separately requested.
 - Integrations: Pipedream with catalog discovery and the specified Google operations.
@@ -50,7 +52,7 @@ A mock dashboard or an API-shaped stub does not satisfy this contract.
 
 ### Still to choose
 
-- Browser microphone input is the initial scope; system-audio capture and native background behavior are not required.
+- MCP authorization server: select a maintained server that issues audience-bound Sanctum access tokens and supports the chosen protocol; this is separate from human login.
 - Identity issuer: proposed default is Google OIDC for human login, separate from Pipedream action credentials; allow deployment to supply its existing issuer instead.
 - Saved meeting retention: how long confirmed recordings and transcripts are kept before automatic deletion; no automatic expiry has been authorized.
 - Unassigned audio buffer: how long to hold captured speech before it has been assigned to a meeting, if the policy archives detected meetings only. This is separate from the offline upload recovery queue.
@@ -100,31 +102,53 @@ Pin exact compatible versions during implementation rather than copying unverifi
 
 | Layer | Chosen technology | Purpose and status |
 | --- | --- | --- |
-| Website | React + TypeScript + Vite + Tailwind CSS | New frontend; follow the design tokens and approved fullscreen listening contract. |
-| Waveform | Canvas 2D + Web Audio API | Recreate the specified irregular waveform and connect it to the real microphone analyser. |
-| Microphone | Browser `getUserMedia` | HTTPS microphone permission; no installed application. |
-| Live media | WebRTC + Pipecat SmallWebRTC | New low-latency media pipeline with scoped identity and reconnect behavior. |
-| Recording buffer | AudioWorklet + independent PCM16 WAV chunks + IndexedDB | Bounded browser recovery queue; only R2 acknowledgement means remote durability. |
-| API | Python 3.12 + FastAPI + Pydantic | Shared validated API/domain logic for website, SDKs, MCP, and workers. |
-| Database | MySQL 8.4 LTS + InnoDB | Authoritative meetings, sources, context revisions, memberships, grants, receipts, and jobs. |
-| Python database driver | MySQL Connector/Python with its built-in connection pool | Use dictionary cursors, connection pooling, and explicit transaction boundaries. |
-| Retrieval | MySQL FULLTEXT plus exact batched cosine ranking with NumPy for semantic matching | Implement semantic matching using embeddings stored in MySQL; no pgvector dependency or new vector service in the baseline. |
-| Recording archive | Cloudflare R2 through its S3 API; boto3 server-side | Private audio objects, manifests, and signed playback access. |
-| Background processing | Python worker + MySQL InnoDB job/lease table | Durable work and retries without a separate queue product. |
-| Fast LLM | Cerebras `qwen-3.8-27b` | Target for requested voice and structured notes/memory; evaluate quality before switching production defaults. |
-| Planner and research | Anthropic client with an explicitly configured model | Implement hosted web search and tool continuations through the official API. |
-| Transcription | Deepgram Nova-3 streaming through Pipecat | Explicit model target; verify language/input requirements in the replay suite. |
-| Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 as evaluated upgrade targets | Live speaker labels and optional recording correction; enrollment/user confirmation maps labels to names. |
-| Speech output | Cartesia Sonic-3 | Requested speech output, strictly gated by a direct request. Google voice cloning is not required. |
-| External integrations | Pipedream Connect + Proxy/component actions | Account handling, relevant tool discovery, and authorized execution across its catalog. |
-| Human authentication | OIDC through Authlib; Google OIDC proposed as the default issuer | Separate login from Pipedream action credentials; actual issuer configuration remains an activation choice. |
-| Remote agent access | Python FastMCP mounted with FastAPI | Explicit MCP tools over the same domain functions and authorization checks. |
-| SDKs | TypeScript with native fetch; Python with HTTPX | Thin typed clients generated from the shared OpenAPI contract, plus ergonomic helpers. |
-| Tests | Python unittest; Vitest for web logic; Playwright for browser flows | Focus on isolation, audio recovery, silence, source alignment, and actual user/agent behavior. |
-| Hosting | Docker Compose + Caddy | Build the website into the API image and run the worker from the same codebase. |
+| Website | React + TypeScript + Vite + Tailwind CSS | Preserve the approved fullscreen listening contract. |
+| Waveform and capture | Canvas 2D + Web Audio + AudioWorklet + `getUserMedia` | One microphone stream, real levels, sample-clocked audio; HTTPS permission required. |
+| Live media | Binary PCM over authenticated WebSocket to Node.js | One live ingest path, explicit source anchors, bounded queues, reconnect and speech cancellation. |
+| Recording buffer | Independent PCM16 WAV chunks + IndexedDB | Browser recovery journal; only an R2 receipt means remote durability. |
+| API and runtime | Node.js 24 LTS + TypeScript + `effect` v3 + `@effect/platform` + `@effect/platform-node` | Effect HttpApi, Schema, typed failures, resource scopes, bounded concurrency and cancellation. |
+| Database | MySQL 8.4 LTS + InnoDB + `@effect/sql-mysql2` | Parameterized SQL, pooled connections, transactions, ownership constraints and durable leases. |
+| Retrieval | MySQL FULLTEXT + exact batched cosine ranking in TypeScript | Normalized float32 embeddings, scoped candidate batches, measured event-loop and memory budgets. |
+| Recording archive | Cloudflare R2 S3 API through `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner` | Private audio, manifests and scoped short-lived playback URLs. |
+| Background work | Node.js worker using Effect + MySQL job/lease table | Restart-safe accepted work, coalescing and fenced completion; no additional queue service. |
+| Fast LLM | Cerebras `qwen-3.8-27b`, through its documented HTTP API | Evaluation target for requested speech and structured notes/memory, not a measured winner. |
+| Planner and research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations, wrapped at the provider boundary. |
+| Transcription | Deepgram Nova-3 streaming API | Server-side provider connection, verified PCM encoding, source alignment and batch gap recovery. |
+| Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades | Correctable speaker tracks; names require enrollment or user confirmation. |
+| Speech output | Cartesia Sonic-3 streaming API | Requested output only, with response IDs and interruptible browser playback. |
+| Integrations | Pipedream Connect + Proxy/component APIs from TypeScript | One account-scoped client; search, inspect and request gateways. |
+| Human authentication | `openid-client` for OIDC | Google proposed, issuer still open; use verified identity plus explicit Sanctum membership. |
+| Remote agents | Official `@modelcontextprotocol/sdk` TypeScript server over Streamable HTTP | Explicit tools calling the same Effect services and authorization as REST. |
+| Public SDKs | Promise-based TypeScript client; thin Python HTTPX client | Generate wire types from OpenAPI; neither client requires Effect in consumer code. |
+| Tests | Vitest + `@effect/vitest` + Playwright | Behavior, clocks, interruption, contracts, isolation, real MySQL and browser recovery. |
+| Hosting | Docker Compose + Caddy | One Node.js application image, API and worker containers, MySQL; R2 remains external storage. |
+| Repository tooling | TypeScript on Node.js + npm | Existing handoff checks use Node's test runner; extend npm workspaces during application implementation. |
 
-Auth issuer and model-quality gates are explicit configuration/validation decisions, not reasons to replace the selected architecture.
+The application runtime and repository tools are TypeScript.
+Python is required only by consumers and tests of the promised Python SDK, not by capture, API, workers, MCP or deployment.
+Use ordinary React components; keep Effect primarily in server orchestration and the browser capture controller.
+Keep the public SDK on standard Promise, AbortSignal and JSON interfaces.
 
+### Effect boundaries and version policy
+
+Registry check on 2026-09-28: `effect` stable is 3.22.2; 4.0.0-rc.118 is a release candidate, not the selected baseline.
+Use v3 documentation and lock compatible peer versions together; for example, `@effect/sql-mysql2` 0.53.0 declares `effect` ^3.22.0, `@effect/sql` ^0.52.0 and `@effect/platform` ^0.97.0.
+Recheck registry metadata when implementing and record the exact tested lockfile; do not mix v4 imports with v3 packages.
+No application dependency is installed merely because it appears in this blueprint.
+
+Use `Effect.gen` for orchestration, `Schema` for boundary decoding and `Layer` only for concrete dependencies such as database, providers and clock.
+Wrap provider promises with cancellation signals when supported; bound timeout, retry count, concurrency and queue capacity.
+Use scoped acquisition/finalizers for sockets, timers and pool resources; release them on interruption and shutdown.
+A request disconnect cancels its request work; accepted jobs remain in MySQL and belong to the worker process.
+In-memory fibers, Queue and PubSub do not provide restart durability.
+Keep the MySQL job ledger; do not replace it with an in-memory queue or an additional workflow/cluster framework.
+Retry safe reads and classified transient failures; an external write with an ambiguous outcome becomes `unknown` for reconciliation.
+Typed failures improve control flow but do not enforce permissions, prove grounding, or make side effects exactly once.
+
+Effect Schema defines wire contracts once, then HttpApi exports OpenAPI and shared services decode all inputs.
+Use only JSON-representable wire types; domain-only transforms stay behind the wire schema.
+Adapt MCP SDK validation requirements at its boundary and test JSON Schema equivalence; do not maintain a second independently edited business schema.
+The SDK's required Zod boundary dependency is acceptable; it must not become a second domain model.
 
 ### Browser listener
 
@@ -134,7 +158,7 @@ The room computer and laptop open the same URL, choose an authorized workspace a
 No installed app or installation step is needed.
 
 Keep the capture controller above the review-overlay/router lifecycle so opening Notes, Agents, or Settings does not recreate the microphone stream.
-Use one browser WebRTC/Pipecat media path.
+Use one browser AudioWorklet-to-WebSocket live media path.
 Use Web Audio for the recreated waveform and a bounded recording tap, with IndexedDB for pending-upload recovery data.
 Keep credentials in a secure browser session; provider/R2/Pipedream secrets remain server-side.
 
@@ -145,22 +169,33 @@ Service workers are not a substitute for a live microphone document.
 Offer Screen Wake Lock where supported during active visible capture, handle rejection/release, and re-request when visible again if the user still wants it.
 Wake Lock does not override lid closure, user sleep, or every browser/OS policy.
 
-### Cloud API image
+### One application image, two entrypoints
 
-FastAPI serves `/api/v1`, the web review UI, and an explicitly defined MCP adapter.
-The same image has a worker entrypoint for context generation, final notes, R2 assembly, batch diarization, memory distillation, and authorized actions.
-Run the worker as a separate process/container using the same code and MySQL-backed job table.
-Already accepted background jobs continue if the browser closes.
-Do not add Redis, Kafka, Temporal, a separate vector database, or an agent framework for this revamp.
+The API entrypoint serves Effect HttpApi at `/api/v1`, `/mcp`, authenticated live ingest and built website assets on one HTTP server.
+Delegate `/mcp` to the official SDK transport and live upgrades to the scoped WebSocket handler; all adapters call the same domain services.
+Use `ws` for server WebSocket upgrades on the Node server; verify integration with the pinned Effect Node HTTP implementation instead of adding a second framework or port.
+The worker entrypoint runs context, final notes, recording assembly, batch transcription/diarization, memory, matching and authorized actions from the same image.
+Run API and worker as separate processes/containers with separate process-scoped resource layers and bounded pools.
+Already accepted jobs continue after the browser closes or the API restarts.
+Do not add Redis, Kafka, Temporal, a vector service or a separate media image for this version.
 MySQL is the only structured production database.
 
-### Cloud media image
+### Live media and speech ownership
 
-Implement Pipecat, Deepgram, Cartesia, and authenticated WebRTC signaling/media.
-Design offer/session setup with authorized listener, capture-epoch, and source-clock metadata.
-A WebRTC connection ID remains a transport identifier, never the meeting identity.
-Add reconnect and timestamp mapping around this path; keep this the only live media transport in the website version.
-Business work is dispatched durably through the API instead of being owned by the media connection.
+Implement concrete TypeScript adapters for Deepgram, Cartesia and optional pyannote cloud APIs.
+A socket connection ID identifies a transport attempt, never a meeting or speaker identity.
+For each provider connection, persist the source epoch/track/sample anchor and connection offset used to align returned timestamps.
+Reconnect starts a new provider offset mapping, while the application capture epoch can remain unchanged.
+Use provider keepalive/rotation rules from current documentation and release provider sockets when capture stops.
+Business work enters the durable job ledger; closing a socket never discards accepted work.
+
+Replacing the earlier media framework requires explicit tests for end-of-turn detection, output interruption, echo protection, bounded playback queues and reconnect.
+Effect manages these lifecycles; it does not supply an audio codec, speech detector or conversation policy.
+Use browser echo cancellation where supported and record assistant playback ranges; never treat generated speech as a fresh user request.
+Each permitted spoken response carries a request ID and cancellation generation checked by both server and browser before emitting audio.
+On user interruption, pause, disconnect or expired speech window, abort generation/TTS, stop current playback and discard queued chunks from the old generation.
+Reconnection must not resume an old spoken response automatically.
+Default listening, research and post-meeting completion remain silent.
 
 ### Storage
 
@@ -196,10 +231,22 @@ Retain overlapping evidence for reconciliation and avoid issuing duplicate actio
 
 The user starts listening through an explicit control, then grants microphone permission if needed.
 Handle permission pending/denied, no matching input, hardware errors, and unsupported constraints separately.
-Connect the same microphone stream to the WebRTC transport, waveform analyser, and recording tap.
-Offer metadata carries the listener, epoch, track identity, sample-rate/time anchor, and ownership generation.
-The media service maps ASR offsets to the capture epoch; test alignment and clock drift against known audio fixtures.
-Use source timestamps/sample ranges as durable identities rather than append time or a WebRTC peer ID.
+Connect the same microphone stream to the waveform analyser and AudioWorklet recording/live tap.
+After a successful authenticated WebSocket upgrade, send a validated versioned `start` message with listener, epoch, track, sample rate, channels, encoding, clock anchor and ownership generation.
+Wait for an accepted response before streaming audio.
+Use PCM16 little-endian payloads with an explicit binary frame header containing protocol version, sequence, sample start and sample count; reject malformed size/range/rate changes.
+Document byte layout and maximum frame size in the shared wire contract before implementation; test encode/decode against independent fixtures.
+A 20–100 ms live frame is an initial tuning range, separate from the 30-second archive chunk.
+Use safe integer ranges or decimal strings for counters at JSON boundaries; never silently round a 64-bit source position.
+Validate listener authorization, epoch and lease ownership on every control operation and before accepting source frames.
+
+Bound browser `WebSocket.bufferedAmount`, queued PCM bytes, server backlog and provider send backlog.
+If live ASR cannot keep up, mark the live range pending/degraded and recover it from independently uploaded recordings; never create an unbounded backlog or label it transcribed.
+Recording-buffer exhaustion still pauses capture rather than silently discarding archive data.
+A socket acknowledgement means accepted for live processing, not saved in R2.
+Track live acceptance, final transcript coverage and durable archive coverage separately.
+Map ASR offsets back to epoch/sample ranges and test drift, reconnect, duplicated frames, gaps and resampling against known fixtures.
+Use source timestamps/sample ranges as durable identities rather than append time or a socket ID.
 
 Persist final transcript segments and source watermarks continuously.
 Partial ASR text can appear visually but is not a committed fact and must not trigger irreversible actions.
@@ -284,7 +331,7 @@ Existing signed URLs remain usable until expiry, which is why their lifetime is 
 
 Use UUIDs for public identifiers and enforce workspace ownership on every reference.
 Use `DATETIME(6)` in UTC for new wall-clock fields, store IANA timezone separately, and retain integer sample offsets for audio ranges.
-Set every database connection to UTC and normalize Python timestamps at the boundary; MySQL DATETIME does not store a timezone.
+Set every database connection to UTC and decode UTC timestamps through the TypeScript boundary; MySQL DATETIME does not store a timezone.
 Use native `JSON` for typed payloads, not as a substitute for ownership columns or uniqueness constraints.
 Use explicit case-sensitive/binary collation for identifiers and idempotency keys; choose and test text-search collation separately.
 Use `utf8mb4` for human text, bounded indexed identifier columns, and matching column types for composite ownership foreign keys.
@@ -295,7 +342,7 @@ Every owned table includes `workspace_id`; cross-table references must enforce m
 | `workspaces` | ID, name, IANA timezone, context event counter, permission revision, configured capture/retention policy. |
 | `principals` + `workspace_members` | Human/agent/device principal; verified issuer/subject or credential identity; explicit workspace membership and role. Never infer membership from an email domain. |
 | `meetings` | Workspace, listener/group, lifecycle state, title, start/end UTC, boundary revision, source coverage, notes JSON/revision, processing state. Use a meeting-native schema. |
-| `meeting_access` | Session/principal or approved workspace-visible scope; restrictive default for migrated unknown ownership. |
+| `meeting_access` | Session/principal or approved workspace-visible scope; restrictive default until ownership is explicitly assigned. |
 | `listeners` | Device identity, mode, selected sources, heartbeat, lease owner/generation, current capture epoch, browser capabilities, health. |
 | `recording_chunks` | Epoch/track/sequence, sample start/count/rate, UTC anchor, byte length, SHA-256, R2 object key, upload state. Unique source identity; hash conflicts return 409. |
 | `meeting_ranges` | Meeting/source intervals plus boundary revision; used for split/merge and safe audio assembly. |
@@ -321,9 +368,12 @@ Keep heuristic dedupe as a suggestion layer above stable action IDs and receipts
 
 Use MySQL 8.4 LTS as the selected baseline and pin a supported patch during implementation.
 All transactional tables use InnoDB.
-Connector/Python returns dictionary rows through explicit dictionary cursors; normalize JSON decoding in one boundary helper rather than assuming psycopg's row/JSON behavior.
-Use its built-in fixed-size pool and turn pool exhaustion into bounded backpressure, not an unhandled error or an unbounded new connection.
-Return connections and reset transaction state on every success/failure path; keep synchronous driver calls off the async media event loop.
+Use `@effect/sql-mysql2` with bounded pool capacity and acquisition deadlines; decode returned rows using Effect Schema.
+Configure mysql2 date/number handling deliberately: preserve DATETIME(6) microseconds as UTC strings and unsafe BIGINT/DECIMAL values as validated strings instead of JavaScript Number.
+A JavaScript Date only preserves milliseconds; use it only where that precision is sufficient.
+Normalize JSON, boolean, buffer and null handling at one database boundary.
+Use scoped transactions and connection cleanup on success, failure, cancellation and shutdown.
+Do not hold transactions open while waiting on model or provider calls, and do not block the audio event loop with unbounded synchronous ranking or audio assembly.
 
 Claim jobs inside a short transaction using `SELECT ... FOR UPDATE SKIP LOCKED`, then write owner/lease/generation and commit before calling a model or provider.
 Use an index beginning with eligible status and available time; verify the actual query plan and lock behavior under concurrent workers.
@@ -334,14 +384,14 @@ Do not retry an external side effect merely because its subsequent database tran
 Use MySQL-native SQL:
 
 - Replace `ON CONFLICT` with `INSERT ... ON DUPLICATE KEY UPDATE` using supported row aliases, or an explicit no-op insert path with the intended uniqueness semantics.
-- Replace `ILIKE`, `ANY`, `::jsonb`, `::timestamptz`, JSONB operators/functions, and Postgres regex/date syntax with tested MySQL equivalents or existing Python transformations.
+- Replace `ILIKE`, `ANY`, `::jsonb`, `::timestamptz`, JSONB operators/functions, and Postgres regex/date syntax with tested MySQL equivalents or explicit TypeScript transformations.
 - Prefer normalized participant/access relations for indexed ownership/person lookups; native JSON remains appropriate for typed document payloads.
 - Replace GIN/HNSW/pgvector-specific indexes and operators rather than leaving hidden Postgres dependencies.
 - Test null ordering, Unicode, case/accent behavior, timezones, booleans, JSON null, empty lists, and duplicate-key behavior against synthetic behavior fixtures.
 - Do not assume MySQL DDL can be rolled back as a multi-statement transaction: schema operations can implicitly commit.
 - Use a migration ledger, an execution lock, explicit preconditions, and restart-safe steps; inspect partial completion before retrying.
 
-[MySQL locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html), [upserts](https://dev.mysql.com/doc/refman/8.4/en/insert-on-duplicate.html), [implicit commits](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html), [Connector/Python pooling](https://dev.mysql.com/doc/connector-python/en/connector-python-connection-pooling.html).
+[MySQL locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html), [upserts](https://dev.mysql.com/doc/refman/8.4/en/insert-on-duplicate.html), [implicit commits](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html), [Effect MySQL client](https://effect.website/docs/v3/api/sql-mysql2/MysqlClient).
 
 ## 08. Time-aware context and selective memory
 
@@ -365,9 +415,10 @@ Extracted commitments do not become executed tasks without a matching action gra
 Reuse Jcyber's separation between source evidence, selected atoms, working context, and durable knowledge.
 Do not reuse its current SQLite stub as a shared production service: it retrieves one JSON payload by engagement key and ignores supplied scope.
 Use MySQL FULLTEXT for lexical context search, with explicit fallback behavior for short terms and supported languages.
-Implement semantic people/needs/offers matching: store embeddings with model/dimension metadata in MySQL, then compute exact cosine top-k in bounded batches using NumPy.
+Implement semantic people/needs/offers matching: store embeddings with model/dimension metadata in MySQL, then compute exact cosine top-k in bounded TypeScript batches over Float32Array values.
 Apply workspace/access filters before loading vectors, and stream batches rather than loading every tenant into a global matrix.
-This is O(N × dimensions), not an ANN index; measure latency and recall at the configured directory size and agreed growth target.
+This is O(N × dimensions), not an ANN index; measure latency, recall, memory and event-loop delay at the configured directory size and agreed growth target.
+Run ranking in the worker, yield between bounded batches and move CPU-heavy work to a worker thread only if the measured budget requires it.
 Do not silently drop semantic matching or replace it with keyword-only search.
 If exact ranking fails the measured scale target, flag that result and choose a separately approved vector index before claiming parity.
 Always apply access scope in retrieval queries before data reaches the model.
@@ -404,8 +455,8 @@ Implement structured speaker tracks before adding another diarization provider.
 Benchmark existing Deepgram streaming diarization against pyannote Live-1.
 Use Precision-3 for a later correction pass over complete recordings if its measured improvement justifies the additional call.
 Keep ASR and diarization sample-time alignment explicit, including provider-stream offsets.
-Deepgram's current streaming diarizer is v1; its v2 diarizer is batch-only.
-Live-1 currently limits a stream to five hours and disconnects after five seconds without audio; rotate streams proactively and preserve application meeting IDs.
+Record supported streaming/batch diarization versions, idle timeout, maximum stream duration and keepalive behavior from each provider during implementation.
+Rotate streams before the verified limits and preserve application meeting IDs; provider limits belong in tested adapter configuration, not timeless assumptions.
 Do not carry `SPEAKER_00` across streams as if it identified a person.
 
 Use explicit enrollment or user-confirmed mappings for names.
@@ -413,7 +464,7 @@ Prefer an unknown speaker over a false name when evidence is weak.
 A voice match is evidence for attribution, never authentication for SDK, MCP, or Pipedream actions.
 Record attribution corrections so notes/memory can be recomputed without rewriting raw audio.
 
-Google's new Gemini 3.8 voice replication is an optional future output-voice choice, not a speaker-identification dependency.
+Google voice replication is an optional future output-voice choice, not a speaker-identification dependency.
 It is excluded from the critical path of this revamp unless the user separately chooses a custom assistant voice.
 
 ## 10. Pipedream and authorized execution
@@ -485,15 +536,19 @@ Membership is stored explicitly; a matching email domain or spoken company name 
 Use browser sessions in secure HttpOnly cookies with CSRF protection for mutations.
 SDK automation uses revocable hashed tokens bound to a principal, workspace/meeting allowlist, and scopes.
 Remote MCP uses delegated OAuth and the same authorization functions.
-Use maintained FastMCP auth/provider facilities rather than hand-writing an OAuth server; configure durable production token storage and stable signing material.
-Verify any proxy-issued token's resource audience and map its validated subject to a Sanctum principal.
+Use the official TypeScript MCP SDK authorization interfaces with a maintained authorization server that supports the selected protocol's resource/audience requirements.
+The authorization-server deployment choice is still open; do not implement a custom OAuth server or assume Google human-login tokens are Sanctum MCP access tokens.
+Publish protected-resource metadata and test issuer discovery, PKCE, resource audience, scopes, expiry and revocation with the selected server.
+Verify the issued access token and map its validated subject to a Sanctum principal; durable grants and credentials live outside process memory.
 Do not forward arbitrary upstream OAuth tokens as Sanctum API credentials.
 
 Minimum scopes: `context:read`, `context:write`, `recordings:read`, `actions:request`, `actions:execute`, `workspace:admin`.
 A write-capable agent does not automatically get recordings or action execution.
 Device ingest credentials are narrower than human or agent credentials.
-Authenticate WebRTC offer/control requests with the browser session and CSRF protection; bind each peer to the authorized listener and ownership generation.
-Do not place long-lived credentials in signaling URLs or data-channel messages.
+Authenticate the WebSocket upgrade with the same-origin secure browser session and an explicit Origin allowlist; reject missing or unexpected browser origins.
+Require CSRF protection on HTTP session/device mutations; bind the socket to the authorized listener and ownership generation after the start handshake.
+Recheck permission revision, session expiry and lease revocation during long-lived capture; close unauthorized connections.
+Do not place credentials in socket URLs, subprotocol strings, control messages or logs.
 
 Enforce scope in REST, MCP, background workers, caches, exports, search, and signed audio access.
 Replace global live-state reads with authorized workspace/listener views.
@@ -501,8 +556,8 @@ Keep authorization consistent across every route and background operation.
 
 ## 12. API contract
 
-Use one FastAPI `/api/v1` contract with explicit operation IDs and JSON Schema models.
-Keep wire fields in snake_case to match existing Python/JSON conventions; SDK method names may be idiomatic without inventing a second data model.
+Use one Effect HttpApi `/api/v1` contract with explicit operation IDs and JSON-representable Effect Schema wire models.
+Keep existing proposed wire fields in snake_case for contract consistency; TypeScript method names may be idiomatic without inventing a second data model.
 List endpoints use opaque cursor pagination and bounded limits.
 A missing or unauthorized resource returns the same outward result where revealing existence would leak data.
 Standard errors include code, message, request_id, retryable, and typed details without secrets.
@@ -510,7 +565,7 @@ Standard errors include code, message, request_id, retryable, and typed details 
 | Method and route | Behavior | Access |
 | --- | --- | --- |
 | `POST /api/v1/listeners` | Register a room/laptop device and its source capabilities. | Device enrollment / admin |
-| `POST /api/offer` | WebRTC signaling with listener/epoch anchors, authenticated identity, and source watermarks. | Authorized browser listener |
+| `GET /api/v1/listeners/{id}/stream` (WebSocket upgrade) | Session/Origin authorization, versioned start handshake, bounded PCM and control frames, provider-offset mapping. | Authorized browser listener |
 | `POST /api/v1/listeners/{id}/heartbeat` | Update health and renew the capture-group lease. | Device ingest |
 | `PUT /api/v1/listeners/{id}/chunks/{chunk_id}` | Validate/upload a bounded audio chunk and return a durable receipt. | Device ingest |
 | `GET /api/v1/meetings` | Filter accessible meetings by date, participant, status. | Context read |
@@ -536,7 +591,7 @@ Standard errors include code, message, request_id, retryable, and typed details 
 | `GET /healthz` and `GET /readyz` | Process health and dependency readiness without tenant content. | Operational policy |
 
 The adapter for SDK/MCP reads the same service functions as the UI.
-Do not auto-expose every FastAPI route as an MCP tool: admin, capture, and destructive routes require deliberate inclusion.
+Do not auto-expose every HTTP route as an MCP tool: admin, capture, and destructive routes require deliberate inclusion.
 
 ### Context response example — proposed contract
 
@@ -572,7 +627,8 @@ For a requested historic time, filter both event/validity time and revisions kno
 Create TypeScript and Python packages over the same OpenAPI schema.
 Ship generated DTOs plus small handwritten helpers for pagination, context snapshots, retries, changes, and action receipts.
 Avoid a framework dependency in consumers beyond a normal HTTP client.
-Provide sync/async Python clients where justified by the backend users, and an async TypeScript client.
+Provide a Promise-based TypeScript client with AbortSignal support and a thin Python HTTPX client with sync/async helpers where justified by consumers.
+Python SDK generation and tests are isolated from application runtime images; consumers never need to install Effect.
 Document timeouts, cancellation, rate limiting, idempotency, and conflict recovery.
 
 A successful SDK write accepts an idempotency key and returns the created item/action and revision.
@@ -598,14 +654,16 @@ const result = await sanctum.context.add({
 This is a target interface, not an already-published package.
 Provide complete runnable examples once the implementation exists: read a meeting, cite a source, append research, handle a conflict, consume changes, request an authorized action, revoke an agent.
 
-Mount a remote MCP endpoint at `/mcp` using maintained Python FastMCP integrated with FastAPI lifecycle/auth.
+Mount `/mcp` using the official TypeScript SDK Streamable HTTP transport, integrated with the Node server lifecycle and shared Effect services.
 Keep dedicated tools for list_meetings, get_context, search_context, get_source, get_context_changes, add_context, revise_context, request_action, get_action, search_integration_actions, and get_integration_action.
 Expose source/context resources as an optional convenience; tool access remains sufficient for clients without resource support.
 Return structured content with bounded text summaries, source IDs, revisions, and tool error flags.
 Declare tool annotations accurately; annotations are not authorization controls.
 
-Target the current 2026-07-28 MCP behavior supported by the pinned SDK and test compatible older clients explicitly.
-Do not copy an obsolete GET/SSE session transport into a new server without version-aware compatibility.
+Pin the stable SDK and record its actually supported protocol versions in a contract test; the current baseline is SDK v1 with 2025-11-25 Streamable HTTP.
+The 2026-07-28 protocol work and SDK v2 are a separate compatibility upgrade, not an implicit requirement to install prereleases.
+Do not confuse legacy HTTP+SSE with Streamable HTTP responses that can themselves use SSE.
+Use SDK transport behavior rather than hand-writing protocol negotiation.
 Test connection, OAuth, discovery, schemas, actual tool execution, cancellation, and two concurrent principals.
 An MCP protocol session is never a meeting, workspace, or identity boundary.
 
@@ -641,24 +699,25 @@ Create these during implementation; do not obtain them by copying the previous r
 
 | New area | Responsibility |
 | --- | --- |
-| `backend/app.py`, `backend/api_v1.py` | FastAPI lifecycle, routes, shared OpenAPI contract. |
-| `backend/db.py`, `backend/migrations/` | MySQL pool, transactions, explicit versioned schema migrations. |
-| `backend/auth.py`, `backend/agents.py` | Human/agent principals, workspace membership, scopes, revocation. |
-| `backend/listeners.py`, `backend/meetings.py`, `backend/boundaries.py` | Listener leases, meeting ranges, detection and corrections. |
-| `backend/transcripts.py`, `backend/recordings.py`, `backend/speakers.py` | Source evidence, R2 manifests/playback, speaker attribution. |
-| `backend/context.py`, `backend/matcher.py` | Time-aware memory/retrieval and semantic matching. |
-| `backend/jobs.py`, `backend/worker.py` | Durable processing, leases, retries and completion. |
-| `backend/planner.py`, `backend/executor.py`, `backend/action_service.py` | Bounded planning, research, authorized actions and receipts. |
-| `shared/config.py`, `shared/pipedream_client.py` | Shared role configuration and one connector client. |
-| `realtime/server.py`, `realtime/ingest.py`, `realtime/speech_gate.py` | Pipecat/WebRTC, source timing, request-only audio output. |
-| `web-app/src/pages/listen/` | New fullscreen waveform, controls, and review/agent dialogs. |
-| `web-app/src/lib/capture/` | Browser microphone controller, recording tap, IndexedDB queue, uploader. |
-| `sdk/typescript/`, `sdk/python/` | Thin SDKs and examples generated from the same API contract. |
-| `tests/`, `scripts/`, deployment files | Behavior fixtures, verification, local development, containers and routing. |
+| `server/src/main.ts`, `server/src/api.ts` | Node lifecycle, Effect HttpApi, shared contract and web assets. |
+| `server/src/db.ts`, `server/migrations/` | MySQL pool, transactions and explicit versioned migrations. |
+| `server/src/auth.ts`, `server/src/agents.ts` | Identity, membership, scopes and revocation. |
+| `server/src/listeners.ts`, `server/src/meetings.ts`, `server/src/boundaries.ts` | Leases, source ranges and meeting corrections. |
+| `server/src/transcripts.ts`, `server/src/recordings.ts`, `server/src/speakers.ts` | Evidence, R2 manifests/playback and attribution. |
+| `server/src/context.ts`, `server/src/matcher.ts` | Time-aware context, retrieval and semantic matching. |
+| `server/src/jobs.ts`, `server/src/worker.ts` | Durable processing, leases, retries and completion. |
+| `server/src/planner.ts`, `server/src/executor.ts`, `server/src/actions.ts` | Research, grants, action execution and receipts. |
+| `server/src/config.ts`, `server/src/providers/` | Explicit model roles and concrete provider clients, including one Pipedream client. |
+| `server/src/media/` | WebSocket ingest, PCM framing, source timing, turn detection and speech gate. |
+| `server/src/mcp.ts`, `packages/contracts/src/` | MCP adapter and shared wire schemas/OpenAPI. |
+| `web-app/src/pages/listen/`, `web-app/src/lib/capture/` | Fullscreen UI, microphone, IndexedDB recovery and uploader. |
+| `sdk/typescript/`, `sdk/python/` | Thin clients and runnable examples from the same API contract. |
+| `server/tests/`, `scripts/`, deployment files | Behavior fixtures, launch/check commands, containers and routing. |
 
-Use pnpm workspaces for `web-app` and `sdk/typescript`.
-Start Python at version 3.12 and verify dependency compatibility before locking FastAPI, Pydantic, Pipecat, and FastMCP.
-Keep boundaries concrete; avoid speculative service layers, generic agent frameworks, or a separate vector service.
+Extend the existing npm manifest and lockfile with workspaces for `server`, `web-app`, `packages/contracts` and `sdk/typescript` as they are implemented.
+Keep a single npm lockfile; do not introduce a competing package manager.
+Compile server TypeScript to JavaScript for the production image; documentation scripts use Node's native type stripping plus separate type checking.
+Keep boundaries concrete; avoid generic agent frameworks or one-interface-per-file scaffolding.
 
 ## 16. New schema, deployment, and recovery
 
@@ -687,8 +746,8 @@ Configuration groups:
 
 | Group | Required values |
 | --- | --- |
-| Core | MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, TLS configuration, public app URL, workspace timezone, environment, API/media ports. |
-| Identity | Issuer/client metadata, resource audiences, callback URLs, session/credential secret references, MCP auth configuration. |
+| Core | MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, TLS configuration, public app URL, workspace timezone, environment, API/web ports (7102/3102 in this worktree; live ingest shares the API port). |
+| Identity | Issuer/client metadata, resource audiences, callback URLs, session/credential secret references, MCP authorization-server configuration and resource metadata. |
 | Audio | Selected microphone, browser buffer quota/cap, archive format, source-clock metadata, stream rotation policy. |
 | R2 | Account endpoint, bucket, scoped access credentials, private-object prefix; secrets server-side only. |
 | Models | Explicit provider/model for voice, extraction, planner, research; provider keys; request budgets. |
@@ -696,25 +755,32 @@ Configuration groups:
 | Pipedream | Project/environment/client credentials; principal/account mappings. |
 | Operations | Job concurrency, request limits, recording policy, metrics/log redaction, feature rollout scope. |
 
-The executor must add the scripts below and make them real; they do not exist in the current checkout.
+Current documentation commands are `npm ci`, `npm run check`, `npm run docs:render` and `npm run docs:build`.
+The application commands below are implementation deliverables; they do not exist yet.
+Keep documentation and application checks named separately so a green handoff check cannot be reported as a tested recorder.
 Use separate terminals/processes managed by the launcher, not a blocking shell sleep loop.
 Before serving, verify the assigned ports are unused.
 
 ```bash
-python3 scripts/dev.py --api-port 7102 --media-port 7103 --web-port 3102
-python3 -m unittest discover -s tests -p 'test_*.py'
-pnpm --dir web-app build
-pnpm --dir web-app test
-pnpm --dir sdk/typescript test
+npm run dev -- --api-port 7102 --web-port 3102
+npm run check:app
+npm run build --workspace server
+npm run build --workspace web-app
+npm run build --workspace sdk/typescript
+npm run test --workspace server
+npm run test --workspace web-app
+npm run test --workspace sdk/typescript
 python3 -m unittest discover -s sdk/python/tests -p 'test_*.py'
-python3 scripts/check_contracts.py
-python3 scripts/replay_capture.py --fixture tests/fixtures/day.json --accelerated
+node scripts/check-contracts.ts
+node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated
 ```
 
 Use a disposable test database for automatic migrations during tests.
 Production migration execution remains a separate explicit action.
 If a Sentrux baseline exists in the actual execution checkout, run `sentrux gate .` and preserve its score.
-Keep quality tools local; do not change CI unless requested.
+CI/CD is authorized and already publishes documentation.
+Extend CI with real TypeScript application checks as each slice exists; run Python only in the dedicated Python SDK check once that client exists.
+Production application deployment still requires its own target and authorization.
 Use no-mistakes only when its branch/commit/push/PR workflow is authorized; run it in the background and monitor its status.
 Do not add agent co-author attribution to commits.
 
@@ -735,6 +801,7 @@ Do not add agent co-author attribution to commits.
 | Agent writes | Two clients read the same revision; both submit updates; stale write gets 409, provenance persists, idempotent retry does not duplicate data. |
 | Actions | Expired/revoked/mismatched grants block execution. Ambiguous timeouts become unknown. Matching receipts prevent duplicate sends/bookings. |
 | UI | Fullscreen waveform matches the accepted design; no permanent dashboard. Test keyboard/focus, small laptop, reduced motion, reconnect, upload backlog, errors, and source-linked playback. |
+| Effect lifecycle | Cancel provider calls, interrupt sockets, exhaust pools, crash workers and use a test clock for leases/retries; no leaked fibers, sockets or connections, and accepted jobs remain recoverable. |
 | SDK/MCP | Run both SDK examples and real MCP discovery/read/write/conflict/revoke flows with separate principals. Schemas and errors match the shared API. |
 | Compatibility | Notes, exports, matching, meeting links, and requested speech remain available under the new access model. |
 
@@ -761,17 +828,22 @@ Keep tests near the behavior they protect and inspect the actual app after each 
 
 ## 20. Evidence and authoritative references
 
-Repository evidence is pinned to the reference commit above; it is not a source tree to import.
+Repository evidence is pinned to the reference commit above; it is historical, not a source tree to import or a current runtime recommendation.
+Python paths in these historical source URLs describe the reference system only.
 
 - [Sanctum waveform implementation](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/web-app/src/pages/kiosk/engine.ts#L117)
 - [Sanctum media/session lifecycle](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/realtime/server.py#L1216)
-- [Sanctum current schema](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/backend/app.py#L71)
+- [Sanctum historical schema](https://github.com/42nights/sanctum/blob/49aef4a49fa5facc485d5858690860fd028491d7/backend/app.py#L71)
 - [Jcyber memory contract](https://github.com/undeemed/Jcyber/blob/29a8583b523b1965b75a3232673ee6918dff050a/schema/tencentdb/memory-interface.md)
-- [Jcyber actual SQLite backend](https://github.com/undeemed/Jcyber/blob/29a8583b523b1965b75a3232673ee6918dff050a/deploy/memory_core.py)
+- [Jcyber pinned SQLite backend](https://github.com/undeemed/Jcyber/blob/29a8583b523b1965b75a3232673ee6918dff050a/deploy/memory_core.py)
 - [Browser microphone access](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
 - [Screen Wake Lock](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API)
 - [Browser storage persistence](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist)
-- [Pipecat audio recording utility](https://docs.pipecat.ai/api-reference/server/utilities/audio/audio-buffer-processor)
+- [Node.js TypeScript execution](https://nodejs.org/docs/latest-v24.x/api/typescript.html)
+- [Effect v3 HTTP contracts](https://effect.website/docs/v3/api/platform/HttpApi)
+- [Effect MySQL adapter](https://effect.website/docs/v3/api/sql-mysql2/MysqlClient)
+- [Deepgram streaming WebSockets](https://developers.deepgram.com/docs/lower-level-websockets)
+- [OIDC client](https://github.com/panva/openid-client)
 - [Pipedream component execution](https://pipedream.com/docs/connect/components)
 - [MySQL 8.4 FULLTEXT](https://dev.mysql.com/doc/refman/8.4/en/fulltext-search.html)
 - [MySQL JSON](https://dev.mysql.com/doc/refman/8.4/en/json.html)
@@ -782,10 +854,9 @@ Repository evidence is pinned to the reference commit above; it is not a source 
 - [Deepgram diarization versions](https://developers.deepgram.com/docs/diarization)
 - [pyannote Live-1 protocol and limits](https://docs.pyannote.ai/tutorials/streaming-real-time)
 - [pyannote Precision-3 release](https://www.pyannote.ai/changelog/precision-3)
-- [FastMCP with FastAPI](https://gofastmcp.com/integrations/fastapi)
-- [FastMCP OAuth proxy](https://gofastmcp.com/servers/auth/oauth-proxy)
-- [MCP 2026-07-28 transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
-- [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+- [Official TypeScript MCP SDK](https://ts.sdk.modelcontextprotocol.io/)
+- [MCP baseline transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+- [MCP baseline authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
 
 All new schemas, route names, module boundaries, thresholds, and SDK examples in this plan are proposed implementation contracts.
 They are not claims that the current repository already provides those capabilities.

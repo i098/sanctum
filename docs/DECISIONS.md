@@ -2,6 +2,8 @@
 
 ## Confirmed
 
+- Use TypeScript + stable Effect v3 on Node.js for all application services and repository tooling; retain a thin Python client SDK.
+- Use one Node application image with API and worker entrypoints, browser WebSocket PCM ingest, MySQL-backed durable jobs, and the official TypeScript MCP SDK.
 - Build a fresh application; include no legacy application code.
 - Start with a website using microphone access on room computers and laptops.
 - No Electron/native application or mandatory system-audio capture.
@@ -21,6 +23,8 @@
 This means how people log in and prove who they are.
 Google OIDC is a proposed default, not an approved choice.
 Pipedream app connections do not establish membership in a Sanctum team.
+Remote MCP also needs a maintained authorization server with resource-audience support; human OIDC login alone does not supply that server.
+Select and configure both roles before enabling production delegated access.
 
 ### Saved-meeting retention
 
@@ -38,3 +42,13 @@ This unassigned-speech buffer is different from the browser queue of recordings 
 
 An actual deployment also needs a timezone, identity configuration, MySQL/R2/provider credentials, approved audio fixtures, and an authorized hosting target.
 These secrets and production resources do not belong in this repository.
+
+## Runtime decision — 2026-09-28
+
+Accepted: all-TypeScript application with Effect, replacing the earlier mixed-language plan.
+Cloud speech/model APIs remove the need for a Python inference service.
+Shared wire schemas reduce contract drift across browser, API, workers and agent adapters.
+The alternative of keeping a Python voice service was rejected to keep one application runtime.
+Consequences: implement and test turn detection, interruption, echo protection and reconnect explicitly.
+Effect handles in-process concurrency and cleanup; MySQL remains responsible for durable jobs and receipts.
+The Python SDK remains a client deliverable, isolated from server images and ordinary documentation CI.

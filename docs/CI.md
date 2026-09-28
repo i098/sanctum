@@ -8,7 +8,10 @@ It does not pretend to test or deploy the future meeting application.
 ## Triggers and checks
 
 The CI workflow runs on pull requests, pushes to main, and manual dispatch.
-It checks documentation-tool behavior, Python syntax, handoff structure, local links, SVG/JSON validity, embedded JavaScript syntax, generated-file consistency, and static-site assembly.
+It checks TypeScript types, documentation-tool behavior, handoff structure, local links, SVG/JSON validity, embedded JavaScript syntax, generated-file consistency, stale stack references, and static-site assembly.
+Both verification and Pages assembly use Node.js 24 LTS and `npm ci` against the committed lockfile.
+No Python interpreter is used by current documentation CI.
+`npm run check` fails on generated-file drift; `npm run docs:render` updates the derived files locally.
 GitHub Actions dependencies are pinned to immutable commit SHAs.
 The check job has read-only repository permissions and a ten-minute timeout.
 
@@ -24,7 +27,8 @@ No application database, microphone, or external integration is involved.
 
 ## When implementation is added
 
-Add real backend, web, SDK, MCP, MySQL, and browser checks with each corresponding implementation slice.
+Add real TypeScript server, web, SDK, MCP, MySQL, Effect interruption/cleanup and browser checks with each corresponding implementation slice.
+Add Python only to an isolated client-SDK job when that client exists.
 Do not add permanently passing placeholders for missing components.
 The handoff validator deliberately permits new application directories; it still validates the planning and reference documents.
 Introduce application deployment only after a deployment target and its operational permissions are explicitly configured.

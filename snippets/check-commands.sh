@@ -1,8 +1,11 @@
-python3 scripts/dev.py --api-port 7102 --media-port 7103 --web-port 3102
-python3 -m unittest discover -s tests -p 'test_*.py'
-pnpm --dir web-app build
-pnpm --dir web-app test
-pnpm --dir sdk/typescript test
+npm run dev -- --api-port 7102 --web-port 3102
+npm run check:app
+npm run build --workspace server
+npm run build --workspace web-app
+npm run build --workspace sdk/typescript
+npm run test --workspace server
+npm run test --workspace web-app
+npm run test --workspace sdk/typescript
 python3 -m unittest discover -s sdk/python/tests -p 'test_*.py'
-python3 scripts/check_contracts.py
-python3 scripts/replay_capture.py --fixture tests/fixtures/day.json --accelerated
+node scripts/check-contracts.ts
+node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated

@@ -1,6 +1,6 @@
 # Sanctum — AI meeting notes and shared agent memory
 
-An open-source project for silent meeting capture, source-linked memory, and shared context through MCP and SDKs.
+An open-source TypeScript + Effect project for silent meeting capture, source-linked memory, and shared context through MCP and SDKs.
 
 [![CI and documentation](https://github.com/undeemed/sanctum/actions/workflows/ci.yml/badge.svg)](https://github.com/undeemed/sanctum/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -65,34 +65,35 @@ Give your coding agent this instruction:
 | Layer | Choice |
 | --- | --- |
 | Website | React, TypeScript, Vite, Tailwind CSS, Canvas, Web Audio |
-| Live audio | WebRTC and Pipecat |
-| API and workers | Python 3.12, FastAPI, Pydantic |
+| Live audio | AudioWorklet + authenticated WebSocket PCM ingest |
+| API and workers | Node.js 24 LTS, TypeScript, stable Effect v3 |
+| Contracts and SQL | Effect Schema, HttpApi, `@effect/sql-mysql2` |
 | Structured storage | MySQL 8.4 LTS / InnoDB |
 | Recording storage | Cloudflare R2 |
-| Agent interfaces | FastMCP, TypeScript SDK, Python SDK |
+| Agent interfaces | Official TypeScript MCP SDK; Promise-based TypeScript and thin Python clients |
 | Integrations | Pipedream Connect |
 
+One Node.js image runs separate API and worker processes; MySQL stores durable jobs.
+Python is only a client SDK option, not a server dependency.
 Model and speaker-attribution choices remain evaluation-gated; provider claims are not application benchmarks.
 The full selection is in [plan section 04](tasks/plan.md#04-chosen-technology-stack-and-runtime).
 
 ## Run the documentation locally
 
-Requires Python 3.12+; Node.js 24 is used for JavaScript syntax checks.
-No Python or npm dependencies are needed for these repository checks.
+Requires Node.js 24.12+; CI uses Node.js 24 LTS.
 
 ```bash
 git clone https://github.com/undeemed/sanctum.git
 cd sanctum
-python3 -m unittest discover -s tests -p 'test_*.py'
-python3 scripts/validate_handoff.py
-python3 scripts/check_javascript.py
-python3 scripts/build_site.py
-python3 -m http.server 8080 --directory _site
+npm ci
+npm run check
+npm run docs:build
 ```
 
-Open [localhost:8080](http://localhost:8080/) for the blueprint and design reference.
-This serves documentation only, not the future meeting application.
-The Markdown and design reference work offline; enhanced diagram and code rendering load CDN assets.
+Open `_site/index.html` in a browser, or use the [published documentation](https://undeemed.github.io/sanctum/).
+After source edits, run `npm run docs:render` before checking and committing generated files.
+These commands validate and assemble documentation, not the future meeting application.
+Markdown and visual references work offline; enhanced diagram and code rendering load CDN assets.
 
 ## CI/CD
 

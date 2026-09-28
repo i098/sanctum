@@ -23,26 +23,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
-      - name: Check Python syntax
-        run: python -m compileall -q scripts
-      - name: Test documentation tooling
-        run: python -m unittest discover -s tests -p 'test_*.py'
-      - name: Validate handoff and references
-        run: python scripts/validate_handoff.py
-      - name: Check embedded JavaScript
-        run: python scripts/check_javascript.py
-      - name: Rebuild generated documents
-        run: python scripts/render_handoff.py
-      - name: Reject stale generated output
-        run: git diff --exit-code -- index.html EXECUTE.txt snippets
+      - name: Install locked documentation dependencies
+        run: npm ci --ignore-scripts
+      - name: Check types, behavior, handoff and generated output
+        run: npm run check
       - name: Assemble documentation site
-        run: python scripts/build_site.py
+        run: npm run docs:build
 
   build-pages:
     name: Build Pages artifact
@@ -54,11 +43,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          python-version: '3.12'
+          node-version: '24'
+      - name: Install locked documentation dependencies
+        run: npm ci --ignore-scripts
       - name: Assemble documentation site
-        run: python scripts/build_site.py
+        run: npm run docs:build
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: _site
