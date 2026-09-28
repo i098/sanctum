@@ -11,3 +11,5 @@ dist/
 .work/
 .DS_Store
 _site/
+.quality/
+.fallow/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://fallow.tools/schema.json",
+  "ignorePatterns": [
+    "_site/**",
+    "snippets/**",
+    "index.html"
+  ],
+  "audit": {
+    "gate": "new-only"
+  },
+  "minimumVersion": "3.30.0",
+  "failOnParseError": true
+}

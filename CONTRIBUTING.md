@@ -26,6 +26,16 @@ Node.js 24.12+ runs the TypeScript tools directly; `npm run check` separately ty
 Python is needed only when implementing/testing the thin Python client SDK.
 The current checks validate documentation and handoff integrity; application tests must be added with implementation.
 
+## Quality and commit checks
+
+Stage new files before running Sentrux so its tracked-file scan includes them.
+Run npm run quality:fallow -- --base HEAD and npm run quality:sentrux before submitting code.
+Keep the committed Sentrux baseline intact; fix regressions rather than weakening gates.
+Use Conventional Commits, for example ci: enforce quality gates or fix(capture): recover interrupted uploads.
+Use a matching PR title; keep each header at most 72 characters.
+Check commits with npm run commitlint -- --from HEAD^ --to HEAD.
+See [CI/CD details](docs/CI.md) for versions, baseline behavior and exceptions.
+
 ## Pull requests
 
 Explain the user-visible behavior, the relevant task, and the checks you actually ran.

@@ -100,6 +100,9 @@ Markdown and visual references work offline; enhanced diagram and code rendering
 
 Pull requests and pushes validate the handoff, relative links, SVG/JSON references, JavaScript syntax, and generated-file consistency.
 Successful pushes to `main` publish the documentation to [GitHub Pages](https://undeemed.github.io/sanctum/).
+Fallow blocks new code findings; Sentrux blocks structural regressions against the committed floor and base revision.
+Conventional Commit headers and PR titles are checked with a 72-character limit.
+Publication waits for all checks.
 Pull requests cannot deploy and receive no production secrets.
 See [CI/CD details](docs/CI.md) for the exact checks and how to extend them when application code is added.
 

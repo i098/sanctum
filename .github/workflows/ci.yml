@@ -3,6 +3,7 @@ name: CI and documentation
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -33,9 +34,140 @@ jobs:
       - name: Assemble documentation site
         run: npm run docs:build
 
+  fallow:
+    name: Fallow gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      QUALITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - name: Reject new code findings
+        run: npm run quality:fallow -- --base "$QUALITY_BASE" --format json --output-file "$RUNNER_TEMP/fallow.json"
+      - name: Show Fallow report
+        if: always()
+        run: test ! -f "$RUNNER_TEMP/fallow.json" || cat "$RUNNER_TEMP/fallow.json"
+
+  sentrux:
+    name: Sentrux gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      QUALITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+      SENTRUX_SKIP_GRAMMAR_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install pinned Sentrux and grammars
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 https://github.com/sentrux/sentrux/releases/download/v0.5.7/sentrux-linux-x86_64 -o "$RUNNER_TEMP/sentrux"
+          curl --fail --silent --show-error --location --retry 3 https://github.com/sentrux/sentrux/releases/download/v0.5.7/grammars-linux-x86_64.tar.gz -o "$RUNNER_TEMP/grammars.tar.gz"
+          printf '%s  %s\n' '3237f80fe20d54aad4deefa8a143f0d60543bb5d2d6ad891eb42432f155725a6' "$RUNNER_TEMP/sentrux" | sha256sum --check --strict
+          printf '%s  %s\n' '8849f1eb07df3f6d4ea1ed422d8dee4b9b79a250682fa5646675dae466554454' "$RUNNER_TEMP/grammars.tar.gz" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/sentrux"
+          mkdir -p "$HOME/.sentrux/plugins"
+          tar -xzf "$RUNNER_TEMP/grammars.tar.gz" -C "$HOME/.sentrux/plugins"
+          touch "$HOME/.sentrux/telemetry_opt_out"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/sentrux" --version
+          "$RUNNER_TEMP/sentrux" plugin list | tee "$RUNNER_TEMP/sentrux-plugins.txt"
+          grep -E 'typescript v.*\[.*ts' "$RUNNER_TEMP/sentrux-plugins.txt"
+      - name: Check committed floor and measure base and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s .sentrux/baseline.json
+          sentrux gate .
+          mkdir "$RUNNER_TEMP/sentrux-base" "$RUNNER_TEMP/sentrux-head"
+          git archive "$QUALITY_BASE" | tar -x -C "$RUNNER_TEMP/sentrux-base"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/sentrux-head"
+          if test -f "$RUNNER_TEMP/sentrux-base/.sentrux/baseline.json"; then
+            cp "$RUNNER_TEMP/sentrux-base/.sentrux/baseline.json" "$RUNNER_TEMP/sentrux-floor.json"
+          else
+            cp .sentrux/baseline.json "$RUNNER_TEMP/sentrux-floor.json"
+          fi
+          for snapshot in "$RUNNER_TEMP/sentrux-base" "$RUNNER_TEMP/sentrux-head"; do
+            git -C "$snapshot" init -q
+            git -C "$snapshot" add .
+            sentrux gate --save "$snapshot"
+          done
+      - name: Reject any quality score drop or structural regression
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const load = path => JSON.parse(readFileSync(path, 'utf8'));
+          const temp = process.env.RUNNER_TEMP;
+          const floor = load(`${temp}/sentrux-floor.json`);
+          const base = load(`${temp}/sentrux-base/.sentrux/baseline.json`);
+          const head = load(`${temp}/sentrux-head/.sentrux/baseline.json`);
+          const committed = load('.sentrux/baseline.json');
+          function compare(before, after) {
+            for (const key of ['quality_signal', 'cycle_count', 'god_file_count', 'complex_fn_count', 'coupling_score']) {
+              assert(Number.isFinite(before[key]) && Number.isFinite(after[key]), `Missing metric: ${key}`);
+            }
+            assert(after.quality_signal + 1e-9 >= before.quality_signal, 'Sentrux quality score dropped');
+            for (const key of ['cycle_count', 'god_file_count', 'complex_fn_count']) assert(after[key] <= before[key], `${key} increased`);
+            assert(after.coupling_score <= before.coupling_score + 0.05 + 1e-9, 'Coupling exceeded native tolerance');
+          }
+          assert.throws(() => compare(base, { ...base, quality_signal: base.quality_signal - 0.001 }));
+          assert.throws(() => compare(base, { ...base, cycle_count: base.cycle_count + 1 }));
+          assert.throws(() => compare(base, {}));
+          compare(floor, head);
+          compare(base, head);
+          compare(floor, committed);
+          console.log(JSON.stringify({ floor, base, head, result: 'pass' }));
+          JS
+
+  commits:
+    name: Commit standard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COMMIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+      COMMIT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - name: Check commit range
+        run: npm run commitlint -- --from "$COMMIT_BASE" --to "$COMMIT_HEAD" --verbose
+      - name: Check pull request title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          COMMITLINT_PR_TITLE: 'true'
+        run: printf '%s\n' "$PR_TITLE" | npm run commitlint
+      - name: Verify invalid headers are rejected
+        run: |
+          if printf '%s\n' 'unstructured message' | npm run commitlint; then
+            echo 'Commit standard failed to reject invalid message' >&2
+            exit 1
+          fi
+
   build-pages:
     name: Build Pages artifact
-    needs: verify
+    needs: [verify, fallow, sentrux, commits]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
