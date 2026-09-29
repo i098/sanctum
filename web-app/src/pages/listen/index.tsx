@@ -47,8 +47,9 @@ const ARCHIVE: Record<ArchiveState, string> = {
 function health(snapshot: CaptureSnapshot): string {
   const archive = snapshot.archive ? ARCHIVE[snapshot.archive] : 'not recording';
   const pending = snapshot.bufferedChunks > 0 ? ` · ${snapshot.bufferedChunks} chunks pending` : '';
-  const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks kept on this device, not uploadable` : '';
-  return `Silent · ${archive}${pending}${stranded}`;
+  const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks of removed listeners kept on this device, not uploadable` : '';
+  const refused = snapshot.refusedChunks > 0 ? ` · ${snapshot.refusedChunks} chunks refused by the server kept on this device, not uploadable` : '';
+  return `Silent · ${archive}${pending}${stranded}${refused}`;
 }
 
 function statusMessage(snapshot: CaptureSnapshot, failure: string | null): { text: string; warning: boolean } {

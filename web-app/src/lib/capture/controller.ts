@@ -14,7 +14,7 @@ import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
-import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState } from './view.ts';
+import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
 
 /** Browser-side engineering defaults (plan 02); tests shorten them. */
 export interface CaptureTiming {
@@ -31,7 +31,7 @@ const LISTENER_KEY = 'sanctum.listener';
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
   | 'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close'
-  | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd' | 'orphanedRecordings' | 'recordingChunks' | 'discardRecording'
+  | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd' | 'orphanedRecordings' | 'recordingSegments' | 'discardRecording'
 >;
 
 export interface CaptureDeps {
@@ -113,8 +113,10 @@ class CaptureController implements CaptureView {
   private uploading = false;
   private claimed = false;
   private pending = 0;
-  /** Local chunks that can no longer be uploaded (listener forgotten or chunk refused): kept, never pending. */
+  /** Local chunks of removed listeners: kept, never pending, listed for export or discard. */
   private stranded = 0;
+  /** Local chunks of this device's listeners that the server refused: kept, never pending. */
+  private refused = 0;
   private savedThroughMs: number | null = null;
   private wakeLock: 'unsupported' | 'released' | 'held';
   private sentinel: WakeLockSentinel | null = null;
@@ -185,8 +187,8 @@ class CaptureController implements CaptureView {
     return (await this.openBuffer()).orphanedRecordings(this.owned());
   }
 
-  async exportRecording({ listenerId, epochId }: OrphanedRecording): Promise<Blob> {
-    return assembleWav(await (await this.openBuffer()).recordingChunks(listenerId, epochId));
+  async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording): Promise<readonly WavPart[]> {
+    return assembleWav(await (await this.openBuffer()).recordingSegments(listenerId, epochId), sampleRate);
   }
 
   async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
@@ -215,7 +217,7 @@ class CaptureController implements CaptureView {
     try {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) this.interrupted = true;
-      ({ pending: this.pending, stranded: this.stranded } = await buffer.countChunks(this.listener?.id ?? null));
+      ({ pending: this.pending, refused: this.refused, stranded: this.stranded } = await buffer.countChunks(this.owned()));
       this.savedThroughMs = await buffer.savedThroughMs();
       this.claimed = this.interrupted || this.pending > 0;
     } catch {
@@ -481,7 +483,7 @@ class CaptureController implements CaptureView {
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.listener = null; // the server no longer knows this listener; the next start registers again
       if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
-      void this.refreshPending(); // its chunks are now stranded: kept locally, no longer pending
+      void this.refreshPending(); // its chunks are now stranded once no tab still owns it: kept locally, no longer pending
     }
   }
 
@@ -588,8 +590,8 @@ class CaptureController implements CaptureView {
 
   private async refreshPending(): Promise<void> {
     const buffer = await this.buffer?.catch(() => null);
-    const counts = await buffer?.countChunks(this.listener?.id ?? null).catch(() => null);
-    if (counts) ({ pending: this.pending, stranded: this.stranded } = counts);
+    const counts = await buffer?.countChunks(this.owned()).catch(() => null);
+    if (counts) ({ pending: this.pending, refused: this.refused, stranded: this.stranded } = counts);
     this.publish();
   }
 
@@ -618,6 +620,7 @@ class CaptureController implements CaptureView {
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,
+      refusedChunks: this.refused,
       savedThroughMs: this.savedThroughMs,
       wakeLock: this.wakeLock,
     });

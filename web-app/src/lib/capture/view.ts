@@ -23,8 +23,10 @@ export interface CaptureSnapshot {
   readonly issue: CaptureIssue | null;
   readonly epochId: string | null;
   readonly bufferedChunks: number;
-  /** Chunks kept on this device that cannot be uploaded: their listener is gone or the server refused them. */
+  /** Chunks of removed listeners (the server no longer knows them) kept on this device: never uploadable, listed for export or discard. */
   readonly strandedChunks: number;
+  /** Chunks of this device's listeners that the server refused (e.g. recorded after another device took the lease) kept on this device. */
+  readonly refusedChunks: number;
   readonly savedThroughMs: number | null;
   readonly wakeLock: 'unsupported' | 'released' | 'held';
 }
@@ -54,6 +56,13 @@ export interface OrphanedRecording {
   readonly gaps: readonly RecordingGap[];
 }
 
+/** One exported WAV file, holding samples `sampleStart`..`sampleEnd` of the recording's capture sample clock. */
+export interface WavPart {
+  readonly blob: Blob;
+  readonly sampleStart: number;
+  readonly sampleEnd: number;
+}
+
 export interface CaptureView {
   getSnapshot(): CaptureSnapshot;
   subscribe(listener: () => void): () => void;
@@ -63,8 +72,8 @@ export interface CaptureView {
   resume(): Promise<void>;
   /** Recordings orphaned by a removed listener; never the pending or in-progress audio. */
   orphanedRecordings(): Promise<readonly OrphanedRecording[]>;
-  /** One WAV built from the recording's chunks on this device; no server call. */
-  exportRecording(recording: OrphanedRecording): Promise<Blob>;
+  /** The recording's chunks on this device as sequential WAV files, each within the WAV size limit; no server call. */
+  exportRecording(recording: OrphanedRecording): Promise<readonly WavPart[]>;
   /** Deletes only this orphaned recording's chunks, and only when a person asks. */
   discardRecording(recording: OrphanedRecording): Promise<void>;
 }
@@ -77,6 +86,7 @@ export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
   epochId: null,
   bufferedChunks: 0,
   strandedChunks: 0,
+  refusedChunks: 0,
   savedThroughMs: null,
   wakeLock: 'released',
 });

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { CaptureView, OrphanedRecording } from '../../lib/capture/view.ts';
+import type { CaptureView, OrphanedRecording, WavPart } from '../../lib/capture/view.ts';
 import { Dialog } from './Dialog.tsx';
 
 /** m:ss or h:mm:ss of `samples` on the capture sample clock. */
@@ -15,23 +15,28 @@ function describe(recording: OrphanedRecording): string {
   return `${started} · ${clock(recording.sampleCount, recording.sampleRate)} · ${recording.chunkCount} chunks`;
 }
 
-function download(blob: Blob, recording: OrphanedRecording): void {
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = `sanctum-${recording.startedAt.replaceAll(':', '-')}-${recording.epochId.slice(0, 8)}.wav`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href));
+/** Sequential downloads; a recording over the WAV size limit gets its part number and time range in each file name. */
+function download(parts: readonly WavPart[], recording: OrphanedRecording): void {
+  const name = `sanctum-${recording.startedAt.replaceAll(':', '-')}-${recording.epochId.slice(0, 8)}`;
+  const at = (samples: number) => clock(samples - parts[0]!.sampleStart, recording.sampleRate).replaceAll(':', '.');
+  parts.forEach((part, index) => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(part.blob);
+    link.download = parts.length === 1 ? `${name}.wav` : `${name}-part${index + 1}of${parts.length}-${at(part.sampleStart)}-${at(part.sampleEnd)}.wav`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href));
+  });
 }
 
 interface LocalRecordingsProps {
   engine: CaptureView;
-  /** Stranded chunk count from the capture snapshot; the list reloads when it changes. */
+  /** Chunks of removed listeners from the capture snapshot; the list reloads when it changes. */
   stranded: number;
 }
 
 /**
- * Recordings orphaned by a removed listener, which can never be uploaded. Export (a WAV built in
- * the browser) is the primary action; discard is separate, confirmed, and deletes only that
+ * Recordings orphaned by a removed listener, which can never be uploaded. Export (WAV files built
+ * in the browser) is the primary action; discard is separate, confirmed, and deletes only that
  * recording. Nothing is deleted automatically and capture keeps running throughout.
  */
 export function LocalRecordings({ engine, stranded }: LocalRecordingsProps) {
@@ -50,7 +55,7 @@ export function LocalRecordings({ engine, stranded }: LocalRecordingsProps) {
 
   const exportWav = (recording: OrphanedRecording): void => {
     setFailure(null);
-    engine.exportRecording(recording).then(blob => download(blob, recording), fail);
+    engine.exportRecording(recording).then(parts => download(parts, recording), fail);
   };
   const discard = (recording: OrphanedRecording): void => {
     setConfirming(null);
@@ -60,9 +65,9 @@ export function LocalRecordings({ engine, stranded }: LocalRecordingsProps) {
 
   return (
     <section className="listen-panel listen-local" aria-labelledby={`${id}-heading`}>
-      <h3 id={`${id}-heading`} ref={heading} tabIndex={-1}>Local recordings that cannot be uploaded</h3>
+      <h3 id={`${id}-heading`} ref={heading} tabIndex={-1}>Recordings of removed listeners</h3>
       {recordings.length === 0 ? (
-        <p>None on this device.</p>
+        <p>No recordings of removed listeners on this device.</p>
       ) : (
         <ul className="listen-items">
           {recordings.map((recording, index) => (

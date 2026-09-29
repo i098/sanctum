@@ -2,9 +2,11 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import type * as Buffer from '../src/lib/capture/buffer.ts';
+import type * as Orphans from '../src/lib/capture/orphans.ts';
 import type * as Recorder from '../src/lib/capture/recorder.ts';
 
 type BufferModule = typeof Buffer;
+type OrphansModule = typeof Orphans;
 type RecorderModule = typeof Recorder;
 interface Fixture { listener: string; epoch: string; sequence: number; start: number; count: number }
 
@@ -31,26 +33,37 @@ async function seed(page: Page, fixtures: Fixture[]): Promise<void> {
   }, { fixtures, rate: RATE });
 }
 
-test('discard deletes only the chosen orphaned recording, never pending audio', async ({ page }) => {
+test('exports one epoch of a listener and discards only the chosen orphaned recording, never pending audio', async ({ page }) => {
   await seed(page, [
     { listener: OWNED, epoch: EPOCHS[0], sequence: 0, start: 0, count: RATE },
     { listener: REMOVED, epoch: EPOCHS[1], sequence: 0, start: 0, count: RATE },
     { listener: REMOVED, epoch: EPOCHS[1], sequence: 1, start: RATE, count: RATE },
     { listener: REMOVED, epoch: EPOCHS[2], sequence: 0, start: 10 * RATE, count: RATE },
   ]);
-  const result = await page.evaluate(async ({ owned, removed, epochs }) => {
+  const result = await page.evaluate(async ({ owned, removed, epochs, rate }) => {
     const { RecoveryBuffer } = (await import('/src/lib/capture/buffer.ts' as string)) as BufferModule;
+    const { assembleWav } = (await import('/src/lib/capture/orphans.ts' as string)) as OrphansModule;
     const buffer = await RecoveryBuffer.open();
+    await buffer.saveEpoch({ epoch_id: epochs[0], listener_id: owned } as never);
+    await buffer.saveEpoch({ epoch_id: epochs[1], listener_id: removed } as never);
+    const parts = assembleWav(await buffer.recordingSegments(removed, epochs[1]), rate);
+    const exported = await Promise.all(parts.map(async ({ blob, sampleStart, sampleEnd }) => {
+      const samples = new Int16Array(await blob.arrayBuffer(), 44);
+      return { sampleStart, sampleEnd, samples: samples.length, first: samples[0], last: samples.at(-1) };
+    }));
     const before = (await buffer.orphanedRecordings([owned])).map(recording => [recording.epochId, recording.chunkCount]);
     await buffer.discardRecording(removed, epochs[1], [owned]);
     await buffer.discardRecording(owned, epochs[0], [owned]);
     const after = (await buffer.orphanedRecordings([owned])).map(recording => [recording.epochId, recording.chunkCount]);
-    return { before, after, counts: await buffer.countChunks(owned), pending: (await buffer.nextPending(owned))?.manifest.epoch_id };
-  }, { owned: OWNED, removed: REMOVED, epochs: EPOCHS });
+    const starts = [(await buffer.epochStart(epochs[0])) !== null, (await buffer.epochStart(epochs[1])) !== null];
+    return { exported, before, after, starts, counts: await buffer.countChunks([owned]), pending: (await buffer.nextPending(owned))?.manifest.epoch_id };
+  }, { owned: OWNED, removed: REMOVED, epochs: EPOCHS, rate: RATE });
   expect(result).toEqual({
+    exported: [{ sampleStart: 0, sampleEnd: 2 * RATE, samples: 2 * RATE, first: 0, last: 2 * RATE - 1 }],
     before: [[EPOCHS[1], 2], [EPOCHS[2], 1]],
     after: [[EPOCHS[2], 1]],
-    counts: { pending: 1, stranded: 1 },
+    starts: [true, false],
+    counts: { pending: 1, refused: 0, stranded: 1 },
     pending: EPOCHS[0],
   });
 });
@@ -61,7 +74,7 @@ test('exports an orphaned recording as one WAV, then discards it only after conf
     { listener: REMOVED, epoch: EPOCHS[1], sequence: 2, start: 2 * RATE, count: RATE },
   ]);
   await page.reload();
-  await expect(page.getByText('2 chunks kept on this device, not uploadable')).toBeVisible();
+  await expect(page.getByText('2 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
   await page.getByRole('button', { name: 'Settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   const row = settings.getByRole('listitem');
@@ -91,11 +104,11 @@ test('exports an orphaned recording as one WAV, then discards it only after conf
 
   await discard.click();
   await confirm.getByRole('button', { name: 'Discard recording' }).click();
-  await expect(settings.getByText('None on this device.')).toBeVisible();
-  await expect(settings.getByRole('heading', { name: 'Local recordings that cannot be uploaded' })).toBeFocused();
+  await expect(settings.getByText('No recordings of removed listeners on this device.')).toBeVisible();
+  await expect(settings.getByRole('heading', { name: 'Recordings of removed listeners' })).toBeFocused();
   await expect(page.getByText('not uploadable')).toBeHidden();
   expect(await page.evaluate(async () => {
     const { RecoveryBuffer } = (await import('/src/lib/capture/buffer.ts' as string)) as BufferModule;
-    return (await RecoveryBuffer.open()).countChunks(null);
-  })).toEqual({ pending: 0, stranded: 0 });
+    return (await RecoveryBuffer.open()).countChunks([]);
+  })).toEqual({ pending: 0, refused: 0, stranded: 0 });
 });

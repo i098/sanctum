@@ -5,7 +5,9 @@ import type { EpochEnd } from '../src/lib/capture/buffer.ts';
 import type { ListenersClient } from '../src/lib/capture/client.ts';
 import { createCaptureController, type CaptureBuffer, type CaptureDeps } from '../src/lib/capture/controller.ts';
 import type { LiveOptions, LiveStream, StopReason } from '../src/lib/capture/live.ts';
+import { groupRecordings } from '../src/lib/capture/orphans.ts';
 import { sealChunk, StorageError, type PartRecord, type SealedChunk } from '../src/lib/capture/recorder.ts';
+import type { CaptureView } from '../src/lib/capture/view.ts';
 
 const LISTENER_ID = '5f0d6f0e-8c1b-4b8e-a4f3-2d9c7a1e4b01';
 /** Registered after the server forgot LISTENER_ID. */
@@ -82,14 +84,19 @@ class MemoryBuffer implements CaptureBuffer {
     this.chunks.delete(manifest.chunk_id);
     this.starts.delete(manifest.epoch_id);
   }
-  async countChunks(listenerId: string | null) {
-    const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)).length;
-    return { pending, stranded: this.chunks.size - pending };
+  async countChunks(owned: readonly string[]) {
+    const counts = { pending: 0, refused: 0, stranded: 0 };
+    for (const { manifest } of this.chunks.values()) {
+      if (!owned.includes(manifest.listener_id)) counts.stranded++;
+      else if (this.refused.has(manifest.chunk_id)) counts.refused++;
+      else counts.pending++;
+    }
+    return counts;
   }
-  async orphanedRecordings() {
-    return [];
+  async orphanedRecordings(owned: readonly string[]) {
+    return groupRecordings([...this.chunks.values()].map(({ manifest }) => manifest).filter((manifest) => !owned.includes(manifest.listener_id)));
   }
-  async recordingChunks() {
+  async recordingSegments() {
     return [];
   }
   async discardRecording(listenerId: string, epochId: string, owned: readonly string[]) {
@@ -300,6 +307,9 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
+/** Chunks the Settings list of removed-listener recordings shows; the footer's stranded count must match it. */
+const listedChunks = async ({ engine }: { engine: CaptureView }) => (await engine.orphanedRecordings()).reduce((sum, recording) => sum + recording.chunkCount, 0);
+
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.UTC(2026, 8, 29, 9), toFake: ['Date', 'setTimeout', 'setInterval', 'clearInterval', 'clearTimeout'] });
 });
@@ -459,11 +469,13 @@ describe('capture lifecycle', () => {
     await buffer.sealChunk(old);
     const h = harness({ buffer, stored: true });
     h.forget();
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, strandedChunks: 1 })); // the upload was refused
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 1, strandedChunks: 0 })); // the upload was refused
+    expect(await listedChunks(h)).toBe(0);
 
     await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server no longer knows the listener
     expect(h.storage.has('sanctum.listener')).toBe(false);
-    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, strandedChunks: 1 });
+    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 0, strandedChunks: 1 });
+    expect(await listedChunks(h)).toBe(1);
 
     await h.engine.start();
     h.feed(1.2);
@@ -534,7 +546,8 @@ describe('capture lifecycle', () => {
     await vi.advanceTimersByTimeAsync(15_000); // this tab's heartbeat for the old listener fails NotFound
     expect(h.storage.get('sanctum.listener')).toBe(next);
 
-    expect(await h.engine.orphanedRecordings()).toEqual([]);
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 1, refusedChunks: 0, strandedChunks: 0 })); // the other tab's audio is still uploadable
+    expect(await listedChunks(h)).toBe(0);
     await h.engine.discardRecording({ listenerId: NEXT_LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
@@ -702,7 +715,8 @@ describe('capture lifecycle', () => {
     await settle();
     const after = h.snapshot().epochId!;
     await h.engine.pause();
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 2 }));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, refusedChunks: 2, strandedChunks: 0 }));
+    expect(await listedChunks(h)).toBe(0);
     expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([held, held]);
     const archived = new Map<string, typeof StartMessage.Type>(h.lives.filter((live) => live.options.start.archive_only).map((live) => [live.options.start.epoch_id, live.options.start]));
     expect(archived.get(held)).toMatchObject({ lease_generation: 1, end_reason: 'lease_lost' });
@@ -769,7 +783,7 @@ describe('capture lifecycle', () => {
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0, strandedChunks: 0 }));
   });
 
-  it('keeps audio the server refuses after a takeover as stranded local audio', async () => {
+  it('keeps audio the server refuses after a takeover as refused local audio', async () => {
     const h = harness({ stored: true });
     h.setOffline(true);
     await h.engine.start();
@@ -778,7 +792,7 @@ describe('capture lifecycle', () => {
     h.setOwner(false); // another device took the listener over before this audio ended
     h.setOffline(false);
     h.win.dispatchEvent(new Event('online'));
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 2 }));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, refusedChunks: 2, strandedChunks: 0 }));
     expect(h.calls.put).toEqual([]);
     expect(h.buffer.chunks.size).toBe(2); // never deleted
   });
