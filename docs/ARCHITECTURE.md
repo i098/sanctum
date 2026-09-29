@@ -29,7 +29,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `mysqlErrno`. |
 | Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
-| Object storage | [server/src/object-store.ts](../server/src/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`), `ObjectStoreError.ambiguous`. |
+| Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
 | Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
 | Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `WorkerServices`, `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
@@ -43,6 +43,7 @@ Conventions:
 - Decode rows only through `SqlSchema` plus the `db.ts` column schemas; never read `Date` or `Number` BIGINTs from mysql2.
 - Domain functions take `access: AccessScope` first and never read credentials; unauthorized reads fail as `NotFound`.
 - Tests use synthetic fixtures and fakes; no live provider, R2 or Pipedream call from any test.
+- `server/src/providers/` never imports application modules; providers take options, and application code imports providers, never the reverse (a two-way directory dependency tripled Sentrux coupling).
 
 ## Slices
 
@@ -61,7 +62,8 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `auth.ts`: `listVisibleMeetingIds(access): Effect<ReadonlyArray<MeetingId>, SqlError, R>`.
 - `jobs.ts`: `enqueueJob(input: EnqueueJob): Effect<JobId, SqlError, R>`, joining the caller's transaction.
 - `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number }`; an active row with the same key is re-armed.
-- `jobs.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`; requires exactly its handlers' services.
+- `job-runner.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`, plus claim, lease, fenced completion and deadlock retry; only worker.ts imports it.
+- `jobs.ts` holds only `enqueueJob` and imports no application module, so enqueueing never deepens a caller's import chain.
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
