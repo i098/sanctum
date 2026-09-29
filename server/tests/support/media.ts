@@ -145,6 +145,7 @@ export function chunk(input: {
   readonly sample_start: number;
   readonly samples: Int16Array;
   readonly sample_rate?: SampleRate;
+  readonly captured_at?: string;
 }): { readonly manifest: RecordingChunkManifest; readonly body: Uint8Array } {
   const sample_rate = input.sample_rate ?? 16_000;
   const body = wav(input.samples, sample_rate);
@@ -159,7 +160,7 @@ export function chunk(input: {
       sample_start: input.sample_start,
       sample_count: input.samples.length,
       sample_rate,
-      captured_at: '2026-09-26T17:00:00Z' as RecordingChunkManifest['captured_at'],
+      captured_at: (input.captured_at ?? '2026-09-26T17:00:00Z') as RecordingChunkManifest['captured_at'],
       byte_length: body.byteLength,
       sha256: sha256(body),
     },
@@ -272,16 +273,25 @@ export const openSocket = (host: string, listener_id: string, token: string) =>
       }),
   ), socket => Effect.sync(socket.close));
 
-export const startMessage = (input: { readonly listener_id: string; readonly epoch_id: string; readonly lease_generation: number; readonly sample_start?: number; readonly archive_only?: boolean }) =>
+export const startMessage = (input: {
+  readonly listener_id: string;
+  readonly epoch_id: string;
+  readonly lease_generation: number;
+  readonly sample_start?: number;
+  readonly archive_only?: boolean;
+  readonly captured_at?: string;
+  readonly end_reason?: string;
+}) =>
   JSON.stringify({
     _tag: 'start',
     protocol_version: 1,
     listener_id: input.listener_id,
     epoch_id: input.epoch_id,
     track: 0,
-    clock: { sample_rate: 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
+    clock: { sample_rate: 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: input.captured_at ?? '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
     lease_generation: input.lease_generation,
     ...(input.archive_only === undefined ? {} : { archive_only: input.archive_only }),
+    ...(input.end_reason === undefined ? {} : { end_reason: input.end_reason }),
   });
 
 /** One binary PCM frame of `count` samples (a quiet ramp) at `sample_start`. */

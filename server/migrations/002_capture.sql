@@ -37,6 +37,17 @@ CREATE TABLE listeners (
   CONSTRAINT listeners_group FOREIGN KEY (workspace_id, capture_group_id) REFERENCES capture_groups (workspace_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- When each lease generation was claimed: audio a device captured under generation g after
+-- generation g + 1 was claimed was recorded without the lease and is refused.
+CREATE TABLE listener_lease_claims (
+  workspace_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  listener_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  lease_generation BIGINT UNSIGNED NOT NULL,
+  claimed_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (listener_id, lease_generation),
+  CONSTRAINT listener_lease_claims_listener FOREIGN KEY (workspace_id, listener_id) REFERENCES listeners (workspace_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- One continuous sample clock. Reconnect keeps the epoch; reload/device change/restart creates one.
 CREATE TABLE capture_epochs (
   id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

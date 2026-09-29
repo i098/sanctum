@@ -28,6 +28,7 @@ import {
 import { Effect, Option, Schema } from 'effect';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
+import { heldUntil, recordClaim } from './lease-claims.ts';
 import { onCaptureEnded } from './meetings.ts';
 
 const ListenerRow = Schema.Struct({
@@ -132,7 +133,8 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
         const listener = yield* ownedListener(access, listener_id, true);
         const renew = input.lease_generation === listener.lease_generation && listener.lease_generation > 0;
         if (!renew && listener.lease_active === 1) {
-          const receipt: typeof HeartbeatReceipt.Type = { lease_generation: listener.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false };
+          // The caller keeps its own generation: handing it the holder's would let it act as the holder.
+          const receipt: typeof HeartbeatReceipt.Type = { lease_generation: input.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false };
           return { ...receipt, capture_group_id: null };
         }
         if (!renew && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
@@ -143,6 +145,7 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
           SET lease_generation = ${generation}, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL ${engineeringDefaults.ownershipLeaseMs * 1000} MICROSECOND,
               state = ${input.state}, health = ${health}, last_heartbeat_at = UTC_TIMESTAMP(6)
           WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id}`;
+        if (!renew) yield* recordClaim(access.workspace_id, listener_id, generation);
         const renewed = yield* ownedListener(access, listener_id);
         const receipt: typeof HeartbeatReceipt.Type = { lease_generation: generation, lease_expires_at: renewed.lease_expires_at!, owner: true };
         return { ...receipt, capture_group_id: renewed.capture_group_id };
@@ -150,10 +153,61 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
     );
   });
 
+const acceptedAt = (start: typeof StartMessage.Type, resume_from_sample: number): StartVerdict =>
+  AcceptedMessage.make({ epoch_id: start.epoch_id, resume_from_sample, max_frame_bytes: MAX_FRAME_BYTES });
+
+/** Records the epoch's clock anchor; `ended` inserts it already ended with that reason (archive only). */
+const insertEpoch = (access: AccessScope, start: typeof StartMessage.Type, ended: typeof EpochEndReason.Type | null) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => {
+    const { clock } = start;
+    return sql`
+      INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at,
+                                  timezone, start_reason, started_at, live_sample_end, ended_at, end_reason)
+      VALUES (${start.epoch_id}, ${access.workspace_id}, ${start.listener_id}, ${start.lease_generation}, ${clock.sample_rate}, ${clock.channels},
+              ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, UTC_TIMESTAMP(6),
+              ${clock.sample_start}, IF(${ended !== null}, UTC_TIMESTAMP(6), NULL), ${ended})`;
+  });
+
+/** An existing epoch must belong to this listener and clock. */
+const sameEpoch = (listener: ListenerRow, start: typeof StartMessage.Type, epoch: typeof EpochRow.Type) =>
+  epoch.listener_id === listener.id && epoch.sample_rate === start.clock.sample_rate;
+
 /**
- * Validates a live `start` against the lease and epoch. An existing open epoch resumes at its live
- * watermark (reconnect); a new epoch ends the listener's previous one and records its clock anchor.
- * An `archive_only` start passes the same checks but only records its epoch, already ended, for uploads.
+ * Registers an epoch whose live `start` never reached the server, only so its chunks upload. It is
+ * accepted under the generation the device held when the epoch began, even after that lease lapsed or
+ * a later generation took over, and recorded already ended with the device's journaled end reason.
+ */
+const registerArchive = (access: AccessScope, listener: ListenerRow, start: typeof StartMessage.Type) =>
+  Effect.gen(function* () {
+    if (!(yield* heldUntil(access.workspace_id, listener.id, start.lease_generation, Date.parse(start.clock.captured_at)))) {
+      return rejected('stale_generation', `Generation ${start.lease_generation} did not hold this listener when the epoch began`);
+    }
+    const existing = yield* findEpoch(access.workspace_id, start.epoch_id);
+    if (Option.isSome(existing) && !sameEpoch(listener, start, existing.value)) return rejected('invalid_start', 'The epoch belongs to another listener or clock');
+    if (Option.isNone(existing)) yield* insertEpoch(access, start, start.end_reason ?? 'interrupted');
+    return acceptedAt(start, start.clock.sample_start);
+  });
+
+/** A live `start` under the current lease: resume an open epoch at its watermark, or end the previous one and begin this one. */
+const startLive = (access: AccessScope, listener: ListenerRow, start: typeof StartMessage.Type) =>
+  Effect.gen(function* () {
+    const existing = yield* findEpoch(access.workspace_id, start.epoch_id);
+    if (Option.isSome(existing)) {
+      if (!sameEpoch(listener, start, existing.value)) return rejected('invalid_start', 'The epoch belongs to another listener or clock');
+      return existing.value.ended === 1 ? rejected('epoch_closed', 'The epoch ended; start a new one') : acceptedAt(start, existing.value.live_sample_end);
+    }
+    if (listener.current_epoch_id !== null) {
+      yield* endEpoch(access.workspace_id, listener.id, listener.current_epoch_id, start.start_reason === 'device_change' ? 'device_change' : 'interrupted');
+    }
+    yield* insertEpoch(access, start, null);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE listeners SET current_epoch_id = ${start.epoch_id}, state = 'listening' WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
+    return acceptedAt(start, start.clock.sample_start);
+  });
+
+/**
+ * Validates a `start` against the lease and epoch. A live start needs the current generation and an
+ * active lease; an `archive_only` start is judged by the generation held when its epoch began.
  */
 export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type) =>
   Effect.gen(function* () {
@@ -161,29 +215,11 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, start.listener_id, true);
+        if (start.archive_only) return yield* registerArchive(access, listener, start);
         if (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation) {
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
-        const accepted = (resume_from_sample: number) => AcceptedMessage.make({ epoch_id: start.epoch_id, resume_from_sample, max_frame_bytes: MAX_FRAME_BYTES });
-        const existing = yield* findEpoch(access.workspace_id, start.epoch_id);
-        if (Option.isSome(existing)) {
-          const epoch = existing.value;
-          if (epoch.listener_id !== listener.id || epoch.sample_rate !== start.clock.sample_rate) return rejected('invalid_start', 'The epoch belongs to another listener or clock');
-          return epoch.ended === 1 && !start.archive_only ? rejected('epoch_closed', 'The epoch ended; start a new one') : accepted(epoch.live_sample_end);
-        }
-        if (listener.current_epoch_id !== null && !start.archive_only) {
-          yield* endEpoch(access.workspace_id, listener.id, listener.current_epoch_id, start.start_reason === 'device_change' ? 'device_change' : 'interrupted');
-        }
-        const { clock } = start;
-        yield* sql`
-          INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at,
-                                      timezone, start_reason, started_at, live_sample_end, ended_at, end_reason)
-          VALUES (${start.epoch_id}, ${access.workspace_id}, ${listener.id}, ${start.lease_generation}, ${clock.sample_rate}, ${clock.channels},
-                  ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, UTC_TIMESTAMP(6),
-                  ${clock.sample_start}, IF(${start.archive_only === true}, UTC_TIMESTAMP(6), NULL), ${start.archive_only ? 'interrupted' : null})`;
-        if (start.archive_only) return accepted(clock.sample_start);
-        yield* sql`UPDATE listeners SET current_epoch_id = ${start.epoch_id}, state = 'listening' WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
-        return accepted(clock.sample_start);
+        return yield* startLive(access, listener, start);
       }),
     );
   });

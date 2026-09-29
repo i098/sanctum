@@ -9,13 +9,16 @@ import {
   eventually,
   fakeSpeech,
   MigratedDatabase,
+  chunk,
   newEpochId,
   openSocket,
+  pause,
   pcmFrame,
   seedDevice,
   serveApi,
   startMessage,
   upgradeStatus,
+  uploadChunk,
 } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
 import { memoryObjectStore } from './support/object-store.ts';
@@ -68,7 +71,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       const { listener_id, lease_generation } = yield* claimListener(host, 'device');
       expect(lease_generation).toBe(1);
       const secondTab = yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(0));
-      expect(secondTab.body).toMatchObject({ owner: false, lease_generation: 1 });
+      expect(secondTab.body).toMatchObject({ owner: false, lease_generation: 0 });
 
       const epoch_id = newEpochId();
       const socket = yield* openSocket(host, listener_id, 'device');
@@ -88,6 +91,59 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       const stale = yield* openSocket(host, listener_id, 'device');
       stale.send(startMessage({ listener_id, epoch_id: newEpochId(), lease_generation: 1 }));
       expect(yield* stale.take('rejected')).toMatchObject({ reason: 'stale_generation' });
+    }),
+  );
+
+  it.scoped('rejects a second holder of the listener and leaves the winner live segment untouched', () =>
+    Effect.gen(function* () {
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const epoch_id = newEpochId();
+      const winner = yield* openSocket(host, listener_id, 'device');
+      winner.send(startMessage({ listener_id, epoch_id, lease_generation }));
+      yield* winner.take('accepted');
+
+      // The loser keeps its own generation: the holder's is never handed out.
+      const loser = yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(0));
+      expect(loser.body).toMatchObject({ owner: false, lease_generation: 0 });
+      for (const start of [{ lease_generation: 0 }, { lease_generation: 0, archive_only: true }]) {
+        const socket = yield* openSocket(host, listener_id, 'device');
+        socket.send(startMessage({ listener_id, epoch_id: newEpochId(), ...start }));
+        expect(yield* socket.take('rejected')).toMatchObject({ reason: 'stale_generation' });
+      }
+
+      winner.send(pcmFrame(0, 0));
+      expect(yield* winner.take('ack')).toMatchObject({ sample_end: 1_600 });
+      expect((yield* epochRow(epoch_id))[0]).toMatchObject({ end_reason: null });
+    }),
+  );
+
+  it.scoped('uploads archive audio recorded under the held generation and refuses audio recorded after losing it', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const held = new Date(Date.now() - 60_000).toISOString();
+      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(0))).body).toMatchObject({ owner: true, lease_generation: 2 });
+      yield* pause(20);
+      const lost = new Date().toISOString();
+
+      const register = <T extends 'accepted' | 'rejected'>(epoch_id: CaptureEpochId, captured_at: string, verdict: T) =>
+        Effect.gen(function* () {
+          const socket = yield* openSocket(host, listener_id, 'device');
+          socket.send(startMessage({ listener_id, epoch_id, lease_generation, archive_only: true, captured_at, end_reason: 'pause' }));
+          return yield* socket.take(verdict);
+        });
+      const before = newEpochId();
+      yield* register(before, held, 'accepted');
+      expect((yield* epochRow(before))[0]).toMatchObject({ end_reason: 'pause' });
+      const samples = new Int16Array(16_000);
+      const put = (captured_at: string, sequence: number) =>
+        uploadChunk(host, 'device', chunk({ listener_id, epoch_id: before, sequence, sample_start: sequence * 16_000, samples, captured_at }));
+      expect((yield* put(held, 0)).status).toBe(200);
+      expect((yield* put(lost, 1)).status).toBe(404);
+      expect(yield* register(newEpochId(), lost, 'rejected')).toMatchObject({ reason: 'stale_generation' });
     }),
   );
 

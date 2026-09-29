@@ -7,10 +7,12 @@
  */
 import { randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema } from '@effect/sql';
-import { CaptureEpochId, JobFailure, ListenerId, ProviderConnectionId, SampleIndex, type WorkspaceId } from '@sanctum/contracts';
+import { CaptureEpochId, EpochEndReason, JobFailure, ListenerId, ProviderConnectionId, SampleIndex, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { ObjectStore } from '../providers/object-store.ts';
 import { SpeechToText } from '../providers/deepgram.ts';
+import { DbSafeInt } from '../db.ts';
+import { onCaptureEnded } from '../meetings.ts';
 import { listCommittedChunks } from '../recordings.ts';
 import { coverageIn, publishFinalWindow, type SampleSpan, uncovered } from '../transcripts.ts';
 
@@ -24,6 +26,37 @@ const ReconcilePayload = Schema.Struct({
 const EpochListener = Schema.Struct({ id: ListenerId, capture_group_id: Schema.NullOr(Schema.String) });
 
 const WAV_HEADER_BYTES = 44;
+
+const ArchiveEnd = Schema.Struct({
+  listener_id: ListenerId,
+  end_reason: Schema.NullOr(EpochEndReason),
+  archive: DbSafeInt,
+  idle: DbSafeInt,
+  sample_end: Schema.NullOr(DbSafeInt),
+});
+
+/**
+ * An archive-only epoch (recovered offline audio, never live) that ended by close or interruption
+ * seals its meeting once its uploaded audio is reconciled, so notes and memory run without waiting
+ * for a later boundary. Skipped while the listener captures live: that session owns the open meeting.
+ */
+const sealArchiveEpoch = (workspace_id: WorkspaceId, epoch_id: CaptureEpochId, track: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [end] = yield* SqlSchema.findAll({
+      Request: CaptureEpochId,
+      Result: ArchiveEnd,
+      execute: id => sql`
+        SELECT e.listener_id, e.end_reason, e.ended_at IS NOT NULL AND e.live_sample_end = e.sample_start AS archive,
+               l.current_epoch_id IS NULL OR l.current_epoch_id = e.id AS idle,
+               (SELECT MAX(c.sample_start + c.sample_count) FROM recording_chunks c
+                WHERE c.workspace_id = e.workspace_id AND c.epoch_id = e.id AND c.track = ${track} AND c.upload_state = 'committed') AS sample_end
+        FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
+        WHERE e.workspace_id = ${workspace_id} AND e.id = ${id}`,
+    })(epoch_id).pipe(Effect.catchTag('ParseError', Effect.die));
+    if (end === undefined || end.archive !== 1 || end.idle !== 1 || end.sample_end === null || end.end_reason === null) return;
+    yield* onCaptureEnded({ workspace_id, listener_id: end.listener_id, epoch_id, track, sample_end: end.sample_end, reason: end.end_reason });
+  });
 
 export const reconcileTranscript = (job: { readonly workspace_id: WorkspaceId; readonly payload: unknown }) =>
   Effect.gen(function* () {
@@ -82,5 +115,6 @@ export const reconcileTranscript = (job: { readonly workspace_id: WorkspaceId; r
       }
     }
     const missing_audio = uncovered(range, chunks.map(chunk => ({ sample_start: chunk.sample_start, sample_end: chunk.sample_start + chunk.sample_count })));
+    yield* sealArchiveEpoch(workspace_id, epoch_id, track);
     return { status: 'succeeded' as const, result: { transcribed, missing_audio } };
   }).pipe(Effect.catchTag('SqlError', error => new JobFailure({ message: `Database error: ${error.message}`, retryable: true })));

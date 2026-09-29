@@ -18,7 +18,7 @@
  * checked by the server session against the accepted `start` message.
  */
 import { Schema } from 'effect';
-import { EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
+import { EpochEndReason, EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
 import { CaptureEpochId, ListenerId, SampleIndex, SampleRate } from './common.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
@@ -132,6 +132,11 @@ export const StartMessage = Schema.TaggedStruct('start', {
    * the server records its clock anchor, never makes it the live epoch and closes the socket after `accepted`.
    */
   archive_only: Schema.optional(Schema.Boolean),
+  /**
+   * With `archive_only`: why the epoch ended on the device, as journaled there; omitted when the
+   * device never saw it end (tab closed, crash), which the server records as `interrupted`.
+   */
+  end_reason: Schema.optional(EpochEndReason),
 });
 
 export const StopMessage = Schema.TaggedStruct('stop', {

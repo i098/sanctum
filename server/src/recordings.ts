@@ -25,6 +25,7 @@ import {
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
+import { heldUntil } from './lease-claims.ts';
 import { ObjectStore, type ObjectStoreError } from './providers/object-store.ts';
 
 /** Batch reconciliation waits this long after an upload so live finals for the range can land first. */
@@ -112,7 +113,7 @@ const storeObject = (key: string, body: Uint8Array, sha256: string) =>
     );
   }).pipe(Effect.mapError(storageUnavailable));
 
-const EpochClock = Schema.Struct({ sample_rate: DbSafeInt, sample_start: DbSafeInt });
+const EpochClock = Schema.Struct({ sample_rate: DbSafeInt, sample_start: DbSafeInt, lease_generation: DbSafeInt });
 
 /** The epoch's clock when it belongs to `listener_id` and that listener to the caller. */
 const ownedEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: CaptureEpochId) =>
@@ -122,11 +123,28 @@ const ownedEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: Capt
       Request: CaptureEpochId,
       Result: EpochClock,
       execute: id => sql`
-        SELECT e.sample_rate, e.sample_start FROM capture_epochs e
+        SELECT e.sample_rate, e.sample_start, e.lease_generation FROM capture_epochs e
         JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
         WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${id} AND l.id = ${listener_id} AND l.principal_id = ${access.principal.id}`,
     });
     return yield* find(epoch_id).pipe(Effect.catchTag('ParseError', Effect.die));
+  });
+
+/**
+ * The chunk's epoch belongs to the caller, matches its clock, and the audio ends before a later lease
+ * generation was claimed; audio recorded after the device lost the lease is NotFound, like an unknown epoch.
+ */
+const heldEpoch = (access: AccessScope, listener_id: ListenerId, manifest: RecordingChunkManifest) =>
+  Effect.gen(function* () {
+    const epoch = yield* ownedEpoch(access, listener_id, manifest.epoch_id);
+    if (Option.isNone(epoch)) return yield* new NotFound({ message: 'Capture epoch not found for this listener' });
+    if (epoch.value.sample_rate !== manifest.sample_rate || manifest.sample_start < epoch.value.sample_start) {
+      return yield* invalid('sample rate or range does not match the epoch clock');
+    }
+    const ends_ms = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
+    if (!(yield* heldUntil(access.workspace_id, listener_id, epoch.value.lease_generation, ends_ms))) {
+      return yield* new NotFound({ message: 'This audio was recorded after the device lost the listener lease' });
+    }
   });
 
 /** Checks ownership, epoch clock, WAV shape and hash; returns the body's SHA-256. */
@@ -136,11 +154,7 @@ const validateChunk = (access: AccessScope, listener_id: ListenerId, chunk_id: R
     if (!access.scopes.includes('capture:ingest')) {
       return yield* new Forbidden({ message: 'The capture:ingest scope is required', required_scope: 'capture:ingest' });
     }
-    const epoch = yield* ownedEpoch(access, listener_id, manifest.epoch_id);
-    if (Option.isNone(epoch)) return yield* new NotFound({ message: 'Capture epoch not found for this listener' });
-    if (epoch.value.sample_rate !== manifest.sample_rate || manifest.sample_start < epoch.value.sample_start) {
-      return yield* invalid('sample rate or range does not match the epoch clock');
-    }
+    yield* heldEpoch(access, listener_id, manifest);
     const shapeError = wavError(body, manifest);
     if (shapeError !== null) return yield* invalid(shapeError);
     const sha256 = createHash('sha256').update(body).digest('hex');
