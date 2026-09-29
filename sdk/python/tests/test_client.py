@@ -94,7 +94,18 @@ class Transport(unittest.TestCase):
             with self.assertRaises(httpx.ConnectError):
                 client.health.healthz({})
 
-    def test_non_json_proxy_error_raises_sanctum_error(self) -> None:
+    def test_non_json_proxy_error_raises_sanctum_error_and_is_retried(self) -> None:
+        calls = 0
+
+        def gateway(_: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(502, text="<html>Bad Gateway</html>") if calls < 3 else httpx.Response(200, json={"status": "ok"})
+
+        with Client("https://sanctum.test", transport=httpx.MockTransport(gateway), retry_delay_ms=1) as client:
+            self.assertEqual(client.health.healthz({}), {"status": "ok"})
+        self.assertEqual(calls, 3)
+
         transport = httpx.MockTransport(lambda _: httpx.Response(502, text="<html>Bad Gateway</html>"))
         with Client("https://sanctum.test", transport=transport, max_attempts=1) as client:
             with self.assertRaises(SanctumError) as raised:

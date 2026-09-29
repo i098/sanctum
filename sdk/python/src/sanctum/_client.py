@@ -29,7 +29,7 @@ class SanctumError(Exception):
         self.status = status
         self.body = dict(body)
         self.code: str = body.get("code", "http_error")
-        self.retryable = body.get("retryable") is True or status == 429
+        self.retryable = body.get("retryable") is True or status == 429 or ("retryable" not in body and status in (502, 503, 504))
 
 
 def _request(operation: str, input: Mapping[str, Any]) -> tuple[Operation, str, dict[str, str], Any]:

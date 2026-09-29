@@ -68,7 +68,7 @@ interface Session {
   readonly stream: MediaStream;
   readonly recorder: Recorder;
   readonly buffer: CaptureBuffer;
-  readonly listener: StoredListener;
+  listener: StoredListener;
   readonly releaseLock: () => Promise<void>;
   epoch: Epoch | null;
   stopping: boolean;
@@ -423,6 +423,7 @@ class CaptureController implements CaptureView {
     const exit = await Effect.runPromiseExit(this.client.heartbeat({ path: { listener_id: listener.id }, payload }));
     if (Exit.isSuccess(exit)) {
       this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
+      if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.saveListener(null); // the server no longer knows this listener; the next start registers again

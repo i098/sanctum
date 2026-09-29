@@ -80,7 +80,7 @@ export const segmentRows = (workspace_id: string, filter: Statement.Fragment, li
           AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
         JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
         WHERE s.workspace_id = ${workspace_id} AND ${filter}
-        ORDER BY e.captured_at, s.sample_start, s.id
+        ORDER BY event_at, s.id
         LIMIT ${limit}`,
   );
  });

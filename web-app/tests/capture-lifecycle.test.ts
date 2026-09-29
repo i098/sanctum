@@ -100,6 +100,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const lives: Array<{ options: LiveOptions; sent: number[]; stopped: StopReason | null }> = [];
   const calls = { register: 0, heartbeat: [] as unknown[], put: [] as RecordingChunkManifest[] };
   let owner = true;
+  let generation = 1;
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const receipt = (manifest: RecordingChunkManifest) =>
     ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
@@ -110,7 +111,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     },
     heartbeat: (request: { payload: unknown }) => {
       calls.heartbeat.push(request.payload);
-      return Effect.succeed({ lease_generation: 1, lease_expires_at: '2026-09-29T09:00:45Z', owner });
+      return Effect.succeed({ lease_generation: generation, lease_expires_at: '2026-09-29T09:00:45Z', owner });
     },
     putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => {
       calls.put.push(request.headers['x-sanctum-manifest']);
@@ -165,7 +166,10 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     feed,
     accept,
     snapshot,
-    setOwner: (value: boolean) => (owner = value),
+    setOwner: (value: boolean) => {
+      if (!value && owner) generation++;
+      owner = value;
+    },
   };
 }
 
@@ -367,6 +371,7 @@ describe('capture lifecycle', () => {
     h.feed(0.1);
     expect(h.lives).toHaveLength(2);
     expect(h.lives[1]!.options.start.epoch_id).not.toBe(h.lives[0]!.options.start.epoch_id);
+    expect(h.lives[1]!.options.start.lease_generation).toBe(2);
     h.accept();
     await settle();
     expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });

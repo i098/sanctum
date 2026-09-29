@@ -20,7 +20,7 @@ export class SanctumError extends Error {
     this.name = 'SanctumError';
     this.status = status;
     this.code = typeof body['code'] === 'string' ? body['code'] : 'http_error';
-    this.retryable = body['retryable'] === true || status === 429;
+    this.retryable = body['retryable'] === true || status === 429 || (body['retryable'] === undefined && [502, 503, 504].includes(status));
     this.body = body;
   }
 }

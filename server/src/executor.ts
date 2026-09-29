@@ -100,8 +100,7 @@ const storeArtifact = (row: ActionRow, attempt: number, bytes: Uint8Array) =>
  * the action `unknown`) still lands and reconciles it; the attempt fence stops stale overwrites.
  */
 const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{ readonly receipt: Record<string, unknown>; readonly artifact: Uint8Array | null }, IntegrationFailure>) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
+  Effect.flatMap(SqlClient.SqlClient, sql => sql.withTransaction(Effect.gen(function* () {
     const fence = sql`workspace_id = ${row.workspace_id} AND id = ${row.id} AND attempts = ${attempt}`;
     if (outcome._tag === 'Right') {
       const { artifact } = outcome.right;
@@ -117,7 +116,7 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
       ? sql`UPDATE actions SET state = 'unknown', reconciliation = 'pending', last_error = ${error}, updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state = 'running'`
       : sql`UPDATE actions SET reconciliation = IF(state = 'unknown', 'reconciled', reconciliation), state = 'failed', last_error = ${error},
           updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state IN ('running', 'unknown')`;
-  });
+  })));
 
 /**
  * Sends one attempt and records its answer from a daemon that outlives this handler. No answer
