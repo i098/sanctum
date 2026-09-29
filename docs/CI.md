@@ -3,7 +3,8 @@
 ## Current scope
 
 The pipeline validates and publishes the documentation and visual reference that exist today.
-It does not pretend to test or deploy the future meeting application.
+The Application checks job tests the application workspaces implemented so far.
+It does not deploy the application or claim coverage for slices that do not exist yet.
 
 ## Triggers and checks
 
@@ -18,7 +19,7 @@ The check job has read-only repository permissions and a ten-minute timeout.
 ## Quality regression gates
 
 Every pull request and push to main runs Fallow, Sentrux and commit-standard checks in addition to handoff validation.
-Documentation publication waits for all four jobs.
+Documentation publication waits for all five jobs, including Application checks.
 Missing binaries, invalid results, missing Sentrux baselines and scanner failures fail the job; no continue-on-error bypass is configured.
 The scanners check code structure and static findings; they do not prove runtime performance or Rust parity.
 
@@ -63,9 +64,20 @@ Pull requests do not run the deployment jobs.
 Roll back documentation by reverting the relevant commit and letting the same pipeline deploy the previous content.
 No application database, microphone, or external integration is involved.
 
+## Application checks
+
+The `app` job runs `npm run check:app` (`scripts/check-app.ts`) and stops at the first failing step.
+Steps, in order: workspace typechecks, root Vitest suites, web build, Playwright browser tests, benchmark manifest validation.
+Child processes run with `SANCTUM_ENV=test` and without provider credential variables, so external side effects stay disabled.
+Server tests use a `mysql:8.4` service container through `SANCTUM_TEST_MYSQL_URL`; its root password is a non-secret test literal.
+Playwright installs only the Chromium headless shell and its system dependencies.
+The job has read-only repository permissions, no secrets, no deployment, and a twenty-minute timeout.
+`benchmarks/workload.json` is validated for shape only; no benchmark result exists and Rust parity remains unverified.
+Run it locally with `npm run check:app`; without `SANCTUM_TEST_MYSQL_URL`, server tests start a throwaway Docker container.
+
 ## When implementation is added
 
-Add real TypeScript server, web, SDK, MCP, MySQL, Effect interruption/cleanup and browser checks with each corresponding implementation slice.
+Extend `scripts/check-app.ts` with real SDK, MCP, Effect interruption/cleanup and later server and browser checks as each implementation slice lands.
 Add Python only to an isolated client-SDK job when that client exists.
 Run deterministic performance smoke/correctness checks in normal CI; keep Rust comparisons and regression timing gates on a controlled benchmark host.
 Do not add permanently passing placeholders for missing components.
