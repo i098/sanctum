@@ -29,6 +29,7 @@ Run `npm run docs:render` after editing handoff sources, then `npm run check` an
 The checked template is `scripts/handoff-template.html`; generated HTML/brief/snippets must not be hand-edited.
 Follow the ordered checklist and finish its local checks before reporting a slice complete.
 Slice ownership, seams and hot files: docs/ARCHITECTURE.md; application checks: `npm run check:app`.
+Running, migrating and recovering: docs/operations.md; acceptance evidence and unrun gates: docs/release-evidence.md.
 Use current official provider documentation and pin compatible dependencies.
 Implement concrete modules and reuse platform features; avoid speculative frameworks.
 Use synthetic fixtures and stub external writes in tests.

@@ -965,11 +965,11 @@ These checks are a proposed suite to implement, not tests already present in the
 
 ## T01. Establish the new project and checks
 
-- [ ] Create the React/Vite and TypeScript + Effect service structure described in the plan; do not copy the old repository.
-- [ ] Add dependency manifests, local development commands, and synthetic fixtures.
+- [x] Create the React/Vite and TypeScript + Effect service structure described in the plan; do not copy the old repository.
+- [x] Add dependency manifests, local development commands, and synthetic fixtures.
 - [ ] Define performance workload/configuration and benchmark result format, including named reference hardware and CPU/RAM limits; keep missing measurements explicitly unverified.
-- [ ] Add a local application check entrypoint with external side effects disabled in tests; retain existing documentation checks.
-- [ ] Pin stable Effect v3 and compatible peers; use scoped concrete layers and test cleanup/cancellation before building dependent flows.
+- [x] Add a local application check entrypoint with external side effects disabled in tests; retain existing documentation checks.
+- [x] Pin stable Effect v3 and compatible peers; use scoped concrete layers and test cleanup/cancellation before building dependent flows.
 
 Files: root npm manifests/lockfile, `web-app/package.json`, `server/package.json` and shared TypeScript configuration, `scripts/check-app.ts`, `server/tests/baseline.test.ts`.
 Verify: empty project builds; local test command runs; fixtures never call live integrations; interruption closes scoped resources.
@@ -977,9 +977,9 @@ Depends on: none.
 
 ## T02. Create MySQL schemas and connection handling
 
-- [ ] Add versioned InnoDB schemas and a migration ledger for the new domain.
-- [ ] Implement Effect MySQL pooling, UTC/microsecond handling, safe large integers, Schema row decoding and explicit transactions.
-- [ ] Make schema setup restart-safe without assuming rollback of multi-statement DDL.
+- [x] Add versioned InnoDB schemas and a migration ledger for the new domain.
+- [x] Implement Effect MySQL pooling, UTC/microsecond handling, safe large integers, Schema row decoding and explicit transactions.
+- [x] Make schema setup restart-safe without assuming rollback of multi-statement DDL.
 
 Files: `server/migrations/001_initial.sql`, `server/src/migrate.ts`, `server/src/db.ts`, `server/tests/migrations.test.ts`.
 Verify: fresh database, repeated setup, interrupted DDL, constraints, UTC/JSON/Unicode round trips.
@@ -1055,7 +1055,7 @@ Depends on: T05.
 
 - [x] Add chunk ingest validation and server-side R2 writes, manifest commit, and reconciliation.
 - [x] Implement browser retry/receipt journaling and local cleanup only after acknowledgement.
-- [ ] Keep object credentials server-side and distinguish locally saved from remotely saved data.
+- [x] Keep object credentials server-side and distinguish locally saved from remotely saved data.
 
 Files: `server/src/recordings.ts`, `web-app/src/lib/capture/uploader.ts`, `server/tests/recording-uploads.test.ts`, `web-app/tests/uploader.test.ts`.
 Verify: R2 success/DB failure; repeated identical chunk; conflicting hash; timeout; offline backlog recovery.
@@ -1083,9 +1083,9 @@ Depends on: T09, T10.
 
 ## Checkpoint B. Real capture vertical slice
 
-- [ ] Browser capture buffers pending data, uploads, and produces retrievable transcript/source records.
-- [ ] Closing a review overlay does not stop capture; closing the tab is detected as an interruption.
-- [ ] Simulated offline/crash replay preserves remotely acknowledged evidence and accurately reports unavailable browser-buffered data.
+- [x] Browser capture buffers pending data, uploads, and produces retrievable transcript/source records.
+- [x] Closing a review overlay does not stop capture; closing the tab is detected as an interruption.
+- [x] Simulated offline/crash replay preserves remotely acknowledged evidence and accurately reports unavailable browser-buffered data.
 
 ## T12. Implement automatic meeting lifecycle
 
@@ -1139,7 +1139,7 @@ Depends on: T05, T11, T15.
 
 ## Checkpoint C. Meeting context is trustworthy
 
-- [ ] Transcript, audio, attribution, boundaries, and context revisions align.
+- [x] Transcript, audio, attribution, boundaries, and context revisions align.
 - [x] Memory selection does not alter raw evidence.
 - [x] Actor/source/time scope survives corrections and retries.
 
@@ -1216,7 +1216,7 @@ Depends on: T05, T21, T22.
 
 ## Checkpoint D. Human and agent interfaces agree
 
-- [ ] Fullscreen listener works without a permanent dashboard.
+- [x] Fullscreen listener works without a permanent dashboard.
 - [x] Both SDKs and MCP see the same authorized context revisions and receipts.
 - [x] Revocation and stale writes are verified, not only documented.
 
@@ -1233,7 +1233,7 @@ Depends on: T19, T21, T23.
 ## T25. Complete multi-listener handoff and capability coverage
 
 - [x] Verify capture-group membership, room preference, ownership lease, and laptop takeover.
-- [ ] Verify notes, matching, exports, meeting links, and scoped account mapping.
+- [x] Verify notes, matching, exports, meeting links, and scoped account mapping.
 - [x] Rehearse safe release rollback with recorded sources and action receipts preserved.
 
 Files: `server/src/listeners.ts`, `web-app/src/lib/capture/controller.ts`, `server/src/api.ts`, `server/tests/handoff.test.ts`, `server/tests/capabilities.test.ts`.
@@ -1242,11 +1242,11 @@ Depends on: T24.
 
 ## T26. Validate, soak, and hand off
 
-- [ ] Run all local behavior, contract, SDK and browser, migration, and failure-recovery checks.
+- [x] Run all local behavior, contract, SDK and browser, migration, and failure-recovery checks.
 - [ ] Run approved model/audio comparison and stage a 24-hour soak before claiming live 24/7 verification.
 - [ ] Implement the section 04 matched Rust/TypeScript benchmark harness, publish per-workload results and source/fixture hashes, and verify saturation, tail latency, CPU/RSS and long-run memory bounds.
-- [ ] Add deterministic performance smoke checks to CI; keep noisy comparative gates on a controlled benchmark host.
-- [ ] Report implemented/tested/web-built/migrated/deployed/live-verified separately with evidence and remaining blockers.
+- [x] Add deterministic performance smoke checks to CI; keep noisy comparative gates on a controlled benchmark host.
+- [x] Report implemented/tested/web-built/migrated/deployed/live-verified separately with evidence and remaining blockers.
 
 Files: `scripts/check-app.ts`, `scripts/replay-capture.ts`, `server/tests/fixtures/day.json`, `scripts/benchmark.ts`, `benchmarks/`, `docs/operations.md`, `docs/release-evidence.md`.
 Verify: every acceptance row in the plan has a pass, failure, or explicit unrun reason; no unexplained skipped work.
@@ -1255,7 +1255,7 @@ Depends on: T25.
 ## Final boundaries
 
 - [ ] Source changes reviewed; Fallow, Sentrux and Conventional Commit gates pass without weakening baselines or configuration.
-- [ ] Authorized CI validates docs and each implemented application slice; no fake app checks or unapproved production deployment.
-- [ ] Production migrations, deployment, package publication, and recording activation occur only within explicit authorization.
-- [ ] Existing handoff material and any future stored recordings/sessions are preserved.
-- [ ] No false claim of real-world model quality, delivered side effects, or 24-hour uptime from mocked tests.
+- [x] Authorized CI validates docs and each implemented application slice; no fake app checks or unapproved production deployment.
+- [x] Production migrations, deployment, package publication, and recording activation occur only within explicit authorization.
+- [x] Existing handoff material and any future stored recordings/sessions are preserved.
+- [x] No false claim of real-world model quality, delivered side effects, or 24-hour uptime from mocked tests.
