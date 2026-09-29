@@ -16,6 +16,8 @@ export const engineeringDefaults = {
   playbackUrlTtlMs: 5 * 60_000,
   /** Per-workspace external action submissions per window; more pause the job until the window frees up. */
   actionBudget: { perWindow: 30, windowMs: 60_000 },
+  /** Requested speech: open window, quiet time that ends a direct-request turn, echo memory after playback. */
+  speech: { windowMs: 30_000, endOfTurnMs: 700, echoTailMs: 1_500 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
 } as const;
@@ -39,6 +41,11 @@ export const serverConfig = Config.all({
     password: Config.redacted('MYSQL_PASSWORD').pipe(Config.withDefault(Redacted.make(''))),
     maxConnections: Config.integer('MYSQL_POOL_SIZE').pipe(Config.withDefault(10)),
     queueLimit: Config.integer('MYSQL_POOL_QUEUE').pipe(Config.withDefault(100)),
+  }),
+  /** Requested speech output; without a key and voice, speech fails as unavailable instead of being faked. */
+  cartesia: Config.all({
+    apiKey: Config.option(Config.redacted('CARTESIA_API_KEY')),
+    voiceId: Config.option(Config.string('CARTESIA_VOICE_ID')),
   }),
   /** Open decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...openDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
