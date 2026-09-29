@@ -1,14 +1,10 @@
-import { HttpServer } from '@effect/platform';
 import { describe, expect, it } from '@effect/vitest';
 import { Unauthenticated } from '@sanctum/contracts';
-import { Context, Effect, Layer } from 'effect';
+import { Effect, Layer } from 'effect';
 import { Authenticator } from '../src/auth.ts';
 import { engineeringDefaults, requireActivation } from '../src/config.ts';
-import { serverLayer } from '../src/main.ts';
-import { migrate, loadMigrations } from '../src/migrate.ts';
-import { dbLayer } from '../src/db.ts';
-import { createTestDatabase } from './support/database.ts';
 import { fixtureAccess } from './support/fixtures.ts';
+import { serveApi } from './http-server.ts';
 
 const access = fixtureAccess();
 
@@ -17,18 +13,6 @@ const FixtureAuthenticator = Layer.succeed(Authenticator, {
   authenticate: request =>
     request.headers.authorization === 'Bearer fixture' ? Effect.succeed(access) : Effect.fail(new Unauthenticated({ message: 'no credentials' })),
 });
-
-/** Real Node HTTP server on a free port against a disposable database; yields its base URL. */
-const serve = (options: { readonly migrated: boolean; readonly auth?: Layer.Layer<Authenticator> }) =>
-  Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    if (options.migrated) yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
-    const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, options.auth);
-    const context = yield* Layer.build(layer);
-    const address = Context.get(context, HttpServer.HttpServer).address;
-    if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
-    return `http://127.0.0.1:${address.port}`;
-  });
 
 const get = (url: string, headers: Record<string, string> = {}) =>
   Effect.promise(async () => {
@@ -39,7 +23,7 @@ const get = (url: string, headers: Record<string, string> = {}) =>
 describe('API entrypoint', () => {
   it.scoped('serves health, readiness and the authenticated session over HTTP', () =>
     Effect.gen(function* () {
-      const base = yield* serve({ migrated: true, auth: FixtureAuthenticator });
+      const base = yield* serveApi({ auth: FixtureAuthenticator });
       expect(yield* get(`${base}/healthz`)).toEqual({ status: 200, body: { status: 'ok' } });
       expect(yield* get(`${base}/readyz`)).toEqual({ status: 200, body: { status: 'ready' } });
       expect(yield* get(`${base}/api/v1/session`, { authorization: 'Bearer fixture' })).toEqual({ status: 200, body: access });
@@ -50,7 +34,7 @@ describe('API entrypoint', () => {
 
   it.scoped('is not ready while migrations are pending and refuses sessions without configured auth', () =>
     Effect.gen(function* () {
-      const base = yield* serve({ migrated: false });
+      const base = yield* serveApi({ migrated: false });
       const ready = yield* get(`${base}/readyz`);
       expect(ready.status).toBe(503);
       expect(ready.body).toMatchObject({ code: 'unavailable', retryable: true });
