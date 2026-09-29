@@ -6,15 +6,17 @@ import { HttpApiBuilder } from '@effect/platform';
 import { SanctumApi } from '@sanctum/contracts';
 import { Layer } from 'effect';
 import { AuthenticatedLive, SessionLive } from './auth.ts';
+import { ContextLive } from './context.ts';
 import { HealthLive } from './health.ts';
 import type { Migration } from './migrate.ts';
 
 export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
-  HttpApiBuilder.api(SanctumApi).pipe(
-    Layer.provide([
-      HealthLive(migrations),
-      SessionLive,
-      // Slice handler layers: one line each.
-    ]),
-    Layer.provide(AuthenticatedLive),
-  );
+ HttpApiBuilder.api(SanctumApi).pipe(
+  Layer.provide([
+   HealthLive(migrations),
+   SessionLive,
+   // Slice handler layers: one line each.
+   ContextLive,
+  ]),
+  Layer.provide(AuthenticatedLive),
+ );

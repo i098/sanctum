@@ -4,21 +4,23 @@
  */
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@effect/platform';
 import { Schema } from 'effect';
-import { SessionApi } from './auth.ts';
+import { Authenticated, SessionApi } from './auth.ts';
+import { ContextApi } from './context.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 
 /** Process health and dependency readiness without tenant content. */
 export class HealthApi extends HttpApiGroup.make('health')
-  .add(HttpApiEndpoint.get('healthz', '/healthz').addSuccess(Schema.Struct({ status: Schema.Literal('ok') })))
-  .add(HttpApiEndpoint.get('readyz', '/readyz').addSuccess(Schema.Struct({ status: Schema.Literal('ready') }))) {}
+ .add(HttpApiEndpoint.get('healthz', '/healthz').addSuccess(Schema.Struct({ status: Schema.Literal('ok') })))
+ .add(HttpApiEndpoint.get('readyz', '/readyz').addSuccess(Schema.Struct({ status: Schema.Literal('ready') }))) { }
 
 export class SanctumApi extends HttpApi.make('sanctum')
-  .add(HealthApi)
-  .add(SessionApi)
-  // Slice groups: one `.add(XApi)` line each, in plan section 12 order.
-  .addError(Unauthenticated)
-  .addError(Forbidden)
-  .addError(NotFound)
-  .addError(RevisionConflict)
-  .addError(HashConflict)
-  .addError(Unavailable) {}
+ .add(HealthApi)
+ .add(SessionApi)
+ // Slice groups: one `.add(XApi)` line each, in plan section 12 order.
+ .add(ContextApi.middleware(Authenticated))
+ .addError(Unauthenticated)
+ .addError(Forbidden)
+ .addError(NotFound)
+ .addError(RevisionConflict)
+ .addError(HashConflict)
+ .addError(Unavailable) { }

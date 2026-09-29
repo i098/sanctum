@@ -70,3 +70,14 @@ CREATE TABLE context_events (
   CONSTRAINT context_events_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces (id),
   CONSTRAINT context_events_item FOREIGN KEY (item_id, item_revision) REFERENCES context_items (id, revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- Final transcript segments a meeting's context job has read: the source watermark and retry idempotency.
+CREATE TABLE context_processed_segments (
+  workspace_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  meeting_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  segment_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  processed_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (workspace_id, meeting_id, segment_id),
+  CONSTRAINT context_processed_meeting FOREIGN KEY (workspace_id, meeting_id) REFERENCES meetings (workspace_id, id),
+  CONSTRAINT context_processed_segment FOREIGN KEY (workspace_id, segment_id) REFERENCES transcript_segments (workspace_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

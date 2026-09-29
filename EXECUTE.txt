@@ -1129,9 +1129,9 @@ Depends on: T12.
 
 ## T16. Build versioned time-aware shared context
 
-- [ ] Add attributed context items, source refs, temporal fields, and immutable revisions.
-- [ ] Add committed-order change events, access-bound cursors, and optimistic concurrency.
-- [ ] Build bounded authorized retrieval and Jcyber-inspired memory distillation; coalesce active context jobs.
+- [x] Add attributed context items, source refs, temporal fields, and immutable revisions.
+- [x] Add committed-order change events, access-bound cursors, and optimistic concurrency.
+- [x] Build bounded authorized retrieval and Jcyber-inspired memory distillation; coalesce active context jobs.
 
 Files: `server/migrations/007_context.sql`, `server/src/context.ts`, `server/src/cache.ts`, `server/tests/context.test.ts`, `server/tests/context-changes.test.ts`.
 Verify: two-agent conflict, midnight/DST/delayed upload, source access, revoked cursor, missing source, distillation retry.
@@ -1140,8 +1140,8 @@ Depends on: T05, T11, T15.
 ## Checkpoint C. Meeting context is trustworthy
 
 - [ ] Transcript, audio, attribution, boundaries, and context revisions align.
-- [ ] Memory selection does not alter raw evidence.
-- [ ] Actor/source/time scope survives corrections and retries.
+- [x] Memory selection does not alter raw evidence.
+- [x] Actor/source/time scope survives corrections and retries.
 
 ## T17. Implement Pipedream discovery and execution access
 
