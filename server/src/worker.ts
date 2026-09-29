@@ -10,12 +10,13 @@ import { dbLayer } from './db.ts';
 import { jobHandlers } from './job-handlers.ts';
 import { runWorker } from './jobs.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
+import { PyannoteLive } from './providers/pyannote.ts';
 
 if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
     const run = Effect.zipRight(requireCurrentSchema(loadMigrations()), runWorker(jobHandlers));
-    return yield* Effect.provide(run, dbLayer(config.mysql));
+    return yield* Effect.provide(run, [dbLayer(config.mysql), PyannoteLive]);
   }).pipe(NodeRuntime.runMain);
 }

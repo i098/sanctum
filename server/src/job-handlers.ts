@@ -5,6 +5,11 @@
 import type { SqlClient } from '@effect/sql';
 import type { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import type { Effect } from 'effect';
+import { finalizeMeeting } from './meetings.ts';
+import type { ObjectStore } from './object-store.ts';
+import { assembleRecording } from './playback.ts';
+import type { PyannoteClient } from './providers/pyannote.ts';
+import { refineSpeakers } from './speakers.ts';
 
 export interface ClaimedJob {
   readonly id: JobId;
@@ -27,10 +32,13 @@ export type JobOutcome =
   | { readonly status: 'paused'; readonly resume_after_ms: number; readonly reason: string };
 
 /** Services every worker handler may use; a slice adds its provider tag here and its layer in worker.ts. */
-export type WorkerServices = SqlClient.SqlClient;
+export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient;
 
 export type JobHandler = (job: ClaimedJob) => Effect.Effect<JobOutcome, JobFailure, WorkerServices>;
 
 export const jobHandlers: Partial<Record<JobKind, JobHandler>> = {
   // One line per slice, e.g. 'context.refresh': refreshContext,
+  'meeting.finalize': finalizeMeeting,
+  'recording.assemble': assembleRecording,
+  'speakers.refine': refineSpeakers,
 };
