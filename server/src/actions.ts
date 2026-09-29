@@ -37,6 +37,7 @@ type ActionRequest = typeof RequestActionInput.Type;
 type Args = Readonly<Record<string, unknown>>;
 
 const JsonRecord = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const Restrictions = Schema.Record({ key: Schema.String, value: Schema.Array(Schema.Unknown) });
 
 /** JSON with object keys sorted at every depth, so equal requests hash equally. */
 const canonical = (value: unknown) =>
@@ -52,10 +53,10 @@ const requestHash = (input: ActionRequest) =>
     .digest('hex');
 
 /** Each restricted argument must be present and every value it carries must be listed. */
-const restrictionsAllow = (restrictions: Args, args: Args) =>
+const restrictionsAllow = (restrictions: typeof Restrictions.Type, args: Args) =>
   Object.entries(restrictions).every(([key, allowed]) => {
     if (!(key in args)) return false;
-    const permitted = new Set((Array.isArray(allowed) ? allowed : [allowed]).map(canonical));
+    const permitted = new Set(allowed.map(canonical));
     const values: ReadonlyArray<unknown> = Array.isArray(args[key]) ? args[key] : [args[key]];
     return values.length > 0 && values.every(value => permitted.has(canonical(value)));
   });
@@ -90,7 +91,7 @@ const GrantRow = Schema.Struct({
   app_slug: Schema.String,
   account_id: IntegrationAccountId,
   meeting_id: Schema.NullOr(MeetingId),
-  restrictions: DbJson(JsonRecord),
+  restrictions: DbJson(Restrictions),
   expires_at: Schema.NullOr(DbUtc),
   revoked_at: Schema.NullOr(DbUtc),
   version: DbSafeInt,
