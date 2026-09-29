@@ -4,7 +4,7 @@
  */
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@effect/platform';
 import { Schema } from 'effect';
-import { Authenticated, SessionApi } from './auth.ts';
+import { SessionApi } from './auth.ts';
 import { IntegrationsApi } from './integrations.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 
@@ -17,7 +17,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(HealthApi)
   .add(SessionApi)
   // Slice groups: one `.add(XApi)` line each, in plan section 12 order.
-  .add(IntegrationsApi.middleware(Authenticated))
+  .add(IntegrationsApi)
   .addError(Unauthenticated)
   .addError(Forbidden)
   .addError(NotFound)

@@ -4,7 +4,9 @@
  */
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
-import { ActionId, ActionState, IdempotencyKey, IntegrationAccountId, MeetingId } from './common.ts';
+import { ActionId, IdempotencyKey, IntegrationAccountId, MeetingId } from './common.ts';
+import { ActionState } from './actions.ts';
+import { Authenticated } from './auth.ts';
 
 export const ActionKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255));
 export const AppSlug = Schema.String.pipe(Schema.pattern(/^[a-z0-9_-]{1,128}$/));
@@ -83,7 +85,7 @@ export const RequestActionOutput = Schema.Struct({
 
 const actionKey = HttpApiSchema.param('action_key', ActionKey);
 
-/** Connector discovery over HTTP (plan section 12); registered behind `Authenticated` in api.ts. */
+/** Connector discovery over HTTP (plan section 12); REST, SDKs and MCP share the same gateway functions. */
 export class IntegrationsApi extends HttpApiGroup.make('integrations')
   .add(
     HttpApiEndpoint.get('searchIntegrationActions', '/integrations/actions')
@@ -100,4 +102,5 @@ export class IntegrationsApi extends HttpApiGroup.make('integrations')
       .setPayload(GetIntegrationActionInput.pipe(Schema.omit('action_key')))
       .addSuccess(GetIntegrationActionOutput),
   )
+  .middleware(Authenticated)
   .prefix('/api/v1') {}
