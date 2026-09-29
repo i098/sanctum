@@ -3,10 +3,11 @@ import { expect, layer } from '@effect/vitest';
 import { type AccessScope, type CaptureEpochId, Unavailable } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Either, Layer } from 'effect';
-import { heartbeat, registerListener, startEpoch } from '../src/listeners.ts';
+import { heartbeat, registerListener, startEpoch, stopEpoch } from '../src/listeners.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { putChunk } from '../src/recordings.ts';
-import { finalSegments, getSegments, recordFinalWindow } from '../src/transcripts.ts';
+import { finalSegments, getSegments, publishFinalWindow, recordFinalWindow } from '../src/transcripts.ts';
+import { jobsOf } from './support/capture.ts';
 import { chunk, fakeSpeech, MigratedDatabase, newEpochId, seedDevice } from './support/media.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -89,6 +90,34 @@ const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause', takeover_
     return { before, after: yield* states(), uploaded };
   });
 
+/** A registered device with fake providers; `archive` journals an offline epoch whose one chunk is uploaded and reconciled by `recover`. */
+const captureDevice = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const access = yield* seedDevice('Room');
+  const listener = yield* registerListener(access, { name: 'Room', mode: 'room', capabilities: {} });
+  const { lease_generation } = yield* heartbeat(access, listener.id, { lease_generation: 0, state: 'starting', epoch_id: null, buffered_chunks: 0, storage_bytes_free: null });
+  const store = memoryObjectStore();
+  const speech = fakeSpeech();
+  const providers = Layer.merge(store.layer, speech.layer);
+  const archive = (captured_at: string, end_reason: 'close' | 'interrupted' | 'pause', text: string | null) =>
+    Effect.gen(function* () {
+      const epoch_id = newEpochId();
+      const clock = { sample_rate: RATE, channels: 1, encoding: 'pcm_s16le', sample_start: 0, captured_at, timezone: 'America/Los_Angeles' } as const;
+      yield* startEpoch(access, { _tag: 'start', protocol_version: 1, listener_id: listener.id, epoch_id, track: 0, clock: clock as never, lease_generation, start_reason: 'start', archive_only: true, end_reason, sample_end: RATE });
+      const recover = Effect.gen(function* () {
+        speech.controls.batch = (samples, sample_rate) =>
+          Effect.succeed(text === null ? [] : [{ start_s: 0, end_s: samples.length / sample_rate, is_final: true, text, confidence: 0.9, speaker: '0' }]);
+        const upload = chunk({ listener_id: listener.id, epoch_id, sequence: 0, sample_start: 0, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }), captured_at });
+        yield* Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers);
+        yield* Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: 0, sample_end: RATE } }), providers);
+      });
+      return { epoch_id, recover };
+    });
+  const states = () => Effect.map(sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`, rows => rows.map(row => row.state));
+  const meetingJobs = () => Effect.map(jobsOf(access.workspace_id), jobs => jobs.filter(job => job.kind.startsWith('meeting.')));
+  return { access, listener, lease_generation, archive, states, meetingJobs };
+});
+
 layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation', it => {
   it.effect('seals the meeting of recovered offline audio with the journaled end reason once it is reconciled', () =>
     Effect.gen(function* () {
@@ -101,30 +130,43 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));
 
-  it.effect('leaves a paused meeting open when a later archive epoch holding none of its audio ends', () =>
+  it.effect('an older archive epoch completing after a later live meeting was paused leaves that meeting open', () =>
     Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const access = yield* seedDevice('Room');
-      const listener = yield* registerListener(access, { name: 'Room', mode: 'room', capabilities: {} });
-      const { lease_generation } = yield* heartbeat(access, listener.id, { lease_generation: 0, state: 'starting', epoch_id: null, buffered_chunks: 0, storage_bytes_free: null });
-      const store = memoryObjectStore();
-      const speech = fakeSpeech();
-      const providers = Layer.merge(store.layer, speech.layer);
-      const archive = (captured_at: string, end_reason: 'pause' | 'interrupted', text: string | null) =>
-        Effect.gen(function* () {
-          const epoch_id = newEpochId();
-          const clock = { sample_rate: RATE, channels: 1, encoding: 'pcm_s16le', sample_start: 0, captured_at, timezone: 'America/Los_Angeles' } as const;
-          yield* startEpoch(access, { _tag: 'start', protocol_version: 1, listener_id: listener.id, epoch_id, track: 0, clock: clock as never, lease_generation, start_reason: 'start', archive_only: true, end_reason, sample_end: RATE });
-          speech.controls.batch = (samples, sample_rate) =>
-            Effect.succeed(text === null ? [] : [{ start_s: 0, end_s: samples.length / sample_rate, is_final: true, text, confidence: 0.9, speaker: '0' }]);
-          const upload = chunk({ listener_id: listener.id, epoch_id, sequence: 0, sample_start: 0, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }), captured_at });
-          yield* Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers);
-          yield* Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: 0, sample_end: RATE } }), providers);
-        });
-      yield* archive('2026-09-26T17:00:00Z', 'pause', 'We will review the hiring budget today.');
-      yield* archive('2026-09-26T17:10:00Z', 'interrupted', null);
-      const states = yield* sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`;
-      expect(states.map(row => row.state)).toEqual(['provisional']);
+      const device = yield* captureDevice;
+      const older = yield* device.archive('2026-09-26T17:00:00Z', 'interrupted', null);
+      const live = newEpochId();
+      const clock = { sample_rate: RATE, channels: 1, encoding: 'pcm_s16le', sample_start: 0, captured_at: '2026-09-26T17:10:00Z', timezone: 'America/Los_Angeles' } as const;
+      yield* startEpoch(device.access, { _tag: 'start', protocol_version: 1, listener_id: device.listener.id, epoch_id: live, track: 0, clock: clock as never, lease_generation: device.lease_generation, start_reason: 'start' });
+      yield* publishFinalWindow({
+        workspace_id: device.access.workspace_id,
+        listener_id: device.listener.id,
+        capture_group_id: null,
+        epoch_id: live,
+        track: 0,
+        window: { sample_start: 0, sample_end: RATE },
+        segments: [{ sample_start: 0, sample_end: RATE, text: 'We will review the hiring budget today.', confidence: 0.9, speaker_label: '0' }],
+        origin: 'live',
+        provider: 'fake',
+        model: 'fake-1',
+        provider_connection_id: null,
+      });
+      yield* stopEpoch(device.access, device.listener.id, live, device.lease_generation, 'pause');
+      yield* older.recover;
+      expect(yield* device.states()).toEqual(['provisional']);
+      expect((yield* device.meetingJobs()).length).toBe(0);
+    }));
+
+  it.effect('seals an offline meeting when capture resumes after a pause and then ends with no further speech', () =>
+    Effect.gen(function* () {
+      for (const end_reason of ['close', 'interrupted'] as const) {
+        const device = yield* captureDevice;
+        yield* (yield* device.archive('2026-09-26T17:00:00Z', 'pause', 'We will review the hiring budget today.')).recover;
+        yield* (yield* device.archive('2026-09-26T17:10:00Z', end_reason, null)).recover;
+        expect(yield* device.states()).toEqual([end_reason === 'close' ? 'closing' : 'interrupted']);
+        const sql = yield* SqlClient.SqlClient;
+        const [meeting] = yield* sql<{ id: string }>`SELECT id FROM meetings WHERE listener_id = ${device.listener.id}`;
+        expect(yield* device.meetingJobs()).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${meeting!.id}`, status: 'pending' }]);
+      }
     }));
 
   it.effect('batch-transcribes an upload that arrives before live ASR, and later live finals do not duplicate it', () =>
