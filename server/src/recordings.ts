@@ -25,7 +25,7 @@ import {
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
-import { ObjectStore, type ObjectStoreError } from './object-store.ts';
+import { ObjectStore, type ObjectStoreError } from './providers/object-store.ts';
 
 /** Batch reconciliation waits this long after an upload so live finals for the range can land first. */
 const RECONCILE_DELAY_MS = 60_000;

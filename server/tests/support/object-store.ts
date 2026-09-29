@@ -1,6 +1,6 @@
 /** In-memory R2 stand-in for tests: records every call and can inject failures per operation. */
 import { Effect, Layer } from 'effect';
-import { ObjectStore, ObjectStoreError, type StoredObject } from '../../src/object-store.ts';
+import { ObjectStore, ObjectStoreError, type StoredObject } from '../../src/providers/object-store.ts';
 
 type Operation = ObjectStoreError['operation'];
 

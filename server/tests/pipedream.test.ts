@@ -454,7 +454,7 @@ describe('Pipedream Connect client', () => {
         return { status: 500, body: {} };
       });
       const config = { apiUrl: connect.url, environment: 'development' as const, credentials: Option.some({ projectId: 'proj', clientId: 'cid', clientSecret: Redacted.make('secret') }) };
-      const client = makePipedreamClient(config);
+      const client = makePipedreamClient(config, 30_000);
 
       expect(yield* client.getAction('missing')).toBeNull();
       const bytes = Uint8Array.from([0, 255, 13, 10, 128, 7]);
@@ -481,9 +481,9 @@ describe('Pipedream Connect client', () => {
       proxyStatus = 400;
       expect(yield* Effect.flip(proxy('POST'))).toMatchObject({ status: 400, retryable: false, ambiguous: false });
 
-      const refused = makePipedreamClient({ ...config, apiUrl: 'http://127.0.0.1:1' });
+      const refused = makePipedreamClient({ ...config, apiUrl: 'http://127.0.0.1:1' }, 30_000);
       expect(yield* Effect.flip(refused.proxy({ external_user_id: 'e', account_id: 'a', method: 'POST', url: target, headers: {}, body: bytes }))).toMatchObject({ status: null, ambiguous: false, retryable: true });
-      const unconfigured = makePipedreamClient({ ...config, credentials: Option.none() });
+      const unconfigured = makePipedreamClient({ ...config, credentials: Option.none() }, 30_000);
       expect(yield* Effect.flip(unconfigured.searchActions({ q: 'x', app: 'gmail', limit: 3 }))).toMatchObject({ message: 'Pipedream is not configured', retryable: false });
     }),
   );

@@ -5,7 +5,6 @@
  * The catalog never leaves the server; integrations.ts decides what reaches a model.
  */
 import { Context, Data, Effect, Layer, Option, Redacted, Schema } from 'effect';
-import { engineeringDefaults, serverConfig, type ServerConfig } from '../config.ts';
 
 /** Failed provider call. `ambiguous`: a write may have happened upstream; never replay it blindly. */
 export class IntegrationFailure extends Data.TaggedError('IntegrationFailure')<{
@@ -121,11 +120,17 @@ const componentBody = (request: ComponentRequest) => ({
 const noErrors = (operation: string, errors: ReadonlyArray<string> | null | undefined) =>
   errors && errors.length > 0 ? Effect.fail(failure(`${operation}: ${errors.join('; ')}`, null, false, false)) : Effect.void;
 
+/** Connect settings; config.ts reads them from the environment (providers never import application modules). */
+export interface PipedreamOptions {
+  readonly apiUrl: string;
+  readonly environment: 'development' | 'production';
+  readonly credentials: Option.Option<{ readonly projectId: string; readonly clientId: string; readonly clientSecret: Redacted.Redacted }>;
+}
+
 /** Live client over the Connect REST API with an OAuth client-credentials token. */
-export const makePipedreamClient = (config: ServerConfig['pipedream']): PipedreamService => {
+export const makePipedreamClient = (config: PipedreamOptions, timeoutMs: number): PipedreamService => {
   if (Option.isNone(config.credentials)) return unconfigured;
   const credentials = config.credentials.value;
-  const timeoutMs = engineeringDefaults.pipedream.requestTimeoutMs;
   let token: { readonly value: string; readonly expiresAt: number } | null = null;
 
   /** `write`: the request may change upstream state, so a lost or 5xx response is ambiguous. */
@@ -225,11 +230,6 @@ export const makePipedreamClient = (config: ServerConfig['pipedream']): Pipedrea
       }),
   };
 };
-
-export const PipedreamLive = Layer.effect(
-  PipedreamClient,
-  Effect.map(serverConfig, config => makePipedreamClient(config.pipedream)),
-);
 
 /** Test catalog entry: a component plus fixture-only behavior. */
 export interface FixtureAction extends ActionComponent {

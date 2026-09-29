@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { ObjectStore } from '../src/object-store.ts';
+import { ObjectStore } from '../src/providers/object-store.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
 const hash = 'cd'.repeat(32);

@@ -27,7 +27,7 @@ import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt } from './db.ts';
 import { asJobResult, currentRanges, dbFailures, MeetingJobPayload, type MeetingJob, OPEN_STATES, scheduleFinalize, selectMeeting } from './meeting-store.ts';
-import { ObjectStore } from './object-store.ts';
+import { ObjectStore } from './providers/object-store.ts';
 import { type DiarizedTurn, PyannoteClient, type VoiceMatch } from './providers/pyannote.ts';
 
 /** An enrolled voice names a label only when it clearly beats every other enrolled voice; otherwise the speaker stays unknown. */

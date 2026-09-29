@@ -4,7 +4,7 @@ import { type AccessScope, type CaptureEpochId, type ListenerId, RecordingChunkI
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { randomUUID } from 'node:crypto';
 import { Effect, Layer } from 'effect';
-import { ObjectStore } from '../src/object-store.ts';
+import { ObjectStore } from '../src/providers/object-store.ts';
 import { listCommittedChunks } from '../src/recordings.ts';
 import { api, chunk, claimListener, fakeSpeech, MigratedDatabase, newEpochId, openSocket, seedDevice, uploadChunk, serveApi, startMessage } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';

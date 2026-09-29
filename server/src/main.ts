@@ -17,7 +17,7 @@ import { dbLayer, type MysqlOptions } from './db.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, type SpeechToText } from './media/providers.ts';
 import { loadMigrations } from './migrate.ts';
-import type { ObjectStore } from './object-store.ts';
+import type { ObjectStore } from './providers/object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
 
 /** `vite build` output; the same relative path from `src/` in the repository and `dist/` in the image. */

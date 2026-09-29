@@ -4,7 +4,7 @@ import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse, Socket }
 import { NodeHttpServer } from '@effect/platform-node';
 import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Context, Effect, Layer, Stream } from 'effect';
-import { ObjectStore } from '../src/object-store.ts';
+import { ObjectStore } from '../src/providers/object-store.ts';
 import { DeepgramLive, parseLiveMessage, SpeechToText } from '../src/providers/deepgram.ts';
 import { R2ObjectStoreLive } from '../src/providers/r2.ts';
 

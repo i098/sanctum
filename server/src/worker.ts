@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer } from './db.ts';
 import { jobHandlers } from './job-handlers.ts';
-import { runWorker } from './jobs.ts';
+import { runWorker } from './job-runner.ts';
 import { MediaProvidersLive } from './media/providers.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
 import { PyannoteLive } from './providers/pyannote.ts';

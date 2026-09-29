@@ -21,9 +21,9 @@ import {
 } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
-import { engineeringDefaults } from './config.ts';
+import { engineeringDefaults, serverConfig } from './config.ts';
 import { DbSafeInt } from './db.ts';
-import { type ActionComponent, type ActionProp, IntegrationFailure, PipedreamClient, PipedreamLive } from './providers/pipedream.ts';
+import { type ActionComponent, type ActionProp, IntegrationFailure, PipedreamClient, makePipedreamClient } from './providers/pipedream.ts';
 
 export { IntegrationFailure };
 
@@ -383,6 +383,12 @@ export const uploadDriveFile = (
   }).pipe(Effect.catchTags({ SqlError: storeFailure, ParseError: storeFailure }));
 
 /** `/api/v1/integrations`: the same gateway functions the MCP adapter calls. */
+/** Connect client from the environment; without credentials every call fails as `Unavailable`. */
+const PipedreamLive = Layer.effect(
+  PipedreamClient,
+  Effect.map(serverConfig, config => makePipedreamClient(config.pipedream, engineeringDefaults.pipedream.requestTimeoutMs)),
+);
+
 export const IntegrationsLive = HttpApiBuilder.group(SanctumApi, 'integrations', handlers =>
   handlers
     .handle('searchIntegrationActions', ({ urlParams }) => Effect.flatMap(CurrentAccess, access => searchIntegrationActions(access, urlParams)))

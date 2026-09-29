@@ -23,7 +23,7 @@ import { DbSafeInt, DbUtc } from './db.ts';
 import { mergeMeetings, splitMeeting } from './meeting-corrections.ts';
 import { currentRanges, dbFailures, selectMeeting } from './meeting-store.ts';
 import { closeMeeting, getMeeting, listMeetings } from './meetings.ts';
-import { ObjectStore } from './object-store.ts';
+import { ObjectStore } from './providers/object-store.ts';
 import { issueRecordingAccess } from './playback.ts';
 import { mapSpeaker, tracksOverlapping } from './speakers.ts';
 

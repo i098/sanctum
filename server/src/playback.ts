@@ -12,7 +12,7 @@ import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt, DbSha256 } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { asJobResult, currentRanges, MeetingJobPayload, type MeetingJob, OPEN_STATES, selectMeeting, type TimedRange } from './meeting-store.ts';
-import { ObjectStore } from './object-store.ts';
+import { ObjectStore } from './providers/object-store.ts';
 
 const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeInt, sha256: DbSha256, object_key: Schema.String });
 

@@ -19,7 +19,7 @@ import { Authenticator } from '../../src/auth.ts';
 import { dbLayer } from '../../src/db.ts';
 import type { serverLayer } from '../../src/main.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
-import type { ObjectStore } from '../../src/object-store.ts';
+import type { ObjectStore } from '../../src/providers/object-store.ts';
 import { type AsrResult, SpeechToText } from '../../src/providers/deepgram.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';

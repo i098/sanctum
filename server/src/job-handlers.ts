@@ -8,7 +8,7 @@ import type { JobHandlers } from './job-types.ts';
 import type { SpeechToText } from './media/providers.ts';
 import { reconcileTranscript } from './media/reconcile.ts';
 import { finalizeMeeting } from './meetings.ts';
-import type { ObjectStore } from './object-store.ts';
+import type { ObjectStore } from './providers/object-store.ts';
 import { assembleRecording } from './playback.ts';
 import type { PyannoteClient } from './providers/pyannote.ts';
 import { refineSpeakers } from './speakers.ts';

@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { AwsClient } from 'aws4fetch';
 import { Config, Effect, Layer, Option, Redacted } from 'effect';
-import { ObjectStore, ObjectStoreError, type StoredObject } from '../object-store.ts';
+import { ObjectStore, ObjectStoreError, type StoredObject } from './object-store.ts';
 
 const r2Config = Config.all({
   endpoint: Config.url('R2_ENDPOINT'),

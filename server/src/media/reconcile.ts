@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema } from '@effect/sql';
 import { CaptureEpochId, JobFailure, ListenerId, ProviderConnectionId, SampleIndex, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
-import { ObjectStore } from '../object-store.ts';
+import { ObjectStore } from '../providers/object-store.ts';
 import { SpeechToText } from '../providers/deepgram.ts';
 import { listCommittedChunks } from '../recordings.ts';
 import { coverageIn, publishFinalWindow, type SampleSpan, uncovered } from '../transcripts.ts';
