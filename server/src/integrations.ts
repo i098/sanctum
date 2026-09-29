@@ -60,20 +60,20 @@ const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string;
       Request: Schema.Void,
       Result: AccountRow,
       execute: () => sql`
-                                                                SELECT a.id, a.app_slug, a.external_user_id, a.provider_account_id,
-                                                                                (a.owner_principal_id = ${principal} OR EXISTS (
-                                                                                                SELECT 1 FROM action_grants g
-                                                                                                WHERE g.workspace_id = a.workspace_id AND g.account_id = a.id AND g.grantee_principal_id = ${principal}
-                                                                                                                AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND ${meetingVisible}
-                                                                                )) AS usable
-                                                                FROM integration_accounts a
-                                                                WHERE ${sql.and([
-        sql`a.workspace_id = ${access.workspace_id}`,
-        sql`a.status = 'active'`,
-        ...(filter.app === undefined ? [] : [sql`a.app_slug = ${filter.app}`]),
-        ...(filter.id === undefined ? [] : [sql`a.id = ${filter.id}`]),
-      ])}
-                                                                ORDER BY a.created_at, a.id`,
+        SELECT a.id, a.app_slug, a.external_user_id, a.provider_account_id,
+          (a.owner_principal_id = ${principal} OR EXISTS (
+            SELECT 1 FROM action_grants g
+            WHERE g.workspace_id = a.workspace_id AND g.account_id = a.id AND g.grantee_principal_id = ${principal}
+              AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND ${meetingVisible}
+          )) AS usable
+        FROM integration_accounts a
+        WHERE ${sql.and([
+          sql`a.workspace_id = ${access.workspace_id}`,
+          sql`a.status = 'active'`,
+          ...(filter.app === undefined ? [] : [sql`a.app_slug = ${filter.app}`]),
+          ...(filter.id === undefined ? [] : [sql`a.id = ${filter.id}`]),
+        ])}
+        ORDER BY a.created_at, a.id`,
     })(undefined);
     const mayRequest = access.scopes.includes('actions:request');
     return rows.map((row): Account => ({ ...row, usable: mayRequest && row.usable === 1 }));
@@ -132,8 +132,8 @@ export const searchIntegrationActions = (access: AccessScope, input: typeof Sear
     }
     const limit = Math.min(input.limit, SEARCH_MAX_LIMIT);
     const perApp = yield* Effect.forEach(apps, app => client.searchActions({ q: input.intent, app, limit }), { concurrency: 4 });
-    // ponytail: round-robin across per-app result lists; add cross-app scoring if users connect many apps.
-    const ranked = Array.from({ length: limit }, (_, rank) => perApp.flatMap((actions, index) => (actions[rank] ? [{ app: apps[index]!, action: actions[rank] }] : []))).flat();
+    // Pipedream returns ranked lists without scores: interleave apps by rank (stable sort).
+    const ranked = perApp.flatMap((actions, index) => actions.map((action, rank) => ({ app: apps[index]!, action, rank }))).sort((a, b) => a.rank - b.rank);
     const matches = ranked.slice(0, limit).map(({ app, action }) => ({
       action_key: action.key,
       app,
@@ -155,7 +155,7 @@ type OptionsPage = { readonly options: ReadonlyArray<{ readonly label: string; r
 
 const visibleProps = (props: ReadonlyArray<ActionProp>) => props.filter(prop => !prop.hidden && prop.type !== 'alert');
 
-/** Fields fitted into the budget: optional descriptions go first, then optional fields, then all fields (configuration required). */
+/** Fields fitted into the budget: optional fields go first, then all fields (configuration required); never truncated mid-field. */
 const inspectOutput = (action: ActionComponent, schema: ResolvedSchema): InspectOutput => {
   const missing = missingFields(schema.props, schema.configured);
   const output = {
@@ -174,9 +174,7 @@ const inspectOutput = (action: ActionComponent, schema: ResolvedSchema): Inspect
     complete: missing.length === 0,
   };
   if (size(output) <= outputBudgetBytes) return output;
-  const brief = { ...output, fields: output.fields.map(field => (field.required ? field : { ...field, description: null })) };
-  if (size(brief) <= outputBudgetBytes) return brief;
-  const required = { ...brief, fields: brief.fields.filter(field => field.required), complete: false };
+  const required = { ...output, fields: output.fields.filter(field => field.required), complete: false };
   return size(required) <= outputBudgetBytes ? required : { ...required, fields: [] };
 };
 
