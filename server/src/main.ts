@@ -9,12 +9,15 @@ import { fileURLToPath } from 'node:url';
 import type { SqlClient } from '@effect/sql';
 import { HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
-import { Effect, Layer, flow } from 'effect';
+import { type ConfigError, Effect, Layer, flow } from 'effect';
 import { ApiLive } from './api.ts';
 import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
+import { ListenerStreamLive } from './media/ingest.ts';
+import { MediaProvidersLive, type SpeechToText } from './media/providers.ts';
 import { loadMigrations } from './migrate.ts';
+import type { ObjectStore } from './object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
 
 /** `vite build` output; the same relative path from `src/` in the repository and `dist/` in the image. */
@@ -27,11 +30,14 @@ const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.u
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
+  media: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError> = MediaProvidersLive,
 ) =>
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
+    Layer.provide(ListenerStreamLive),
     Layer.provide(ApiLive(loadMigrations())),
+    Layer.provide(media),
     Layer.provide(authenticator),
     Layer.provide(dbLayer(config.mysql)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),

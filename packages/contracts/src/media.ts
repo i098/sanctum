@@ -18,7 +18,7 @@
  * checked by the server session against the accepted `start` message.
  */
 import { Schema } from 'effect';
-import { SourceClock, LeaseGeneration } from './capture.ts';
+import { EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
 import { CaptureEpochId, ListenerId, SampleIndex } from './common.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
@@ -125,6 +125,8 @@ export const StartMessage = Schema.TaggedStruct('start', {
   track: Schema.Number.pipe(Schema.int(), Schema.between(0, 65_535)),
   clock: SourceClock,
   lease_generation: LeaseGeneration,
+  /** Why a new epoch begins; ignored when `epoch_id` already exists (reconnect keeps the epoch). */
+  start_reason: Schema.optionalWith(EpochStartReason, { default: () => 'start' as const }),
 });
 
 export const StopMessage = Schema.TaggedStruct('stop', {

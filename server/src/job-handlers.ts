@@ -5,6 +5,8 @@
  */
 import type { SqlClient } from '@effect/sql';
 import type { JobHandlers } from './job-types.ts';
+import type { SpeechToText } from './media/providers.ts';
+import { reconcileTranscript } from './media/reconcile.ts';
 import { finalizeMeeting } from './meetings.ts';
 import type { ObjectStore } from './object-store.ts';
 import { assembleRecording } from './playback.ts';
@@ -12,11 +14,12 @@ import type { PyannoteClient } from './providers/pyannote.ts';
 import { refineSpeakers } from './speakers.ts';
 
 /** Services every worker handler may use; a slice adds its provider tag here and its layer in worker.ts. */
-export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient;
+export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient | SpeechToText;
 
 export const jobHandlers: JobHandlers<WorkerServices> = {
   // One line per slice, e.g. 'context.refresh': refreshContext,
   'meeting.finalize': finalizeMeeting,
   'recording.assemble': assembleRecording,
   'speakers.refine': refineSpeakers,
+  'transcript.reconcile': reconcileTranscript,
 };

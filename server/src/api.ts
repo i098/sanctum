@@ -9,6 +9,7 @@ import { Layer } from 'effect';
 import { AgentsLive } from './agents.ts';
 import { AuthenticatedLive } from './auth.ts';
 import { HealthLive } from './health.ts';
+import { ListenersLive } from './listeners-api.ts';
 import { MeetingsLive } from './meetings-api.ts';
 import { IntegrationsLive } from './integrations.ts';
 import type { Migration } from './migrate.ts';
@@ -22,6 +23,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       HealthLive(migrations),
       SessionLive,
       // Slice handler layers: one line each.
+      ListenersLive,
       MeetingsLive,
       IntegrationsLive,
       AgentsLive,

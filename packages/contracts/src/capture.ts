@@ -119,7 +119,7 @@ const chunkId = HttpApiSchema.param('chunk_id', RecordingChunkId);
 /**
  * Listener device API (plan section 12). The live stream is a WebSocket upgrade on
  * `LISTENER_STREAM_PATH` speaking the protocol in media.ts. Owned by the media slice, which
- * registers it in api.ts; the capture slice is its browser client.
+ * registers it in api.ts behind `Authenticated`; the capture slice is its browser client.
  */
 export class ListenersApi extends HttpApiGroup.make('listeners')
   .add(HttpApiEndpoint.post('registerListener', '/listeners').setPayload(RegisterListener).addSuccess(Listener, { status: 201 }))

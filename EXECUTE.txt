@@ -1043,9 +1043,9 @@ Depends on: T06.
 
 ## T08. Register listeners and recoverable source manifests
 
-- [ ] Add listeners, capture epochs, ownership generations, and recording manifests.
-- [ ] Authenticate device registration, heartbeats, and authorized WebSocket session/Origin bindings.
-- [ ] Return source watermarks so reconnect resumes instead of restarting the meeting.
+- [x] Add listeners, capture epochs, ownership generations, and recording manifests.
+- [x] Authenticate device registration, heartbeats, and authorized WebSocket session/Origin bindings.
+- [x] Return source watermarks so reconnect resumes instead of restarting the meeting.
 
 Files: `server/migrations/002_capture.sql`, `server/src/listeners.ts`, `server/src/main.ts`, `server/tests/listeners.test.ts`.
 Verify: unauthorized upgrade rejection; stale ownership generation; reconnect with identical epoch; two independent rooms.
@@ -1053,7 +1053,7 @@ Depends on: T05.
 
 ## T09. Upload audio to R2 with durable receipts
 
-- [ ] Add chunk ingest validation and server-side R2 writes, manifest commit, and reconciliation.
+- [x] Add chunk ingest validation and server-side R2 writes, manifest commit, and reconciliation.
 - [x] Implement browser retry/receipt journaling and local cleanup only after acknowledgement.
 - [ ] Keep object credentials server-side and distinguish locally saved from remotely saved data.
 
@@ -1063,9 +1063,9 @@ Depends on: T07, T08; real R2 credentials only for a separate authorized live ch
 
 ## T10. Implement scoped WebSocket ingest and reconnect
 
-- [ ] Implement versioned PCM framing and authenticated WebSocket ingest with listener/epoch/source-clock metadata, bounded backlogs and provider offset mapping.
-- [ ] Persist structured final transcription segments; keep partials provisional.
-- [ ] Reconnect through source watermarks without equating socket IDs with meeting IDs.
+- [x] Implement versioned PCM framing and authenticated WebSocket ingest with listener/epoch/source-clock metadata, bounded backlogs and provider offset mapping.
+- [x] Persist structured final transcription segments; keep partials provisional.
+- [x] Reconnect through source watermarks without equating socket IDs with meeting IDs.
 
 Files: `server/src/media/ingest.ts`, `server/src/media/session.ts`, `server/src/transcripts.ts`, `server/migrations/003_transcripts.sql`, `server/tests/ingest.test.ts`, `packages/contracts/src/media.ts`.
 Verify: repeated/out-of-order final segments, reconnect, recording/ASR alignment, provider outage, unauthorized upgrade denial, slow-provider backpressure and archive-based recovery.
@@ -1073,9 +1073,9 @@ Depends on: T07, T08.
 
 ## T11. Reconcile offline transcript coverage
 
-- [ ] Schedule batch transcription for uploaded source ranges missing final ASR coverage.
-- [ ] Deduplicate live and replayed source spans by epoch/track/range and retain correction history.
-- [ ] Preserve gap markers and never replay historical audio into room speakers or action execution.
+- [x] Schedule batch transcription for uploaded source ranges missing final ASR coverage.
+- [x] Deduplicate live and replayed source spans by epoch/track/range and retain correction history.
+- [x] Preserve gap markers and never replay historical audio into room speakers or action execution.
 
 Files: `server/src/transcripts.ts`, `server/src/jobs.ts`, `server/src/worker.ts`, `server/migrations/004_jobs.sql`, `server/tests/transcript-recovery.test.ts`.
 Verify: upload before/after live final; provider retry; duplicate batch delivery; process crash during reconciliation.
