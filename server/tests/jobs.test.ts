@@ -209,6 +209,8 @@ describe('job ledger', () => {
     }),
   );
 
+  // The slow handler outlives three lease lengths, so it only succeeds with attempt 1 if renewal works;
+  // 1.5 s leases leave room for slow MySQL round trips on a loaded shared host.
   it.live('runs handlers, renews leases, re-checks requesters and records defects', () =>
     withDatabase(
       Effect.gen(function* () {
@@ -221,12 +223,12 @@ describe('job ledger', () => {
           'context.refresh': (claimed: ClaimedJob) =>
             Effect.gen(function* () {
               yield* Ref.update(runs, list => [...list, claimed.work_key]);
-              if (claimed.work_key === 'slow') yield* Effect.sleep('900 millis');
+              if (claimed.work_key === 'slow') yield* Effect.sleep('4500 millis');
               if (claimed.work_key === 'defect') return yield* Effect.die(new Error('handler bug'));
               return { status: 'succeeded' as const, result: { key: claimed.work_key } };
             }),
         };
-        const worker = yield* Effect.fork(runWorker(handlers, { leaseMs: 300, pollMs: 50, concurrency: 2 }));
+        const worker = yield* Effect.fork(runWorker(handlers, { leaseMs: 1_500, pollMs: 50, concurrency: 2 }));
 
         const slow = yield* job(owner.workspace_id, 'slow', {}, { requested_by: owner.principal.id });
         const defect = yield* job(owner.workspace_id, 'defect');
