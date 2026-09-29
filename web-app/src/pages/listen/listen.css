@@ -145,6 +145,7 @@
 
 .listen-dialog {
   width: min(720px, calc(100vw - 64px));
+  margin: auto;
   max-height: calc(100vh - 96px);
   padding: 24px 28px;
   border: 1px solid #222936;

@@ -9,6 +9,8 @@ for (const name of ['Review', 'Agents', 'Settings']) {
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name });
     await expect(dialog).toBeVisible();
+    const frame = (await dialog.boundingBox())!;
+    expect(Math.abs(frame.x + frame.width / 2 - 640)).toBeLessThanOrEqual(1);
     const readsWhileOpen = await page.evaluate(() => window.__capture.reads);
     for (let press = 0; press < 12; press++) {
       await page.keyboard.press(press % 3 ? 'Tab' : 'Shift+Tab');
