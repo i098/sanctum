@@ -7,13 +7,14 @@ import { Schema } from 'effect';
 import { AgentsApi, Authenticated, SessionApi } from './auth.ts';
 import { ListenersApi } from './capture.ts';
 import { IntegrationsApi } from './integrations.ts';
+import { ContextApi } from './context.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 import { MeetingsApi } from './meetings.ts';
 
 /** Process health and dependency readiness without tenant content. */
 export class HealthApi extends HttpApiGroup.make('health')
-  .add(HttpApiEndpoint.get('healthz', '/healthz').addSuccess(Schema.Struct({ status: Schema.Literal('ok') })))
-  .add(HttpApiEndpoint.get('readyz', '/readyz').addSuccess(Schema.Struct({ status: Schema.Literal('ready') }))) {}
+ .add(HttpApiEndpoint.get('healthz', '/healthz').addSuccess(Schema.Struct({ status: Schema.Literal('ok') })))
+ .add(HttpApiEndpoint.get('readyz', '/readyz').addSuccess(Schema.Struct({ status: Schema.Literal('ready') }))) { }
 
 export class SanctumApi extends HttpApi.make('sanctum')
   .add(HealthApi)
@@ -21,6 +22,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   // Slice groups: one `.add(XApi)` line each, in plan section 12 order.
   .add(ListenersApi.middleware(Authenticated))
   .add(MeetingsApi)
+  .add(ContextApi.middleware(Authenticated))
   .add(IntegrationsApi)
   .add(AgentsApi)
   .addError(Unauthenticated)

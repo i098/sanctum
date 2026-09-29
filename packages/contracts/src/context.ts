@@ -1,4 +1,5 @@
 /** Versioned, time-aware, source-linked context (plan sections 08 and 12). */
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
 import {
   ArtifactId,
@@ -8,9 +9,12 @@ import {
   IanaTimeZone,
   IdempotencyKey,
   MeetingId,
+  PageLimit,
   PrincipalId,
   Revision,
   SampleIndex,
+  Sha256Hex,
+  SourceRange,
   TranscriptSegmentId,
   UtcTimestamp,
 } from './common.ts';
@@ -102,6 +106,7 @@ export const ContextChangeKind = Schema.Literal(
   'meeting_boundary_changed',
   'access_changed',
 );
+export type ContextChangeKind = typeof ContextChangeKind.Type;
 
 /** Committed-order change, written in the same transaction as the change itself. */
 export const ContextEvent = Schema.Struct({
@@ -125,3 +130,68 @@ export const ExtractionCandidate = Schema.Struct({
   time: Schema.NullOr(TimeExpression),
 });
 export type ExtractionCandidate = typeof ExtractionCandidate.Type;
+
+/** `PATCH /api/v1/context/items/{id}`: a new immutable revision; `state: superseded` retracts the item. */
+export const ReviseContextItem = Schema.Struct({
+  expected_revision: Revision,
+  idempotency_key: IdempotencyKey,
+  kind: Schema.optional(ContextKind),
+  text: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(20_000))),
+  sources: Schema.optional(Schema.Array(SourceRef).pipe(Schema.minItems(1))),
+  state: Schema.optional(Schema.Literal('committed', 'superseded')),
+});
+export type ReviseContextItem = typeof ReviseContextItem.Type;
+
+/** `GET /api/v1/context/changes`: committed-order events after an access-bound cursor. */
+export const ContextChanges = Schema.Struct({ events: Schema.Array(ContextEvent), next_cursor: Cursor });
+export type ContextChanges = typeof ContextChanges.Type;
+
+/** `GET /api/v1/sources/{id}`: exact cited evidence, readable only within the source's own access scope. */
+export const Source = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal('segment'),
+    id: TranscriptSegmentId,
+    meeting_id: MeetingId,
+    text: Schema.String,
+    revision: Revision,
+    speaker_label: Schema.NullOr(Schema.String),
+    source: SourceRange,
+    event_at: UtcTimestamp,
+    start_ms: Schema.Number,
+    end_ms: Schema.Number,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('artifact'),
+    id: ArtifactId,
+    meeting_id: Schema.NullOr(MeetingId),
+    title: Schema.String,
+    content_type: Schema.String,
+    content: Schema.NullOr(Schema.String),
+    sha256: Sha256Hex,
+    created_at: UtcTimestamp,
+  }),
+);
+export type Source = typeof Source.Type;
+
+const meetingId = HttpApiSchema.param('meeting_id', MeetingId);
+const itemId = HttpApiSchema.param('item_id', ContextItemId);
+const sourceId = HttpApiSchema.param('source_id', Schema.UUID);
+const Limit = Schema.NumberFromString.pipe(Schema.compose(PageLimit));
+
+/** Plan section 12 context routes; api.ts registers the group behind `Authenticated`. */
+export class ContextApi extends HttpApiGroup.make('context')
+  .add(HttpApiEndpoint.get('getContext')`/meetings/${meetingId}/context`.addSuccess(ContextSnapshot))
+  .add(
+    HttpApiEndpoint.get('searchContext', '/context/search')
+      .setUrlParams(Schema.Struct({ q: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(500)), meeting_id: Schema.optional(MeetingId), limit: Schema.optional(Limit) }))
+      .addSuccess(Schema.Struct({ items: Schema.Array(ContextItem) })),
+  )
+  .add(HttpApiEndpoint.post('addContextItem', '/context/items').setPayload(AddContextItem).addSuccess(ContextItem, { status: 201 }))
+  .add(HttpApiEndpoint.patch('reviseContextItem')`/context/items/${itemId}`.setPayload(ReviseContextItem).addSuccess(ContextItem))
+  .add(
+    HttpApiEndpoint.get('getContextChanges', '/context/changes')
+      .setUrlParams(Schema.Struct({ cursor: Schema.optional(Cursor), limit: Schema.optional(Limit) }))
+      .addSuccess(ContextChanges),
+  )
+  .add(HttpApiEndpoint.get('getSource')`/sources/${sourceId}`.addSuccess(Source))
+  .prefix('/api/v1') { }
