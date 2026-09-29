@@ -122,7 +122,7 @@ describe('split and merge', () => {
         expect(yield* Effect.flip(mergeMeetings(member, input))).toMatchObject({ _tag: 'NotFound' });
         const refused = yield* Effect.flip(mergeMeetings(owner, input));
         expect(refused).toMatchObject({ _tag: 'Forbidden', message: 'Meetings have different access; align access explicitly before merging' });
-        yield* sql`UPDATE meeting_access SET access = 'write' WHERE meeting_id = ${second}`;
+        yield* sql`UPDATE meeting_access SET access = 'write' WHERE meeting_id = ${second} AND principal_id = ${member.principal.id}`;
         expect(yield* mergeMeetings(member, input)).toMatchObject({ id: first, boundary_revision: 2 });
         const readOnly: AccessScope = { ...member, scopes: ['context:read'] };
         expect(yield* Effect.flip(splitMeeting(readOnly, first, { expected_revision: 2, at: { epoch_id: (yield* rangesOf(first))[0]!.epoch_id as never, sample: 10 } }))).toMatchObject({ _tag: 'Forbidden' });

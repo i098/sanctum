@@ -104,7 +104,21 @@ export const hear = (...args: Parameters<typeof speak>) =>
   Effect.gen(function* () {
     const segment = yield* speak(...args);
     yield* onFinalSegments({ ...args[0], segments: [segment] });
+    yield* assignOwners(args[0].workspace_id);
     return segment;
+  });
+
+/**
+ * Meetings start restricted with no grants (kernel policy: no role override). Stands in for the
+ * explicit assignment step by granting workspace owners and admins `owner` access to new meetings.
+ */
+const assignOwners = (workspace_id: WorkspaceId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+      SELECT m.workspace_id, m.id, w.principal_id, 'owner', w.principal_id, UTC_TIMESTAMP(6)
+      FROM meetings m JOIN workspace_members w ON w.workspace_id = m.workspace_id AND w.role IN ('owner', 'admin') AND w.revoked_at IS NULL
+      WHERE m.workspace_id = ${workspace_id}`;
   });
 
 export const meetingsOf = (workspace_id: WorkspaceId) =>
