@@ -50,8 +50,6 @@ interface PyannoteService {
   readonly configured: boolean;
   /** Diarizes the audio at `url`; with voiceprints this is `/identify`, which also scores each label against them. */
   readonly diarize: (input: { readonly url: string; readonly voiceprints: ReadonlyArray<{ readonly label: string; readonly voiceprint: string }> }) => Effect.Effect<BatchDiarization, Unavailable>;
-  /** Creates a voiceprint from a single-speaker clip (at most 30 s) the person explicitly enrolled. */
-  readonly createVoiceprint: (url: string) => Effect.Effect<string, Unavailable>;
   /** Opens a Live-1 session; `url` is a single-use WebSocket URL carrying no team credential. */
   readonly createLiveStream: () => Effect.Effect<{ readonly id: string; readonly url: string }, Unavailable>;
 }
@@ -63,7 +61,6 @@ const Created = Schema.Struct({ jobId: Schema.String, status: Status });
 const Output = Schema.Struct({
   diarization: Schema.optional(Schema.Array(Schema.Struct({ speaker: Schema.String, start: Schema.Number, end: Schema.Number, confidence: Schema.optional(Schema.Number) }))),
   voiceprints: Schema.optional(Schema.Array(Schema.Struct({ speaker: Schema.String, confidence: Schema.Record({ key: Schema.String, value: Schema.Number }) }))),
-  voiceprint: Schema.optional(Schema.String),
 });
 const JobState = Schema.Struct({ status: Status, output: Schema.optional(Output) });
 const LiveStream = Schema.Struct({ id: Schema.String, url: Schema.String });
@@ -108,11 +105,6 @@ export const makePyannote = (apiKey: Redacted.Redacted | null) =>
             turns: (output.diarization ?? []).map(turn => ({ label: turn.speaker, start_s: turn.start, end_s: turn.end, confidence: turn.confidence ?? null })),
             matches: (output.voiceprints ?? []).map(match => ({ label: match.speaker, scores: match.confidence })),
           };
-        }),
-      createVoiceprint: url =>
-        Effect.gen(function* () {
-          const output = yield* awaitJob((yield* submit('/voiceprint', { url })).jobId);
-          return output.voiceprint ?? (yield* unavailable('voiceprint job returned no voiceprint', false));
         }),
       createLiveStream: () => call(HttpClientRequest.bodyUnsafeJson(HttpClientRequest.post(`${pyannoteLimits.apiBase}/live`), {}), LiveStream),
     } satisfies PyannoteService;

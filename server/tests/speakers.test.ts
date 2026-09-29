@@ -59,7 +59,6 @@ const fakePyannote = (result: BatchDiarization, seen: Array<ReadonlyArray<string
       seen.push(voiceprints.map(voiceprint => voiceprint.label));
       return result;
     }),
-    createVoiceprint: () => Effect.die('unused'),
     createLiveStream: () => Effect.die('unused'),
   });
 
@@ -241,7 +240,9 @@ describe('pyannote adapter', () => {
       expect(identified.matches).toEqual([{ label: 'SPEAKER_00', scores: { p1: 86 } }]);
       expect(log.find(entry => entry.url.endsWith('/identify'))!.body).toMatchObject({ voiceprints: [{ label: 'p1', voiceprint: 'vp' }], matching: { exclusive: true } });
       expect(yield* client.createLiveStream()).toEqual({ id: 's1', url: 'wss://live.test/s1?token=single-use' });
-      expect(yield* Effect.flip(client.createVoiceprint('https://objects.test/voice.wav'))).toMatchObject({ _tag: 'Unavailable', retryable: true, message: 'pyannote: HTTP 500' });
+      const { '/live': _live, ...down } = routes;
+      const failing = yield* makePyannote(Redacted.make('fixture-key')).pipe(Effect.provide(respond(down, log)));
+      expect(yield* Effect.flip(failing.createLiveStream())).toMatchObject({ _tag: 'Unavailable', retryable: true, message: 'pyannote: HTTP 500' });
     }),
   );
 

@@ -18,30 +18,23 @@ const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeIn
 
 const RecordingRow = Schema.Struct({ object_key: Schema.String, pieces: DbJson(Schema.Array(SourceRange)) });
 
-/** Mono PCM16 WAV bytes for `samples` at `rate`. */
+/** Mono PCM16 WAV file holding `parts` at `rate`. */
 const wavFile = (rate: number, parts: ReadonlyArray<Uint8Array>) => {
   const bytes = parts.reduce((total, part) => total + part.byteLength, 0);
-  const out = new Uint8Array(44 + bytes);
-  const view = new DataView(out.buffer);
-  const ascii = (offset: number, text: string) => [...text].forEach((char, index) => view.setUint8(offset + index, char.charCodeAt(0)));
-  ascii(0, 'RIFF');
-  view.setUint32(4, 36 + bytes, true);
-  ascii(8, 'WAVEfmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, rate, true);
-  view.setUint32(28, rate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  ascii(36, 'data');
-  view.setUint32(40, bytes, true);
-  let offset = 44;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.byteLength;
-  }
-  return out;
+  const header = Buffer.alloc(44);
+  header.write('RIFFxxxxWAVEfmt ', 0, 'ascii');
+  header.writeUInt32LE(36 + bytes, 4);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(bytes, 40);
+  // A plain copy: Buffer.slice/subarray share memory, which callers of the object store do not expect.
+  return new Uint8Array(Buffer.concat([header, ...parts]));
 };
 
 /** Parts of `ranges` not covered by `pieces`: audio the meeting owns but no saved chunk supplied. */
