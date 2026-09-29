@@ -319,6 +319,7 @@ describe('research.run', () => {
         expect(yield* runResearch(job)).toEqual({ status: 'paused', resume_after_ms: 4_000, reason: 'planner rate limited' });
         vi.mocked(planActions).mockReturnValue(Effect.fail(new Unavailable({ message: 'no planner configured', retryable: false })));
         expect(yield* Effect.flip(runResearch(job))).toMatchObject({ _tag: 'JobFailure', retryable: false, message: 'no planner configured' });
+        expect(yield* runResearch({ ...job, requested_by: null })).toEqual({ status: 'succeeded', result: { skipped: 'Research needs a requesting principal; nobody asked for this run' } });
       }).pipe(Effect.provide(actionServices)),
       { migrated: true },
     ));

@@ -15,14 +15,14 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Either, Layer, Ref, Stream } from 'effect';
 import { getContextChanges } from '../src/context-changes.ts';
-import { commitMemory, refreshContext } from '../src/context-jobs.ts';
+import { commitMemory, refreshContext, SYSTEM_ACTOR } from '../src/context-jobs.ts';
 import { type ExtractionInput, extractCandidates } from '../src/extraction.ts';
 import { requestContextRefresh, requestMemoryCommit } from '../src/context-schedule.ts';
 import { appendContextEvent } from '../src/context-events.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem } from '../src/context.ts';
 import { jobHandlers } from '../src/job-handlers.ts';
 import { LlmClient } from '../src/llm.ts';
-import { type FixtureMeeting, migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
+import { type FixtureMeeting, grantMeeting, migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const LA = IanaTimeZone.make('America/Los_Angeles');
@@ -188,7 +188,6 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       const failed = yield* Effect.flip(refreshContext(down.extract)(job(meeting, owner!.principal.id)));
       expect(failed).toEqual(new JobFailure({ message: 'model provider unavailable', retryable: true }));
       expect((yield* getContextSnapshot(owner!, meeting.meeting_id)).source_watermark).toBeNull();
-      expect(yield* Effect.flip(refreshContext(down.extract)(job(meeting, null)))).toMatchObject({ retryable: false });
       expect(yield* Effect.flip(refreshContext(down.extract)({ ...job(meeting, owner!.principal.id), payload: {} }))).toMatchObject({ retryable: false });
       // The unconfigured extractor in the worker registry reports Unavailable, never invented candidates.
       expect(jobHandlers['context.refresh']).toBeDefined();
@@ -234,6 +233,23 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
 
       expect(yield* commit(job(meeting, owner!.principal.id))).toMatchObject({ status: 'succeeded', result: { processed: 0, committed: 0 } });
       expect((yield* getContextChanges(owner!, {})).events).toHaveLength(changes.events.length);
+      const sql = yield* SqlClient.SqlClient;
+      const [processing] = yield* sql<{ memory: string }>`SELECT processing->>'$.memory' AS memory FROM meetings WHERE id = ${meeting.meeting_id}`;
+      expect(processing).toEqual({ memory: 'complete' });
+    }));
+
+  it.effect('commits memory for an automatically closed meeting as the system actor without widening visibility', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Auto close', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00', visibility: 'restricted' });
+      const segment = yield* seedSegment(meeting, 0, 4, 'We will pause hiring until March.');
+      const fake = yield* fakeExtractor(() => [candidate(segment, { quote: 'pause hiring', kind: 'decision', text: 'Hiring paused', time: null })]);
+      const outcome = yield* commitMemory(fake.extract)(job(meeting, null));
+      expect(outcome).toMatchObject({ status: 'succeeded', result: { added: 1, committed: 1 } });
+      expect(yield* Effect.either(getContextSnapshot(owner!, meeting.meeting_id))).toMatchObject({ _tag: 'Left' });
+      yield* grantMeeting(owner!, meeting, 'read');
+      const snapshot = yield* getContextSnapshot(owner!, meeting.meeting_id);
+      expect(snapshot.items).toMatchObject([{ text: 'Hiring paused', state: 'committed', author: { type: 'system', id: SYSTEM_ACTOR } }]);
       const sql = yield* SqlClient.SqlClient;
       const [processing] = yield* sql<{ memory: string }>`SELECT processing->>'$.memory' AS memory FROM meetings WHERE id = ${meeting.meeting_id}`;
       expect(processing).toEqual({ memory: 'complete' });

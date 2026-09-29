@@ -16,7 +16,7 @@ import {
  Meeting,
  MeetingId,
  MeetingProcessing,
- type PrincipalId,
+ PrincipalId,
  type TranscriptSegment,
  type Unavailable,
  type WorkspaceId,
@@ -45,6 +45,13 @@ const BATCH_SEGMENTS = 100;
 
 const Payload = Schema.Struct({ meeting_id: MeetingId });
 
+
+/**
+ * The worker's own actor for context work nobody requested, such as memory at an automatic close.
+ * It is not a member and holds no grants: it reads only the job's meeting, writes under that
+ * meeting's existing visibility, and is recorded as the `system` author and event actor.
+ */
+export const SYSTEM_ACTOR = PrincipalId.make('00000000-0000-4000-8000-000000000001');
 
 interface Target {
  readonly workspace_id: WorkspaceId;
@@ -163,12 +170,11 @@ const distill = (target: Target) =>
   );
  });
 
-/** Decodes the job's meeting and acting principal, runs `work`, and turns database failures into retries. */
+/** Decodes the job's meeting and acting principal (the system actor when nobody asked), runs `work`, and turns database failures into retries. */
 const contextJob = <A, R>(work: (target: Target) => Effect.Effect<A, JobFailure | SqlError.SqlError, R>) => (job: LedgerJob) =>
  Effect.gen(function*() {
   const { meeting_id } = yield* Schema.decodeUnknown(Payload)(job.payload).pipe(Effect.mapError(() => new JobFailure({ message: 'Invalid context job payload', retryable: false })));
-  if (job.requested_by === null) return yield* new JobFailure({ message: 'Context jobs act for a principal; requested_by is missing', retryable: false });
-  return yield* work({ workspace_id: job.workspace_id, meeting_id, actor: job.requested_by });
+  return yield* work({ workspace_id: job.workspace_id, meeting_id, actor: job.requested_by ?? SYSTEM_ACTOR });
  }).pipe(Effect.catchTag('SqlError', error => new JobFailure({ message: error.message, retryable: true })));
 
 /** A bounded round left segments behind: run again right away rather than wait for new speech. */

@@ -169,7 +169,8 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
     const { meeting_id, request } = yield* Schema.decodeUnknown(ResearchPayload)(job.payload);
-    if (job.requested_by === null) return yield* new JobFailure({ message: 'Research requires a requesting principal', retryable: false });
+    // Research plans over integration actions a person's grants own, so it never runs as the system actor.
+    if (job.requested_by === null) return { status: 'succeeded', result: { skipped: 'Research needs a requesting principal; nobody asked for this run' } } as const;
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: job.requested_by });
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
     const plan = yield* Effect.either(planActions(access, { meeting_id, request }));
