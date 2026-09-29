@@ -161,7 +161,8 @@ export const issueRecordingAccess = (access: AccessScope, meeting_id: MeetingId)
   }).pipe(
     Effect.catchTags({
       SqlError: () => new Unavailable({ message: 'Database unavailable', retryable: true }),
-      ObjectStoreError: () => new Unavailable({ message: 'Recording storage unavailable', retryable: true }),
+      ObjectStoreError: error =>
+        new Unavailable({ message: error.unconfigured ? 'Recording storage is not configured' : 'Recording storage unavailable', retryable: error.unconfigured !== true }),
       ParseError: error => Effect.die(error),
     }),
   );

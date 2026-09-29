@@ -11,6 +11,8 @@ export class ObjectStoreError extends Data.TaggedError('ObjectStoreError')<{
   readonly message: string;
   /** Unknown outcome (e.g. timeout after sending); callers reconcile with `head` before retrying. */
   readonly ambiguous: boolean;
+  /** Storage credentials are absent: retrying cannot help until an operator configures them. */
+  readonly unconfigured?: boolean;
 }> {}
 
 export interface StoredObject {

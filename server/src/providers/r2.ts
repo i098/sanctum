@@ -79,7 +79,7 @@ function r2Store(config: R2Config) {
 }
 
 const unconfigured = (operation: Operation) => (key: string) =>
-  Effect.fail(new ObjectStoreError({ operation, key, message: 'R2 is not configured (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)', ambiguous: false }));
+  Effect.fail(new ObjectStoreError({ operation, key, message: 'R2 is not configured (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)', ambiguous: false, unconfigured: true }));
 
 export const R2ObjectStoreLive = Layer.effect(
   ObjectStore,
