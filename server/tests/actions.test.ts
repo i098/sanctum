@@ -3,7 +3,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
 import { Effect, Fiber, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
-import { createActionGrant, getActionReceipt, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
+import { createActionGrant, getActionReceipt, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { planActions } from '../src/planner.ts';
@@ -110,6 +110,27 @@ describe('action gateway', () => {
         const [counts] = yield* sql<{ actions: string; jobs: string }>`
           SELECT (SELECT COUNT(*) FROM actions) AS actions, (SELECT COUNT(*) FROM jobs WHERE kind = 'action.execute') AS jobs`;
         expect(counts).toEqual({ actions: '1', jobs: '1' });
+      }),
+      { migrated: true },
+    ));
+
+  it.effect('lists one meeting\'s receipts oldest first, only to their requester and admins, in offset pages', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, member, agent } = yield* setup();
+        const meeting_id = yield* seedMeeting(agent.workspace_id, [agent, member, owner]);
+        const other = yield* seedMeeting(agent.workspace_id, [agent]);
+        const ids: Array<ActionId> = [];
+        for (const key of ['a', 'b', 'c']) ids.push((yield* requestAction(agent, request({ meeting_id, idempotency_key: key }))).action_id);
+        yield* requestAction(agent, request({ meeting_id: other, idempotency_key: 'elsewhere' }));
+        const first = yield* listMeetingActions(agent, meeting_id, { limit: 2 });
+        expect(first.actions.map(action => action.action_id)).toEqual(ids.slice(0, 2));
+        const rest = yield* listMeetingActions(agent, meeting_id, { cursor: first.next_cursor!, limit: 2 });
+        expect(rest).toEqual({ actions: [expect.objectContaining({ action_id: ids[2], meeting_id, state: 'queued' })], next_cursor: null });
+        expect((yield* listMeetingActions(owner, meeting_id, {})).actions.map(action => action.action_id)).toEqual(ids);
+        expect(yield* listMeetingActions(member, meeting_id, {})).toEqual({ actions: [], next_cursor: null });
+        expect(yield* Effect.flip(listMeetingActions(member, other, {}))).toMatchObject({ _tag: 'NotFound' });
+        expect(yield* Effect.flip(listMeetingActions(agent, meeting_id, { cursor: 'bogus' }))).toMatchObject({ _tag: 'NotFound', message: 'Unknown cursor' });
       }),
       { migrated: true },
     ));

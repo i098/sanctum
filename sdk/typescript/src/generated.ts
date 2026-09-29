@@ -206,6 +206,8 @@ export type RecordingAccess = {
   readonly url: string;
   readonly expires_at: string;
   readonly gaps: ReadonlyArray<SourceRange>;
+  readonly pieces: ReadonlyArray<SourceRange>;
+  readonly sample_rate: 8000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000 | 96000;
 };
 
 export type GetNotesInput = {
@@ -349,6 +351,7 @@ export type ReviseContextItemInput = {
 
 export type GetContextChangesInput = {
   readonly cursor?: string;
+  readonly meeting_id?: string;
   readonly limit?: number;
 };
 
@@ -492,6 +495,17 @@ export type ActionReceiptGrant = {
   readonly version: number;
 };
 
+export type ListMeetingActionsInput = {
+  readonly meeting_id: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+};
+
+export type ActionPage = {
+  readonly actions: ReadonlyArray<ActionReceipt>;
+  readonly next_cursor: string | null;
+};
+
 export type ResolveActionInput = {
   readonly outcome: "succeeded" | "failed";
   readonly provider_receipt: Readonly<Record<string, unknown>> | null;
@@ -629,6 +643,7 @@ export interface Operations {
   'integrations.getIntegrationAction': { input: GetIntegrationActionInput; output: GetIntegrationActionOutput };
   'actions.requestAction': { input: RequestActionInput; output: RequestActionOutput };
   'actions.getAction': { input: GetActionInput; output: ActionReceipt };
+  'actions.listMeetingActions': { input: ListMeetingActionsInput; output: ActionPage };
   'actions.resolveAction': { input: ResolveActionInput; output: ActionReceipt };
   'actions.createActionGrant': { input: CreateActionGrantInput; output: ActionGrant };
   'actions.revokeActionGrant': { input: RevokeActionGrantInput; output: ActionGrant };
@@ -658,12 +673,13 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","meeting_id","limit"],"body":false},
   'context.addContextItem': {"method":"POST","path":"/api/v1/context/items","pathParams":[],"queryParams":[],"body":true},
   'context.reviseContextItem': {"method":"PATCH","path":"/api/v1/context/items/{item_id}","pathParams":["item_id"],"queryParams":[],"body":true},
-  'context.getContextChanges': {"method":"GET","path":"/api/v1/context/changes","pathParams":[],"queryParams":["cursor","limit"],"body":false},
+  'context.getContextChanges': {"method":"GET","path":"/api/v1/context/changes","pathParams":[],"queryParams":["cursor","meeting_id","limit"],"body":false},
   'context.getSource': {"method":"GET","path":"/api/v1/sources/{source_id}","pathParams":["source_id"],"queryParams":[],"body":false},
   'integrations.searchIntegrationActions': {"method":"GET","path":"/api/v1/integrations/actions","pathParams":[],"queryParams":["intent","app","limit"],"body":false},
   'integrations.getIntegrationAction': {"method":"POST","path":"/api/v1/integrations/actions/{action_key}/schema","pathParams":["action_key"],"queryParams":[],"body":true},
   'actions.requestAction': {"method":"POST","path":"/api/v1/actions","pathParams":[],"queryParams":[],"body":true},
   'actions.getAction': {"method":"GET","path":"/api/v1/actions/{action_id}","pathParams":["action_id"],"queryParams":[],"body":false},
+  'actions.listMeetingActions': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/actions","pathParams":["meeting_id"],"queryParams":["cursor","limit"],"body":false},
   'actions.resolveAction': {"method":"POST","path":"/api/v1/actions/{action_id}/resolve","pathParams":["action_id"],"queryParams":[],"body":true},
   'actions.createActionGrant': {"method":"POST","path":"/api/v1/action-grants","pathParams":[],"queryParams":[],"body":true},
   'actions.revokeActionGrant': {"method":"DELETE","path":"/api/v1/action-grants/{grant_id}","pathParams":["grant_id"],"queryParams":[],"body":false},

@@ -175,6 +175,8 @@ const meetingsGroup = (store: Store) => {
             url: `https://objects.test/${meeting.id}.wav?expires=300`,
             expires_at: new Date(Date.now() + 300_000).toISOString(),
             gaps: [],
+            pieces: [],
+            sample_rate: 16_000,
           });
         }),
       )
@@ -317,7 +319,7 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
           yield* need(access, 'context:read');
           const after = urlParams.cursor === undefined ? 0 : Number(urlParams.cursor.slice(1));
           const changes = space(access)
-            .events.filter(e => e.seq > after)
+            .events.filter(e => e.seq > after && (urlParams.meeting_id === undefined || e.meeting_id === urlParams.meeting_id))
             .slice(0, urlParams.limit ?? 50);
           return { events: changes, next_cursor: `c${changes.at(-1)?.seq ?? after}` };
         }),
@@ -412,7 +414,8 @@ const actionsGroup = ({ space, need, once }: Store) =>
           return receipt ? Effect.succeed(receipt) : Effect.fail(new NotFound({ message: 'Action not found' }));
         }),
       )
-      // ponytail: no SDK/MCP/website test drives resolution or grants yet; model them here once one does.
+      // ponytail: no SDK/MCP/website test drives listing, resolution or grants yet; model them here once one does.
+      .handle('listMeetingActions', unmodelled)
       .handle('resolveAction', unmodelled)
       .handle('createActionGrant', unmodelled)
       .handle('revokeActionGrant', unmodelled),

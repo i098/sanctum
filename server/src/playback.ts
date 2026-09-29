@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema } from '@effect/sql';
-import { type AccessScope, type MeetingId, type RecordingAccess, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
+import { type AccessScope, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
@@ -16,7 +16,7 @@ import { ObjectStore } from './providers/object-store.ts';
 
 const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeInt, sha256: DbSha256, object_key: Schema.String });
 
-const RecordingRow = Schema.Struct({ object_key: Schema.String, pieces: DbJson(Schema.Array(SourceRange)) });
+const RecordingRow = Schema.Struct({ object_key: Schema.String, pieces: DbJson(Schema.Array(SourceRange)), sample_rate: SampleRate });
 
 /** Mono PCM16 WAV file holding `parts` at `rate`. */
 const wavFile = (rate: number, parts: ReadonlyArray<Uint8Array>) => {
@@ -139,7 +139,7 @@ export const issueRecordingAccess = (access: AccessScope, meeting_id: MeetingId)
     const recording = yield* SqlSchema.findOne({
       Request: Schema.Void,
       Result: RecordingRow,
-      execute: () => sql`SELECT object_key, pieces FROM meeting_recordings WHERE meeting_id = ${meeting_id} AND boundary_revision = ${meeting.boundary_revision}`,
+      execute: () => sql`SELECT object_key, pieces, sample_rate FROM meeting_recordings WHERE meeting_id = ${meeting_id} AND boundary_revision = ${meeting.boundary_revision}`,
     })(undefined);
     if (recording._tag === 'None') {
       const failed = meeting.processing.recording === 'failed';
@@ -157,6 +157,8 @@ export const issueRecordingAccess = (access: AccessScope, meeting_id: MeetingId)
       url,
       expires_at: UtcTimestamp.make(new Date(Date.now() + ttl).toISOString()),
       gaps: gapsOf(ranges, recording.value.pieces),
+      pieces: recording.value.pieces,
+      sample_rate: recording.value.sample_rate,
     } satisfies RecordingAccess;
   }).pipe(
     Effect.catchTags({

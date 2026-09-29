@@ -9,6 +9,7 @@ import {
   ProfileId,
   Revision,
   SampleIndex,
+  SampleRate,
   SourceRange,
   SpeakerTrackId,
   CaptureEpochId,
@@ -86,6 +87,9 @@ export const RecordingAccess = Schema.Struct({
   expires_at: UtcTimestamp,
   /** Portions of the meeting whose audio is missing (sleep, discard, never uploaded). */
   gaps: Schema.Array(SourceRange),
+  /** Saved audio in the order the file plays it; with `sample_rate` it maps a source sample to a playback offset. */
+  pieces: Schema.Array(SourceRange),
+  sample_rate: SampleRate,
 });
 export type RecordingAccess = typeof RecordingAccess.Type;
 
@@ -159,4 +163,4 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.get('exportMeeting')`/meetings/${meetingId}/export`.addSuccess(MeetingExport))
   .add(HttpApiEndpoint.post('mapSpeaker')`/meetings/${meetingId}/speakers/map`.setPayload(MapSpeaker).addSuccess(Schema.Array(SpeakerTrack)))
   .middleware(Authenticated)
-  .prefix('/api/v1') {}
+  .prefix('/api/v1') { }

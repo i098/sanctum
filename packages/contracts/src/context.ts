@@ -190,7 +190,7 @@ export class ContextApi extends HttpApiGroup.make('context')
   .add(HttpApiEndpoint.patch('reviseContextItem')`/context/items/${itemId}`.setPayload(ReviseContextItem).addSuccess(ContextItem))
   .add(
     HttpApiEndpoint.get('getContextChanges', '/context/changes')
-      .setUrlParams(Schema.Struct({ cursor: Schema.optional(Cursor), limit: Schema.optional(Limit) }))
+      .setUrlParams(Schema.Struct({ cursor: Schema.optional(Cursor), meeting_id: Schema.optional(MeetingId), limit: Schema.optional(Limit) }))
       .addSuccess(ContextChanges),
   )
   .add(HttpApiEndpoint.get('getSource')`/sources/${sourceId}`.addSuccess(Source))

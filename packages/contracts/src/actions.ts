@@ -3,6 +3,7 @@ import { Schema } from 'effect';
 import {
   ActionGrantId,
   ActionId,
+  Cursor,
   IntegrationAccountId,
   MeetingId,
   PrincipalId,
@@ -55,6 +56,9 @@ export const ActionReceipt = Schema.Struct({
   updated_at: UtcTimestamp,
 });
 export type ActionReceipt = typeof ActionReceipt.Type;
+
+/** One meeting's receipts the caller may see, oldest first. */
+export const ActionPage = Schema.Struct({ actions: Schema.Array(ActionReceipt), next_cursor: Schema.NullOr(Cursor) });
 
 /**
  * Grant input from an authorized human who owns `account_id`. Each restriction key lists the

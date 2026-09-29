@@ -70,6 +70,9 @@ describe('meeting recording playback', () => {
         const access = yield* issueRecordingAccess(owner, meeting);
         expect(access).toMatchObject({ meeting_id: meeting, boundary_revision: 1 });
         expect(access.gaps.map(gap => [gap.sample_start / RATE, gap.sample_end / RATE])).toEqual([[30, 40]]);
+        // Saved audio in play order: the file's second 30 is source second 40.
+        expect(access.pieces.map(piece => [piece.sample_start / RATE, piece.sample_end / RATE])).toEqual([[0, 30], [40, 55]]);
+        expect(access.sample_rate).toBe(RATE);
         expect(Date.parse(access.expires_at) - Date.now()).toBeLessThanOrEqual(5 * 60_000);
         expect(store.verifySignedUrl(access.url)).toBe(`meetings/${listener.workspace_id}/${meeting}/r1.wav`);
         store.now = () => Date.now() + 5 * 60_000 + 1;
