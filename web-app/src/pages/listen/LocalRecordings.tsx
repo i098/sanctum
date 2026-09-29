@@ -45,14 +45,13 @@ interface LocalRecordingsProps {
  */
 export function LocalRecordings({ engine }: LocalRecordingsProps) {
   const { strandedChunks: stranded, listener } = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
-  const [recordings, setRecordings] = useState<readonly OrphanedRecording[] | null>([]);
+  const [recordings, setRecordings] = useState<readonly OrphanedRecording[] | null | undefined>(undefined);
   const [confirming, setConfirming] = useState<OrphanedRecording | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const id = useId();
   const fail = (error: unknown): void => setFailure(`Local recordings unavailable: ${error instanceof Error ? error.message : String(error)}`);
   useEffect(() => {
-    if (stranded === 0) return setRecordings([]);
     let current = true;
     const query = (): void => void engine.orphanedRecordings().then(list => current && setRecordings(list), (error: unknown) => current && fail(error));
     query();
@@ -78,7 +77,7 @@ export function LocalRecordings({ engine }: LocalRecordingsProps) {
   return (
     <section className="listen-panel listen-local" aria-labelledby={`${id}-heading`}>
       <h3 id={`${id}-heading`} ref={heading} tabIndex={-1}>Recordings of removed listeners</h3>
-      {recordings === null ? (
+      {recordings === undefined ? null : recordings === null ? (
         <p>{stranded} chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.</p>
       ) : recordings.length === 0 ? (
         <p>No recordings of removed listeners on this device.</p>

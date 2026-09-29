@@ -186,8 +186,10 @@ class CaptureController implements CaptureView {
   readonly resume = (): Promise<void> => this.start();
 
   async orphanedRecordings(): Promise<readonly OrphanedRecording[] | null> {
+    const buffer = await this.openBuffer();
+    await this.refreshPending();
     if (this.session !== null || (await captureLockHeld(this.nav.locks))) return null;
-    return (await this.openBuffer()).orphanedRecordings(this.uploadable(), this.deps.wavMaxSamples);
+    return buffer.orphanedRecordings(this.uploadable(), this.deps.wavMaxSamples);
   }
 
   async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording, part: number): Promise<WavPart | null> {

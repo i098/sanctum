@@ -573,6 +573,28 @@ describe('capture lifecycle', () => {
     expect(idle.snapshot().strandedChunks).toBe(0);
   });
 
+  it('counts and lists removed-listener recordings in a tab that loaded while another tab captured', async () => {
+    const buffer = new MemoryBuffer();
+    const old = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(old);
+    const locks = new FakeLocks();
+    const recorder = harness({ buffer, locks });
+    await settle();
+    recorder.forget();
+    await recorder.engine.start();
+    const late = harness({ buffer, locks });
+    await settle();
+    expect(await late.engine.orphanedRecordings()).toBeNull();
+    expect(late.snapshot().strandedChunks).toBe(1);
+
+    await recorder.engine.pause();
+    expect((await late.engine.orphanedRecordings())!.map((listed) => listed.epochId)).toEqual([old.manifest.epoch_id]);
+    await expectAgreement(late);
+  });
+
   it('never discards pending audio of the listener another tab registered after this one loaded', async () => {
     const buffer = new MemoryBuffer();
     const seal = (listener_id: string) =>
