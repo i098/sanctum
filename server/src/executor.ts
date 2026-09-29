@@ -99,20 +99,15 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
           updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state IN ('running', 'unknown')`;
   });
 
-const ActionPayload = Schema.Struct({ action_id: ActionId });
-
-/** `action.execute`: payload `{ action_id }`, work key = action ID. */
-export const executeAction = (job: Job) =>
+/**
+ * Sends one attempt and records its answer. No answer within the submit timeout records
+ * `unknown` now; the submission keeps running in a daemon so its late answer still settles the row.
+ */
+const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof resolveAccess>>, attempt: number) =>
   Effect.gen(function* () {
-    const { action_id } = yield* Schema.decodeUnknown(ActionPayload)(job.payload);
-    const start = yield* startAttempt(job, action_id);
-    if (start.status === 'paused') return start;
-    if (start.status === 'done') return { status: 'succeeded', result: { action_id, state: start.state } } as const;
-    const { row } = start;
-    // Daemon: on timeout the submission keeps running so its late answer can still settle the row.
     const sending = yield* Effect.forkDaemon(Effect.either(
       executeIntegrationAction({
-        access: start.access,
+        access,
         account_id: row.account_id!,
         action_key: row.action_key,
         version: row.version,
@@ -122,13 +117,22 @@ export const executeAction = (job: Job) =>
       }),
     ));
     const answered = yield* Effect.option(Effect.timeout(Fiber.join(sending), engineeringDefaults.actionSubmitTimeoutMs));
-    if (Option.isSome(answered)) {
-      yield* recordOutcome(row, start.attempt, answered.value);
-    } else {
-      const timedOut = new IntegrationFailure({ message: 'No provider answer after submission', status: null, retryable: false, ambiguous: true });
-      yield* recordOutcome(row, start.attempt, Either.left(timedOut));
-      yield* Effect.forkDaemon(Effect.flatMap(Fiber.join(sending), late => recordOutcome(row, start.attempt, late)));
-    }
+    if (Option.isSome(answered)) return yield* recordOutcome(row, attempt, answered.value);
+    const timedOut = new IntegrationFailure({ message: 'No provider answer after submission', status: null, retryable: false, ambiguous: true });
+    yield* recordOutcome(row, attempt, Either.left(timedOut));
+    yield* Effect.forkDaemon(Effect.flatMap(Fiber.join(sending), late => recordOutcome(row, attempt, late)));
+  });
+
+const ActionPayload = Schema.Struct({ action_id: ActionId });
+
+/** `action.execute`: payload `{ action_id }`, work key = action ID. */
+export const executeAction = (job: Job) =>
+  Effect.gen(function* () {
+    const { action_id } = yield* Schema.decodeUnknown(ActionPayload)(job.payload);
+    const start = yield* startAttempt(job, action_id);
+    if (start.status === 'paused') return start;
+    if (start.status === 'done') return { status: 'succeeded', result: { action_id, state: start.state } } as const;
+    yield* submit(start.row, start.access, start.attempt);
     const final = yield* loadAction(job.workspace_id, action_id);
     return { status: 'succeeded', result: { action_id, state: Option.getOrThrow(final).state } } as const;
   }).pipe(Effect.catchTags({ SqlError: storageFailure, ParseError: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })) }));

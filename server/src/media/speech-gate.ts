@@ -87,6 +87,19 @@ const sentences = <E>(text: Stream.Stream<string, E>) =>
     );
   });
 
+/**
+ * What one heard segment means: empty text, Sanctum's own echo and a late transcript of the
+ * request that opened the window are ignored; anything else a person says over an open
+ * response interrupts it.
+ */
+const segmentRole = (gate: ReturnType<typeof makeSpeechGate>, listener_id: ListenerId, segment: TranscriptSegment) => {
+  if (segment.text.trim() === '' || gate.isEcho(listener_id, segment.text)) return 'ignore';
+  const active = gate.active(listener_id);
+  if (!active) return 'listen';
+  const partOfRequest = active.epoch_id === segment.source.epoch_id && segment.source.sample_start < active.sample_end;
+  return partOfRequest ? 'ignore' : 'interrupt';
+};
+
 type SpeechMessage = SpeechChunkMessage | SpeechCancelMessage;
 
 /**
@@ -177,12 +190,9 @@ export const speechController = (options: {
     return {
       onSegment: (segment: TranscriptSegment) =>
         Effect.gen(function* () {
-          if (segment.text.trim() === '' || gate.isEcho(listener_id, segment.text)) return;
-          const active = gate.active(listener_id);
-          // A late transcript of the request itself is neither a new turn nor an interruption.
-          if (active?.epoch_id === segment.source.epoch_id && segment.source.sample_start < active.sample_end) return;
-          // A person talking over an open response interrupts it.
-          if (active) yield* cancel('barge_in');
+          const role = segmentRole(gate, listener_id, segment);
+          if (role === 'ignore') return;
+          if (role === 'interrupt') yield* cancel('barge_in');
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */
