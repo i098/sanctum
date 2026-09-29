@@ -1,0 +1,25 @@
+{
+  "name": "@sanctum/server",
+  "private": true,
+  "type": "module",
+  "description": "Sanctum API and worker entrypoints",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "migrate": "node src/migrate.ts",
+    "start": "node src/main.ts",
+    "worker": "node src/worker.ts"
+  },
+  "dependencies": {
+    "@effect/platform": "0.97.2",
+    "@effect/platform-node": "0.108.2",
+    "@effect/sql": "0.52.1",
+    "@effect/sql-mysql2": "0.53.0",
+    "@sanctum/contracts": "*",
+    "effect": "3.22.2",
+    "mysql2": "3.24.4"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0"
+  }
+}

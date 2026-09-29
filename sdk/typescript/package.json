@@ -1,0 +1,6 @@
+{
+  "name": "@sanctum/sdk",
+  "private": true,
+  "type": "module",
+  "description": "Promise-based TypeScript client for the Sanctum API"
+}
