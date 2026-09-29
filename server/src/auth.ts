@@ -155,7 +155,6 @@ export const authenticateUpgrade = (request: IncomingMessage) =>
 /**
  * Access of a member acting outside a request (workers, open sockets). Agents keep the union of
  * their active credentials, so revoking the last one stops their background work.
- * ponytail: union over credentials; record the credential on jobs if per-credential limits matter.
  */
 type MemberKey = { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId };
 

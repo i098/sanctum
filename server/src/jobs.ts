@@ -82,8 +82,7 @@ const ClaimedRow = Schema.Struct({
 
 /**
  * Claims the oldest due job of `kinds`. The `(status, available_at)` index keeps the locking read
- * to one row. ponytail: rows of unhandled kinds scanned before it stay locked until commit under
- * REPEATABLE READ; run claims at READ COMMITTED if many kinds lack a handler in one worker.
+ * to one row.
  */
 export const claimJob = (kinds: ReadonlyArray<JobKind>, leaseMs: number) =>
   Effect.gen(function*() {
