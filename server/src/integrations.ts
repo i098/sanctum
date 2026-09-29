@@ -14,12 +14,12 @@ import {
   type GetIntegrationActionOutput,
   IntegrationAccountId,
   NotFound,
-  SanctumApi,
   SEARCH_MAX_LIMIT,
   type SearchIntegrationActionsInput,
   type SearchIntegrationActionsOutput,
   Unavailable,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt } from './db.ts';
