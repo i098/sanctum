@@ -2,7 +2,7 @@ import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, type CaptureEpochId, Unavailable } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
-import { Effect, Layer } from 'effect';
+import { Effect, Either, Layer } from 'effect';
 import { heartbeat, registerListener, startEpoch } from '../src/listeners.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { putChunk } from '../src/recordings.ts';
@@ -55,7 +55,7 @@ const texts = (access: AccessScope, epoch_id: CaptureEpochId, sample_end = 10 * 
  * Recovered offline audio: an archive-only epoch journaled with `end_reason` and 5 s of audio, uploaded
  * and reconciled one chunk job at a time. Returns the meeting states before the last job and after it.
  */
-const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause') =>
+const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause', takeover_at: string | null = null) =>
   Effect.gen(function* () {
     const access = yield* seedDevice('Room');
     const listener = yield* registerListener(access, { name: 'Room', mode: 'room', capabilities: {} });
@@ -69,26 +69,34 @@ const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause') =>
     speech.controls.batch = (samples, sample_rate) =>
       Effect.succeed([{ start_s: 0, end_s: samples.length / sample_rate, is_final: true, text: 'We will review the hiring budget today.', confidence: 0.9, speaker: '0' }]);
     const providers = Layer.merge(store.layer, speech.layer);
-    for (let second = 0; second < 5; second++) {
-      const upload = chunk({ listener_id: listener.id, epoch_id, sequence: second, sample_start: second * RATE, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }) });
-      yield* Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers);
-    }
     const sql = yield* SqlClient.SqlClient;
+    // Another device claimed the next generation while this one was still recording offline.
+    if (takeover_at !== null) {
+      yield* sql`INSERT INTO listener_lease_claims (workspace_id, listener_id, lease_generation, claimed_at) VALUES (${access.workspace_id}, ${listener.id}, ${lease_generation + 1}, ${takeover_at})`;
+    }
+    const uploaded: Array<boolean> = [];
+    for (let second = 0; second < 5; second++) {
+      const samples = syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 });
+      const upload = chunk({ listener_id: listener.id, epoch_id, sequence: second, sample_start: second * RATE, samples, captured_at: `2026-09-26T17:00:0${second}Z` });
+      uploaded.push(Either.isRight(yield* Effect.either(Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers))));
+    }
     const states = () => Effect.map(sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`, rows => rows.map(row => row.state));
     const reconcile = (second: number) =>
       Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: second * RATE, sample_end: (second + 1) * RATE } }), providers);
     for (const second of [4, 0, 1, 2]) yield* reconcile(second);
     const before = yield* states();
     yield* reconcile(3);
-    return { before, after: yield* states() };
+    return { before, after: yield* states(), uploaded };
   });
 
 layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation', it => {
   it.effect('seals the meeting of recovered offline audio with the journaled end reason once it is reconciled', () =>
     Effect.gen(function* () {
       // Chunk jobs finish out of order; the meeting seals only once the last gap is reconciled.
-      expect(yield* recoverArchive('close')).toEqual({ before: ['provisional'], after: ['closing'] });
-      expect(yield* recoverArchive('interrupted')).toEqual({ before: ['provisional'], after: ['interrupted'] });
+      expect(yield* recoverArchive('close')).toMatchObject({ before: ['provisional'], after: ['closing'] });
+      expect(yield* recoverArchive('interrupted')).toMatchObject({ before: ['provisional'], after: ['interrupted'] });
+      // A takeover mid-epoch: audio after it is refused, and the meeting seals once the held audio is reconciled.
+      expect(yield* recoverArchive('close', '2026-09-26 17:00:03')).toEqual({ before: ['closing'], after: ['closing'], uploaded: [true, true, true, false, false] });
       // A pause is not an end of the meeting: it stays open for the next capture.
       expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));

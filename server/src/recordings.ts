@@ -27,6 +27,7 @@ import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { heldUntil } from './lease-claims.ts';
 import { ObjectStore, type ObjectStoreError } from './providers/object-store.ts';
+import { write } from './store.ts';
 
 /** Batch reconciliation waits this long after an upload so live finals for the range can land first. */
 const RECONCILE_DELAY_MS = 60_000;
@@ -143,8 +144,31 @@ const heldEpoch = (access: AccessScope, listener_id: ListenerId, manifest: Recor
     }
     const duration_us = Math.round((manifest.sample_count / manifest.sample_rate) * 1_000_000);
     if (!(yield* heldUntil(access.workspace_id, listener_id, epoch.value.lease_generation, manifest.captured_at, duration_us))) {
+      yield* endArchiveAt(access, manifest);
       return yield* new NotFound({ message: 'This audio was recorded after the device lost the listener lease' });
     }
+  });
+
+/**
+ * Uploads run oldest first, so the first refused chunk of an archive-only epoch marks where its held
+ * audio ends: the epoch's reported end moves back to it, and an empty reconcile at that point lets the
+ * meeting seal once the held audio is transcribed, instead of waiting for audio that will never upload.
+ */
+const endArchiveAt = (access: AccessScope, manifest: RecordingChunkManifest) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const moved = yield* write(sql`
+      UPDATE capture_epochs SET archive_sample_end = ${manifest.sample_start}
+      WHERE workspace_id = ${access.workspace_id} AND id = ${manifest.epoch_id} AND archive_sample_end > ${manifest.sample_start}`);
+    if (moved.affectedRows === 0) return;
+    yield* enqueueJob({
+      workspace_id: access.workspace_id,
+      kind: 'transcript.reconcile',
+      work_key: `${manifest.epoch_id}:${manifest.track}:${manifest.sample_start}`,
+      payload: { epoch_id: manifest.epoch_id, track: manifest.track, sample_start: manifest.sample_start, sample_end: manifest.sample_start },
+      requested_by: access.principal.id,
+      delay_ms: RECONCILE_DELAY_MS,
+    });
   });
 
 /** Checks ownership, epoch clock, WAV shape and hash; returns the body's SHA-256. */
