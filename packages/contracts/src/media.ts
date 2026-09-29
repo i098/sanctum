@@ -53,11 +53,14 @@ export type FrameError =
 
 const LITTLE_ENDIAN_HOST = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
+const fits = (value: number, max: number) => Number.isInteger(value) && value >= 0 && value <= max;
+
 function headerRangeError(header: PcmFrameHeader, samples: Int16Array): string | null {
-  if (samples.length !== header.sample_count || samples.length === 0 || samples.length > MAX_FRAME_SAMPLES) return 'sample_count must equal samples.length within MAX_FRAME_SAMPLES';
-  if (!Number.isInteger(header.track) || header.track < 0 || header.track > 0xffff) return 'track must fit u16';
-  if (!Number.isInteger(header.sequence) || header.sequence < 0 || header.sequence > 0xffff_ffff) return 'sequence must fit u32';
-  return Number.isSafeInteger(header.sample_start) && header.sample_start >= 0 ? null : 'unsafe sample_start';
+  const count = samples.length;
+  if (count === 0 || count !== header.sample_count || !fits(count, MAX_FRAME_SAMPLES)) return 'sample_count must equal samples.length within MAX_FRAME_SAMPLES';
+  if (!fits(header.track, 0xffff)) return 'track must fit u16';
+  if (!fits(header.sequence, 0xffff_ffff)) return 'sequence must fit u32';
+  return fits(header.sample_start, Number.MAX_SAFE_INTEGER) ? null : 'unsafe sample_start';
 }
 
 export function encodePcmFrame(header: PcmFrameHeader, samples: Int16Array): Uint8Array {
