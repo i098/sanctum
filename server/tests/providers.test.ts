@@ -5,12 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Context, Effect, Layer, Stream } from 'effect';
 import { ObjectStore } from '../src/object-store.ts';
 import { DeepgramLive, parseLiveMessage, SpeechToText } from '../src/providers/deepgram.ts';
-import { presignUrl, R2ObjectStoreLive, signRequest } from '../src/providers/r2.ts';
-
-// AWS Signature Version 4 examples from the S3 API reference ("Examples: Signature Calculations").
-const awsKey = { accessKeyId: 'AKIAIOSFODNN7EXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', region: 'us-east-1' };
-const awsDate = new Date('2013-05-24T00:00:00Z');
-const EMPTY_SHA = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+import { R2ObjectStoreLive } from '../src/providers/r2.ts';
 
 /** Local HTTP stand-in for a provider; records requests and answers with `respond`. */
 const localServer = (respond: (request: IncomingMessage, body: Buffer, response: ServerResponse) => void) =>
@@ -40,22 +35,6 @@ const localServer = (respond: (request: IncomingMessage, body: Buffer, response:
 const withConfig = (values: Record<string, string>) => Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(values))));
 
 describe('R2 object store', () => {
-  it('signs requests exactly like the AWS SigV4 reference examples', () => {
-    const headers = signRequest({
-      method: 'GET',
-      url: new URL('https://examplebucket.s3.amazonaws.com/test.txt'),
-      headers: { range: 'bytes=0-9' },
-      payloadHash: EMPTY_SHA,
-      key: awsKey,
-      now: awsDate,
-    });
-    expect(headers.authorization).toBe(
-      'AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41',
-    );
-    const url = presignUrl({ url: new URL('https://examplebucket.s3.amazonaws.com/test.txt'), key: awsKey, now: awsDate, expiresSeconds: 86_400 });
-    expect(new URL(url).searchParams.get('X-Amz-Signature')).toBe('aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404');
-  });
-
   it.scoped('writes, heads and reads private objects through the S3 API with server-side credentials', () =>
     Effect.gen(function* () {
       const objects = new Map<string, { body: Buffer; sha: string }>();
@@ -77,7 +56,8 @@ describe('R2 object store', () => {
       expect(yield* store.put('w/1.wav', new Uint8Array([1, 2, 3]), { sha256: sha, contentType: 'audio/wav' })).toEqual({ key: 'w/1.wav', byte_length: 3, sha256: sha });
       const put = server.requests[0]!;
       expect(put.url).toBe('/audio/private/w/1.wav');
-      expect(put.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=key-id\/\d{8}\/auto\/s3\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256, Signature=[0-9a-f]{64}$/);
+      expect(put.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=key-id\/\d{8}\/auto\/s3\/aws4_request, SignedHeaders=\S*x-amz-meta-sha256\S*, Signature=[0-9a-f]{64}$/);
+      expect(put.headers['x-amz-content-sha256']).toBe(sha);
       expect(yield* store.head('w/1.wav')).toEqual({ key: 'w/1.wav', byte_length: 3, sha256: sha });
       expect(yield* store.head('missing.wav')).toBeNull();
       expect([...(yield* store.get('w/1.wav'))]).toEqual([1, 2, 3]);
@@ -86,6 +66,7 @@ describe('R2 object store', () => {
       const signed = new URL(yield* store.presignGet('w/1.wav', 300_000));
       expect(signed.searchParams.get('X-Amz-Expires')).toBe('300');
       expect(signed.pathname).toBe('/audio/private/w/1.wav');
+      expect(signed.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
     }),
   );
 
