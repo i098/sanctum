@@ -1,7 +1,10 @@
 import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, CaptureEpochId } from '@sanctum/contracts';
-import { Effect, Layer } from 'effect';
+import { Clock, Effect, Layer } from 'effect';
+import { runWorker } from '../src/job-runner.ts';
+import type { JobHandlers } from '../src/job-types.ts';
+import { hear, jobsOf, meetingsOf } from './support/capture.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import {
   api,
@@ -35,6 +38,20 @@ const setup = Effect.gen(function* () {
 
 const epochRow = (epoch_id: string) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql<{ live_sample_end: string; end_reason: string | null }>`SELECT live_sample_end, end_reason FROM capture_epochs WHERE id = ${epoch_id}`);
+
+/** Starts a live epoch, streams 4 800 samples and drops the socket without a `stop`, as a killed browser would. */
+const streamThenDrop = (host: string, listener_id: string, lease_generation: number) =>
+  Effect.gen(function* () {
+    const epoch_id = newEpochId();
+    const socket = yield* openSocket(host, listener_id, 'device');
+    socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
+    yield* socket.take('accepted');
+    for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+    for (let sequence = 0; sequence < 3; sequence++) yield* socket.take('ack');
+    socket.close();
+    yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === '4800');
+    return epoch_id;
+  });
 
 layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownership', it => {
   it.scoped('registers listeners only for principals holding capture:ingest', () =>
@@ -230,6 +247,66 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
       const [listener] = yield* sql<{ current_epoch_id: string | null; state: string }>`SELECT current_epoch_id, state FROM listeners WHERE id = ${listener_id}`;
       expect(listener).toMatchObject({ current_epoch_id: null, state: 'stopped' });
+    }),
+  );
+
+  it.scoped('resumes the epoch inside the lease; after it lapses the returning owner starts a new epoch after a gap', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const epoch_id = yield* streamThenDrop(host, listener_id, lease_generation);
+      expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(lease_generation))).body).toMatchObject({ owner: true, lease_generation });
+      const inside = yield* openSocket(host, listener_id, 'device');
+      inside.send(startMessage({ listener_id, epoch_id, lease_generation }));
+      expect(yield* inside.take('accepted')).toMatchObject({ epoch_id, resume_from_sample: 4_800 });
+      inside.close();
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBeNull();
+
+      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(lease_generation))).body).toMatchObject({ owner: true, lease_generation });
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
+      const after = yield* openSocket(host, listener_id, 'device');
+      after.send(startMessage({ listener_id, epoch_id, lease_generation }));
+      expect(yield* after.take('rejected')).toMatchObject({ reason: 'epoch_closed' });
+      const fresh = newEpochId();
+      const next = yield* openSocket(host, listener_id, 'device');
+      next.send(startMessage({ listener_id, epoch_id: fresh, lease_generation }));
+      expect(yield* next.take('accepted')).toMatchObject({ epoch_id: fresh, resume_from_sample: 0 });
+      const [gap] = yield* sql<{ ended_at: string | null; ordered: number }>`SELECT CAST(old.ended_at AS CHAR) AS ended_at, new.started_at >= old.ended_at AS ordered
+        FROM capture_epochs old JOIN capture_epochs new ON new.id = ${fresh} WHERE old.id = ${epoch_id}`;
+      expect(gap!.ended_at).not.toBeNull();
+      expect(Number(gap!.ordered)).toBe(1);
+      const [listener] = yield* sql<{ current_epoch_id: string }>`SELECT current_epoch_id FROM listeners WHERE id = ${listener_id}`;
+      expect(listener!.current_epoch_id).toBe(fresh);
+    }),
+  );
+
+  it.scoped('the worker sweep interrupts a lapsed listener that never returns and seals its meeting', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { tokens, host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const epoch_id = yield* streamThenDrop(host, listener_id, lease_generation);
+      const device = { workspace_id: tokens.get('device')!.workspace_id, listener_id, capture_group_id: null };
+      yield* hear(device, epoch_id, 0, 0.25, 'we should review the budget numbers today');
+      const handlers: JobHandlers<never> = { 'context.refresh': () => Effect.succeed({ status: 'succeeded' as const, result: null }) };
+      yield* Effect.forkScoped(Effect.withClock(runWorker(handlers, { pollMs: 50, concurrency: 1 }), Clock.make()));
+      yield* pause(300);
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBeNull();
+
+      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* eventually(epochRow(epoch_id), rows => rows[0]?.end_reason === 'interrupted');
+      const [listener] = yield* sql<{ current_epoch_id: string | null; state: string }>`SELECT current_epoch_id, state FROM listeners WHERE id = ${listener_id}`;
+      expect(listener).toMatchObject({ current_epoch_id: null, state: 'stopped' });
+      const [meeting] = yield* meetingsOf(device.workspace_id);
+      expect(meeting).toMatchObject({ state: 'interrupted' });
+      expect(yield* jobsOf(device.workspace_id)).toContainEqual({ kind: 'meeting.finalize', work_key: `meeting:${meeting!.id}`, status: 'pending' });
+
+      const archive = yield* openSocket(host, listener_id, 'device');
+      archive.send(startMessage({ listener_id, epoch_id, lease_generation, archive_only: true, end_reason: 'close' }));
+      expect(yield* archive.take('accepted')).toMatchObject({ epoch_id });
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
     }),
   );
 

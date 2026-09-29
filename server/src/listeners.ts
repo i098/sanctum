@@ -123,7 +123,8 @@ const endEpoch = (workspace_id: WorkspaceId, listener_id: ListenerId, epoch_id: 
 
 /**
  * Renews the caller's lease, or takes it over when the previous owner's lease lapsed. Generation 0
- * means never claimed, so the first claim always increments. A takeover interrupts the old owner's epoch.
+ * means never claimed, so the first claim always increments. A lapsed lease, renewed or taken over,
+ * interrupts its open epoch; the returning owner starts a new one.
  * An owner in a capture group also needs the group lease; without it `owner` is false while the
  * receipt still carries this listener's generation.
  */
@@ -138,7 +139,7 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
           // The caller keeps its own generation: handing it the holder's would let it act as the holder.
           return { lease_generation: input.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false } satisfies typeof HeartbeatReceipt.Type;
         }
-        if (!renew && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
+        if (listener.lease_active !== 1 && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
         const generation = renew ? listener.lease_generation : listener.lease_generation + 1;
         const health = JSON.stringify({ buffered_chunks: input.buffered_chunks, storage_bytes_free: input.storage_bytes_free, epoch_id: input.epoch_id });
         yield* sql`
@@ -154,6 +155,27 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
       }),
     );
   });
+
+/**
+ * Worker sweep: a listener whose lease lapsed with an epoch still open disconnected without a `stop`
+ * (browser killed, power or network lost), so that epoch ends as interrupted and its meeting seals.
+ */
+export const sweepLapsedListeners = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const lapsed = sql`current_epoch_id IS NOT NULL AND COALESCE(lease_expires_at > UTC_TIMESTAMP(6), 0) = 0`;
+  const listeners = yield* sql<{ workspace_id: WorkspaceId; id: ListenerId }>`SELECT workspace_id, id FROM listeners WHERE ${lapsed}`;
+  for (const { workspace_id, id } of listeners) {
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const [open] = yield* sql<{ epoch_id: CaptureEpochId }>`SELECT current_epoch_id AS epoch_id FROM listeners
+          WHERE workspace_id = ${workspace_id} AND id = ${id} AND ${lapsed} FOR UPDATE`;
+        if (open === undefined) return;
+        yield* endEpoch(workspace_id, id, open.epoch_id, 'interrupted');
+        yield* sql`UPDATE listeners SET state = 'stopped' WHERE workspace_id = ${workspace_id} AND id = ${id}`;
+      }),
+    );
+  }
+});
 
 const acceptedAt = (start: typeof StartMessage.Type, resume_from_sample: number): StartVerdict =>
   AcceptedMessage.make({ epoch_id: start.epoch_id, resume_from_sample, max_frame_bytes: MAX_FRAME_BYTES });

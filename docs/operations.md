@@ -63,6 +63,7 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 
 - **Worker crash or restart**: leases expire and the sweeper returns running jobs to pending; handlers are idempotent per work key, and an action whose outcome is unknown stays `unknown` until a person resolves it.
 - **API restart**: browsers reconnect with the same capture epoch and resume from the server's live watermark; chunks waiting in IndexedDB upload with their original IDs and are deduplicated by hash.
+- **Browser killed or offline without a stop**: once the listener's lease lapses, the worker sweeper ends its open epoch as `interrupted` and seals the meeting; a device that returns after that starts a new epoch, so the stored gap stays visible.
 - **R2 write succeeded but the manifest did not**: the retried upload finds the object with `head` and completes the manifest; a conflicting hash is rejected.
 - **Provider outage**: live ranges are marked degraded and recovered by `transcript.reconcile` from uploaded chunks.
 - **Rollback**: set `SANCTUM_IMAGE` to the previous validated tag and `docker compose up -d api worker`; data volumes and R2 objects are untouched and migrations are never reversed, so a previous image must support the current schema.

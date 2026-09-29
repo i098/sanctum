@@ -14,6 +14,7 @@ import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
 import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
 import { later } from './jobs.ts';
+import { sweepLapsedListeners } from './listeners.ts';
 import { write } from './store.ts';
 
 const ER_LOCK_WAIT_TIMEOUT = 1205;
@@ -190,7 +191,7 @@ export const runWorker = <R>(
     Effect.catchAllCause(cause => Effect.zipRight(Effect.logError('Job claimer failed', cause), Effect.sleep(pollMs))),
     Effect.forever,
   );
-  const sweeper = Effect.repeat(Effect.catchAllCause(sweepJobs, cause => Effect.logError('Job sweeper failed', cause)), Schedule.spaced(pollMs));
+  const sweeper = Effect.repeat(Effect.catchAllCause(Effect.zipRight(sweepJobs, sweepLapsedListeners), cause => Effect.logError('Worker sweeper failed', cause)), Schedule.spaced(pollMs));
   return Effect.all([sweeper, ...Array.from({ length: concurrency }, () => claimer)], { concurrency: 'unbounded', discard: true }).pipe(
     Effect.zipRight(Effect.never),
   );
