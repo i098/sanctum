@@ -54,7 +54,7 @@ export default async function setup(project: TestProject) {
   const container = external ? null : startContainer();
   const url = external ?? container!.url;
   const stop = () => {
-    if (container) execFileSync('docker', ['rm', '--force', container.name], { stdio: 'ignore' });
+    if (container) execFileSync('docker', ['rm', '--force', '--volumes', container.name], { stdio: 'ignore' });
   };
   process.once('exit', stop);
   try {
