@@ -251,7 +251,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       const target = watermark;
       const owner = yield* advanceLiveWatermark(access, listener.id, epoch_id, start.lease_generation, target);
       if (!owner) {
-        const message = RejectedMessage.make({ reason: 'stale_generation', message: 'Another tab or device took over this listener' });
+        const message = RejectedMessage.make({ reason: 'stale_generation', message: 'Another tab or device took over this listener, or its epoch ended' });
         return yield* Deferred.fail(fenced, new SessionRejected({ message }));
       }
       persisted = target;

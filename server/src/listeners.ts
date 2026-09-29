@@ -249,8 +249,8 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
   });
 
 /**
- * Persists the live watermark while `lease_generation` still owns the listener; `false` means a
- * newer owner took over and the caller must stop live writes.
+ * Persists the live watermark while `lease_generation` still owns the listener and the epoch is still
+ * its open one; `false` means a newer owner took over or the epoch ended, and the caller must stop live writes.
  */
 export const advanceLiveWatermark = (access: AccessScope, listener_id: ListenerId, epoch_id: CaptureEpochId, lease_generation: number, sample_end: number) =>
   Effect.gen(function* () {
@@ -258,7 +258,7 @@ export const advanceLiveWatermark = (access: AccessScope, listener_id: ListenerI
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, listener_id, true);
-        if (listener.lease_generation !== lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener))) return false;
+        if (listener.lease_generation !== lease_generation || listener.current_epoch_id !== epoch_id || !(yield* holdsGroupLease(access.workspace_id, listener))) return false;
         yield* sql`
           UPDATE capture_epochs SET live_sample_end = GREATEST(live_sample_end, ${sample_end})
           WHERE workspace_id = ${access.workspace_id} AND id = ${epoch_id} AND ended_at IS NULL`;

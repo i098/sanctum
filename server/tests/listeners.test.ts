@@ -282,6 +282,28 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
     }),
   );
 
+  it.scoped('fences a socket still open when its lapsed lease ended the epoch', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const epoch_id = newEpochId();
+      const socket = yield* openSocket(host, listener_id, 'device');
+      socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
+      yield* socket.take('accepted');
+      socket.send(pcmFrame(0, 0));
+      yield* socket.take('ack');
+      yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === '1600');
+
+      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(lease_generation))).body).toMatchObject({ owner: true, lease_generation });
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
+      socket.send(pcmFrame(1, 1_600));
+      expect(yield* socket.take('rejected')).toMatchObject({ reason: 'stale_generation' });
+      expect((yield* epochRow(epoch_id))[0]!.live_sample_end).toBe('1600');
+    }),
+  );
+
   it.scoped('the worker sweep interrupts a lapsed listener that never returns and seals its meeting', () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
