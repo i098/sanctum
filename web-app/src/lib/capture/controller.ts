@@ -56,6 +56,8 @@ const isSampleRate = Schema.is(SampleRate);
 
 interface Epoch {
   readonly id: CaptureEpochId;
+  /** The live `start`; a regained lease resends it under the renewed generation. */
+  readonly start: typeof StartMessage.Type;
   /** Recorder sample index of epoch sample 0. */
   readonly base: number;
   readonly assembler: ChunkAssembler;
@@ -315,19 +317,34 @@ class CaptureController implements CaptureView {
       onSealed: () => void this.refreshPending().then(() => this.startDrain()),
       onError: (error) => this.halt(captureIssue(error), false),
     });
-    const url = (this.deps.streamUrl ?? streamUrl)(start.listener_id);
-    const live = this.leaseLost ? null : (this.deps.openLive ?? openLiveStream)({ url, start, onStatus: (status, reason) => this.onLive(status, reason), ...(this.deps.onSpeech ? { onSpeech: this.deps.onSpeech } : {}) });
+    const epoch: Epoch = { id: start.epoch_id, start, base, assembler, live: null, lastWallMs: startedAtMs, lastEnd: base };
+    if (!this.leaseLost) epoch.live = this.connectLive(start);
     queueMicrotask(() => this.publish());
-    return { id: start.epoch_id, base, assembler, live, lastWallMs: startedAtMs, lastEnd: base };
+    return epoch;
   }
 
+  private connectLive(start: typeof StartMessage.Type): LiveStream {
+    const url = (this.deps.streamUrl ?? streamUrl)(start.listener_id);
+    return (this.deps.openLive ?? openLiveStream)({ url, start, onStatus: (status, reason) => this.onLive(status, reason), ...(this.deps.onSpeech ? { onSpeech: this.deps.onSpeech } : {}) });
+  }
+
+  /**
+   * A `stale_generation` keeps the epoch (its audio uploads once the lease is regained) and claims the
+   * lease now; `epoch_closed` drops an epoch a takeover ended so the next block opens a fresh one.
+   */
   private onLive(status: LiveStatus, reason?: RejectReason): void {
     this.live = status;
-    if (status === 'rejected') this.issue = reason === 'stale_generation' ? 'lease_lost' : 'socket_unavailable';
+    const epoch = this.session?.epoch;
     if (status === 'rejected' && reason === 'stale_generation') {
+      this.issue = 'lease_lost';
       this.leaseLost = true;
-      if (this.session?.epoch) this.session.epoch.live = null;
-    }
+      if (epoch) epoch.live = null;
+      void this.beat();
+    } else if (status === 'rejected' && reason === 'epoch_closed' && epoch) {
+      void epoch.assembler.close();
+      this.session!.epoch = null;
+      this.live = null;
+    } else if (status === 'rejected') this.issue = 'socket_unavailable';
     this.publish();
   }
 
@@ -463,14 +480,11 @@ class CaptureController implements CaptureView {
     this.issue = 'lease_lost';
   }
 
-  /** Drops the stream-less epoch so the next block opens a fresh one under the current generation. */
+  /** Resends the stream-less epoch's `start` under the renewed generation, so the server accepts (or first inserts) it. */
   private regainLease(): void {
-    const epoch = this.session?.epoch;
-    if (epoch && epoch.live === null) {
-      void epoch.assembler.close();
-      this.session!.epoch = null;
-      this.live = null;
-    }
+    const session = this.session;
+    const epoch = session?.epoch;
+    if (session && epoch && epoch.live === null) epoch.live = this.connectLive({ ...epoch.start, lease_generation: session.listener.lease_generation });
     if (this.issue === 'lease_lost') this.issue = null;
   }
 
@@ -490,7 +504,7 @@ class CaptureController implements CaptureView {
       onRefused: () => void this.refreshPending(),
       epochOpen: (epochId: string) => {
         const epoch = this.session?.epoch;
-        return epoch?.id === epochId && epoch.live !== null;
+        return epoch?.id === epochId && (epoch.live !== null || this.leaseLost);
       },
     };
     const fiber = Effect.runFork(
