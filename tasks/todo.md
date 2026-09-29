@@ -40,9 +40,9 @@ Depends on: T02.
 
 ## T04. Implement semantic matching
 
-- [ ] Generate/store versioned profile embeddings in MySQL with model/dimension metadata.
-- [ ] Implement scoped batched exact cosine ranking and appropriate result verification.
-- [ ] Benchmark O(N × dimensions) latency, memory and event-loop impact against a stated directory-size target; compare with the same Rust algorithm/precision before claiming parity.
+- [x] Generate/store versioned profile embeddings in MySQL with model/dimension metadata.
+- [x] Implement scoped batched exact cosine ranking and appropriate result verification.
+- [x] Benchmark O(N × dimensions) latency, memory and event-loop impact against a stated directory-size target; compare with the same Rust algorithm/precision before claiming parity.
 
 Files: `server/src/matcher.ts`, matching schema migration, TypeScript provider configuration, `server/tests/semantic-matching.test.ts`, `scripts/benchmark-matching.ts`.
 Verify: labeled ranking fixtures, invalid vectors, model/dimension mismatch, tenant isolation, and scale measurements.
@@ -162,9 +162,9 @@ Depends on: T10, T13.
 
 ## T15. Centralize model roles and extract canonical notes
 
-- [ ] Add explicit role settings and validated structured extraction with correctly handled hosted research tools.
-- [ ] Generate one canonical summary for notes, email discussion sections, and exports.
-- [ ] Reject silent live fallback to demo content and keep failures recoverable from source data.
+- [x] Add explicit role settings and validated structured extraction with correctly handled hosted research tools.
+- [x] Generate one canonical summary for notes, email discussion sections, and exports.
+- [x] Reject silent live fallback to demo content and keep failures recoverable from source data.
 
 Files: `server/src/config.ts`, `server/src/llm.ts`, `server/src/context.ts`, `server/src/planner.ts`, `server/tests/extraction.test.ts`.
 Verify: schema/grounding/date fixtures; candidate output comparison against labeled fixtures; unavailable provider without fake success.

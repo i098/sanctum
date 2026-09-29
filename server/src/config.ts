@@ -16,7 +16,33 @@ export const engineeringDefaults = {
   playbackUrlTtlMs: 5 * 60_000,
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
+  /**
+   * Plan section 09 initial model per role, checked against provider docs on 2026-09-29, plus
+   * the Cerebras reasoning effort per role. `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override.
+   */
+  modelRoles: {
+    voice: { provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'none' },
+    extraction: { provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'low' },
+    planner: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
+    research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
+  },
+  /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
+  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
 } as const;
+
+export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
+
+/** Research needs Anthropic's hosted web search, so only its model is configurable. */
+const modelRole = (role: ModelRoleName) => {
+  const fallback = engineeringDefaults.modelRoles[role];
+  const providers = role === 'research' ? (['anthropic'] as const) : (['cerebras', 'anthropic'] as const);
+  const prefix = role.toUpperCase();
+  return Config.all({
+    provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
+    model: Config.string(`${prefix}_MODEL`).pipe(Config.withDefault(fallback.model)),
+    reasoning: Config.succeed(fallback.reasoning),
+  });
+};
 
 /** Decisions still open in docs/DECISIONS.md; each blocks production activation until selected. */
 const openDecisions = ['identity_issuer', 'mcp_authorization_server', 'meeting_retention', 'outside_meeting_speech'] as const;
@@ -40,6 +66,9 @@ export const serverConfig = Config.all({
   }),
   /** Open decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...openDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
+  modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
+  /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
+  modelKeys: Config.all({ cerebras: Config.option(Config.redacted('CEREBRAS_API_KEY')), anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
 });
 export type ServerConfig = Config.Config.Success<typeof serverConfig>;
 
