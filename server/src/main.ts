@@ -10,12 +10,12 @@ import { Effect, Layer } from 'effect';
 import { ApiLive } from './api.ts';
 import { type Authenticator, UnconfiguredAuthenticator } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
-import { dbLayer } from './db.ts';
+import { dbLayer, type MysqlOptions } from './db.ts';
 import { loadMigrations } from './migrate.ts';
 
 /** Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free port). */
 export const serverLayer = (
-  config: { readonly apiPort: number; readonly mysql: Parameters<typeof dbLayer>[0] },
+  config: { readonly apiPort: number; readonly mysql: MysqlOptions },
   authenticator: Layer.Layer<Authenticator> = UnconfiguredAuthenticator,
 ) =>
   HttpApiBuilder.serve(HttpMiddleware.logger).pipe(

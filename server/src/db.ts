@@ -5,15 +5,25 @@
  */
 import { MysqlClient } from '@effect/sql-mysql2';
 import { SqlClient, type SqlError } from '@effect/sql';
-import { Effect, Layer, ParseResult, Schema } from 'effect';
+import { Effect, Layer, ParseResult, type Redacted, Schema } from 'effect';
 import { Sha256Hex, UtcTimestamp, Unavailable } from '@sanctum/contracts';
-import type { ServerConfig } from './config.ts';
+
+/** Connection settings; config.ts reads them from the environment. */
+export interface MysqlOptions {
+  readonly host: string;
+  readonly port: number;
+  readonly database: string;
+  readonly username: string;
+  readonly password: Redacted.Redacted;
+  readonly maxConnections: number;
+  readonly queueLimit: number;
+}
 
 /**
  * Pool options: DATETIME(6) and BIGINT/DECIMAL arrive as strings (no millisecond Date or
  * rounded Number), connection waits are bounded by `queueLimit`.
  */
-const mysqlLayer = (mysql: ServerConfig['mysql']) =>
+const mysqlLayer = (mysql: MysqlOptions) =>
   MysqlClient.layer({
     host: mysql.host,
     port: mysql.port,
@@ -49,7 +59,7 @@ export const verifyUtcSession = Effect.gen(function*() {
 });
 
 /** Pool plus the UTC precondition; API and worker each build their own process-scoped layer. */
-export const dbLayer = (mysql: ServerConfig['mysql']) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(mysqlLayer(mysql)));
+export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(mysqlLayer(mysql)));
 
 const MYSQL_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
 

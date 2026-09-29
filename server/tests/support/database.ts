@@ -4,12 +4,12 @@ import type { SqlClient } from '@effect/sql';
 import { Effect, Redacted } from 'effect';
 import { createConnection } from 'mysql2/promise';
 import { inject } from 'vitest';
-import { dbLayer } from '../../src/db.ts';
+import { dbLayer, type MysqlOptions } from '../../src/db.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 
 export interface TestDatabase {
   readonly name: string;
-  readonly mysql: Parameters<typeof dbLayer>[0];
+  readonly mysql: MysqlOptions;
 }
 
 const admin = () => createConnection(inject('mysqlAdminUrl'));
