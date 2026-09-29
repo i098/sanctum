@@ -55,9 +55,18 @@ export async function fakeServer(page: Page, failUploads = false): Promise<FakeS
   return server;
 }
 
+/** Inert page engine, so the test's own controller is the only one holding the tab's capture lock. */
+const INERT_ENGINE = `
+import { createCaptureStore } from '/src/lib/capture/view.ts';
+const idle = async () => {};
+const engine = { ...createCaptureStore().view, levels: { bandCount: 33, read: bands => (bands.fill(0), 0) }, start: idle, pause: idle, resume: idle };
+export const getCaptureEngine = () => engine;
+`;
+
 /** Creates a controller with short chunks in the page; `capBytes` shrinks the recovery buffer. */
 export async function capture(page: Page, options: { start: boolean; chunkSeconds: number; capBytes?: number }): Promise<void> {
   if (page.url() === 'about:blank') {
+    await page.route('**/src/pages/listen/engine.ts*', route => route.fulfill({ contentType: 'text/javascript', body: INERT_ENGINE }));
     await page.goto('/');
     // The Vite dev server reloads the page once when it first optimizes the capture dependencies.
     await page.evaluate(() => import('/src/lib/capture/controller.ts' as string)).catch(() => page.waitForLoadState('load'));

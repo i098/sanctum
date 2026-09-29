@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { openListening, waveProfile } from './listen-fake.ts';
 
-test('production build never claims capture it cannot perform', async ({ page }) => {
+test('the real engine never claims capture when the API is unreachable', async ({ page }) => {
+  await page.route('**/api/v1/**', route => route.fulfill({ status: 503, json: { _tag: 'Unavailable', code: 'unavailable', retryable: true, message: 'offline' } }));
   await page.goto('/');
   await expect(page.getByText('stopped', { exact: true })).toBeVisible();
   await expect(page.getByText('Silent · not recording')).toBeVisible();
   await page.getByRole('button', { name: 'Listen' }).click();
-  await expect(page.getByText('Microphone capture is not available in this build.')).toBeVisible();
-  await expect(page.getByText('stopped', { exact: true })).toBeVisible();
+  await expect(page.locator('.listen-helper[data-warning="true"]')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.listen-state')).not.toHaveText('listening');
   expect((await waveProfile(page)).rise).toBeLessThanOrEqual(1);
 });
 

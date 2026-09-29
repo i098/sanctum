@@ -74,8 +74,8 @@ test('keeps unacknowledged audio across a reload and uploads it as an interrupte
 test('pauses visibly when the recovery buffer is full and keeps what it stored', async ({ page }) => {
   await fakeServer(page, true);
   await capture(page, { start: true, chunkSeconds: 30, capBytes: 150_000 });
-  await expect.poll(async () => (await snapshot(page)).issue, { timeout: 10_000 }).toBe('storage_full');
-  expect(await snapshot(page)).toMatchObject({ listener: 'paused', bufferedChunks: 1 });
+  // Pausing stops the microphone asynchronously after the issue is published; wait for the settled state.
+  await expect.poll(async () => snapshot(page), { timeout: 10_000 }).toMatchObject({ issue: 'storage_full', listener: 'paused', bufferedChunks: 1 });
 });
 
 test('reports missing audio when site data is cleared during capture', async ({ page }) => {
