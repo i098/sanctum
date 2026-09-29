@@ -1,6 +1,7 @@
 /** `ListenersApi` handlers: device registration, lease heartbeats and archive chunk uploads (T08/T09). */
 import { HttpApiBuilder } from '@effect/platform';
-import { CurrentAccess, SanctumApi, Unavailable } from '@sanctum/contracts';
+import { CurrentAccess, Unavailable } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect } from 'effect';
 import { claimGroupLease } from './capture-groups.ts';
 import { heartbeat, registerListener } from './listeners.ts';
