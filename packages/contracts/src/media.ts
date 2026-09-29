@@ -19,7 +19,7 @@
  */
 import { Schema } from 'effect';
 import { EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
-import { CaptureEpochId, ListenerId, SampleIndex } from './common.ts';
+import { CaptureEpochId, ListenerId, SampleIndex, SampleRate } from './common.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
 export const MEDIA_PROTOCOL_VERSION = 1;
@@ -165,5 +165,37 @@ export const TranscriptMessage = Schema.TaggedStruct('transcript', {
   segment: TranscriptSegment,
 });
 
-export const ServerControlMessage = Schema.Union(AcceptedMessage, RejectedMessage, AckMessage, DegradedMessage, TranscriptMessage);
+/**
+ * Requested speech only (plan section 04). `generation` rises with every opened request, also
+ * across API restarts; the browser plays a chunk only while its generation is current.
+ */
+const SpeechGeneration = Schema.Number.pipe(Schema.int(), Schema.positive());
+
+/** One chunk of a requested spoken response: base64 PCM16 little-endian mono. */
+export const SpeechChunkMessage = Schema.TaggedStruct('speech_chunk', {
+  request_id: Schema.String,
+  generation: SpeechGeneration,
+  sequence: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  sample_rate: SampleRate,
+  audio: Schema.String,
+});
+export type SpeechChunkMessage = typeof SpeechChunkMessage.Type;
+
+/** Stop playback and discard every queued chunk of `generation` and older. */
+export const SpeechCancelMessage = Schema.TaggedStruct('speech_cancel', {
+  generation: SpeechGeneration,
+  reason: Schema.Literal('barge_in', 'pause', 'disconnect', 'expired'),
+});
+export type SpeechCancelMessage = typeof SpeechCancelMessage.Type;
+export type SpeechCancelReason = SpeechCancelMessage['reason'];
+
+export const ServerControlMessage = Schema.Union(
+  AcceptedMessage,
+  RejectedMessage,
+  AckMessage,
+  DegradedMessage,
+  TranscriptMessage,
+  SpeechChunkMessage,
+  SpeechCancelMessage,
+);
 export type ServerControlMessage = typeof ServerControlMessage.Type;

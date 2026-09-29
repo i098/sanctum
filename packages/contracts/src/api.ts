@@ -8,7 +8,7 @@ import { AgentsApi, Authenticated, SessionApi } from './auth.ts';
 import { ListenersApi } from './capture.ts';
 import { IntegrationsApi } from './integrations.ts';
 import { ContextApi } from './context.ts';
-import { ActionsApi } from './api-stand-ins.ts';
+import { ActionsApi } from './actions-api.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 import { MeetingsApi } from './meetings.ts';
 

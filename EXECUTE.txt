@@ -1155,9 +1155,9 @@ Depends on: T05.
 
 ## T18. Persist grants, actions, and receipts
 
-- [ ] Add stored action grants and a shared execution gateway for internal/external agents.
-- [ ] Use stable idempotency keys, job leases, revocation checks, and provider receipt reconciliation.
-- [ ] Represent ambiguous completion as unknown and block unsafe automatic replay.
+- [x] Add stored action grants and a shared execution gateway for internal/external agents.
+- [x] Use stable idempotency keys, job leases, revocation checks, and provider receipt reconciliation.
+- [x] Represent ambiguous completion as unknown and block unsafe automatic replay.
 
 Files: `server/migrations/008_actions.sql`, `server/src/actions.ts`, `server/src/executor.ts`, `server/tests/actions.test.ts`.
 Verify: mismatched/expired/revoked grants; duplicated requests; timeout after upstream success; no real sends in tests.
@@ -1165,9 +1165,9 @@ Depends on: T11, T16, T17.
 
 ## T19. Make background work independent of media connections
 
-- [ ] Run context, memory, notes, research, and external actions through durable jobs with explicit work keys.
-- [ ] Keep capture nonblocking and recover worker leases after restart.
-- [ ] Implement bounded rate/budget states that can resume instead of silently stopping work after a fixed cycle count.
+- [x] Run context, memory, notes, research, and external actions through durable jobs with explicit work keys.
+- [x] Keep capture nonblocking and recover worker leases after restart.
+- [x] Implement bounded rate/budget states that can resume instead of silently stopping work after a fixed cycle count.
 
 Files: `server/src/worker.ts`, `server/src/jobs.ts`, `server/tests/worker-recovery.test.ts`.
 Verify: disconnect sockets and kill API/worker independently; late completion; concurrent claim; stale lease; budget pause and resume.
@@ -1175,10 +1175,10 @@ Depends on: T16, T18.
 
 ## T20. Enforce silence across all output paths
 
-- [ ] Add a request-scoped speech gate immediately before audio emission.
-- [ ] Cover direct responses, tool responses, meeting close, and action completion so only requested speech is emitted.
-- [ ] Keep passive frontend transitions silent while supporting explicit user playback.
-- [ ] Detect direct-request turn completion, prevent output echo from becoming a request, and cancel TTS/playback on interruption or disconnect; reject late response generations.
+- [x] Add a request-scoped speech gate immediately before audio emission.
+- [x] Cover direct responses, tool responses, meeting close, and action completion so only requested speech is emitted.
+- [x] Keep passive frontend transitions silent while supporting explicit user playback.
+- [x] Detect direct-request turn completion, prevent output echo from becoming a request, and cancel TTS/playback on interruption or disconnect; reject late response generations.
 
 Files: `server/src/media/speech-gate.ts`, `server/src/media/session.ts`, `server/src/worker.ts`, `web-app/src/pages/listen/engine.ts`, `server/tests/silence.test.ts`, `web-app/src/lib/capture/playback.ts`.
 Verify: zero unsolicited speech/SFX across ordinary capture and all background transitions; requested reply positive control, barge-in, echo suppression, stale audio rejection and no playback after reconnect.

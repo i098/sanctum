@@ -5,6 +5,7 @@
  */
 import type { SqlClient } from '@effect/sql';
 import { commitMemory, refreshContext } from './context-jobs.ts';
+import { executeAction, runResearch } from './executor.ts';
 import { extractCandidates } from './extraction.ts';
 import type { JobHandlers } from './job-types.ts';
 import type { LlmClient } from './llm.ts';
@@ -27,4 +28,6 @@ export const jobHandlers: JobHandlers<WorkerServices> = {
   'transcript.reconcile': reconcileTranscript,
   'context.refresh': refreshContext(extractCandidates),
   'memory.commit': commitMemory(extractCandidates),
+  'action.execute': executeAction,
+  'research.run': runResearch,
 };

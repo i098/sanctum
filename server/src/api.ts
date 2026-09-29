@@ -6,8 +6,8 @@ import { HttpApiBuilder, HttpServerResponse, OpenApi } from '@effect/platform';
 import { CurrentAccess } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Layer } from 'effect';
+import { ActionsLive } from './actions.ts';
 import { AgentsLive } from './agents.ts';
-import { ActionsStandInLive } from './api-stand-ins.ts';
 import { AuthenticatedLive } from './auth.ts';
 import { ContextLive } from './context.ts';
 import { HealthLive } from './health.ts';
@@ -29,8 +29,8 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       MeetingsLive,
       ContextLive,
       IntegrationsLive,
+      ActionsLive,
       AgentsLive,
-      ActionsStandInLive,
     ]),
     Layer.provide(AuthenticatedLive),
   );

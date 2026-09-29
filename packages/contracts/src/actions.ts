@@ -55,3 +55,24 @@ export const ActionReceipt = Schema.Struct({
   updated_at: UtcTimestamp,
 });
 export type ActionReceipt = typeof ActionReceipt.Type;
+
+/**
+ * Grant input from an authorized human who owns `account_id`. Each restriction key lists the
+ * only values the same-named argument may take, e.g. `{ "to": ["a@example.com"] }`.
+ */
+export const CreateActionGrantInput = Schema.Struct({
+  grantee: PrincipalId,
+  action_key: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255)),
+  account_id: IntegrationAccountId,
+  meeting_id: Schema.NullOr(MeetingId),
+  restrictions: Schema.Record({ key: Schema.String, value: Schema.Array(Schema.Unknown) }),
+  expires_at: Schema.NullOr(UtcTimestamp),
+});
+export type CreateActionGrantInput = typeof CreateActionGrantInput.Type;
+
+/** Human resolution of an `unknown` action after checking the provider; never inferred automatically. */
+export const ResolveActionInput = Schema.Struct({
+  outcome: Schema.Literal('succeeded', 'failed'),
+  provider_receipt: Schema.NullOr(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+});
+export type ResolveActionInput = typeof ResolveActionInput.Type;
