@@ -4,7 +4,7 @@
  * slice's listener API.
  */
 import { createHash } from 'node:crypto';
-import type { Page } from '@playwright/test';
+import { test, type Page } from '@playwright/test';
 import type * as Buffer from '../src/lib/capture/buffer.ts';
 import type * as Controller from '../src/lib/capture/controller.ts';
 import type { CaptureSnapshot, CaptureView } from '../src/lib/capture/view.ts';
@@ -19,6 +19,8 @@ declare global {
 }
 
 export const LISTENER = '7d3b1f0e-2a4c-4e8b-9f1d-5c6a7b8c9d01';
+/** The session opener's script-readable CSRF cookie; the server rejects cookie mutations without it as `x-csrf-token`. */
+const CSRF = 'csrf-e2e-token';
 
 interface FakeServer {
   uploads: Array<{ manifest: Manifest; body: globalThis.Buffer }>;
@@ -29,9 +31,13 @@ interface FakeServer {
 
 export async function fakeServer(page: Page, failUploads = false): Promise<FakeServer> {
   const server: FakeServer = { uploads: [], starts: [], frames: 0, failUploads };
+  await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route(/\/api\/v1\/listeners(\/|$)/, (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && request.headers()['x-csrf-token'] !== CSRF) {
+      return route.fulfill({ status: 403, json: { _tag: 'Forbidden', code: 'forbidden', retryable: false, message: 'CSRF token is missing or invalid' } });
+    }
     if (path === '/api/v1/listeners') {
       const listener = { id: LISTENER, workspace_id: LISTENER, name: 'Browser listener', mode: 'laptop', state: 'stopped', lease_generation: 1 };
       return route.fulfill({ status: 201, json: { ...listener, lease_expires_at: null, current_epoch_id: null, last_heartbeat_at: null } });
