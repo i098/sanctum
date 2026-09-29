@@ -5,6 +5,7 @@
 import { HttpApiBuilder } from '@effect/platform';
 import { SanctumApi } from '@sanctum/contracts';
 import { Layer } from 'effect';
+import { AgentsLive } from './agents.ts';
 import { AuthenticatedLive, SessionLive } from './auth.ts';
 import { HealthLive } from './health.ts';
 import type { Migration } from './migrate.ts';
@@ -15,6 +16,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       HealthLive(migrations),
       SessionLive,
       // Slice handler layers: one line each.
+      AgentsLive,
     ]),
     Layer.provide(AuthenticatedLive),
   );

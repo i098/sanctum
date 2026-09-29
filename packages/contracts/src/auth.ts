@@ -1,7 +1,7 @@
 /** Authenticated principal and the access scope every domain function receives. */
-import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from '@effect/platform';
+import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema } from '@effect/platform';
 import { Context, Schema } from 'effect';
-import { MeetingId, PrincipalId, WorkspaceId } from './common.ts';
+import { AgentCredentialId, Cursor, MeetingId, PrincipalId, UtcTimestamp, WorkspaceId } from './common.ts';
 import { Forbidden, Unauthenticated } from './errors.ts';
 
 export const PrincipalKind = Schema.Literal('human', 'agent', 'device');
@@ -64,3 +64,48 @@ export class SessionApi extends HttpApiGroup.make('session')
   .add(HttpApiEndpoint.get('getSession', '/session').addSuccess(AccessScope))
   .middleware(Authenticated)
   .prefix('/api/v1') {}
+
+// Agent principals and their scoped, revocable bearer credentials (kernel slice, plan sections 11 and 12).
+// Kept beside SessionApi: a separate module importing this one would deepen every import chain.
+/** Scopes must be a subset of the creator's; allowlisted meetings must be readable by the creator. */
+export const CreateAgent = Schema.Struct({
+  display_name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200)),
+  scopes: Schema.Array(AccessScopeName),
+  meetings: MeetingAccess,
+  expires_at: Schema.NullOr(UtcTimestamp),
+});
+export type CreateAgent = typeof CreateAgent.Type;
+
+export const AgentCredential = Schema.Struct({
+  id: AgentCredentialId,
+  scopes: Schema.Array(AccessScopeName),
+  meetings: MeetingAccess,
+  expires_at: Schema.NullOr(UtcTimestamp),
+  revoked_at: Schema.NullOr(UtcTimestamp),
+  last_used_at: Schema.NullOr(UtcTimestamp),
+  created_at: UtcTimestamp,
+});
+
+export const AgentWithCredential = Schema.Struct({ agent: Principal, credential: AgentCredential });
+export type AgentWithCredential = typeof AgentWithCredential.Type;
+
+/** `token` is the only plain copy of the bearer credential; the server stores its hash. */
+export const CreatedAgent = Schema.Struct({ ...AgentWithCredential.fields, token: Schema.String });
+
+export const AgentPage = Schema.Struct({ items: Schema.Array(AgentWithCredential), next_cursor: Schema.NullOr(Cursor) });
+
+export const AgentPageParams = Schema.Struct({
+  cursor: Schema.optional(Cursor),
+  limit: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, 200))),
+});
+
+const agentId = HttpApiSchema.param('agent_id', PrincipalId);
+const keyId = HttpApiSchema.param('key_id', AgentCredentialId);
+
+/** Admins see every credential of the workspace; other callers only the ones they own. */
+export class AgentsApi extends HttpApiGroup.make('agents')
+  .add(HttpApiEndpoint.post('createAgent', '/agents').setPayload(CreateAgent).addSuccess(CreatedAgent, { status: 201 }))
+  .add(HttpApiEndpoint.get('listAgents', '/agents').setUrlParams(AgentPageParams).addSuccess(AgentPage))
+  .add(HttpApiEndpoint.del('revokeCredential')`/agents/${agentId}/credentials/${keyId}`)
+  .middleware(Authenticated)
+  .prefix('/api/v1') { }

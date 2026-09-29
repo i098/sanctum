@@ -20,7 +20,7 @@ const FixtureAuthenticator = Layer.succeed(Authenticator, {
 
 /** Real Node HTTP server on a free port against a disposable database; yields its base URL. */
 const serve = (options: { readonly migrated: boolean; readonly auth?: Layer.Layer<Authenticator> }) =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
     if (options.migrated) yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
     const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, options.auth);
@@ -38,7 +38,7 @@ const get = (url: string, headers: Record<string, string> = {}) =>
 
 describe('API entrypoint', () => {
   it.scoped('serves health, readiness and the authenticated session over HTTP', () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const base = yield* serve({ migrated: true, auth: FixtureAuthenticator });
       expect(yield* get(`${base}/healthz`)).toEqual({ status: 200, body: { status: 'ok' } });
       expect(yield* get(`${base}/readyz`)).toEqual({ status: 200, body: { status: 'ready' } });
@@ -48,18 +48,20 @@ describe('API entrypoint', () => {
     }),
   );
 
-  it.scoped('is not ready while migrations are pending and refuses sessions without configured auth', () =>
-    Effect.gen(function* () {
+  it.scoped('is not ready while migrations are pending and never grants a session without the credential tables', () =>
+    Effect.gen(function*() {
       const base = yield* serve({ migrated: false });
       const ready = yield* get(`${base}/readyz`);
       expect(ready.status).toBe(503);
       expect(ready.body).toMatchObject({ code: 'unavailable', retryable: true });
-      expect((yield* get(`${base}/api/v1/session`, { authorization: 'Bearer fixture' })).status).toBe(401);
+      // The kernel authenticator cannot read its tables: a server error, never an unchecked grant.
+      const session = yield* Effect.promise(() => fetch(`${base}/api/v1/session`, { headers: { authorization: 'Bearer fixture' } }));
+      expect(session.status).toBe(500);
     }),
   );
 
   it.effect('refuses production activation while open decisions are unselected', () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       yield* requireActivation({ environment: 'development', selectedDecisions: [] });
       const blocked = yield* Effect.flip(requireActivation({ environment: 'production', selectedDecisions: ['identity_issuer'] }));
       expect(blocked.message).toBe('Production activation blocked; unselected: mcp_authorization_server, meeting_retention, outside_meeting_speech');

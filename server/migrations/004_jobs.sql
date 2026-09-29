@@ -19,6 +19,8 @@ CREATE TABLE jobs (
   lease_until DATETIME(6) NULL,
   attempts INT UNSIGNED NOT NULL DEFAULT 0,
   max_attempts INT UNSIGNED NOT NULL,
+  -- Coalesced work arrived while running: completion returns the row to pending instead of finishing.
+  rearmed TINYINT(1) NOT NULL DEFAULT 0,
   result JSON NULL,
   last_error JSON NULL,
   created_at DATETIME(6) NOT NULL,
