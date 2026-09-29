@@ -28,6 +28,7 @@ Reference links are historical evidence and product context, not implementation 
 Run `npm run docs:render` after editing handoff sources, then `npm run check` and `npm run docs:build`.
 The checked template is `scripts/handoff-template.html`; generated HTML/brief/snippets must not be hand-edited.
 Follow the ordered checklist and finish its local checks before reporting a slice complete.
+Slice ownership, seams and hot files: docs/ARCHITECTURE.md; application checks: `npm run check:app`.
 Use current official provider documentation and pin compatible dependencies.
 Implement concrete modules and reuse platform features; avoid speculative frameworks.
 Use synthetic fixtures and stub external writes in tests.
@@ -48,3 +49,10 @@ Unresolved sign-in and recording policies remain explicit; finish independent co
 Repository creation is not permission to provision paid services, send messages, create real events, run production migrations, publish packages, deploy, or activate live recording.
 Ask at those boundaries when the user has not already authorized the specific action.
 Report implementation, local tests, model evaluation, deployment, and live verification separately.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
