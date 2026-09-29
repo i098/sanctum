@@ -7,7 +7,10 @@ interface DialogProps {
   children: ReactNode;
 }
 
-/** Keeps Tab and Shift+Tab cycling inside the dialog instead of leaving for the browser chrome. */
+/**
+ * Keeps Tab and Shift+Tab cycling inside the dialog. `showModal()` alone makes the page inert but
+ * still lets Tab leave for the browser chrome (the listen-overlays focus test fails without this).
+ */
 function wrapFocus(event: KeyboardEvent<HTMLDialogElement>): void {
   if (event.key !== 'Tab') return;
   const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]')]
