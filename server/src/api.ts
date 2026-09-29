@@ -8,6 +8,7 @@ import { Layer } from 'effect';
 import { AgentsLive } from './agents.ts';
 import { AuthenticatedLive, SessionLive } from './auth.ts';
 import { HealthLive } from './health.ts';
+import { MeetingsLive } from './meetings-api.ts';
 import type { Migration } from './migrate.ts';
 
 export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
@@ -16,6 +17,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       HealthLive(migrations),
       SessionLive,
       // Slice handler layers: one line each.
+      MeetingsLive,
       AgentsLive,
     ]),
     Layer.provide(AuthenticatedLive),

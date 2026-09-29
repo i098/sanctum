@@ -1089,9 +1089,9 @@ Depends on: T09, T10.
 
 ## T12. Implement automatic meeting lifecycle
 
-- [ ] Create provisional/active/closing/closed/interrupted meetings independently of listener lifetime.
-- [ ] Evaluate boundaries from evidence and context; keep uncertain boundaries revisable.
-- [ ] Close capture ranges immediately and schedule final work separately from action draining.
+- [x] Create provisional/active/closing/closed/interrupted meetings independently of listener lifetime.
+- [x] Evaluate boundaries from evidence and context; keep uncertain boundaries revisable.
+- [x] Close capture ranges immediately and schedule final work separately from action draining.
 
 Files: `server/src/meetings.ts`, `server/src/boundaries.ts`, `server/migrations/005_meeting_ranges.sql`, `server/src/media/session.ts`, `server/tests/meeting-boundaries.test.ts`.
 Verify: pause versus true boundary, explicit close, back-to-back conversations, new speech during old meeting processing.
@@ -1099,9 +1099,9 @@ Depends on: T11.
 
 ## T13. Add boundary correction and safe recording playback
 
-- [ ] Implement revision-checked split/merge transactions and recompute derived source ownership.
-- [ ] Assemble or stream an authorized per-meeting audio cut; never grant a URL to another meeting's audio.
-- [ ] Preserve prior action IDs/receipts when meeting boundaries move.
+- [x] Implement revision-checked split/merge transactions and recompute derived source ownership.
+- [x] Assemble or stream an authorized per-meeting audio cut; never grant a URL to another meeting's audio.
+- [x] Preserve prior action IDs/receipts when meeting boundaries move.
 
 Files: `server/src/meetings.ts`, `server/src/recordings.ts`, `server/tests/boundary-corrections.test.ts`, `server/tests/playback-access.test.ts`.
 Verify: sample coverage, incompatible access scopes, stale revisions, old/new playback cuts, no repeated side effects.
@@ -1109,9 +1109,9 @@ Depends on: T12.
 
 ## T14. Make speaker attribution structured and correctable
 
-- [ ] Persist provider-local speaker tracks, timestamps, and attribution revisions.
-- [ ] Implement optional pyannote live and batch adapters behind explicit configuration.
-- [ ] Support unknown labels, explicit person mapping/enrollment, and provider stream rotation.
+- [x] Persist provider-local speaker tracks, timestamps, and attribution revisions.
+- [x] Implement optional pyannote live and batch adapters behind explicit configuration.
+- [x] Support unknown labels, explicit person mapping/enrollment, and provider stream rotation.
 
 Files: `server/src/providers/pyannote.ts`, `server/src/speakers.ts`, `server/migrations/006_speakers.sql`, `server/tests/speakers.test.ts`, `scripts/evaluate-speakers.ts`.
 Verify: overlap, reconnect/rotation, similar voices, unknown participants, map correction, no voice-based authorization.

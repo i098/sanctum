@@ -202,7 +202,19 @@ describe('HTTP API contract', () => {
     ]);
     expect(spec.paths['/api/v1/listeners/{listener_id}/chunks/{chunk_id}']?.put?.operationId).toBe('listeners.putChunk');
     expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths)).toEqual([
-      '/healthz', '/readyz', '/api/v1/session', '/api/v1/agents', '/api/v1/agents/{agent_id}/credentials/{key_id}',
+      '/healthz',
+      '/readyz',
+      '/api/v1/session',
+      '/api/v1/meetings',
+      '/api/v1/meetings/merge',
+      '/api/v1/meetings/{meeting_id}',
+      '/api/v1/meetings/{meeting_id}/close',
+      '/api/v1/meetings/{meeting_id}/split',
+      '/api/v1/meetings/{meeting_id}/transcript',
+      '/api/v1/meetings/{meeting_id}/recording-access',
+      '/api/v1/meetings/{meeting_id}/speakers/map',
+      '/api/v1/agents',
+      '/api/v1/agents/{agent_id}/credentials/{key_id}',
     ]);
   });
 });
