@@ -30,7 +30,8 @@ const ECHO_OVERLAP = 0.6;
 export const makeSpeechGate = (now: () => number = Date.now) => {
   const { windowMs, echoTailMs } = engineeringDefaults.speech;
   const open = new Map<ListenerId, SpeechWindow>();
-  const played = new Map<ListenerId, Array<{ text: string; words: Set<string>; until: number }>>();
+  /** Words of the listener's current or last reply, heard as echo until `until`. */
+  const played = new Map<ListenerId, { words: Set<string>; until: number }>();
   let generation = 0;
   return {
     now,
@@ -51,19 +52,17 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
       return { _tag: 'speech_cancel', generation: window.generation, reason };
     },
     active: (listener_id: ListenerId) => open.get(listener_id),
-    /** Records played text until `until` (+ echo tail), extending the entry while one sentence keeps playing. */
     notePlayed: (listener_id: ListenerId, text: string, until: number) => {
-      const entries = played.get(listener_id) ?? [];
-      const last = entries.at(-1);
-      if (last?.text === text) last.until = until + echoTailMs;
-      else entries.push({ text, words: new Set(words(text)), until: until + echoTailMs });
-      played.set(listener_id, entries);
+      const recent = played.get(listener_id);
+      const known = recent && recent.until > now() ? recent.words : new Set<string>();
+      for (const word of words(text)) known.add(word);
+      played.set(listener_id, { words: known, until: until + echoTailMs });
     },
     isEcho: (listener_id: ListenerId, text: string) => {
       const heard = words(text);
-      const recent = (played.get(listener_id) ?? []).filter(entry => entry.until > now());
-      played.set(listener_id, recent);
-      return heard.length > 0 && recent.some(entry => heard.filter(word => entry.words.has(word)).length / heard.length >= ECHO_OVERLAP);
+      const recent = played.get(listener_id);
+      if (!recent || recent.until <= now() || heard.length === 0) return false;
+      return heard.filter(word => recent.words.has(word)).length / heard.length >= ECHO_OVERLAP;
     },
   };
 };

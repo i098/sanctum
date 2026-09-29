@@ -5,11 +5,11 @@
  */
 import { SqlClient } from '@effect/sql';
 import { ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect, Option, Schema } from 'effect';
+import { Effect, type Either, Option, Schema } from 'effect';
 import { type ActionRow, loadAction, requestAction } from './actions.ts';
 import { requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
-import { executeIntegrationAction } from './integrations.ts';
+import { executeIntegrationAction, type IntegrationFailure } from './integrations.ts';
 import { planActions } from './planner.ts';
 
 /** The claimed-job fields these handlers read; stated here so this module does not import the registry. */
@@ -82,7 +82,7 @@ const startAttempt = (job: Job, action_id: ActionId) =>
  * Records the provider's answer for this attempt. A late answer (after another attempt marked
  * the action `unknown`) still lands and reconciles it; the attempt fence stops stale overwrites.
  */
-const recordOutcome = (row: ActionRow, attempt: number, outcome: Effect.Effect.Success<ReturnType<typeof submit>>) =>
+const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{ readonly receipt: Record<string, unknown> }, IntegrationFailure>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fence = sql`workspace_id = ${row.workspace_id} AND id = ${row.id} AND attempts = ${attempt}`;
@@ -99,19 +99,6 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Effect.Effect.S
           updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state IN ('running', 'unknown')`;
   });
 
-const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof resolveAccess>>) =>
-  Effect.either(
-    executeIntegrationAction({
-      access,
-      account_id: row.account_id!,
-      action_key: row.action_key,
-      version: row.version,
-      configuration_ref: row.configuration_ref ?? '',
-      arguments: row.args,
-      provider_idempotency_key: row.provider_idempotency_key!,
-    }),
-  );
-
 const ActionPayload = Schema.Struct({ action_id: ActionId });
 
 /** `action.execute`: payload `{ action_id }`, work key = action ID. */
@@ -121,7 +108,19 @@ export const executeAction = (job: Job) =>
     const start = yield* startAttempt(job, action_id);
     if (start.status === 'paused') return start;
     if (start.status === 'done') return { status: 'succeeded', result: { action_id, state: start.state } } as const;
-    yield* recordOutcome(start.row, start.attempt, yield* submit(start.row, start.access));
+    const { row } = start;
+    const outcome = yield* Effect.either(
+      executeIntegrationAction({
+        access: start.access,
+        account_id: row.account_id!,
+        action_key: row.action_key,
+        version: row.version,
+        configuration_ref: row.configuration_ref ?? '',
+        arguments: row.args,
+        provider_idempotency_key: row.provider_idempotency_key!,
+      }),
+    );
+    yield* recordOutcome(row, start.attempt, outcome);
     const final = yield* loadAction(job.workspace_id, action_id);
     return { status: 'succeeded', result: { action_id, state: Option.getOrThrow(final).state } } as const;
   }).pipe(Effect.catchTags({ SqlError: storageFailure, ParseError: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })) }));

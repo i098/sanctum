@@ -1,7 +1,7 @@
 // stand-in: replaced by the kernel slice at integration
 /** Job ledger core: enqueue, SKIP LOCKED claim, lease, fenced completion, bounded retry, worker loop. */
 import { randomUUID } from 'node:crypto';
-import { SqlClient, type SqlError } from '@effect/sql';
+import { SqlClient, type SqlError, type Statement } from '@effect/sql';
 import { JobId, type JobKind, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 
@@ -78,26 +78,21 @@ type Handler = (job: Claimed) => Effect.Effect<
 const run = (job: Claimed, handler: Handler | undefined) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const fence = sql`id = ${job.id} AND lease_generation = ${job.lease_generation}`;
-    if (!handler) {
-      return yield* sql`UPDATE jobs SET status = 'failed', last_error = ${JSON.stringify({ message: `No handler for ${job.kind}` })}, updated_at = UTC_TIMESTAMP(6) WHERE ${fence}`;
-    }
+    const settle = (set: Statement.Fragment) =>
+      sql`UPDATE jobs SET ${set}, lease_until = NULL, updated_at = UTC_TIMESTAMP(6) WHERE id = ${job.id} AND lease_generation = ${job.lease_generation}`;
+    if (!handler) return yield* settle(sql`status = 'failed', last_error = ${JSON.stringify({ message: `No handler for ${job.kind}` })}`);
     const outcome = yield* Effect.either(handler(job));
     if (outcome._tag === 'Left') {
       const retry = outcome.left.retryable && job.attempt < job.max_attempts;
-      return yield* sql`
-        UPDATE jobs SET status = ${retry ? 'pending' : 'failed'}, available_at = UTC_TIMESTAMP(6) + INTERVAL ${job.attempt} SECOND,
-          last_error = ${JSON.stringify({ message: outcome.left.message })}, lease_until = NULL, updated_at = UTC_TIMESTAMP(6) WHERE ${fence}`;
+      return yield* settle(sql`status = ${retry ? 'pending' : 'failed'}, available_at = UTC_TIMESTAMP(6) + INTERVAL ${job.attempt} SECOND,
+        last_error = ${JSON.stringify({ message: outcome.left.message })}`);
     }
     const done = outcome.right;
-    if (done.status === 'paused') {
-      // A budget pause does not consume an attempt.
-      return yield* sql`
-        UPDATE jobs SET status = 'paused', attempts = attempts - 1, available_at = UTC_TIMESTAMP(6) + INTERVAL ${done.resume_after_ms * 1000} MICROSECOND,
-          last_error = ${JSON.stringify({ message: done.reason })}, lease_until = NULL, updated_at = UTC_TIMESTAMP(6) WHERE ${fence}`;
-    }
-    yield* sql`
-      UPDATE jobs SET status = 'succeeded', result = ${JSON.stringify(done.result ?? null)}, lease_until = NULL, updated_at = UTC_TIMESTAMP(6) WHERE ${fence}`;
+    // A budget pause does not consume an attempt.
+    yield* done.status === 'paused'
+      ? settle(sql`status = 'paused', attempts = attempts - 1, available_at = UTC_TIMESTAMP(6) + INTERVAL ${done.resume_after_ms * 1000} MICROSECOND,
+          last_error = ${JSON.stringify({ message: done.reason })}`)
+      : settle(sql`status = 'succeeded', result = ${JSON.stringify(done.result ?? null)}`);
   }).pipe(Effect.asVoid);
 
 export const runWorker = (handlers: Partial<Record<JobKind, Handler>>): Effect.Effect<never, SqlError.SqlError, SqlClient.SqlClient> =>
