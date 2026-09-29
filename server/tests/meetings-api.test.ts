@@ -73,8 +73,11 @@ describe('MeetingsApi over HTTP', () => {
       expect(oldCursor).toMatchObject({ status: 409, body: { current_revision: 2 } });
       const merged = yield* call(base, 'owner', 'POST', '/meetings/merge', { target: { meeting_id: meeting, expected_revision: 2 }, source: { meeting_id: split.body.later.id, expected_revision: 1 } });
       expect(merged).toMatchObject({ status: 200, body: { id: meeting, boundary_revision: 3 } });
-      // No recording store is configured in this process, so playback reports it instead of inventing a URL.
-      expect(yield* call(base, 'owner', 'POST', `/meetings/${meeting}/recording-access`)).toMatchObject({ status: 503, body: { code: 'unavailable', retryable: false } });
+      // No worker runs in this process, so the revised cut is not assembled yet: playback says so instead of inventing a URL.
+      expect(yield* call(base, 'owner', 'POST', `/meetings/${meeting}/recording-access`)).toMatchObject({
+        status: 503,
+        body: { code: 'unavailable', retryable: true, message: 'The recording for boundary revision 3 is not assembled yet' },
+      });
     }),
   );
 });
