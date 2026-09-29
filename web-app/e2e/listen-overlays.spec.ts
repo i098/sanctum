@@ -34,6 +34,8 @@ test('Close button closes an overlay and returns focus', async ({ page }) => {
 });
 
 test('Review tabs switch by arrow keys and show truthful unavailable states', async ({ page }) => {
+  await page.route('**/api/v1/meetings?*', route =>
+    route.fulfill({ status: 503, json: { _tag: 'Unavailable', code: 'unavailable', message: 'Meeting data unavailable', retryable: false } }));
   await openListening(page);
   await page.getByRole('button', { name: 'Review' }).click();
   const tabs = page.getByRole('tab');
@@ -42,7 +44,7 @@ test('Review tabs switch by arrow keys and show truthful unavailable states', as
   await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('tab', { name: 'Activity' })).toBeFocused();
   await expect(page.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('tabpanel', { name: 'Activity' })).toHaveText('Activity unavailable: this listener is not connected to meeting data yet.');
+  await expect(page.getByRole('tabpanel', { name: 'Activity' })).toHaveText('Activity unavailable: Meeting data unavailable');
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('tabpanel', { name: 'Notes' })).toBeVisible();
 });

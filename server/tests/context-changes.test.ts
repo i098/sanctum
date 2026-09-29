@@ -81,6 +81,8 @@ layer(migratedDatabase, { timeout: 120_000 })('context change feed', it => {
       expect(rest.events.map(event => [event.seq, event.change])).toEqual([[3, 'item_revised']]);
       expect((yield* getContextChanges(agent!, { cursor: rest.next_cursor })).events).toEqual([]);
       expect((yield* getContextChanges(owner!, {})).events.map(event => event.seq)).toEqual([1, 2, 3]);
+      expect((yield* getContextChanges(owner!, { meeting_id: restricted.meeting_id })).events.map(event => event.seq)).toEqual([2]);
+      expect((yield* getContextChanges(agent!, { meeting_id: restricted.meeting_id })).events).toEqual([]);
 
       const snapshot = yield* getContextSnapshot(agent!, open.meeting_id);
       yield* add(agent!, open, segment, 'c', snapshot.revision);

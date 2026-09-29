@@ -212,6 +212,8 @@ class RecordingAccess(TypedDict):
     url: str
     expires_at: str
     gaps: list[SourceRange]
+    pieces: list[SourceRange]
+    sample_rate: Literal[8000, 16000, 22050, 24000, 32000, 44100, 48000, 96000]
 
 
 class GetNotesInput(TypedDict):
@@ -355,6 +357,7 @@ class ReviseContextItemInput(TypedDict):
 
 class GetContextChangesInput(TypedDict):
     cursor: NotRequired[str]
+    meeting_id: NotRequired[str]
     limit: NotRequired[int]
 
 
@@ -496,6 +499,17 @@ class ActionReceipt(TypedDict):
 class ActionReceiptGrant(TypedDict):
     id: str
     version: int
+
+
+class ListMeetingActionsInput(TypedDict):
+    meeting_id: str
+    cursor: NotRequired[str]
+    limit: NotRequired[int]
+
+
+class ActionPage(TypedDict):
+    actions: list[ActionReceipt]
+    next_cursor: str | None
 
 
 class ResolveActionInput(TypedDict):
@@ -650,7 +664,7 @@ OPERATIONS: dict[str, Operation] = {
     # ReviseContextItemInput -> ContextItem
     "context.reviseContextItem": Operation("PATCH", "/api/v1/context/items/{item_id}", ("item_id", ), (), True),
     # GetContextChangesInput -> ContextChanges
-    "context.getContextChanges": Operation("GET", "/api/v1/context/changes", (), ("cursor", "limit", ), False),
+    "context.getContextChanges": Operation("GET", "/api/v1/context/changes", (), ("cursor", "meeting_id", "limit", ), False),
     # GetSourceInput -> GetSourceOutput | GetSourceOutput2
     "context.getSource": Operation("GET", "/api/v1/sources/{source_id}", ("source_id", ), (), False),
     # SearchIntegrationActionsInput -> SearchIntegrationActionsOutput
@@ -661,6 +675,8 @@ OPERATIONS: dict[str, Operation] = {
     "actions.requestAction": Operation("POST", "/api/v1/actions", (), (), True),
     # GetActionInput -> ActionReceipt
     "actions.getAction": Operation("GET", "/api/v1/actions/{action_id}", ("action_id", ), (), False),
+    # ListMeetingActionsInput -> ActionPage
+    "actions.listMeetingActions": Operation("GET", "/api/v1/meetings/{meeting_id}/actions", ("meeting_id", ), ("cursor", "limit", ), False),
     # ResolveActionInput -> ActionReceipt
     "actions.resolveAction": Operation("POST", "/api/v1/actions/{action_id}/resolve", ("action_id", ), (), True),
     # CreateActionGrantInput -> ActionGrant

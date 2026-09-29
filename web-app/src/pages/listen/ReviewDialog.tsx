@@ -1,57 +1,26 @@
-import type { MeetingNotes, SanctumClient } from '@sanctum/sdk';
+import type { SanctumClient } from '@sanctum/sdk';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { Dialog } from './Dialog.tsx';
-import { type Frame, settle } from './review-data.ts';
+import { loadReview, type ReviewState } from './review-data.ts';
+import { ReviewPanel, type Seek, show, TABS } from './ReviewPanels.tsx';
 
-const TABS = ['Notes', 'Transcript', 'Recording', 'Memory', 'Context', 'Activity'] as const;
-
-type NotesState = { readonly status: 'loading' } | { readonly status: 'empty' } | Frame<MeetingNotes>;
-
-/** Canonical notes of the most recent meeting this caller may read, through the same v1 SDK agents use. */
-async function latestNotes(client: SanctumClient, signal: AbortSignal): Promise<NotesState> {
-  const page = await settle(client.meetings.listMeetings({ limit: 1 }, { signal }));
-  if (page.status === 'error') return page;
-  const meeting = page.data.meetings[0];
-  if (meeting === undefined) return { status: 'empty' };
-  return settle(client.meetings.getNotes({ meeting_id: meeting.id }, { signal }));
-}
-
-const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
-
-function NotesPanel({ state }: { state: NotesState }) {
-  if (state.status === 'loading') return <p>Loading notes…</p>;
-  if (state.status === 'empty') return <p>No meetings yet.</p>;
-  if (state.status === 'error') return <p>Notes unavailable: {state.message}</p>;
-  const notes = state.data;
-  return (
-    <article className="listen-notes">
-      <h3>{notes.title}</h3>
-      <p>{notes.summary}</p>
-      {notes.sections.map(section => (
-        <section key={section.heading}>
-          <h4>{section.heading}</h4>
-          <ul>
-            {section.points.map(point => (
-              <li key={point.text}>
-                {point.text} <span className="listen-source">{point.sources.map(source => clock(source.start_ms)).join(', ')}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </article>
-  );
-}
-
-/** Review overlay: six tabs; Notes shows the canonical summary, the rest stay truthful about missing data. */
+/**
+ * Review overlay over the most recent readable meeting: six tabs, each truthful about its own
+ * source. A note or item's source time opens its transcript segment; the segment's Play opens
+ * authorized playback at that point. Opening or closing it never touches capture.
+ */
 export function ReviewDialog({ client, open, onClose }: { client: SanctumClient; open: boolean; onClose: () => void }) {
   const [selected, setSelected] = useState(0);
-  const [notes, setNotes] = useState<NotesState>({ status: 'loading' });
+  const [review, setReview] = useState<ReviewState>({ status: 'loading' });
+  const [focus, setFocus] = useState<string | null>(null);
+  const [seek, setSeek] = useState<Seek | null>(null);
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
-    setNotes({ status: 'loading' });
-    void latestNotes(client, controller.signal).then(state => controller.signal.aborted || setNotes(state));
+    setReview({ status: 'loading' });
+    setFocus(null);
+    setSeek(null);
+    void loadReview(client, controller.signal, state => controller.signal.aborted || setReview(state));
     return () => controller.abort();
   }, [client, open]);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -61,12 +30,30 @@ export function ReviewDialog({ client, open, onClose }: { client: SanctumClient;
     setSelected(next);
     event.currentTarget.querySelectorAll('button')[next]?.focus();
   };
+  const navigation = {
+    focus,
+    seek,
+    onSource: (segment_id: string) => {
+      setFocus(segment_id);
+      setSelected(TABS.indexOf('Transcript'));
+    },
+    onPlay: (seconds: number) => {
+      setSeek({ seconds });
+      setSelected(TABS.indexOf('Recording'));
+    },
+  };
+  const tab = TABS[selected]!;
   return (
     <Dialog title="Review" open={open} onClose={onClose}>
+      {review.status === 'ok' && (
+        <p className="listen-source">
+          {review.data.meeting.title ?? 'Untitled meeting'} · {review.data.meeting.state} · started {new Date(review.data.meeting.started_at).toLocaleString([], { timeZone: review.data.meeting.timezone })}
+        </p>
+      )}
       <div role="tablist" aria-label="Review sections" className="listen-tabs" onKeyDown={onKeyDown}>
-        {TABS.map((tab, index) => (
+        {TABS.map((name, index) => (
           <button
-            key={tab}
+            key={name}
             type="button"
             role="tab"
             id={`review-tab-${index}`}
@@ -75,12 +62,12 @@ export function ReviewDialog({ client, open, onClose }: { client: SanctumClient;
             tabIndex={index === selected ? 0 : -1}
             onClick={() => setSelected(index)}
           >
-            {tab}
+            {name}
           </button>
         ))}
       </div>
       <div role="tabpanel" id="review-panel" aria-labelledby={`review-tab-${selected}`} className="listen-panel">
-        {selected === 0 ? <NotesPanel state={notes} /> : <p>{TABS[selected]} unavailable: this listener is not connected to meeting data yet.</p>}
+        {review.status === 'empty' ? <p>No meetings yet.</p> : show(tab, review, data => <ReviewPanel tab={tab} review={data} navigation={navigation} />)}
       </div>
     </Dialog>
   );

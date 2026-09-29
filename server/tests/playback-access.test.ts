@@ -6,27 +6,10 @@ import { Effect } from 'effect';
 import { splitMeeting } from '../src/meeting-corrections.ts';
 import { closeMeeting, finalizeMeeting } from '../src/meetings.ts';
 import { assembleRecording, issueRecordingAccess } from '../src/playback.ts';
-import { claimed, hear, jobsOf, meetingsOf, RATE, type Listener, seedEpoch, seedListener } from './support/capture.ts';
+import { claimed, commitChunk, hear, jobsOf, meetingsOf, RATE, seedEpoch, seedListener } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { memoryObjectStore } from './support/object-store.ts';
-
-const CHUNK_SECONDS = 10;
-
-/** 10-second WAV chunk whose every sample holds its chunk sequence number, so any cut shows exactly which audio it contains. */
-const commitChunk = (listener: Listener, epoch: CaptureEpochId, sequence: number, store: ReturnType<typeof memoryObjectStore>) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const count = CHUNK_SECONDS * RATE;
-    const wav = new Uint8Array(44 + count * 2);
-    new Int16Array(wav.buffer, 44).fill(sequence + 1);
-    const sha256 = createHash('sha256').update(wav).digest('hex');
-    const key = `chunks/${epoch}/${sequence}.wav`;
-    store.objects.set(key, { body: wav, sha256, contentType: 'audio/wav' });
-    yield* sql`INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at, byte_length, sha256, object_key, upload_state, created_at, committed_at)
-      VALUES (${randomUUID()}, ${listener.workspace_id}, ${listener.listener_id}, ${epoch}, 0, ${sequence}, ${sequence * count}, ${count}, ${RATE}, UTC_TIMESTAMP(6), ${wav.byteLength},
-        ${Buffer.from(sha256, 'hex')}, ${key}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
-  });
 
 /** Distinct sample values (chunk sequence + 1) present in an assembled WAV, with their counts. */
 const contents = (wav: Uint8Array) => {
@@ -70,6 +53,9 @@ describe('meeting recording playback', () => {
         const access = yield* issueRecordingAccess(owner, meeting);
         expect(access).toMatchObject({ meeting_id: meeting, boundary_revision: 1 });
         expect(access.gaps.map(gap => [gap.sample_start / RATE, gap.sample_end / RATE])).toEqual([[30, 40]]);
+        // Saved audio in play order: the file's second 30 is source second 40.
+        expect(access.pieces.map(piece => [piece.sample_start / RATE, piece.sample_end / RATE])).toEqual([[0, 30], [40, 55]]);
+        expect(access.sample_rate).toBe(RATE);
         expect(Date.parse(access.expires_at) - Date.now()).toBeLessThanOrEqual(5 * 60_000);
         expect(store.verifySignedUrl(access.url)).toBe(`meetings/${listener.workspace_id}/${meeting}/r1.wav`);
         store.now = () => Date.now() + 5 * 60_000 + 1;

@@ -230,7 +230,7 @@ Depends on: T10, T19.
 ## T21. Deliver fullscreen listening and review overlays
 
 - [x] Recreate the approved waveform independently; connect it to real capture state and analyser levels.
-- [ ] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
+- [x] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
 - [x] Keep capture independent of overlay visibility; implement focus, keyboard, reduced-motion, and error behavior.
 
 Files: `web-app/src/pages/listen/engine.ts`, `web-app/src/pages/listen/waveform.ts`, `web-app/src/pages/listen/index.tsx`, `web-app/src/pages/listen/listen.css`, `web-app/src/pages/listen/ReviewDialog.tsx`.

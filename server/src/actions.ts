@@ -218,6 +218,26 @@ const visibleAction = (access: AccessScope, action_id: ActionId) =>
 export const getActionReceipt = (access: AccessScope, action_id: ActionId): Effect.Effect<ActionReceipt, NotFound, SqlClient.SqlClient> =>
   visibleAction(access, action_id).pipe(Effect.map(toReceipt), Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
 
+/** Receipts on one readable meeting that `visibleAction` would show, oldest first; the cursor is an offset into that append-only order. */
+export const listMeetingActions = (access: AccessScope, meeting_id: MeetingId, page: { readonly cursor?: string | undefined; readonly limit?: number | undefined }) =>
+  Effect.gen(function*() {
+    const sql = yield* SqlClient.SqlClient;
+    yield* authorizeMeeting(access, meeting_id, 'read');
+    const offset = Number(page.cursor ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0) return yield* new NotFound({ message: 'Unknown cursor' });
+    const limit = page.limit ?? 50;
+    const everyone = access.role === 'owner' || access.role === 'admin';
+    const rows = yield* SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: ActionRow,
+      execute: () =>
+        sql`SELECT ${sql.literal(ACTION_COLUMNS)} FROM actions WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id}
+            AND ${everyone ? sql`TRUE` : sql`requested_by = ${access.principal.id}`} ORDER BY created_at, id LIMIT ${limit + 1} OFFSET ${offset}`,
+    })(undefined);
+    const next_cursor = rows.length > limit ? String(offset + limit) : null;
+    return { actions: rows.slice(0, limit).map(toReceipt), next_cursor };
+  }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
+
 const requireHuman = (access: AccessScope, what: string) =>
   access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
 
@@ -285,6 +305,7 @@ export const ActionsLive = HttpApiBuilder.group(SanctumApi, 'actions', handlers 
   handlers
     .handle('requestAction', ({ payload }) => Effect.flatMap(CurrentAccess, access => requestAction(access, payload)))
     .handle('getAction', ({ path }) => Effect.flatMap(CurrentAccess, access => getActionReceipt(access, path.action_id)))
+    .handle('listMeetingActions', ({ path, urlParams }) => Effect.flatMap(CurrentAccess, access => listMeetingActions(access, path.meeting_id, urlParams)))
     .handle('resolveAction', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => resolveAction(access, path.action_id, payload)))
     .handle('createActionGrant', ({ payload }) => Effect.flatMap(CurrentAccess, access => createActionGrant(access, payload)))
     .handle('revokeActionGrant', ({ path }) => Effect.flatMap(CurrentAccess, access => revokeActionGrant(access, path.grant_id))),

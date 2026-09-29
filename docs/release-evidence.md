@@ -9,7 +9,7 @@ Nothing here claims real-world model quality, delivered external side effects, d
 | State | Status | Evidence |
 | --- | --- | --- |
 | Implemented | Yes, with the open items below | T01–T25 on this branch; slice ownership and seams in [ARCHITECTURE.md](ARCHITECTURE.md). |
-| Locally tested | Yes | `npm run check:app`: workspace typechecks, 436+ Vitest tests against MySQL 8.4, 29 Playwright specs in Chromium, benchmark manifest, benchmark correctness smoke, accelerated day replay. Python SDK: 7 unittest cases in an isolated venv. `npm run check` for the handoff. |
+| Locally tested | Yes | `npm run check:app`: workspace typechecks, 443 Vitest tests against MySQL 8.4, 36 Playwright specs in Chromium, benchmark manifest, benchmark correctness smoke, accelerated day replay. Python SDK: 7 unittest cases in an isolated venv. `npm run check` for the handoff. |
 | Model-evaluated | No (unrun) | No approved real meeting recordings or provider credentials were available; model and speaker behavior is tested only with fixture providers (`fixtureLlm`, fixture Deepgram/pyannote/Cartesia/Pipedream). |
 | Web-built | Yes | `npm run build -w web-app` (Vite) inside `check:app`; the API serves the build (`server/tests/capabilities.test.ts`, deep links and security headers). |
 | Migrated | Disposable databases only | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). No production or staging migration was run: not authorized. |
@@ -32,7 +32,7 @@ Nothing here claims real-world model quality, delivered external side effects, d
 | Isolation | Pass | `server/tests/authorization.test.ts`, `capabilities.test.ts` (notes, exports, matching across workspaces), `mcp.test.ts` (tenants), `context.test.ts` (search, caches after revocation), `playback-access.test.ts`, `pipedream.test.ts` (account selection). |
 | Agent writes | Pass | `server/tests/context.test.ts` (one of two same-revision writers wins with 409, idempotent retry), `api-contract.test.ts` and `mcp.test.ts` (shared revisions across SDK and MCP). |
 | Actions | Pass | `server/tests/actions.test.ts`, `worker-recovery.test.ts`: expired/revoked/mismatched grants block, ambiguous timeouts become `unknown` and are never replayed, duplicate requests deduplicate, over-budget results stored as artifacts. No real external write was sent. |
-| UI | Pass, one gap | `web-app/e2e/listen-visual.spec.ts` (1280×720 against the reference, narrow laptop), `listen-waveform.spec.ts` (real audio, reduced motion, hidden page, interruption), `listen-overlays.spec.ts` (focus and keyboard), `review-notes.spec.ts`. Gap: Review's Transcript, Recording, Memory, Context and Activity tabs still show "unavailable" and source-linked playback navigation is not built. |
+| UI | Pass | `web-app/e2e/listen-visual.spec.ts` (1280×720 against the reference, narrow laptop), `listen-waveform.spec.ts` (real audio, reduced motion, hidden page, interruption), `listen-overlays.spec.ts` (focus and keyboard), `review-notes.spec.ts`. Review: `review-tabs.spec.ts` (all six tabs over fixture responses; per-source loading, empty, forbidden and unavailable states; decision or note source to transcript segment to a seek in the signed recording) and `review-server.spec.ts` (the same path against the real API server and a seeded MySQL database, playing the assembled cut at the saved-sample offset past a gap); `web-app/tests/review-data.test.ts` (paging, per-source failures, sample-to-playback mapping). |
 | Performance | Unrun (parity) | TypeScript results for all five workloads with fixture hashes: [benchmarks/README.md](../benchmarks/README.md). No controlled benchmark host and no Rust reference exist, so parity, saturation, concurrent load and long-run memory bounds are unrun; nothing is claimed. |
 | Effect lifecycle | Pass, one gap | `jobs.test.ts` and `worker-recovery.test.ts` (lease loss interrupts handlers, killed workers recover, accepted work survives the API), `api-contract.test.ts` and `mcp.test.ts` (client abort cancels the server handler), `ingest.test.ts` (sockets). Pool exhaustion is not tested separately. |
 | SDK/MCP | Pass | `sdk/typescript/tests`, `sdk/python/tests` (both examples end to end against the fixture server), `server/tests/mcp.test.ts` (eleven tools, discovery, schema equality with REST, conflict, revoke, separate principals). |
@@ -51,7 +51,6 @@ Nothing here claims real-world model quality, delivered external side effects, d
 ## Open implementation items
 
 - Automatically detected meetings start `restricted` with no grants, so members cannot see them until access is granted; ownership assignment waits on the sign-in and outside-meeting decisions.
-- Review tabs other than Notes and source-linked playback navigation (T21 box 2) are not built.
 - Spoken replies from a room device need a reply authority (for example the listener's human owner).
 - `research.run` needs a meeting and plans only over actions already inspected.
 
@@ -60,6 +59,5 @@ Nothing here claims real-world model quality, delivered external side effects, d
 | Item | Why it stays unticked |
 | --- | --- |
 | T01: named reference hardware and CPU/RAM limits | The manifest and result format exist, but no controlled benchmark host is named; the fields stay `null` and `unverified`. |
-| T21: Review overlays with source navigation | Only the Notes tab is wired; the other tabs and source-linked navigation are not built. |
 | T26: approved model/audio comparison and 24-hour soak | Unrun; see Unrun gates. |
 | T26: matched Rust/TypeScript harness | TypeScript half and published results exist; the Rust half, saturation and long-run bounds are unrun. |

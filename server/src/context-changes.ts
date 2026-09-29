@@ -189,8 +189,8 @@ const EventRow = Schema.Struct({
  created_at: DbUtc,
 });
 
-/** Events after `cursor` (from the start when absent) on meetings the caller may read, oldest first. */
-export const getContextChanges = (access: AccessScope, input: { readonly cursor?: string | undefined; readonly limit?: number | undefined }) =>
+/** Events after `cursor` (from the start when absent) on meetings the caller may read, oldest first; `meeting_id` narrows to one meeting. */
+export const getContextChanges = (access: AccessScope, input: { readonly cursor?: string | undefined; readonly meeting_id?: string | undefined; readonly limit?: number | undefined }) =>
  Effect.gen(function*() {
   yield* requireScope(access, 'context:read');
   const after = yield* cursorSeq(access, input.cursor);
@@ -200,6 +200,7 @@ export const getContextChanges = (access: AccessScope, input: { readonly cursor?
    EventRow,
    sql`SELECT seq, meeting_id, item_id, item_revision, change_kind, actor_principal_id, permission_revision, created_at
         FROM context_events WHERE workspace_id = ${access.workspace_id} AND seq > ${after} AND ${visibleWhere(sql, scope, 'meeting_id')}
+          AND ${input.meeting_id === undefined ? sql`TRUE` : sql`meeting_id = ${input.meeting_id}`}
         ORDER BY seq LIMIT ${input.limit ?? 100}`,
   );
   const events = rows.map(row => ({
