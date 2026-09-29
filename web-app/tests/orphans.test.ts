@@ -45,16 +45,18 @@ describe('orphaned local recordings', () => {
       startedAt: '2026-09-29T09:00:00.000Z',
       sampleCount: 3 * RATE,
       chunkCount: 3,
-      gaps: [{ at: 2 * RATE, missing: RATE }],
+      parts: [{ sampleStart: 0, sampleEnd: 4 * RATE, gaps: [{ at: 2 * RATE, missing: RATE }] }],
     });
-    expect(second).toMatchObject({ epochId: LATER_EPOCH, startedAt: '2026-09-29T10:00:00.000Z', sampleCount: RATE, gaps: [] });
+    expect(second).toMatchObject({ epochId: LATER_EPOCH, startedAt: '2026-09-29T10:00:00.000Z', sampleCount: RATE, parts: [{ sampleStart: 0, sampleEnd: RATE, gaps: [] }] });
   });
 
   it('assembles one valid WAV in sample order without filling the gap', async () => {
     const chunks = await Promise.all([chunk(3, 3 * RATE, RATE), chunk(0, 0, RATE), chunk(1, RATE, RATE)]);
-    const parts = assembleWav(chunks.map(segment), RATE);
-    expect(parts.map(({ sampleStart, sampleEnd }) => [sampleStart, sampleEnd])).toEqual([[0, 4 * RATE]]);
-    const wav = await readWav(parts[0]!.blob);
+    const part = assembleWav(chunks.map(segment), RATE, 0)!;
+    expect([part.sampleStart, part.sampleEnd]).toEqual([0, 4 * RATE]);
+    expect(assembleWav(chunks.map(segment), RATE, 1)).toBeNull();
+    expect(assembleWav([], RATE, 0)).toBeNull();
+    const wav = await readWav(part.blob);
     expect(wav.tags).toEqual(['RIFF', 'WAVE', 'fmt ', 'data']);
     expect(wav.riffSize).toBe(wav.length - 8);
     expect(wav.format).toEqual([1, 1, RATE, RATE * 2, 2, 16]);
@@ -62,15 +64,18 @@ describe('orphaned local recordings', () => {
     expect(wav.samples).toEqual([...positions(0, 2 * RATE), ...positions(3 * RATE, RATE)]);
   });
 
-  it('splits a recording over the WAV size limit into sequential standard WAV files', async () => {
+  it('splits a recording over the WAV size limit into sequential standard WAV files, one per requested part', async () => {
     const chunks = await Promise.all([chunk(0, 0, RATE), chunk(1, RATE, RATE), chunk(3, 3 * RATE, RATE)]);
     const limit = (5 * RATE) / 4;
-    const parts = assembleWav(chunks.map(segment), RATE, limit);
+    const [recording] = groupRecordings(chunks.map(({ manifest }) => manifest), limit);
+    const parts = recording!.parts.map((_, index) => assembleWav(chunks.map(segment), RATE, index, limit)!);
     expect(parts.map(({ sampleStart, sampleEnd }) => [sampleStart, sampleEnd])).toEqual([
       [0, limit],
       [limit, 3 * RATE + RATE / 2],
       [3 * RATE + RATE / 2, 4 * RATE],
     ]);
+    expect(recording!.parts.map(({ sampleStart, sampleEnd }) => [sampleStart, sampleEnd])).toEqual(parts.map(({ sampleStart, sampleEnd }) => [sampleStart, sampleEnd]));
+    expect(assembleWav(chunks.map(segment), RATE, 3, limit)).toBeNull();
     const wavs = await Promise.all(parts.map((part) => readWav(part.blob)));
     for (const wav of wavs) {
       expect(wav.tags).toEqual(['RIFF', 'WAVE', 'fmt ', 'data']);
@@ -79,5 +84,16 @@ describe('orphaned local recordings', () => {
       expect(wav.samples.length).toBeLessThanOrEqual(limit);
     }
     expect(wavs.flatMap((wav) => wav.samples)).toEqual([...positions(0, 2 * RATE), ...positions(3 * RATE, RATE)]);
+  });
+
+  it('states a gap inside a later part on the capture clock, the time base of the part ranges', async () => {
+    const chunks = await Promise.all([chunk(0, 0, RATE), chunk(2, 2 * RATE, RATE), chunk(3, 3 * RATE, RATE), chunk(5, 5 * RATE, RATE)]);
+    const [recording] = groupRecordings(chunks.map(({ manifest }) => manifest), 2 * RATE);
+    expect(recording!.parts).toEqual([
+      { sampleStart: 0, sampleEnd: 3 * RATE, gaps: [{ at: RATE, missing: RATE }] },
+      { sampleStart: 3 * RATE, sampleEnd: 6 * RATE, gaps: [{ at: 4 * RATE, missing: RATE }] },
+    ]);
+    const later = await readWav(assembleWav(chunks.map(segment), RATE, 1, 2 * RATE)!.blob);
+    expect(later.samples).toEqual([...positions(3 * RATE, RATE), ...positions(5 * RATE, RATE)]);
   });
 });

@@ -25,6 +25,8 @@ export interface CaptureSnapshot {
   readonly bufferedChunks: number;
   /** Chunks of removed listeners (the server no longer knows them) kept on this device: never uploadable, listed for export or discard. */
   readonly strandedChunks: number;
+  /** Chunks of the removed listener this tab is still recording under: never pending, listed for export or discard once capture stops. */
+  readonly recordingChunks: number;
   /** Chunks of this device's listeners that the server refused (e.g. recorded after another device took the lease) kept on this device. */
   readonly refusedChunks: number;
   readonly savedThroughMs: number | null;
@@ -37,10 +39,17 @@ export interface LevelSource {
   read(bands: Float32Array): number;
 }
 
-/** Samples missing inside a recording; `at` is the position in the exported file, which is not padded. */
+/** Samples missing inside one exported file; `at` is where they are missing on the recording's capture sample clock. */
 export interface RecordingGap {
   readonly at: number;
   readonly missing: number;
+}
+
+/** One exported WAV file's range, `sampleStart`..`sampleEnd` on the recording's capture sample clock, and the gaps inside it. */
+export interface RecordingPart {
+  readonly sampleStart: number;
+  readonly sampleEnd: number;
+  readonly gaps: readonly RecordingGap[];
 }
 
 /** One capture epoch of a listener the server forgot, kept on this device and never uploadable. */
@@ -50,10 +59,11 @@ export interface OrphanedRecording {
   readonly sampleRate: number;
   /** Wall-clock time of the first kept sample, anchored to the epoch's sample clock. */
   readonly startedAt: string;
-  /** Kept samples, i.e. the exported file's length. */
+  /** Kept samples, i.e. the exported files' length. */
   readonly sampleCount: number;
   readonly chunkCount: number;
-  readonly gaps: readonly RecordingGap[];
+  /** The WAV files an export writes, in order; more than one only over the WAV size limit. */
+  readonly parts: readonly RecordingPart[];
 }
 
 /** One exported WAV file, holding samples `sampleStart`..`sampleEnd` of the recording's capture sample clock. */
@@ -72,8 +82,8 @@ export interface CaptureView {
   resume(): Promise<void>;
   /** Recordings orphaned by a removed listener; never the pending or in-progress audio. */
   orphanedRecordings(): Promise<readonly OrphanedRecording[]>;
-  /** The recording's chunks on this device as sequential WAV files, each within the WAV size limit; no server call. */
-  exportRecording(recording: OrphanedRecording): Promise<readonly WavPart[]>;
+  /** One WAV file (`part` of `recording.parts`) of the recording's chunks on this device, or null once they are gone; no server call. */
+  exportRecording(recording: OrphanedRecording, part: number): Promise<WavPart | null>;
   /** Deletes only this orphaned recording's chunks, and only when a person asks. */
   discardRecording(recording: OrphanedRecording): Promise<void>;
 }
@@ -86,6 +96,7 @@ export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
   epochId: null,
   bufferedChunks: 0,
   strandedChunks: 0,
+  recordingChunks: 0,
   refusedChunks: 0,
   savedThroughMs: null,
   wakeLock: 'released',

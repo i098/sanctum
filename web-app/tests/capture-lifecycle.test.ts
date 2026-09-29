@@ -84,17 +84,17 @@ class MemoryBuffer implements CaptureBuffer {
     this.chunks.delete(manifest.chunk_id);
     this.starts.delete(manifest.epoch_id);
   }
-  async countChunks(owned: readonly string[]) {
-    const counts = { pending: 0, refused: 0, stranded: 0 };
+  async countChunks(uploadable: readonly string[], recording: string | null = null) {
+    const counts = { pending: 0, refused: 0, recording: 0, stranded: 0 };
     for (const { manifest } of this.chunks.values()) {
-      if (!owned.includes(manifest.listener_id)) counts.stranded++;
-      else if (this.refused.has(manifest.chunk_id)) counts.refused++;
-      else counts.pending++;
+      if (uploadable.includes(manifest.listener_id)) void (this.refused.has(manifest.chunk_id) ? counts.refused++ : counts.pending++);
+      else if (manifest.listener_id === recording) counts.recording++;
+      else counts.stranded++;
     }
     return counts;
   }
-  async orphanedRecordings(owned: readonly string[]) {
-    return groupRecordings([...this.chunks.values()].map(({ manifest }) => manifest).filter((manifest) => !owned.includes(manifest.listener_id)));
+  async orphanedRecordings(owned: readonly string[], maxSamples?: number) {
+    return groupRecordings([...this.chunks.values()].map(({ manifest }) => manifest).filter((manifest) => !owned.includes(manifest.listener_id)), maxSamples);
   }
   async recordingSegments() {
     return [];
@@ -310,6 +310,9 @@ const settle = () => vi.advanceTimersByTimeAsync(0);
 /** Chunks the Settings list of removed-listener recordings shows; the footer's stranded count must match it. */
 const listedChunks = async ({ engine }: { engine: CaptureView }) => (await engine.orphanedRecordings()).reduce((sum, recording) => sum + recording.chunkCount, 0);
 
+/** The Settings list and the footer's stranded count describe the same chunks. */
+const expectAgreement = async (h: { engine: CaptureView }) => expect(await listedChunks(h)).toBe(h.engine.getSnapshot().strandedChunks);
+
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.UTC(2026, 8, 29, 9), toFake: ['Date', 'setTimeout', 'setInterval', 'clearInterval', 'clearTimeout'] });
 });
@@ -474,8 +477,8 @@ describe('capture lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server no longer knows the listener
     expect(h.storage.has('sanctum.listener')).toBe(false);
-    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 0, strandedChunks: 1 });
-    expect(await listedChunks(h)).toBe(1);
+    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 0, recordingChunks: 0, strandedChunks: 1 });
+    await expectAgreement(h);
 
     await h.engine.start();
     h.feed(1.2);
@@ -500,6 +503,26 @@ describe('capture lifecycle', () => {
     expect(buffer.chunks.has(old.manifest.chunk_id)).toBe(true);
   });
 
+  it('reports audio recorded under a listener removed mid-capture as recording, never pending, and lists it once capture stops', async () => {
+    const h = harness({ stored: true });
+    await h.engine.start();
+    h.forget();
+    await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server removed the listener; capture keeps running
+    h.feed(2.2);
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, recordingChunks: 2, refusedChunks: 0, strandedChunks: 0 }));
+    expect(h.snapshot().archive).not.toBe('buffered_locally');
+    await expectAgreement(h);
+    const [chunk] = [...h.buffer.chunks.values()];
+    await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: chunk!.manifest.epoch_id, sampleRate: RATE, startedAt: chunk!.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
+    expect(h.buffer.chunks.size).toBe(2); // never offered for discard mid-recording
+
+    await h.engine.pause();
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, recordingChunks: 0, refusedChunks: 0, strandedChunks: h.buffer.chunks.size }));
+    expect(h.buffer.chunks.size).toBeGreaterThanOrEqual(2);
+    await expectAgreement(h);
+    expect(h.calls.put).toEqual([]);
+  });
+
   it('never discards pending audio of the listener another tab registered after this one loaded', async () => {
     const buffer = new MemoryBuffer();
     const seal = (listener_id: string) =>
@@ -510,7 +533,7 @@ describe('capture lifecycle', () => {
     await settle();
     h.storage.set('sanctum.listener', JSON.stringify({ id: NEXT_LISTENER_ID, lease_generation: 1 })); // another tab registered and records
 
-    const recording = (chunk: SealedChunk) => ({ listenerId: chunk.manifest.listener_id, epochId: chunk.manifest.epoch_id, sampleRate: RATE, startedAt: chunk.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    const recording = (chunk: SealedChunk) => ({ listenerId: chunk.manifest.listener_id, epochId: chunk.manifest.epoch_id, sampleRate: RATE, startedAt: chunk.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
     await h.engine.discardRecording(recording(pending));
     await h.engine.discardRecording(recording(removed));
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
@@ -527,7 +550,7 @@ describe('capture lifecycle', () => {
     await buffer.sealChunk(pending);
     h.storage.delete('sanctum.listener'); // a stale tab learned its older listener was removed
 
-    await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
 
@@ -546,9 +569,9 @@ describe('capture lifecycle', () => {
     await vi.advanceTimersByTimeAsync(15_000); // this tab's heartbeat for the old listener fails NotFound
     expect(h.storage.get('sanctum.listener')).toBe(next);
 
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 1, refusedChunks: 0, strandedChunks: 0 })); // the other tab's audio is still uploadable
-    expect(await listedChunks(h)).toBe(0);
-    await h.engine.discardRecording({ listenerId: NEXT_LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 1, refusedChunks: 0, recordingChunks: 0, strandedChunks: 0 })); // the other tab's audio is still uploadable
+    await expectAgreement(h);
+    await h.engine.discardRecording({ listenerId: NEXT_LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
 
@@ -792,7 +815,8 @@ describe('capture lifecycle', () => {
     h.setOwner(false); // another device took the listener over before this audio ended
     h.setOffline(false);
     h.win.dispatchEvent(new Event('online'));
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, refusedChunks: 2, strandedChunks: 0 }));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, refusedChunks: 2, recordingChunks: 0, strandedChunks: 0 }));
+    await expectAgreement(h);
     expect(h.calls.put).toEqual([]);
     expect(h.buffer.chunks.size).toBe(2); // never deleted
   });

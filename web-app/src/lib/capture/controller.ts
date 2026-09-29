@@ -48,6 +48,8 @@ export interface CaptureDeps {
   readonly uploader?: UploaderOptions;
   /** Receives requested-speech messages from the live socket (the page wires browser playback here). */
   readonly onSpeech?: LiveOptions['onSpeech'];
+  /** Most samples per exported WAV file of a local recording (defaults to the WAV size limit; tests shorten it). */
+  readonly wavMaxSamples?: number;
 }
 
 const StoredListener = Schema.Struct({ id: ListenerId, lease_generation: LeaseGeneration });
@@ -115,6 +117,8 @@ class CaptureController implements CaptureView {
   private pending = 0;
   /** Local chunks of removed listeners: kept, never pending, listed for export or discard. */
   private stranded = 0;
+  /** Local chunks of the removed listener this tab still records under: never pending, listed once capture stops. */
+  private recording = 0;
   /** Local chunks of this device's listeners that the server refused: kept, never pending. */
   private refused = 0;
   private savedThroughMs: number | null = null;
@@ -184,11 +188,13 @@ class CaptureController implements CaptureView {
   readonly resume = (): Promise<void> => this.start();
 
   async orphanedRecordings(): Promise<readonly OrphanedRecording[]> {
-    return (await this.openBuffer()).orphanedRecordings(this.owned());
+    return (await this.openBuffer()).orphanedRecordings(this.owned(), this.deps.wavMaxSamples);
   }
 
-  async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording): Promise<readonly WavPart[]> {
-    return assembleWav(await (await this.openBuffer()).recordingSegments(listenerId, epochId), sampleRate);
+  async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording, part: number): Promise<WavPart | null> {
+    const wav = assembleWav(await (await this.openBuffer()).recordingSegments(listenerId, epochId), sampleRate, part, this.deps.wavMaxSamples);
+    if (wav === null) await this.refreshPending();
+    return wav;
   }
 
   async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
@@ -217,7 +223,7 @@ class CaptureController implements CaptureView {
     try {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) this.interrupted = true;
-      ({ pending: this.pending, refused: this.refused, stranded: this.stranded } = await buffer.countChunks(this.owned()));
+      await this.count(buffer);
       this.savedThroughMs = await buffer.savedThroughMs();
       this.claimed = this.interrupted || this.pending > 0;
     } catch {
@@ -583,15 +589,24 @@ class CaptureController implements CaptureView {
     });
   }
 
-  /** Listeners whose chunks are pending on this device (the one every tab shares or this tab's own) or still being recorded here: never orphaned, never discarded. */
+  /** Listeners whose chunks this device can upload now: the one every tab shares and this tab's own. */
+  private uploadable(): string[] {
+    return [this.storedListener()?.id, this.listener?.id].filter((id) => id !== undefined);
+  }
+
+  /** The uploadable listeners and the one this tab still records under (removed or not): never orphaned, never discarded. */
   private owned(): string[] {
-    return [this.storedListener()?.id, this.listener?.id, this.session?.listener.id].filter((id) => id !== undefined);
+    return [...this.uploadable(), this.session?.listener.id].filter((id) => id !== undefined);
+  }
+
+  /** Counts every local chunk in exactly one category, from the same listeners `owned` lists. */
+  private async count(buffer: CaptureBuffer): Promise<void> {
+    ({ pending: this.pending, refused: this.refused, recording: this.recording, stranded: this.stranded } = await buffer.countChunks(this.uploadable(), this.session?.listener.id ?? null));
   }
 
   private async refreshPending(): Promise<void> {
     const buffer = await this.buffer?.catch(() => null);
-    const counts = await buffer?.countChunks(this.owned()).catch(() => null);
-    if (counts) ({ pending: this.pending, refused: this.refused, stranded: this.stranded } = counts);
+    if (buffer) await this.count(buffer).catch(() => { });
     this.publish();
   }
 
@@ -620,6 +635,7 @@ class CaptureController implements CaptureView {
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,
+      recordingChunks: this.recording,
       refusedChunks: this.refused,
       savedThroughMs: this.savedThroughMs,
       wakeLock: this.wakeLock,

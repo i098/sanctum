@@ -17,10 +17,11 @@ interface SettingsProps {
   permission: PermissionState;
   engine: CaptureView;
   stranded: number;
+  recording: number;
 }
 
 /** Settings overlay: real device facts, and the unselected policies stated as unselected. */
-export function SettingsDialog({ open, onClose, permission, engine, stranded }: SettingsProps) {
+export function SettingsDialog({ open, onClose, permission, engine, stranded, recording }: SettingsProps) {
   const rows: ReadonlyArray<readonly [string, string]> = [
     ['Sign-in', 'Not configured: no sign-in provider has been selected'],
     ['Workspace', 'Unavailable until sign-in is configured'],
@@ -39,7 +40,7 @@ export function SettingsDialog({ open, onClose, permission, engine, stranded }: 
           </div>
         ))}
       </dl>
-      <LocalRecordings engine={engine} stranded={stranded} />
+      <LocalRecordings engine={engine} stranded={stranded} recording={recording} />
     </Dialog>
   );
 }

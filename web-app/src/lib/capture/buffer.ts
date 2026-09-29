@@ -220,23 +220,26 @@ export class RecoveryBuffer implements ChunkStore {
   }
 
   /**
-   * Chunks on this device by what can still happen to them: `pending` uploads of the `owned`
-   * listeners, `refused` chunks of those listeners the server will not take, and `stranded`
-   * chunks of every other listener (removed: the server no longer knows it). Audio is kept, never
-   * deleted here.
+   * Chunks on this device by what can still happen to them: `pending` uploads of the `uploadable`
+   * listeners, `refused` chunks of those listeners the server will not take, `recording` chunks of
+   * the removed listener still being recorded under, and `stranded` chunks of every other listener
+   * (removed: the server no longer knows it). Audio is kept, never deleted here.
    */
-  countChunks(owned: readonly string[]): Promise<{ pending: number; refused: number; stranded: number }> {
+  countChunks(uploadable: readonly string[], recording: string | null = null): Promise<{ pending: number; refused: number; recording: number; stranded: number }> {
     return guarded(async () => {
-      const counts = { pending: 0, refused: 0, stranded: 0 };
+      const counts = { pending: 0, refused: 0, recording: 0, stranded: 0 };
       const chunks = this.db.transaction(CHUNKS).objectStore(CHUNKS);
-      await walk(chunks.index('listener').openKeyCursor(), (current) => void (owned.includes((current.key as [string, string])[0]) ? counts.pending++ : counts.stranded++));
-      for (const listenerId of new Set(owned)) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.refused++));
+      await walk(chunks.index('listener').openKeyCursor(), (current) => {
+        const listenerId = (current.key as [string, string])[0];
+        void (uploadable.includes(listenerId) ? counts.pending++ : listenerId === recording ? counts.recording++ : counts.stranded++);
+      });
+      for (const listenerId of new Set(uploadable)) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.refused++));
       return counts;
     });
   }
 
   /** Chunks of listeners outside `owned`, grouped per recording; owned audio is never read, orphaned audio is visited, not kept. */
-  orphanedRecordings(owned: readonly string[]): Promise<OrphanedRecording[]> {
+  orphanedRecordings(owned: readonly string[], maxSamples?: number): Promise<OrphanedRecording[]> {
     return guarded(async () => {
       const index = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener');
       const listeners = new Set<string>();
@@ -246,7 +249,7 @@ export class RecoveryBuffer implements ChunkStore {
         if (owned.includes(listenerId)) continue;
         await walk(index.openCursor(listenerRange(listenerId)), (current) => void manifests.push((current.value as ChunkRecord).manifest));
       }
-      return groupRecordings(manifests);
+      return groupRecordings(manifests, maxSamples);
     });
   }
 
