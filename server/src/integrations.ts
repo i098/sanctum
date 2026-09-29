@@ -384,7 +384,7 @@ export const uploadDriveFile = (
 
 /** `/api/v1/integrations`: the same gateway functions the MCP adapter calls. */
 /** Connect client from the environment; without credentials every call fails as `Unavailable`. */
-const PipedreamLive = Layer.effect(
+export const PipedreamLive = Layer.effect(
   PipedreamClient,
   Effect.map(serverConfig, config => makePipedreamClient(config.pipedream, engineeringDefaults.pipedream.requestTimeoutMs)),
 );

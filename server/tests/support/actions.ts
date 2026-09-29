@@ -2,15 +2,18 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, type ActionId, IntegrationAccountId, JobId, type JobKind, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
+import { engineeringDefaults } from '../../src/config.ts';
 import type { executeIntegrationAction, IntegrationFailure } from '../../src/integrations.ts';
-import type { ClaimedJob } from '../../src/job-handlers.ts';
+import type { ClaimedJob } from '../../src/job-types.ts';
+import { LlmClient, makeLlm } from '../../src/llm.ts';
+import { fixturePipedream } from '../../src/providers/pipedream.ts';
 
 type ExecuteInput = Parameters<typeof executeIntegrationAction>[0];
 
 /** What the fake upstream does with the next submissions; `sent` is its outbox. */
 export const provider = {
-  mode: 'ok' as 'ok' | 'ambiguous_after_send' | 'reject' | 'hold',
+  mode: 'ok' as 'ok' | 'ambiguous_after_send' | 'reject' | 'hold' | 'large_result',
   sent: [] as ExecuteInput[],
   /** In `hold` mode: resolves the in-flight submission as a late success. */
   release: null as (() => void) | null,
@@ -20,6 +23,9 @@ export const provider = {
     this.release = null;
   },
 };
+
+/** Services the action and research handlers require; with integrations and the planner mocked, nothing reaches them. */
+export const actionServices = Layer.merge(fixturePipedream([]).layer, Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, {})));
 
 /** `vi.mock('../src/integrations.ts', ...)` factory body. */
 export const fakeIntegrations = async (importOriginal: () => Promise<typeof import('../../src/integrations.ts')>) => {
@@ -34,7 +40,8 @@ export const fakeIntegrations = async (importOriginal: () => Promise<typeof impo
         const receipt = { message_id: `msg-${provider.sent.length}`, idempotency_key: input.provider_idempotency_key };
         if (provider.mode === 'ambiguous_after_send') return Effect.fail(fail('Timed out after submission', true));
         if (provider.mode === 'hold') return Effect.as(Effect.promise(() => new Promise<void>(resolve => (provider.release = resolve))), { receipt, artifact: null });
-        return Effect.succeed({ receipt, artifact: null });
+        const artifact = provider.mode === 'large_result' ? new TextEncoder().encode(JSON.stringify({ rows: ['é'.repeat(20_000)] })) : null;
+        return Effect.succeed({ receipt, artifact });
       }),
   };
 };
@@ -49,7 +56,14 @@ export const seedAccount = (owner: AccessScope, status: 'active' | 'disconnected
     return id;
   });
 
-export const seedMeeting = (workspace_id: WorkspaceId) =>
+/** Active credential carrying the agent's fixture scopes; workers re-resolve agent access from these. */
+export const seedCredential = (owner: AccessScope, agent: AccessScope) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`
+    INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
+    VALUES (${randomUUID()}, ${agent.workspace_id}, ${agent.principal.id}, ${owner.principal.id}, UNHEX(SHA2(${randomUUID()}, 256)), ${JSON.stringify(agent.scopes)}, UTC_TIMESTAMP(6))`);
+
+/** Restricted meeting; each of `writers` gets write access. */
+export const seedMeeting = (workspace_id: WorkspaceId, writers: ReadonlyArray<AccessScope> = []) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = randomUUID() as MeetingId;
@@ -57,6 +71,10 @@ export const seedMeeting = (workspace_id: WorkspaceId) =>
       INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
       VALUES (${id}, ${workspace_id}, 'active', 'America/Los_Angeles', UTC_TIMESTAMP(6),
         ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+    for (const writer of writers) {
+      yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+        VALUES (${workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, UTC_TIMESTAMP(6))`;
+    }
     return id;
   });
 

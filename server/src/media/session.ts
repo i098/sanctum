@@ -24,7 +24,8 @@ import { Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, 
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrResult, type AsrStream, SpeechToText } from '../providers/deepgram.ts';
 import { publishFinalWindow } from '../transcripts.ts';
-import { SpeechGate } from './speech-gate.ts';
+import { SpeechSynthesizer } from '../providers/cartesia.ts';
+import { SpeechGate, SpeechReplies, speechController } from './speech-gate.ts';
 
 export const liveLimits = {
   /** Provider send backlog at which live ASR is skipped and the range left to batch reconciliation. */
@@ -206,15 +207,38 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
     return { feed, close };
   });
 
+/**
+ * Requested speech for this socket when the process provides a synthesizer and replies; otherwise
+ * capture stays silent and ending the socket only closes any window the gate still holds.
+ */
+const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>) =>
+  Effect.gen(function* () {
+    const synthesizer = yield* Effect.serviceOption(SpeechSynthesizer);
+    const replies = yield* Effect.serviceOption(SpeechReplies);
+    if (Option.isSome(synthesizer) && Option.isSome(replies)) {
+      return yield* speechController({ listener_id: listener.id, sample_rate: start.clock.sample_rate, send, respond: replies.value(access, listener.id) }).pipe(
+        Effect.provideService(SpeechSynthesizer, synthesizer.value),
+      );
+    }
+    const gate = yield* Effect.serviceOption(SpeechGate);
+    return {
+      onSegment: (_segment: TranscriptSegment) => Effect.void,
+      onEnd: (_reason: 'pause' | 'disconnect') => Effect.sync(() => Option.map(gate, value => value.cancel(listener.id, 'disconnect'))),
+    };
+  });
+
 /** Opens the session in the current scope; closing that scope persists the watermark and flushes provider finals. */
 export const openLiveSession = ({ access, listener, start, resume_from_sample, send }: LiveSessionInput) =>
   Effect.gen(function* () {
-    const gate = yield* Effect.serviceOption(SpeechGate);
     const { epoch_id, track } = start;
     let watermark = resume_from_sample;
     let persisted = watermark;
     const fenced = yield* Deferred.make<never, SessionRejected>();
-    const asr = yield* liveAsr({ access, listener, start, send });
+    const speech = yield* requestedSpeech({ access, listener, start, send });
+    // Every transcript the client sees also reaches the speech gate (barge-in and direct requests).
+    const relay = (message: ServerControlMessage) =>
+      Effect.zipRight(send(message), message._tag === 'transcript' ? speech.onSegment(message.segment) : Effect.void);
+    const asr = yield* liveAsr({ access, listener, start, send: relay });
 
     const flush = Effect.gen(function* () {
       if (watermark === persisted) return;
@@ -231,7 +255,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       Effect.gen(function* () {
         yield* flush;
         yield* asr.close('session_end');
-        if (Option.isSome(gate)) gate.value.cancel(listener.id, 'live session ended');
+        yield* speech.onEnd('disconnect');
       }),
     );
     yield* Effect.forkScoped(Effect.repeat(flush, Schedule.spaced(liveLimits.watermarkFlushMs)));
@@ -258,6 +282,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       Effect.gen(function* () {
         yield* flush;
         yield* asr.close('stopped');
+        yield* speech.onEnd(reason === 'pause' ? 'pause' : 'disconnect');
         yield* stopEpoch(access, listener.id, epoch_id, start.lease_generation, reason);
       });
 

@@ -14,7 +14,7 @@ import { executeAction, runResearch } from '../src/executor.ts';
 import { directRequest, makeSpeechGate, SpeechGate, speechController } from '../src/media/speech-gate.ts';
 import { planActions } from '../src/planner.ts';
 import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
-import { provider, queuedJob, seedAccount } from './support/actions.ts';
+import { actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -220,6 +220,7 @@ describe('background work', () => {
       Effect.gen(function* () {
         const session = yield* listen(() => Stream.make('Should not be heard.'));
         const [owner, agent] = yield* seedWorkspace('Silent', ['owner', 'agent']);
+        yield* seedCredential(owner!, agent!);
         const account = yield* seedAccount(owner!);
         yield* createActionGrant(owner!, { grantee: agent!.principal.id, action_key: 'gmail-send-email', account_id: account, meeting_id: null, restrictions: {}, expires_at: null });
         const input = (key: string) => ({ action_key: 'gmail-send-email', configuration_ref: 'cfg', version: '1', arguments: {}, meeting_id: null, idempotency_key: key });
@@ -230,12 +231,12 @@ describe('background work', () => {
         provider.mode = 'reject';
         yield* Effect.flatMap(queuedJob(agent!.workspace_id, 'action.execute', rejected.action_id), executeAction);
         vi.mocked(planActions).mockReturnValue(Effect.succeed([input('planned')]));
-        yield* runResearch({ ...(yield* queuedJob(agent!.workspace_id, 'action.execute', ok.action_id)), payload: { meeting_id: null, request: 'follow up' } });
+        yield* runResearch({ ...(yield* queuedJob(agent!.workspace_id, 'action.execute', ok.action_id)), payload: { meeting_id: yield* seedMeeting(agent!.workspace_id, [agent!]), request: 'follow up' } });
         yield* session.onSegment(heard('Let us wrap up.', 3_000, 4_000));
         yield* Effect.sleep(`${endOfTurnMs * 2} millis`);
         yield* session.onEnd('pause');
         expect(session.sent).toEqual([]);
-      }),
+      }).pipe(Effect.provide(actionServices)),
       { migrated: true },
     ));
 });

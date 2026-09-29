@@ -112,8 +112,8 @@ describe('automatic meeting lifecycle', () => {
         const [meeting] = yield* meetingsOf(listener.workspace_id);
         const id = MeetingId.make(meeting!.id);
         const action = randomUUID();
-        yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, created_at, updated_at)
-          VALUES (${action}, ${listener.workspace_id}, ${id}, ${owner.principal.id}, 'gmail-send', 'k1', '{}', ${Buffer.alloc(32)}, 'running', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+        yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, created_at, updated_at, version)
+          VALUES (${action}, ${listener.workspace_id}, ${id}, ${owner.principal.id}, 'gmail-send', 'k1', '{}', ${Buffer.alloc(32)}, 'running', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
         yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
         const closed = yield* closeMeeting(owner, id);
         expect(closed).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });

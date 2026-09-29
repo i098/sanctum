@@ -8,7 +8,7 @@ import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { planActions } from '../src/planner.ts';
 import { withDatabase } from './support/database.ts';
-import { actionRow, provider, queuedJob, seedAccount, seedMeeting } from './support/actions.ts';
+import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 vi.mock('../src/integrations.ts', async importOriginal => {
@@ -35,6 +35,7 @@ const request = (overrides: Partial<Parameters<typeof requestAction>[1]> = {}) =
 const setup = (grant: { meeting_id?: MeetingId | null; expires_at?: string | null; restrictions?: Record<string, ReadonlyArray<unknown>> } = {}) =>
   Effect.gen(function* () {
     const [owner, member, agent] = yield* seedWorkspace('Actions', ['owner', 'member', 'agent']);
+    yield* seedCredential(owner!, agent!);
     const account = yield* seedAccount(owner!);
     const created = yield* createActionGrant(owner!, {
       grantee: agent!.principal.id,
@@ -48,7 +49,7 @@ const setup = (grant: { meeting_id?: MeetingId | null; expires_at?: string | nul
   });
 
 const execute = (access: AccessScope, action_id: ActionId) =>
-  Effect.flatMap(queuedJob(access.workspace_id, 'action.execute', action_id), executeAction);
+  Effect.flatMap(queuedJob(access.workspace_id, 'action.execute', action_id), executeAction).pipe(Effect.provide(actionServices));
 
 describe('action gateway', () => {
   it.effect('executes a granted action once with a truthful receipt and a stable provider key', () =>
@@ -71,6 +72,24 @@ describe('action gateway', () => {
           provider_receipt: { message_id: 'msg-1', idempotency_key: `sanctum:${queued.action_id}` },
         });
         expect(receipt.args_sha256).toMatch(/^[0-9a-f]{64}$/);
+      }),
+      { migrated: true },
+    ));
+
+  it.effect('keeps an over-budget provider result as an artifact the receipt references', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { agent } = yield* setup();
+        provider.mode = 'large_result';
+        const queued = yield* requestAction(agent, request());
+        yield* execute(agent, queued.action_id);
+        const receipt = yield* getActionReceipt(agent, queued.action_id);
+        const artifact_id = receipt.provider_receipt?.['artifact_id'];
+        expect(artifact_id).toEqual(expect.any(String));
+        const sql = yield* SqlClient.SqlClient;
+        const [row] = yield* sql<{ kind: string; content: string; provenance: unknown }>`SELECT kind, content, provenance FROM artifacts WHERE id = ${String(artifact_id)}`;
+        expect(row).toMatchObject({ kind: 'action_output', provenance: { action_id: queued.action_id, attempt: 1 } });
+        expect(JSON.parse(row!.content)).toEqual({ rows: ['é'.repeat(20_000)] });
       }),
       { migrated: true },
     ));
@@ -109,12 +128,8 @@ describe('action gateway', () => {
         const device = { ...agent, role: 'device' as const, scopes: ['capture:ingest' as const] };
         expect(yield* Effect.flip(requestAction(device, request()))).toMatchObject({ _tag: 'Forbidden', required_scope: 'actions:request' });
 
-        const meetingA = yield* seedMeeting(owner.workspace_id);
-        const meetingB = yield* seedMeeting(owner.workspace_id);
-        for (const meeting of [meetingA, meetingB]) {
-          yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-            VALUES (${owner.workspace_id}, ${meeting}, ${member.principal.id}, 'write', ${owner.principal.id}, UTC_TIMESTAMP(6))`;
-        }
+        const meetingA = yield* seedMeeting(owner.workspace_id, [owner, member]);
+        const meetingB = yield* seedMeeting(owner.workspace_id, [owner, member]);
         const scoped = yield* createActionGrant(owner, { grantee: member.principal.id, action_key: SEND, account_id: account, meeting_id: meetingA, restrictions: {}, expires_at: null });
         expect(yield* refused(member, request({ meeting_id: meetingB }))).toBe('Forbidden');
         expect((yield* requestAction(member, request({ meeting_id: meetingA }))).state).toBe('queued');
@@ -226,9 +241,10 @@ describe('research.run', () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { agent } = yield* setup();
+        const meeting_id = yield* seedMeeting(agent.workspace_id, [agent]);
         vi.mocked(planActions).mockReturnValue(Effect.succeed([request({ idempotency_key: 'ignored' }), request({ action_key: 'slack-send-message' })]));
         yield* sql`INSERT INTO jobs (id, workspace_id, kind, work_key, requested_by, status, payload, available_at, max_attempts, created_at, updated_at)
-          VALUES (UUID(), ${agent.workspace_id}, 'research.run', 'follow-up', ${agent.principal.id}, 'pending', ${JSON.stringify({ meeting_id: null, request: 'Email the notes' })},
+          VALUES (UUID(), ${agent.workspace_id}, 'research.run', 'follow-up', ${agent.principal.id}, 'pending', ${JSON.stringify({ meeting_id, request: 'Email the notes' })},
             UTC_TIMESTAMP(6), 3, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
         const job = yield* queuedJob(agent.workspace_id, 'research.run', 'follow-up');
         const first = yield* runResearch(job);
@@ -237,13 +253,13 @@ describe('research.run', () => {
           result: { actions: [{ action_key: SEND, state: 'queued' }, { action_key: 'slack-send-message', refused: 'Forbidden' }] },
         });
         expect(yield* runResearch(job)).toEqual(first);
-        expect(vi.mocked(planActions)).toHaveBeenCalledWith(expect.objectContaining({ principal: expect.objectContaining({ id: agent.principal.id }) }), { meeting_id: null, request: 'Email the notes' });
+        expect(vi.mocked(planActions)).toHaveBeenCalledWith(expect.objectContaining({ principal: expect.objectContaining({ id: agent.principal.id }) }), { meeting_id, request: 'Email the notes' });
 
         vi.mocked(planActions).mockReturnValue(Effect.fail(new Unavailable({ message: 'planner rate limited', retryable: true, retry_after_ms: 4_000 })));
         expect(yield* runResearch(job)).toEqual({ status: 'paused', resume_after_ms: 4_000, reason: 'planner rate limited' });
         vi.mocked(planActions).mockReturnValue(Effect.fail(new Unavailable({ message: 'no planner configured', retryable: false })));
         expect(yield* Effect.flip(runResearch(job))).toMatchObject({ _tag: 'JobFailure', retryable: false, message: 'no planner configured' });
-      }),
+      }).pipe(Effect.provide(actionServices)),
       { migrated: true },
     ));
 });

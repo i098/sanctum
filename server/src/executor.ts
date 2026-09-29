@@ -3,6 +3,7 @@
  * never replayed blindly: an attempt that reached the provider boundary without a recorded
  * outcome becomes `unknown`, and only its own late completion or a person can resolve it.
  */
+import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Either, Fiber, Option, Schema } from 'effect';
@@ -79,6 +80,21 @@ const startAttempt = (job: Job, action_id: ActionId) =>
   })));
 
 /**
+ * Keeps a provider result over the model-facing output budget as an `action_output` artifact
+ * (plan section 10: receipts stay bounded, full results stay readable by reference).
+ */
+const storeArtifact = (row: ActionRow, attempt: number, bytes: Uint8Array) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const id = randomUUID();
+    yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)
+      VALUES (${id}, ${row.workspace_id}, ${row.meeting_id}, 'action_output', ${`${row.action_key} result`}, 'application/json',
+        ${new TextDecoder().decode(bytes)}, ${createHash('sha256').update(bytes).digest()}, ${JSON.stringify({ action_id: row.id, attempt })},
+        ${row.requested_by}, UTC_TIMESTAMP(6))`;
+    return id;
+  });
+
+/**
  * Records the provider's answer for this attempt. A late answer (after another attempt marked
  * the action `unknown`) still lands and reconciles it; the attempt fence stops stale overwrites.
  */
@@ -87,8 +103,11 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
     const sql = yield* SqlClient.SqlClient;
     const fence = sql`workspace_id = ${row.workspace_id} AND id = ${row.id} AND attempts = ${attempt}`;
     if (outcome._tag === 'Right') {
+      const { artifact } = outcome.right;
+      const artifact_id = artifact === null ? null : yield* storeArtifact(row, attempt, artifact);
+      const receipt = artifact_id === null ? outcome.right.receipt : { ...outcome.right.receipt, artifact_id };
       yield* sql`UPDATE actions SET reconciliation = IF(state = 'unknown', 'reconciled', reconciliation), state = 'succeeded',
-        provider_receipt = ${JSON.stringify(outcome.right.receipt)}, last_error = NULL, updated_at = UTC_TIMESTAMP(6)
+        provider_receipt = ${JSON.stringify(receipt)}, last_error = NULL, updated_at = UTC_TIMESTAMP(6)
         WHERE ${fence} AND state IN ('running', 'unknown')`;
       return;
     }
@@ -149,8 +168,10 @@ export const runResearch = (job: Job) =>
     const { meeting_id, request } = yield* Schema.decodeUnknown(ResearchPayload)(job.payload);
     if (job.requested_by === null) return yield* new JobFailure({ message: 'Research requires a requesting principal', retryable: false });
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: job.requested_by });
+    if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
     const plan = yield* Effect.either(planActions(access, { meeting_id, request }));
     if (plan._tag === 'Left') {
+      if (plan.left._tag === 'Forbidden') return yield* new JobFailure({ message: plan.left.message, retryable: false });
       const { retryable, retry_after_ms, message } = plan.left;
       if (retryable && retry_after_ms !== undefined) return { status: 'paused', resume_after_ms: retry_after_ms, reason: message } as const;
       return yield* new JobFailure({ message, retryable });

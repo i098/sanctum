@@ -460,6 +460,39 @@ class ActionReceiptGrant(TypedDict):
     version: int
 
 
+class ResolveActionInput(TypedDict):
+    outcome: Literal["succeeded", "failed"]
+    provider_receipt: dict[str, Any] | None
+    action_id: str
+
+
+class CreateActionGrantInput(TypedDict):
+    grantee: str
+    action_key: str
+    account_id: str
+    meeting_id: str | None
+    restrictions: dict[str, Any]
+    expires_at: str | None
+
+
+class ActionGrant(TypedDict):
+    id: str
+    owner: str
+    grantee: str
+    action_key: str
+    app: str
+    account_id: str
+    meeting_id: str | None
+    restrictions: dict[str, Any]
+    expires_at: str | None
+    revoked_at: str | None
+    version: int
+
+
+class RevokeActionGrantInput(TypedDict):
+    grant_id: str
+
+
 class CreateAgent(TypedDict):
     display_name: str
     scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
@@ -569,6 +602,12 @@ OPERATIONS: dict[str, Operation] = {
     "actions.requestAction": Operation("POST", "/api/v1/actions", (), (), True),
     # GetActionInput -> ActionReceipt
     "actions.getAction": Operation("GET", "/api/v1/actions/{action_id}", ("action_id", ), (), False),
+    # ResolveActionInput -> ActionReceipt
+    "actions.resolveAction": Operation("POST", "/api/v1/actions/{action_id}/resolve", ("action_id", ), (), True),
+    # CreateActionGrantInput -> ActionGrant
+    "actions.createActionGrant": Operation("POST", "/api/v1/action-grants", (), (), True),
+    # RevokeActionGrantInput -> ActionGrant
+    "actions.revokeActionGrant": Operation("DELETE", "/api/v1/action-grants/{grant_id}", ("grant_id", ), (), False),
     # CreateAgent -> CreatedAgent
     "agents.createAgent": Operation("POST", "/api/v1/agents", (), (), True),
     # ListAgentsInput -> AgentPage

@@ -44,6 +44,8 @@ export interface CaptureDeps {
   readonly streamUrl?: (listenerId: string) => string;
   readonly timing?: Partial<CaptureTiming>;
   readonly uploader?: UploaderOptions;
+  /** Receives requested-speech messages from the live socket (the page wires browser playback here). */
+  readonly onSpeech?: LiveOptions['onSpeech'];
 }
 
 const StoredListener = Schema.Struct({ id: ListenerId, lease_generation: LeaseGeneration });
@@ -295,7 +297,7 @@ class CaptureController implements CaptureView {
       onError: (error) => this.halt(captureIssue(error), false),
     });
     const url = (this.deps.streamUrl ?? streamUrl)(start.listener_id);
-    const live = this.leaseLost ? null : (this.deps.openLive ?? openLiveStream)({ url, start, onStatus: (status, reason) => this.onLive(status, reason) });
+    const live = this.leaseLost ? null : (this.deps.openLive ?? openLiveStream)({ url, start, onStatus: (status, reason) => this.onLive(status, reason), ...(this.deps.onSpeech ? { onSpeech: this.deps.onSpeech } : {}) });
     queueMicrotask(() => this.publish());
     return { id: start.epoch_id, base, assembler, live, lastWallMs: startedAtMs, lastEnd: base };
   }

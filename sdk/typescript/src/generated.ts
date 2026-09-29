@@ -455,6 +455,39 @@ export type ActionReceiptGrant = {
   readonly version: number;
 };
 
+export type ResolveActionInput = {
+  readonly outcome: "succeeded" | "failed";
+  readonly provider_receipt: Readonly<Record<string, unknown>> | null;
+  readonly action_id: string;
+};
+
+export type CreateActionGrantInput = {
+  readonly grantee: string;
+  readonly action_key: string;
+  readonly account_id: string;
+  readonly meeting_id: string | null;
+  readonly restrictions: Readonly<Record<string, unknown>>;
+  readonly expires_at: string | null;
+};
+
+export type ActionGrant = {
+  readonly id: string;
+  readonly owner: string;
+  readonly grantee: string;
+  readonly action_key: string;
+  readonly app: string;
+  readonly account_id: string;
+  readonly meeting_id: string | null;
+  readonly restrictions: Readonly<Record<string, unknown>>;
+  readonly expires_at: string | null;
+  readonly revoked_at: string | null;
+  readonly version: number;
+};
+
+export type RevokeActionGrantInput = {
+  readonly grant_id: string;
+};
+
 export type CreateAgent = {
   readonly display_name: string;
   readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
@@ -540,6 +573,9 @@ export interface Operations {
   'integrations.getIntegrationAction': { input: GetIntegrationActionInput; output: GetIntegrationActionOutput };
   'actions.requestAction': { input: RequestActionInput; output: RequestActionOutput };
   'actions.getAction': { input: GetActionInput; output: ActionReceipt };
+  'actions.resolveAction': { input: ResolveActionInput; output: ActionReceipt };
+  'actions.createActionGrant': { input: CreateActionGrantInput; output: ActionGrant };
+  'actions.revokeActionGrant': { input: RevokeActionGrantInput; output: ActionGrant };
   'agents.createAgent': { input: CreateAgent; output: CreatedAgent };
   'agents.listAgents': { input: ListAgentsInput; output: AgentPage };
   'agents.revokeCredential': { input: RevokeCredentialInput; output: null };
@@ -569,6 +605,9 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'integrations.getIntegrationAction': {"method":"POST","path":"/api/v1/integrations/actions/{action_key}/schema","pathParams":["action_key"],"queryParams":[],"body":true},
   'actions.requestAction': {"method":"POST","path":"/api/v1/actions","pathParams":[],"queryParams":[],"body":true},
   'actions.getAction': {"method":"GET","path":"/api/v1/actions/{action_id}","pathParams":["action_id"],"queryParams":[],"body":false},
+  'actions.resolveAction': {"method":"POST","path":"/api/v1/actions/{action_id}/resolve","pathParams":["action_id"],"queryParams":[],"body":true},
+  'actions.createActionGrant': {"method":"POST","path":"/api/v1/action-grants","pathParams":[],"queryParams":[],"body":true},
+  'actions.revokeActionGrant': {"method":"DELETE","path":"/api/v1/action-grants/{grant_id}","pathParams":["grant_id"],"queryParams":[],"body":false},
   'agents.createAgent': {"method":"POST","path":"/api/v1/agents","pathParams":[],"queryParams":[],"body":true},
   'agents.listAgents': {"method":"GET","path":"/api/v1/agents","pathParams":[],"queryParams":["cursor","limit"],"body":false},
   'agents.revokeCredential': {"method":"DELETE","path":"/api/v1/agents/{agent_id}/credentials/{key_id}","pathParams":["agent_id","key_id"],"queryParams":[],"body":false},

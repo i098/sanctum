@@ -3,7 +3,15 @@
  * stream binary frames. Live acceptance is never archive durability; frames dropped while
  * disconnected or over the `bufferedAmount` bound are recovered from uploaded chunks.
  */
-import { encodePcmFrame, LISTENER_STREAM_PATH, type RejectedMessage, ServerControlMessage, StartMessage } from '@sanctum/contracts';
+import {
+  encodePcmFrame,
+  LISTENER_STREAM_PATH,
+  type RejectedMessage,
+  ServerControlMessage,
+  type SpeechCancelMessage,
+  type SpeechChunkMessage,
+  StartMessage,
+} from '@sanctum/contracts';
 import { Either, Schema } from 'effect';
 
 export type LiveStatus = 'connecting' | 'reconnecting' | 'live' | 'degraded' | 'rejected';
@@ -18,6 +26,8 @@ export interface LiveOptions {
   readonly start: StartMessage;
   /** `reason` accompanies `rejected`. */
   onStatus(status: LiveStatus, reason?: RejectReason): void;
+  /** Requested speech for this socket (`speech_chunk`/`speech_cancel`); only the playback module acts on it. */
+  onSpeech?(message: SpeechChunkMessage | SpeechCancelMessage): void;
   readonly WebSocket?: typeof WebSocket;
 }
 
@@ -37,7 +47,13 @@ export function streamUrl(listenerId: string, origin = globalThis.location.origi
   return new URL(LISTENER_STREAM_PATH.replace(':listener_id', listenerId), origin.replace(/^http/, 'ws')).href;
 }
 
-export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket }: LiveOptions): LiveStream {
+/** Requested-speech messages go to playback; everything else is socket control. */
+const speechMessage = (message: ServerControlMessage) =>
+  message._tag === 'speech_chunk' || message._tag === 'speech_cancel' ? message : null;
+
+const ignoreSpeech = () => {};
+
+export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, WebSocket: Socket = WebSocket }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
   let accepted = false;
   let stopped = false;
@@ -46,10 +62,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   let serverDegraded = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
 
-  const onMessage = (ws: WebSocket, data: unknown) => {
-    const decoded = decodeServer(data);
-    if (Either.isLeft(decoded)) return;
-    const message = decoded.right;
+  const onControl = (ws: WebSocket, message: ServerControlMessage) => {
     if (message._tag === 'accepted') {
       accepted = true;
       onStatus(serverDegraded ? 'degraded' : 'live');
@@ -61,6 +74,14 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       serverDegraded = true;
       onStatus('degraded');
     }
+  };
+
+  const onMessage = (ws: WebSocket, data: unknown) => {
+    const decoded = decodeServer(data);
+    if (Either.isLeft(decoded)) return;
+    const speech = speechMessage(decoded.right);
+    if (speech) onSpeech(speech);
+    else onControl(ws, decoded.right);
   };
 
   const connect = () => {

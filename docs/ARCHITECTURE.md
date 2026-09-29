@@ -141,13 +141,17 @@ Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/contex
 
 ### actions (T18, T19 recovery, T20)
 
-Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, `ActionsApi` in contracts actions.ts, speech control messages in contracts media.ts.
+Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/media/speech-reply.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
 
 - `actions.ts`: `requestAction(access, input: RequestActionInput): Effect<RequestActionOutput, Forbidden | NotFound | HashConflict, R>` (the third gateway).
 - `actions.ts`: `getActionReceipt(access, action_id): Effect<ActionReceipt, NotFound, R>`.
 - `speech-gate.ts`: `SpeechGate` tag with `openRequest({ listener_id; epoch_id; request_id; sample_end })`, `mayEmit(request_id, generation): boolean`, `cancel(listener_id, reason)`.
 - `playback.ts` (web): `createPlayback(context: AudioContext)` registered by engine.ts; drops chunks of cancelled generations.
 - Handles job kinds `action.execute`, `action.reconcile`, `research.run`.
+- `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-reply.ts `SpeechRepliesLive`), so a process without them stays silent.
+- Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
+- Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
+- `research.run` needs a meeting; the models planner proposes only actions already inspected with `get_integration_action`, so research without inspected actions plans nothing.
 
 ### interfaces (T22, T23)
 

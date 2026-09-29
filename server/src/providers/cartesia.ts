@@ -4,8 +4,7 @@
  * Reference: https://docs.cartesia.ai/api-reference/tts/bytes (API version 2026-08-14).
  */
 import { Unavailable } from '@sanctum/contracts';
-import { Config, Context, Effect, Layer, Option, Redacted, Stream } from 'effect';
-import { serverConfig } from '../config.ts';
+import { Context, Effect, Option, Redacted, Stream } from 'effect';
 
 export const CARTESIA_API_VERSION = '2026-08-14';
 export const SPEECH_SAMPLE_RATE = 24_000;
@@ -57,8 +56,3 @@ export const cartesiaSynthesizer = (options: { readonly apiKey: Option.Option<Re
       );
     },
   });
-
-export const CartesiaLive = Layer.effect(
-  SpeechSynthesizer,
-  Effect.map(Config.map(serverConfig, config => config.cartesia), cartesia => cartesiaSynthesizer({ ...cartesia, baseUrl: 'https://api.cartesia.ai' })),
-);

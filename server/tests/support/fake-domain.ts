@@ -335,6 +335,8 @@ const integrationsGroup = (_store: Store) =>
       }),
   );
 
+const unmodelled = () => Effect.fail(new Unavailable({ message: 'Not modelled by the fake domain', retryable: false }));
+
 const actionsGroup = ({ space, need, once }: Store) =>
   HttpApiBuilder.group(SanctumApi, 'actions', handlers =>
     handlers
@@ -372,7 +374,11 @@ const actionsGroup = ({ space, need, once }: Store) =>
           const receipt = space(access).actions.get(path.action_id);
           return receipt ? Effect.succeed(receipt) : Effect.fail(new NotFound({ message: 'Action not found' }));
         }),
-      ),
+      )
+      // ponytail: no SDK/MCP/website test drives resolution or grants yet; model them here once one does.
+      .handle('resolveAction', unmodelled)
+      .handle('createActionGrant', unmodelled)
+      .handle('revokeActionGrant', unmodelled),
   );
 
 const agentsGroup = ({ space, need, tokens }: Store) =>

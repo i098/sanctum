@@ -81,9 +81,9 @@ describe('split and merge', () => {
         const sql = yield* SqlClient.SqlClient;
         const { owner, listener, epoch, first, second } = yield* twoMeetings;
         const action = randomUUID();
-        yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, attempts, created_at, updated_at)
+        yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, attempts, created_at, updated_at, version)
           VALUES (${action}, ${listener.workspace_id}, ${second}, ${owner.principal.id}, 'gmail-send', 'send-1', '{}', ${Buffer.alloc(32)}, 'succeeded', '{"message_id":"m-1"}', 1,
-            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
         const before = totalSamples(yield* rangesOf(first)) + totalSamples(yield* rangesOf(second));
         yield* closeMeeting(owner, second);
         const merged = yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });

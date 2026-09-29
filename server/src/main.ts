@@ -16,7 +16,9 @@ import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
 import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpDelegation } from './mcp.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
-import { MediaProvidersLive, type SpeechToText } from './media/providers.ts';
+import { MediaProvidersLive, SpeechSynthesizerLive, type SpeechToText } from './media/providers.ts';
+import { SpeechRepliesLive } from './media/speech-reply.ts';
+import { LlmLive } from './llm.ts';
 import { loadMigrations } from './migrate.ts';
 import type { ObjectStore } from './providers/object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
@@ -42,6 +44,7 @@ export const serverLayer = (
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
     Layer.provide([ListenerStreamLive, McpLive, OpenApiLive]),
+    Layer.provide([SpeechSynthesizerLive, SpeechRepliesLive.pipe(Layer.provide(LlmLive))]),
     Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
     Layer.provide(overrides.media ?? MediaProvidersLive),
     Layer.provide(withMcpDelegation(authenticator)),

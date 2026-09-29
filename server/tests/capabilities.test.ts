@@ -72,9 +72,9 @@ describe('capabilities under the served application', () => {
             captured_at, byte_length, sha256, object_key, upload_state, created_at, committed_at)
           VALUES (${chunk}, ${workspace}, ${listener}, ${epoch}, 0, 0, 0, 1440000, 48000, UTC_TIMESTAMP(6), ${44 + 1440000 * 2},
             ${createHash('sha256').update('chunk').digest()}, ${`recordings/${chunk}.wav`}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
-        yield* sql`INSERT INTO actions (id, workspace_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, created_at, updated_at)
+        yield* sql`INSERT INTO actions (id, workspace_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, created_at, updated_at, version)
           VALUES (${action}, ${workspace}, ${owner!.principal.id}, 'gmail-send-email', 'rehearsal-1', '{}', ${createHash('sha256').update('{}').digest()},
-            'succeeded', ${JSON.stringify(receipt)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+            'succeeded', ${JSON.stringify(receipt)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
 
         // The previous release runs against the current schema: nothing pending, nothing dropped.
         expect(yield* pendingMigrations(previousRelease)).toEqual([]);

@@ -7,7 +7,7 @@
  * Media's session.ts drives `speechController` per socket; nothing else can emit speech.
  */
 import { randomUUID } from 'node:crypto';
-import type { CaptureEpochId, ListenerId, SpeechCancelMessage, SpeechCancelReason, SpeechChunkMessage, TranscriptSegment, Unavailable } from '@sanctum/contracts';
+import type { AccessScope, CaptureEpochId, ListenerId, SpeechCancelMessage, SpeechCancelReason, SpeechChunkMessage, TranscriptSegment, Unavailable } from '@sanctum/contracts';
 import { Context, Effect, Fiber, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
 import { SPEECH_SAMPLE_RATE, SpeechSynthesizer } from '../providers/cartesia.ts';
@@ -71,6 +71,12 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
 export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
 /** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
+/** Reply text for one direct request on one listener; provided by the API entrypoint (speech-reply.ts). */
+export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
+  SpeechReplies,
+  (access: AccessScope, listener_id: ListenerId) => (request: string) => Stream.Stream<string, Unavailable>
+>() {}
+
 export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
 
 /** Splits a streamed reply into sentences so speech starts before the whole reply exists. */

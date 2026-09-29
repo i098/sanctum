@@ -25,9 +25,9 @@ import {
   type RequestActionInput,
   type RequestActionOutput,
   type ResolveActionInput,
-  SanctumApi,
   WorkspaceId,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';

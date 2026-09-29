@@ -13,11 +13,11 @@ import { createActionGrant, requestAction } from '../src/actions.ts';
 import { Authenticator } from '../src/auth.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { dbLayer } from '../src/db.ts';
-import { jobHandlers } from '../src/job-handlers.ts';
-import { runWorker } from '../src/jobs.ts';
+import { executeAction } from '../src/executor.ts';
+import { runWorker } from '../src/job-runner.ts';
 import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
-import { actionRow, provider, seedAccount } from './support/actions.ts';
+import { actionRow, actionServices, provider, seedAccount, seedCredential } from './support/actions.ts';
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -37,6 +37,7 @@ const database = Effect.acquireRelease(Effect.promise(createTestDatabase), db =>
 
 const seed = Effect.gen(function* () {
   const [owner, agent] = yield* seedWorkspace('Recovery', ['owner', 'agent']);
+  yield* seedCredential(owner!, agent!);
   const account = yield* seedAccount(owner!);
   yield* createActionGrant(owner!, { grantee: agent!.principal.id, action_key: SEND, account_id: account, meeting_id: null, restrictions: {}, expires_at: null });
   return { owner: owner!, agent: agent! };
@@ -61,7 +62,8 @@ const jobFor = (id: ActionId) =>
 
 const expireLeases = Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE status = 'running'`);
 
-const worker = Effect.fork(runWorker(jobHandlers));
+/** Only the handler these tests exercise, so the worker needs no media or model providers. */
+const worker = Effect.fork(runWorker({ 'action.execute': executeAction }).pipe(Effect.provide(actionServices)));
 
 describe('worker recovery', () => {
   it.live('finishes work accepted over HTTP after the API process is gone', () =>
