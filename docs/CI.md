@@ -75,6 +75,12 @@ The benchmark smoke fails on a failed operation or an invalid result record, nev
 Run it locally with `npm run check:app`; without `SANCTUM_TEST_MYSQL_URL`, server tests start a throwaway Docker container, but the replay step needs the URL.
 The Vitest suites include the TypeScript SDK, the v1 contract snapshot (`sdk/openapi.json` and the generated SDK files must match `npm run sdk:generate`), and MCP over Streamable HTTP with fixture-issuer tokens.
 
+## Rust benchmark reference
+
+The `rust-bench` job installs Rust 1.97.1 and runs `cargo test --release --locked --manifest-path benchmarks/rust/Cargo.toml` on the benchmark-only crate.
+It checks fixture generation against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation and date arithmetic.
+It runs no timing comparison; Rust/TypeScript comparisons (`scripts/benchmark-compare.ts`) belong on a controlled benchmark host.
+
 ## Python SDK
 
 The `python-sdk` job installs `sdk/python` (its only dependency is `httpx`) into a virtual environment; no Python enters an application image.
