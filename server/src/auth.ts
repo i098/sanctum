@@ -35,8 +35,6 @@ import { type AccessScopeName, MeetingId, NotFound } from '@sanctum/contracts';
 export const requireScope = (access: AccessScope, scope: AccessScopeName): Effect.Effect<void, Forbidden> =>
  access.scopes.includes(scope) ? Effect.void : Effect.fail(new Forbidden({ message: `Missing scope ${scope}`, required_scope: scope }));
 
-const grants = { read: ['read', 'write', 'owner'], write: ['write', 'owner'] } as const;
-
 /** Workspace-visible meetings plus explicit `meeting_access` grants, narrowed by an allowlist credential. */
 const visibleMeetings = (access: AccessScope, need: 'read' | 'write', only: string | null) =>
  Effect.gen(function*() {
@@ -44,7 +42,7 @@ const visibleMeetings = (access: AccessScope, need: 'read' | 'write', only: stri
   const rows = yield* sql<{ id: string }>`SELECT m.id FROM meetings m WHERE m.workspace_id = ${access.workspace_id}
       AND (${only} IS NULL OR m.id = ${only})
       AND (m.visibility = 'workspace' OR EXISTS (SELECT 1 FROM meeting_access a WHERE a.workspace_id = m.workspace_id
-        AND a.meeting_id = m.id AND a.principal_id = ${access.principal.id} AND a.access IN ${sql.in(grants[need])}))`;
+        AND a.meeting_id = m.id AND a.principal_id = ${access.principal.id} AND (${need} = 'read' OR a.access <> 'read')))`;
   const ids = rows.map(row => MeetingId.make(row.id));
   const meetings = access.meetings;
   return meetings.kind === 'allowlist' ? ids.filter(id => meetings.meeting_ids.includes(id)) : ids;
