@@ -19,6 +19,8 @@ const RECEIPT_LIMIT = 1_000;
 /** Default application cap on buffered audio: about 58 hours of 48 kHz PCM16. */
 export const DEFAULT_CAP_BYTES = 2 ** 34;
 
+export type EpochEnd = NonNullable<(typeof StartMessage.Type)['end_reason']>;
+
 interface ChunkRecord extends SealedChunk {
   readonly chunk_id: string;
   /** Listener id, set once the server refused the chunk; indexed so counts never load audio. */
@@ -99,7 +101,7 @@ export class RecoveryBuffer implements ChunkStore {
   private bytes = 0;
   private browserFree = Number.POSITIVE_INFINITY;
   /** Called when the browser closes the database, e.g. site data cleared or evicted. */
-  onLost: () => void = () => {};
+  onLost: () => void = () => { };
 
   private constructor(db: IDBDatabase, capBytes: number, storage: StorageManager | undefined) {
     this.db = db;
@@ -157,6 +159,17 @@ export class RecoveryBuffer implements ChunkStore {
     return guarded(async () => {
       const tx = this.db.transaction(EPOCHS, 'readwrite');
       tx.objectStore(EPOCHS).put(start);
+      await complete(tx);
+    });
+  }
+
+  /** Journals why an epoch ended on this device, for its archive registration; a no-op once a chunk of it was saved. */
+  endEpoch(epochId: string, reason: EpochEnd): Promise<void> {
+    return guarded(async () => {
+      const tx = this.db.transaction(EPOCHS, 'readwrite');
+      const epochs = tx.objectStore(EPOCHS);
+      const start = (await request(epochs.get(epochId))) as typeof StartMessage.Type | undefined;
+      if (start !== undefined) epochs.put({ ...start, end_reason: reason });
       await complete(tx);
     });
   }

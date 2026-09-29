@@ -7,7 +7,7 @@
  */
 import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpochId, type RecordingChunkManifest } from '@sanctum/contracts';
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
-import { RecoveryBuffer } from './buffer.ts';
+import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type LiveOptions, type LiveStatus, type LiveStream, type RejectReason, type StopReason } from './live.ts';
 import { acquireMicrophone, captureIssue, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'epochStart'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart'
 >;
 
 export interface CaptureDeps {
@@ -56,7 +56,7 @@ const isSampleRate = Schema.is(SampleRate);
 
 interface Epoch {
   readonly id: CaptureEpochId;
-  /** The live `start`; a regained lease resends it under the renewed generation. */
+  /** The live `start`; a regained lease resends it only while its generation still holds the lease. */
   readonly start: typeof StartMessage.Type;
   /** Recorder sample index of epoch sample 0. */
   readonly base: number;
@@ -281,8 +281,7 @@ class CaptureController implements CaptureView {
     let epoch = session.epoch;
     if (epoch !== null && now - epoch.lastWallMs - ((sampleStart + samples.length - epoch.lastEnd) / rate) * 1000 > this.timing.gapMs) {
       // The sample clock paused (sleep, suspension) while wall time moved: re-anchor in a new epoch.
-      epoch.live?.stop('close');
-      void epoch.assembler.close();
+      this.endEpoch(session, 'close');
       epoch = null;
     }
     epoch ??= session.epoch = this.openEpoch(session, sampleStart, now - (samples.length / rate) * 1000);
@@ -331,15 +330,14 @@ class CaptureController implements CaptureView {
   }
 
   /**
-   * A `stale_generation` keeps the epoch (its audio uploads once the lease is regained) and claims the
-   * lease now; `epoch_closed` drops an epoch a takeover ended so the next block opens a fresh one.
+   * A `stale_generation` stops the live stream and asks the heartbeat whether the lease is still held;
+   * `epoch_closed` drops an epoch a takeover ended so the next block opens a fresh one.
    */
   private onLive(status: LiveStatus, reason?: RejectReason): void {
     this.live = status;
     const epoch = this.session?.epoch;
     if (status === 'rejected' && reason === 'stale_generation') {
       this.issue = 'lease_lost';
-      this.leaseLost = true;
       if (epoch) epoch.live = null;
       void this.beat();
     } else if (status === 'rejected' && reason === 'epoch_closed' && epoch) {
@@ -350,7 +348,8 @@ class CaptureController implements CaptureView {
     this.publish();
   }
 
-  private async stopSession(reason: StopReason, phase: 'paused' | 'stopped'): Promise<void> {
+  /** `journal` records `reason` as the epoch's end; an interrupted stop leaves it unjournaled so the server records `interrupted`. */
+  private async stopSession(reason: StopReason, phase: 'paused' | 'stopped', journal = true): Promise<void> {
     const session = this.session;
     if (session === null && this.phase === 'starting') this.cancelStart = phase;
     if (session === null || session.stopping) return;
@@ -358,6 +357,7 @@ class CaptureController implements CaptureView {
     session.epoch?.live?.stop(reason);
     await session.recorder.flush();
     this.session = null;
+    if (journal && session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
     await session.epoch?.assembler.close();
     await session.recorder.close().catch(() => { });
     session.stream.getTracks().forEach((track) => track.stop());
@@ -373,7 +373,7 @@ class CaptureController implements CaptureView {
   private halt(issue: CaptureIssue, interrupted: boolean): void {
     this.issue = issue;
     this.interrupted ||= interrupted;
-    void this.stopSession('close', 'paused');
+    void this.stopSession('close', 'paused', !interrupted);
     this.publish();
   }
 
@@ -456,8 +456,11 @@ class CaptureController implements CaptureView {
 
   private onHeartbeat(listener: StoredListener, exit: Exit.Exit<{ readonly owner: boolean; readonly lease_generation: StoredListener['lease_generation'] }, { readonly _tag: string }>): void {
     if (Exit.isSuccess(exit)) {
-      this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
-      if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
+      // `owner: false` echoes this device's own generation; only a held lease may change it.
+      if (exit.value.owner) {
+        this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
+        if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
+      }
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.saveListener(null); // the server no longer knows this listener; the next start registers again
@@ -466,41 +469,50 @@ class CaptureController implements CaptureView {
   }
 
   private onOwnership(owner: boolean): void {
-    if (owner === !this.leaseLost) return;
+    const changed = owner === this.leaseLost;
     this.leaseLost = !owner;
     if (owner) this.regainLease();
-    else this.loseLease();
+    else if (changed) this.loseLease();
     this.publish();
   }
 
+  /** Ends the epoch here: audio after the loss opens new epochs under this device's generation, which the server refuses. */
   private loseLease(): void {
-    const epoch = this.session?.epoch;
-    if (epoch) {
-      epoch.live?.stop('close');
-      epoch.live = null;
-    }
+    if (this.session) this.endEpoch(this.session, 'lease_lost');
     this.issue = 'lease_lost';
   }
 
-  /** Resends the stream-less epoch's `start` under the renewed generation, so the server accepts (or first inserts) it. */
+  /** Resends the stream-less epoch's `start` if its generation still holds; an epoch of an older generation ends here. */
   private regainLease(): void {
     const session = this.session;
     const epoch = session?.epoch;
-    if (session && epoch && epoch.live === null) epoch.live = this.connectLive({ ...epoch.start, lease_generation: session.listener.lease_generation });
+    if (session && epoch && epoch.start.lease_generation !== session.listener.lease_generation) this.endEpoch(session, 'lease_lost');
+    else if (epoch && epoch.live === null) epoch.live = this.connectLive(epoch.start);
     if (this.issue === 'lease_lost') this.issue = null;
+  }
+
+  /** Ends the current epoch on this device, journaling why, so the next block opens a fresh one. */
+  private endEpoch(session: Session, reason: EpochEnd): void {
+    const epoch = session.epoch;
+    if (epoch === null) return;
+    epoch.live?.stop('close');
+    epoch.live = null;
+    this.live = null;
+    void session.buffer.endEpoch(epoch.id, reason).catch(() => { });
+    void epoch.assembler.close();
+    session.epoch = null;
   }
 
   /**
    * An epoch the server does not know: the current one waits for its own live `start`; any other is
-   * registered archive-only from its journaled `start` under the lease a heartbeat just claimed or renewed.
+   * registered archive-only from its `start` as journaled (original generation and end reason); the
+   * server decides whether that generation held the lease when the epoch was captured.
    */
   private unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'> {
     if (this.session?.epoch?.id === epochId) return Effect.succeed('wait');
     return Effect.promise(async () => {
       const start = await this.buffer?.then((buffer) => buffer.epochStart(epochId)).catch(() => null);
-      if (!start) return null;
-      await this.beat();
-      return this.listener?.id === start.listener_id ? { ...start, lease_generation: this.listener.lease_generation, archive_only: true } : null;
+      return start && this.listener?.id === start.listener_id ? { ...start, archive_only: true } : null;
     }).pipe(
       Effect.flatMap((start) =>
         start === null

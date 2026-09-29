@@ -1,6 +1,7 @@
 import { NotFound, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EpochEnd } from '../src/lib/capture/buffer.ts';
 import type { ListenersClient } from '../src/lib/capture/client.ts';
 import { createCaptureController, type CaptureBuffer, type CaptureDeps } from '../src/lib/capture/controller.ts';
 import type { LiveOptions, LiveStream, StopReason } from '../src/lib/capture/live.ts';
@@ -57,6 +58,10 @@ class MemoryBuffer implements CaptureBuffer {
   async saveEpoch(start: typeof StartMessage.Type) {
     this.starts.set(start.epoch_id, start);
   }
+  async endEpoch(epochId: string, reason: EpochEnd) {
+    const start = this.starts.get(epochId);
+    if (start) this.starts.set(epochId, { ...start, end_reason: reason });
+  }
   async epochStart(epochId: string) {
     return this.starts.get(epochId) ?? null;
   }
@@ -96,6 +101,110 @@ class FakeLocks {
   }
 }
 
+type FakeLive = { options: LiveOptions; sent: number[]; stopped: StopReason | null };
+
+const receipt = (manifest: RecordingChunkManifest) =>
+  ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
+
+/** The listener API as the real server behaves: identity is the lease generation alone. */
+class FakeListenerServer {
+  readonly lives: FakeLive[] = [];
+  readonly calls = { register: 0, heartbeat: [] as unknown[], put: [] as RecordingChunkManifest[] };
+  /** The server's lease: `active` while its holder keeps renewing. */
+  private generation: number;
+  private active: boolean;
+  /** When each generation was claimed. */
+  private readonly claims: Array<{ generation: number; at: number }>;
+  /** The server forgot LISTENER_ID: its heartbeat and uploads fail NotFound, and registration issues a new id. */
+  private forgotten = false;
+  /** Registered epochs and their generation; chunks of any other epoch, or ending after a later claim, are NotFound. */
+  private readonly epochs: Map<string, number>;
+  /** Heartbeats and archive registrations cannot reach the server. */
+  private offline = false;
+  private readonly lease = { lease_expires_at: '2026-09-29T09:00:45Z' };
+
+  private readonly options: { unclaimed?: boolean; epochs?: string[] };
+
+  constructor(options: { unclaimed?: boolean; epochs?: string[] }) {
+    this.options = options;
+    this.generation = options.unclaimed ? 0 : 1;
+    this.active = !options.unclaimed;
+    this.claims = options.unclaimed ? [] : [{ generation: 1, at: 0 }];
+    this.epochs = new Map((options.epochs ?? []).map((id) => [id, 1]));
+  }
+
+  readonly client = {
+    registerListener: () => {
+      this.calls.register++;
+      return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
+    },
+    heartbeat: (request: { path: { listener_id: string }; payload: { lease_generation: number } }) => this.heartbeat(request),
+    putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => this.putChunk(request.headers['x-sanctum-manifest']),
+  } as unknown as ListenersClient;
+
+  private claimedAfter(held: number, atMs: number): boolean {
+    return this.claims.some((claim) => claim.generation > held && claim.at < atMs);
+  }
+
+  private heartbeat(request: { path: { listener_id: string }; payload: { lease_generation: number } }) {
+    this.calls.heartbeat.push(request.payload);
+    if (this.offline) return Effect.fail(new Unavailable({ message: 'offline', retryable: true }));
+    if (this.forgotten && request.path.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
+    const held = request.payload.lease_generation;
+    if (this.active && held !== this.generation) return Effect.succeed({ ...this.lease, lease_generation: held, owner: false });
+    if (held !== this.generation || this.generation === 0) this.claims.push({ generation: ++this.generation, at: Date.now() }); // takeover of an expired (or never claimed) lease
+    this.active = true;
+    return Effect.succeed({ ...this.lease, lease_generation: this.generation, owner: true });
+  }
+
+  private putChunk(manifest: RecordingChunkManifest) {
+    if (this.forgotten && manifest.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
+    const held = this.epochs.get(manifest.epoch_id);
+    const end = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
+    if (held === undefined || this.claimedAfter(held, end)) return Effect.fail(new NotFound({ message: 'Capture epoch not found for this listener' }));
+    this.calls.put.push(manifest);
+    return Effect.succeed(receipt(manifest));
+  }
+
+  private registerArchive(liveOptions: LiveOptions): void {
+    const { start } = liveOptions;
+    if (this.offline) return liveOptions.onStatus('reconnecting');
+    if (start.lease_generation > this.generation || this.claimedAfter(start.lease_generation, Date.parse(start.clock.captured_at))) return liveOptions.onStatus('rejected', 'stale_generation');
+    this.epochs.set(start.epoch_id, start.lease_generation);
+    liveOptions.onStatus('live');
+  }
+
+  private startLive(liveOptions: LiveOptions): void {
+    const { start } = liveOptions;
+    if (this.offline) queueMicrotask(() => liveOptions.onStatus('reconnecting'));
+    else if (this.active && start.lease_generation === this.generation) this.epochs.set(start.epoch_id, start.lease_generation);
+    else queueMicrotask(() => liveOptions.onStatus('rejected', 'stale_generation'));
+  }
+
+  readonly openLive = (liveOptions: LiveOptions): LiveStream => {
+    const live: FakeLive = { options: liveOptions, sent: [], stopped: null };
+    this.lives.push(live);
+    if (liveOptions.start.archive_only) queueMicrotask(() => this.registerArchive(liveOptions));
+    else this.startLive(liveOptions);
+    liveOptions.onStatus('connecting');
+    return { send: (start) => void live.sent.push(start), stop: (reason) => void (live.stopped = reason) };
+  };
+
+  /** `false`: another device claims the lease; `true`: the winner's lease expires, so the next heartbeat takes it over. */
+  readonly setOwner = (value: boolean) => {
+    if (value) this.active = false;
+    else this.claims.push({ generation: ++this.generation, at: Date.now() });
+  };
+
+  readonly setOffline = (value: boolean) => {
+    this.offline = value;
+  };
+
+  readonly forget = () => {
+    this.forgotten = true;
+  };
+}
+
 function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[] } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
@@ -107,42 +216,10 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const status = new FakeStatus();
   const sentinels: FakeSentinel[] = [];
   const buffer = options.buffer ?? new MemoryBuffer();
-  const storage = new Map<string, string>(options.stored ? [['sanctum.listener', JSON.stringify({ id: LISTENER_ID, lease_generation: 3 })]] : []);
-  const lives: Array<{ options: LiveOptions; sent: number[]; stopped: StopReason | null }> = [];
-  const calls = { register: 0, heartbeat: [] as unknown[], put: [] as RecordingChunkManifest[] };
-  let owner = true;
-  let generation = 1;
-  /** The server forgot LISTENER_ID: its heartbeat and uploads fail NotFound, and registration issues a new id. */
-  let forgotten = false;
-  /** Epochs the server inserted from a `start` carrying the current lease; chunks of any other epoch are NotFound. */
-  const epochs = new Set(options.epochs);
-  /** Epochs another owner's takeover ended; their `start` is rejected as closed, their chunks still upload. */
-  const ended = new Set<string>();
-  /** Heartbeats and archive registrations cannot reach the server. */
-  let offline = false;
-  const unknown = () => Effect.fail(new NotFound({ message: 'listener not found' }));
+  const storage = new Map<string, string>(options.stored ? [['sanctum.listener', JSON.stringify({ id: LISTENER_ID, lease_generation: 1 })]] : []);
+  const server = new FakeListenerServer(options);
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
-  const receipt = (manifest: RecordingChunkManifest) =>
-    ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
-  const client = {
-    registerListener: () => {
-      calls.register++;
-      return Effect.succeed({ id: forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: options.unclaimed ? 0 : 1 });
-    },
-    heartbeat: (request: { path: { listener_id: string }; payload: unknown }) => {
-      calls.heartbeat.push(request.payload);
-      if (offline) return Effect.fail(new Unavailable({ message: 'offline', retryable: true }));
-      if (forgotten && request.path.listener_id === LISTENER_ID) return unknown();
-      return Effect.succeed({ lease_generation: generation, lease_expires_at: '2026-09-29T09:00:45Z', owner });
-    },
-    putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => {
-      const manifest = request.headers['x-sanctum-manifest'];
-      if (forgotten && manifest.listener_id === LISTENER_ID) return unknown();
-      if (!epochs.has(manifest.epoch_id)) return Effect.fail(new NotFound({ message: 'Capture epoch not found for this listener' }));
-      calls.put.push(manifest);
-      return Effect.succeed(receipt(manifest));
-    },
-  } as unknown as ListenersClient;
+  const { lives, calls, client } = server;
   const deps: CaptureDeps = {
     window: win as unknown as NonNullable<CaptureDeps['window']>,
     document: doc as unknown as NonNullable<CaptureDeps['document']>,
@@ -159,23 +236,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
       return { sampleRate: RATE, levels: { bandCount: 33, read: (bands) => (bands.fill(0.5), 0.5) }, flush: async () => { }, close: async () => { } };
     },
     client,
-    openLive: (liveOptions): LiveStream => {
-      const live = { options: liveOptions, sent: [] as number[], stopped: null as StopReason | null };
-      lives.push(live);
-      const { start } = liveOptions;
-      const current = owner && start.lease_generation === generation;
-      if (start.archive_only) {
-        queueMicrotask(() => {
-          if (offline) return liveOptions.onStatus('reconnecting');
-          if (!current) return liveOptions.onStatus('rejected', 'stale_generation');
-          epochs.add(start.epoch_id);
-          liveOptions.onStatus('live');
-        });
-      } else if (ended.has(start.epoch_id)) queueMicrotask(() => liveOptions.onStatus('rejected', 'epoch_closed'));
-      else if (current) epochs.add(start.epoch_id);
-      liveOptions.onStatus('connecting');
-      return { send: (start) => void live.sent.push(start), stop: (reason) => void (live.stopped = reason) };
-    },
+    openLive: server.openLive,
     streamUrl: (id) => `ws://test/api/v1/listeners/${id}/stream`,
     timing: { chunkSeconds: 1, commitSeconds: 0.5, heartbeatMs: 15_000, gapMs: 3_000 },
   };
@@ -204,19 +265,10 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     accept,
     reject,
     snapshot,
-    setOwner: (value: boolean) => {
-      if (!value && owner) {
-        generation++;
-        epochs.forEach((epoch) => ended.add(epoch));
-      }
-      owner = value;
-    },
-    setOffline: (value: boolean) => {
-      offline = value;
-    },
-    forget: () => {
-      forgotten = true;
-    },
+    /** `false`: another device claims the lease; `true`: the winner's lease expires, so the next heartbeat takes it over. */
+    setOwner: server.setOwner,
+    setOffline: server.setOffline,
+    forget: server.forget,
   };
 }
 
@@ -308,7 +360,7 @@ describe('capture lifecycle', () => {
     await h.engine.start();
     h.feed(0.1);
     h.accept();
-    const overlay = h.engine.subscribe(() => {});
+    const overlay = h.engine.subscribe(() => { });
     overlay();
     h.feed(0.6);
     await settle();
@@ -438,12 +490,31 @@ describe('capture lifecycle', () => {
     h.accept();
     h.setOwner(false);
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost', epochId: null });
     expect(h.lives[0]!.stopped).toBe('close');
     expect(h.calls.heartbeat.at(-1)).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
   });
 
-  it('reopens the live stream in a new epoch when ownership comes back after a takeover ended the old one', async () => {
+  it('keeps its own generation after losing the lease and cannot restart live capture while the winner holds it', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.setOwner(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(JSON.parse(h.storage.get('sanctum.listener')!)).toEqual({ id: LISTENER_ID, lease_generation: 1 });
+    expect(h.calls.heartbeat.slice(-2)).toMatchObject([{ lease_generation: 1 }, { lease_generation: 1 }]);
+
+    await h.engine.pause();
+    await h.engine.resume();
+    h.feed(0.1);
+    await settle();
+    expect(h.lives.filter((live) => !live.options.start.archive_only)).toHaveLength(1); // no live start after the loss
+    expect(h.snapshot().listener).toBe('degraded');
+    expect(h.buffer.starts.get(h.snapshot().epochId!)).toMatchObject({ lease_generation: 1 });
+  });
+
+  it('opens a fresh epoch under the new generation when the lease comes back', async () => {
     const h = harness();
     await h.engine.start();
     h.feed(0.1);
@@ -451,17 +522,21 @@ describe('capture lifecycle', () => {
     const first = h.lives[0]!.options.start.epoch_id;
     h.setOwner(false);
     await vi.advanceTimersByTimeAsync(15_000);
+    h.feed(0.1);
+    await settle();
+    const lost = h.snapshot().epochId;
+    expect(lost).not.toBe(first);
     h.setOwner(true);
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(h.lives[1]!.options.start).toMatchObject({ epoch_id: first, lease_generation: 2 }); // rejected: the takeover closed it
-    expect(h.snapshot()).toMatchObject({ listener: 'starting', issue: null, epochId: null });
+    expect(JSON.parse(h.storage.get('sanctum.listener')!)).toMatchObject({ lease_generation: 3 });
+    expect(h.snapshot()).toMatchObject({ listener: 'starting', issue: null, epochId: null }); // the old generation's epoch ended here
+    expect(h.buffer.starts.get(lost!)).toMatchObject({ lease_generation: 1, end_reason: 'lease_lost' });
     h.feed(0.1);
-    expect(h.lives).toHaveLength(3);
-    expect(h.lives[2]!.options.start.epoch_id).not.toBe(first);
-    expect(h.lives[2]!.options.start.lease_generation).toBe(2);
-    h.accept();
+    const [, next] = h.lives.filter((live) => !live.options.start.archive_only);
+    expect(next!.options.start).toMatchObject({ lease_generation: 3 });
+    next!.options.onStatus('live');
     await settle();
-    expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[2]!.options.start.epoch_id });
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: next!.options.start.epoch_id });
   });
 
   it('uploads an epoch whose start was refused for a lapsed lease once the heartbeat regains it', async () => {
@@ -494,23 +569,28 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 });
   });
 
-  it('uploads audio recorded while another owner held the lease once the lease comes back', async () => {
-    const h = harness();
-    h.setOwner(false);
+  it('uploads audio recorded under the lease with its own generation and strands audio recorded after the loss', async () => {
+    const h = harness({ stored: true });
+    h.setOffline(true);
     await h.engine.start();
-    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
+    h.feed(1.2);
+    const held = h.lives[0]!.options.start.epoch_id;
+    vi.setSystemTime(Date.now() + 2_000); // the takeover comes after this audio ends
+    h.setOwner(false);
+    h.setOffline(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost', epochId: null });
+
     h.feed(1.2);
     await settle();
-    const epoch = h.snapshot().epochId;
-    expect(h.lives).toHaveLength(0);
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 1, strandedChunks: 0 })); // waits instead of being refused
-
-    h.setOwner(true);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(h.lives[0]!.options.start).toMatchObject({ epoch_id: epoch, lease_generation: 2 });
-    await h.engine.pause(); // seals the epoch's last partial chunk
-    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([epoch, epoch]));
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 }));
+    const after = h.snapshot().epochId!;
+    await h.engine.pause();
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 2 }));
+    expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([held, held]);
+    const archived = new Map<string, typeof StartMessage.Type>(h.lives.filter((live) => live.options.start.archive_only).map((live) => [live.options.start.epoch_id, live.options.start]));
+    expect(archived.get(held)).toMatchObject({ lease_generation: 1, end_reason: 'lease_lost' });
+    expect(archived.get(after)).toMatchObject({ lease_generation: 1, end_reason: 'pause' });
+    expect([...h.buffer.chunks.values()].map((chunk) => chunk.manifest.epoch_id)).toEqual([after, after]); // never deleted
   });
 
   it('registers an epoch paused while offline and uploads it after reconnect', async () => {
@@ -527,7 +607,7 @@ describe('capture lifecycle', () => {
     h.setOffline(false);
     h.win.dispatchEvent(new Event('online'));
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([offline, offline]));
-    expect(h.lives.at(-1)!.options.start).toMatchObject({ epoch_id: offline, lease_generation: 1, archive_only: true });
+    expect(h.lives.at(-1)!.options.start).toMatchObject({ epoch_id: offline, lease_generation: 1, archive_only: true, end_reason: 'pause' });
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 }));
     expect(h.buffer.starts.has(offline)).toBe(false);
   });
@@ -547,7 +627,7 @@ describe('capture lifecycle', () => {
     h.setOffline(false);
     await vi.advanceTimersByTimeAsync(15_000);
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([slept, slept]));
-    expect(h.lives.filter((live) => live.options.start.archive_only).map((live) => live.options.start.epoch_id)).toContain(slept);
+    expect(h.lives.filter((live) => live.options.start.archive_only).map((live) => live.options.start)).toContainEqual(expect.objectContaining({ epoch_id: slept, end_reason: 'close' }));
     expect(h.snapshot().epochId).toBe(woke);
     expect(h.lives[1]).toMatchObject({ options: { start: { epoch_id: woke } }, stopped: null });
   });
@@ -567,16 +647,17 @@ describe('capture lifecycle', () => {
     const reloaded = harness({ buffer: closed.buffer, stored: true });
     await vi.waitFor(() => expect(reloaded.calls.put.map((manifest) => manifest.epoch_id)).toEqual([epoch]));
     expect(reloaded.lives.map((live) => live.options.start)).toMatchObject([{ epoch_id: epoch, lease_generation: 1, archive_only: true }]);
+    expect(reloaded.lives[0]!.options.start).not.toHaveProperty('end_reason'); // a tab close never journals: the server records interrupted
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0, strandedChunks: 0 }));
   });
 
-  it('keeps an epoch the server refuses to register as stranded local audio', async () => {
+  it('keeps audio the server refuses after a takeover as stranded local audio', async () => {
     const h = harness({ stored: true });
     h.setOffline(true);
     await h.engine.start();
     h.feed(1.2);
     await h.engine.pause();
-    h.setOwner(false); // another device took the listener over meanwhile
+    h.setOwner(false); // another device took the listener over before this audio ended
     h.setOffline(false);
     h.win.dispatchEvent(new Event('online'));
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 2 }));
