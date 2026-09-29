@@ -7,7 +7,7 @@ import type { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanc
 import type { Effect } from 'effect';
 import { reconcileTranscript } from './media/reconcile.ts';
 import type { ObjectStore } from './object-store.ts';
-import type { SpeechToText } from './providers/deepgram.ts';
+import type { SpeechToText } from './media/providers.ts';
 
 export interface ClaimedJob {
   readonly id: JobId;

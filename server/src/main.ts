@@ -12,16 +12,15 @@ import { type Authenticator, UnconfiguredAuthenticator } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer } from './db.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
+import { MediaProvidersLive, type SpeechToText } from './media/providers.ts';
 import { loadMigrations } from './migrate.ts';
 import type { ObjectStore } from './object-store.ts';
-import { DeepgramLive, type SpeechToText } from './providers/deepgram.ts';
-import { R2ObjectStoreLive } from './providers/r2.ts';
 
 /** Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free port). */
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: Parameters<typeof dbLayer>[0] },
   authenticator: Layer.Layer<Authenticator> = UnconfiguredAuthenticator,
-  media: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError> = Layer.merge(R2ObjectStoreLive, DeepgramLive),
+  media: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError> = MediaProvidersLive,
 ) =>
   HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
     HttpServer.withLogAddress,

@@ -9,15 +9,14 @@ import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer } from './db.ts';
 import { jobHandlers } from './job-handlers.ts';
 import { runWorker } from './jobs.ts';
+import { MediaProvidersLive } from './media/providers.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
-import { DeepgramLive } from './providers/deepgram.ts';
-import { R2ObjectStoreLive } from './providers/r2.ts';
 
 if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
     const run = Effect.zipRight(requireCurrentSchema(loadMigrations()), runWorker(jobHandlers));
-    return yield* Effect.provide(run, Layer.mergeAll(dbLayer(config.mysql), R2ObjectStoreLive, DeepgramLive));
+    return yield* Effect.provide(run, Layer.merge(dbLayer(config.mysql), MediaProvidersLive));
   }).pipe(NodeRuntime.runMain);
 }
