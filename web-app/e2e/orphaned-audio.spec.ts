@@ -166,8 +166,8 @@ test('lists recordings of removed listeners only while no tab captures', async (
   await expect(page.getByText('1 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
 
   await other.close(); // closing the capturing tab frees the capture lock
-  await settings.getByRole('button', { name: 'Close' }).click();
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect.poll(() => page.evaluate(async () => (await navigator.locks.query()).held?.length)).toBe(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // returning to this tab re-lists without reopening Settings
   await expect(settings.getByRole('listitem')).toContainText('1 chunks · listener removed');
   await expect(settings.getByRole('button', { name: 'Export WAV' })).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Discard' })).toBeVisible();

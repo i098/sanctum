@@ -54,8 +54,15 @@ export function LocalRecordings({ engine }: LocalRecordingsProps) {
   useEffect(() => {
     if (stranded === 0) return setRecordings([]);
     let current = true;
-    engine.orphanedRecordings().then(list => current && setRecordings(list), (error: unknown) => current && fail(error));
-    return () => void (current = false);
+    const query = (): void => void engine.orphanedRecordings().then(list => current && setRecordings(list), (error: unknown) => current && fail(error));
+    query();
+    window.addEventListener('focus', query);
+    document.addEventListener('visibilitychange', query);
+    return () => {
+      current = false;
+      window.removeEventListener('focus', query);
+      document.removeEventListener('visibilitychange', query);
+    };
   }, [engine, stranded, listener]);
 
   const exportWav = (recording: OrphanedRecording, part: number): void => {

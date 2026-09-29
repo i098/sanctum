@@ -284,6 +284,7 @@ class CaptureController implements CaptureView {
   }
 
   private async ensureListener(buffer: CaptureBuffer): Promise<StoredListener> {
+    this.listener ??= this.storedListener();
     if (this.listener !== null) return this.listener;
     const capabilities = {
       audio_worklet: typeof AudioWorkletNode !== 'undefined',
@@ -540,6 +541,7 @@ class CaptureController implements CaptureView {
    * server decides whether that generation held the lease when the epoch was captured.
    */
   private unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'> {
+    void this.beat();
     if (this.session?.epoch?.id === epochId) return Effect.succeed('wait');
     return Effect.promise(async () => {
       const buffer = await this.buffer?.catch(() => null);

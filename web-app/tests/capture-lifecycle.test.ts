@@ -475,12 +475,8 @@ describe('capture lifecycle', () => {
     await buffer.sealChunk(old);
     const h = harness({ buffer, stored: true });
     h.forget();
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 1, strandedChunks: 0 })); // the upload was refused
-    expect(await listedChunks(h)).toBe(0);
-
-    await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server no longer knows the listener
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 0, strandedChunks: 1 })); // the failed upload asks the heartbeat, which learns the server no longer knows the listener
     expect(h.storage.has('sanctum.listener')).toBe(false);
-    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, refusedChunks: 0, strandedChunks: 1 });
     await expectAgreement(h);
 
     await h.engine.start();
@@ -514,8 +510,8 @@ describe('capture lifecycle', () => {
     const h = harness({ stored: true });
     await h.engine.start();
     h.forget();
-    h.feed(1.2);
-    await vi.waitFor(() => expect(h.buffer.chunks.size).toBe(1));
+    h.feed(0.6); // no chunk is sealed, so only the heartbeat can learn of the removal
+    await settle();
     const epochId = h.snapshot().epochId!;
     await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server removed the listener
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'listener_removed', epochId: null, bufferedChunks: 0, refusedChunks: 0 }));
@@ -534,6 +530,15 @@ describe('capture lifecycle', () => {
     expect(h.calls.register).toBe(1);
     expect(h.snapshot()).toMatchObject({ issue: null, strandedChunks: kept });
     expect(JSON.parse(h.storage.get('sanctum.listener')!)).toMatchObject({ id: NEXT_LISTENER_ID });
+  });
+
+  it('stops capture as soon as an upload finds the listener removed, without waiting for the heartbeat', async () => {
+    const h = harness({ stored: true });
+    await h.engine.start();
+    h.forget();
+    h.feed(1.2); // the sealed chunk's upload fails NotFound
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'listener_removed', epochId: null }));
+    expect(h.track.readyState).toBe('ended');
   });
 
   it('lists recordings of removed listeners for export or discard only while no tab captures', async () => {
@@ -597,6 +602,28 @@ describe('capture lifecycle', () => {
 
     await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
+  });
+
+  it('records under the listener another tab registered after this one loaded instead of registering a second one', async () => {
+    const buffer = new MemoryBuffer();
+    const h = harness({ buffer });
+    await settle();
+    h.storage.set('sanctum.listener', JSON.stringify({ id: LISTENER_ID, lease_generation: 1 })); // another tab registered, recorded and paused offline with uploads pending
+    const pending = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(pending);
+    h.setOffline(true);
+    await h.engine.start();
+    h.feed(0.1);
+    expect(h.calls.register).toBe(0);
+    expect(h.lives.at(-1)!.options.start.listener_id).toBe(LISTENER_ID);
+    expect(JSON.parse(h.storage.get('sanctum.listener')!)).toMatchObject({ id: LISTENER_ID });
+    await h.engine.pause();
+    expect(await h.engine.orphanedRecordings()).toEqual([]);
+    await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] });
+    expect(buffer.chunks.has(pending.manifest.chunk_id)).toBe(true);
   });
 
   it('keeps the listener another tab registered when this tab learns its older listener was removed', async () => {
