@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "reference_hardware": {
+    "status": "unverified",
+    "name": null,
+    "cpu_model": null,
+    "cores": null,
+    "ram_gb": null,
+    "os": null
+  },
+  "runtime": {
+    "node_engine": ">=24.12.0",
+    "node": null,
+    "v8": null,
+    "rust_toolchain": null,
+    "rust_release_flags": null
+  },
+  "limits": {
+    "cpu_cores": null,
+    "memory_mb": null
+  },
+  "workloads": [
+    {
+      "id": "pcm_ingest",
+      "description": "Decode, validate and dispatch binary PCM16 live frames through the authorized listener stream path.",
+      "fixture": { "generator": "pcm16-frames-v1", "seed": 1 },
+      "parameters": {
+        "sample_rate_hz": 48000,
+        "channels": 1,
+        "sample_format": "pcm16le",
+        "frame_ms": 20,
+        "samples_per_frame": 960,
+        "header_bytes": 24,
+        "payload_bytes": 1920,
+        "frame_bytes": 1944,
+        "offered_frames_per_second": [50, 400, 3200, 12800],
+        "concurrent_listeners": [1, 8, 64, 256],
+        "sweep_until_saturation": true,
+        "cache_state": "warm"
+      },
+      "metrics": ["throughput", "latency_p50", "latency_p95", "latency_p99", "error_rate", "dropped_samples", "cpu", "rss", "heap", "external", "gc_ms", "event_loop_delay_p99"],
+      "durability": "Acceptance means validated and dispatched to the bounded live queue, not saved; overload is rejected or counted as dropped samples, never lost silently.",
+      "parity_gate": { "min_throughput_ratio": 0.9, "max_latency_ratio_p95": 1.1, "max_latency_ratio_p99": 1.1, "status": "unverified" }
+    },
+    {
+      "id": "transcript_ingest",
+      "description": "Persist final transcript segments with source watermarks through the scoped MySQL store.",
+      "fixture": { "generator": "transcript-segments-v1", "seed": 2 },
+      "parameters": {
+        "meetings": 100,
+        "segments_per_meeting": 2000,
+        "segment_text_bytes": 240,
+        "batch_segments": 50,
+        "concurrency": [1, 8, 32],
+        "cache_state": "warm"
+      },
+      "metrics": ["throughput", "latency_p50", "latency_p95", "latency_p99", "error_rate", "dropped_samples", "cpu", "rss", "heap", "external", "gc_ms", "event_loop_delay_p99"],
+      "durability": "A segment counts only after its MySQL transaction commits with the source watermark; a repeated source identity is idempotent.",
+      "parity_gate": { "min_throughput_ratio": 0.9, "max_latency_ratio_p95": 1.1, "max_latency_ratio_p99": 1.1, "status": "unverified" }
+    },
+    {
+      "id": "context_read_write",
+      "description": "Scoped, versioned context reads and writes with authorization checks for workspaces and meetings.",
+      "fixture": { "generator": "context-items-v1", "seed": 3 },
+      "parameters": {
+        "workspaces": 10,
+        "meetings_per_workspace": 100,
+        "context_items_per_meeting": 200,
+        "read_write_ratio": 9,
+        "concurrency": [1, 8, 32, 128],
+        "cache_state": "cold_and_warm"
+      },
+      "metrics": ["throughput", "latency_p50", "latency_p95", "latency_p99", "error_rate", "dropped_samples", "cpu", "rss", "heap", "external", "gc_ms", "event_loop_delay_p99"],
+      "durability": "A write counts after MySQL commit; revision conflicts are reported as errors, and reads never cross workspace scope.",
+      "parity_gate": { "min_throughput_ratio": 0.9, "max_latency_ratio_p95": 1.1, "max_latency_ratio_p99": 1.1, "status": "unverified" }
+    },
+    {
+      "id": "archive_streaming",
+      "description": "Stream 30-second PCM16 WAV chunks through hash validation, a deterministic object-store stub and the manifest record.",
+      "fixture": { "generator": "wav-chunks-v1", "seed": 4 },
+      "parameters": {
+        "chunk_seconds": 30,
+        "sample_rate_hz": 48000,
+        "channels": 1,
+        "sample_format": "pcm16le",
+        "wav_header_bytes": 44,
+        "chunk_bytes": 2880044,
+        "chunks": 240,
+        "concurrent_uploads": [1, 4, 16],
+        "cache_state": "cold"
+      },
+      "metrics": ["throughput", "latency_p50", "latency_p95", "latency_p99", "error_rate", "dropped_samples", "cpu", "rss", "heap", "external", "gc_ms", "event_loop_delay_p99"],
+      "durability": "A chunk counts as saved only after the object write and its database manifest both succeed; a repeated hash is idempotent and a conflicting hash is rejected.",
+      "parity_gate": { "min_throughput_ratio": 0.9, "max_latency_ratio_p95": 1.1, "max_latency_ratio_p99": 1.1, "status": "unverified" }
+    },
+    {
+      "id": "cosine_ranking",
+      "description": "Exact batched cosine top-k over normalized float32 embeddings in one workspace directory.",
+      "fixture": { "generator": "float32-embeddings-v1", "seed": 5 },
+      "parameters": {
+        "algorithm": "exact_cosine",
+        "precision": "float32",
+        "dimension": 1024,
+        "directory_sizes": [1000, 10000, 100000],
+        "top_k": 10,
+        "queries": 1000,
+        "candidate_batch_size": 1000,
+        "cache_state": "warm"
+      },
+      "metrics": ["throughput", "latency_p50", "latency_p95", "latency_p99", "error_rate", "dropped_samples", "cpu", "rss", "heap", "external", "gc_ms", "event_loop_delay_p99"],
+      "durability": "Read-only; every ranking must equal the exact float32 reference top-k for the fixture.",
+      "parity_gate": { "min_throughput_ratio": 0.9, "max_latency_ratio_p95": 1.1, "max_latency_ratio_p99": 1.1, "status": "unverified" }
+    }
+  ]
+}

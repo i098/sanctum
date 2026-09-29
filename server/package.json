@@ -1,0 +1,31 @@
+{
+  "name": "@sanctum/server",
+  "private": true,
+  "type": "module",
+  "description": "Sanctum API and worker entrypoints",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "migrate": "node src/migrate.ts",
+    "start": "node src/main.ts",
+    "worker": "node src/worker.ts",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.129.0",
+    "@effect/platform": "0.97.2",
+    "@effect/platform-node": "0.108.2",
+    "@effect/sql": "0.52.1",
+    "@effect/sql-mysql2": "0.53.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@sanctum/contracts": "*",
+    "@sanctum/sdk": "*",
+    "aws4fetch": "1.0.20",
+    "effect": "3.22.2",
+    "jose": "^6.2.12",
+    "mysql2": "3.24.4"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0"
+  }
+}

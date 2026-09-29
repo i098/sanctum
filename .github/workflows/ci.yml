@@ -34,6 +34,74 @@ jobs:
       - name: Assemble documentation site
         run: npm run docs:build
 
+  app:
+    name: Application checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: sanctum-ci-test
+          TZ: UTC
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      SANCTUM_TEST_MYSQL_URL: mysql://root:sanctum-ci-test@127.0.0.1:3306
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install locked workspace dependencies
+        run: npm ci --ignore-scripts
+      - name: Install Playwright Chromium headless shell
+        run: npx playwright install --with-deps --only-shell chromium
+      - name: Typecheck, test, build and validate benchmark manifest
+        run: npm run check:app
+
+  python-sdk:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      # Node serves only the database-free fixture API for the example test; no application image.
+      - name: Install locked workspace dependencies
+        run: npm ci --ignore-scripts
+      - name: Install the SDK in an isolated environment
+        run: python3 -m venv "$RUNNER_TEMP/sdk-venv" && "$RUNNER_TEMP/sdk-venv/bin/pip" install --quiet ./sdk/python
+      - name: Test the client and run the example end to end
+        working-directory: sdk/python
+        run: '"$RUNNER_TEMP/sdk-venv/bin/python" -m unittest discover -s tests -p "test_*.py" -v'
+
+  rust-bench:
+    name: Rust benchmark reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      # Benchmark-only crate, never an application dependency. Correctness only: comparative
+      # timing belongs on a controlled benchmark host (benchmarks/README.md), never in this job.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1
+      - name: Build and test the locked crate
+        run: cargo test --release --locked --manifest-path benchmarks/rust/Cargo.toml
+
   fallow:
     name: Fallow gate
     runs-on: ubuntu-latest
@@ -167,7 +235,7 @@ jobs:
 
   build-pages:
     name: Build Pages artifact
-    needs: [verify, fallow, sentrux, commits]
+    needs: [verify, app, python-sdk, rust-bench, fallow, sentrux, commits]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10

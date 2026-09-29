@@ -3,7 +3,8 @@
 ## Current scope
 
 The pipeline validates and publishes the documentation and visual reference that exist today.
-It does not pretend to test or deploy the future meeting application.
+The Application checks job tests the application workspaces implemented so far.
+It does not deploy the application or claim coverage for slices that do not exist yet.
 
 ## Triggers and checks
 
@@ -18,7 +19,6 @@ The check job has read-only repository permissions and a ten-minute timeout.
 ## Quality regression gates
 
 Every pull request and push to main runs Fallow, Sentrux and commit-standard checks in addition to handoff validation.
-Documentation publication waits for all four jobs.
 Missing binaries, invalid results, missing Sentrux baselines and scanner failures fail the job; no continue-on-error bypass is configured.
 The scanners check code structure and static findings; they do not prove runtime performance or Rust parity.
 
@@ -63,10 +63,34 @@ Pull requests do not run the deployment jobs.
 Roll back documentation by reverting the relevant commit and letting the same pipeline deploy the previous content.
 No application database, microphone, or external integration is involved.
 
+## Application checks
+
+The `app` job runs `npm run check:app` (`scripts/check-app.ts`) and stops at the first failing step.
+Steps, in order: workspace typechecks, root Vitest suites, web build, Playwright browser tests, benchmark manifest validation, benchmark correctness smoke (`npm run benchmark -- --smoke`) and the accelerated 24-hour replay (`npm run replay:capture`).
+Child processes run with `SANCTUM_ENV=test` and without provider credential variables, so external side effects stay disabled.
+Server tests use a `mysql:8.4` service container through `SANCTUM_TEST_MYSQL_URL`; its root password is a non-secret test literal.
+Playwright installs only the Chromium headless shell and its system dependencies.
+The job has read-only repository permissions, no secrets, no deployment, and a twenty-minute timeout.
+The benchmark smoke fails on a failed operation or an invalid result record, never on timing; comparative timing gates belong on a controlled benchmark host, and Rust parity remains unverified ([benchmarks/README.md](../benchmarks/README.md)).
+Run it locally with `npm run check:app`; without `SANCTUM_TEST_MYSQL_URL`, server tests start a throwaway Docker container, but the replay step needs the URL.
+The Vitest suites include the TypeScript SDK, the v1 contract snapshot (`sdk/openapi.json` and the generated SDK files must match `npm run sdk:generate`), and MCP over Streamable HTTP with fixture-issuer tokens.
+
+## Rust benchmark reference
+
+The `rust-bench` job installs Rust 1.97.1 and runs `cargo test --release --locked --manifest-path benchmarks/rust/Cargo.toml` on the benchmark-only crate.
+It checks fixture generation against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation and date arithmetic.
+It runs no timing comparison; Rust/TypeScript comparisons (`scripts/benchmark-compare.ts`) belong on a controlled benchmark host.
+
+## Python SDK
+
+The `python-sdk` job installs `sdk/python` (its only dependency is `httpx`) into a virtual environment; no Python enters an application image.
+It replays the golden exchanges in `sdk/fixtures/wire-cases.json` that the TypeScript SDK also replays, then runs the Python example end to end against the database-free fixture API (`server/tests/support/fixture-server.ts`).
+The job has no secrets, no database, and a ten-minute timeout.
+Run it locally: `pip install ./sdk/python`, then `cd sdk/python && python3 -m unittest discover -s tests -p 'test_*.py'`.
+
 ## When implementation is added
 
-Add real TypeScript server, web, SDK, MCP, MySQL, Effect interruption/cleanup and browser checks with each corresponding implementation slice.
-Add Python only to an isolated client-SDK job when that client exists.
+Extend `scripts/check-app.ts` with real Effect interruption/cleanup and later server and browser checks as each implementation slice lands.
 Run deterministic performance smoke/correctness checks in normal CI; keep Rust comparisons and regression timing gates on a controlled benchmark host.
 Do not add permanently passing placeholders for missing components.
 The handoff validator deliberately permits new application directories; it still validates the planning and reference documents.

@@ -1,0 +1,105 @@
+/**
+ * Workspace ownership repositories (plan sections 07 and 11). Every statement is parameterized
+ * and names its workspace, so tenant isolation starts at this first query layer.
+ *
+ * Semantics: identifiers compare byte-for-byte (ascii_bin); membership and meeting grants are
+ * upserts that bump the workspace permission revision (cache keys include it); profile edits
+ * are revision-checked and fail with the current revision instead of overwriting.
+ */
+import { randomUUID } from 'node:crypto';
+import { SqlClient, type SqlError } from '@effect/sql';
+import { Effect, Schema } from 'effect';
+import {
+  NotFound,
+  ProfileId,
+  RevisionConflict,
+  type MeetingId,
+  type PrincipalId,
+  type WorkspaceId,
+  type WorkspaceRole,
+} from '@sanctum/contracts';
+import { DbSafeInt } from './db.ts';
+
+interface WriteResult { readonly affectedRows: number; readonly insertId: number | string }
+
+/** Runs DML and returns mysql2's result header (affected rows, LAST_INSERT_ID). */
+export const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
+  Effect.map(statement.raw, result => result as WriteResult);
+
+/**
+ * `LAST_INSERT_ID(expr)` makes the increment and its read one statement; the row lock it takes
+ * lasts until the caller's transaction commits, which serializes allocation per workspace.
+ */
+const increment = (column: 'context_seq' | 'permission_revision') => (workspace_id: WorkspaceId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const result = yield* write(sql`UPDATE workspaces SET ${sql(column)} = LAST_INSERT_ID(${sql(column)} + 1) WHERE id = ${workspace_id}`);
+    if (result.affectedRows !== 1) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
+    return Schema.decodeUnknownSync(DbSafeInt)(result.insertId);
+  });
+
+/** Next committed-order context sequence number; call inside the change's transaction. */
+export const nextContextSeq: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> = increment('context_seq');
+
+/** Invalidates every access-derived cache entry of the workspace; returns the new revision. */
+export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> =
+  increment('permission_revision');
+
+/** Upsert: adds the member or reactivates a revoked one with the given role. */
+export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId; readonly role: WorkspaceRole }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql.withTransaction(
+      sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
+        VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, UTC_TIMESTAMP(6)) AS new
+        ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
+    );
+  });
+
+/** Upsert: explicitly assigns a principal's access to one meeting of the same workspace. */
+export const grantMeetingAccess = (input: {
+  readonly workspace_id: WorkspaceId;
+  readonly meeting_id: MeetingId;
+  readonly principal_id: PrincipalId;
+  readonly access: 'read' | 'write' | 'owner';
+  readonly granted_by: PrincipalId;
+}) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql.withTransaction(
+      sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+        VALUES (${input.workspace_id}, ${input.meeting_id}, ${input.principal_id}, ${input.access}, ${input.granted_by}, UTC_TIMESTAMP(6)) AS new
+        ON DUPLICATE KEY UPDATE access = new.access, granted_by = new.granted_by`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
+    );
+  });
+
+interface ProfileFields {
+  readonly display_name: string;
+  readonly details: Record<string, unknown>;
+}
+
+export const createProfile = (
+  workspace_id: WorkspaceId,
+  input: ProfileFields & { readonly kind: 'person' | 'organization'; readonly principal_id: PrincipalId | null },
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const id = ProfileId.make(randomUUID());
+    yield* sql`INSERT INTO profiles (id, workspace_id, principal_id, kind, display_name, details, created_at, updated_at)
+      VALUES (${id}, ${workspace_id}, ${input.principal_id}, ${input.kind}, ${input.display_name}, ${JSON.stringify(input.details)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+    return id;
+  });
+
+/** Replaces a profile's fields only at `expected_revision`; returns the new revision. */
+export const reviseProfile = (workspace_id: WorkspaceId, input: ProfileFields & { readonly id: ProfileId; readonly expected_revision: number }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const updated = yield* write(sql`UPDATE profiles
+      SET display_name = ${input.display_name}, details = ${JSON.stringify(input.details)}, revision = revision + 1, updated_at = UTC_TIMESTAMP(6)
+      WHERE workspace_id = ${workspace_id} AND id = ${input.id} AND revision = ${input.expected_revision}`);
+    if (updated.affectedRows === 1) return input.expected_revision + 1;
+    const [current] = yield* sql<{ revision: number }>`SELECT revision FROM profiles WHERE workspace_id = ${workspace_id} AND id = ${input.id}`;
+    return yield* current
+      ? new RevisionConflict({ message: 'Profile changed since it was read', current_revision: current.revision })
+      : new NotFound({ message: 'Profile not found' });
+  });

@@ -13,3 +13,5 @@ dist/
 _site/
 .quality/
 .fallow/
+playwright-report/
+test-results/

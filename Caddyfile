@@ -1,0 +1,8 @@
+# HTTPS front for the API process, which serves /api/v1, /mcp, the live-ingest WebSocket
+# upgrade and the website (server/src/web.ts sets CSP, Permissions-Policy and cookie flags).
+# `localhost` gets a certificate from Caddy's local CA; a public hostname gets a managed one.
+{$SANCTUM_SITE_ADDRESS:localhost} {
+	header Strict-Transport-Security "max-age=31536000"
+	# WebSocket upgrades and streamed MCP responses pass through reverse_proxy unchanged.
+	reverse_proxy api:7102
+}

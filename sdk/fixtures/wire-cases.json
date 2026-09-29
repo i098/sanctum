@@ -1,0 +1,185 @@
+{
+  "$comment": "Golden exchanges both SDKs must reproduce byte-for-byte in method, path, query and body, and parse identically. Response bodies are validated against the v1 contract in server/tests/api-contract.test.ts.",
+  "token": "fixture-token",
+  "cases": [
+    {
+      "name": "read with a path parameter",
+      "operation": "context.getContext",
+      "input": { "meeting_id": "5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f" },
+      "exchanges": [
+        {
+          "request": { "method": "GET", "path": "/api/v1/meetings/5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f/context", "query": {}, "body": null },
+          "response": {
+            "status": 200,
+            "body": {
+              "meeting_id": "5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f",
+              "revision": 3,
+              "as_of": "2026-09-26T17:24:00Z",
+              "timezone": "America/Los_Angeles",
+              "source_watermark": null,
+              "items": [],
+              "changes_cursor": "c3",
+              "truncated": false
+            }
+          }
+        }
+      ],
+      "result": { "ok": { "revision": 3, "changes_cursor": "c3" } }
+    },
+    {
+      "name": "list with query parameters and a numeric limit",
+      "operation": "meetings.listMeetings",
+      "input": { "state": "active", "limit": 2, "cursor": "o2" },
+      "exchanges": [
+        {
+          "request": { "method": "GET", "path": "/api/v1/meetings", "query": { "state": "active", "cursor": "o2", "limit": "2" }, "body": null },
+          "response": { "status": 200, "body": { "meetings": [], "next_cursor": null } }
+        }
+      ],
+      "result": { "ok": { "next_cursor": null } }
+    },
+    {
+      "name": "stale write returns the current revision and is not retried",
+      "operation": "context.addContextItem",
+      "input": {
+        "meeting_id": "5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f",
+        "expected_revision": 2,
+        "kind": "research_observation",
+        "text": "Option B supports the required retention controls.",
+        "sources": [{ "artifact_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }],
+        "idempotency_key": "run-1:observation"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/context/items",
+            "query": {},
+            "body": {
+              "meeting_id": "5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f",
+              "expected_revision": 2,
+              "kind": "research_observation",
+              "text": "Option B supports the required retention controls.",
+              "sources": [{ "artifact_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }],
+              "idempotency_key": "run-1:observation"
+            }
+          },
+          "response": {
+            "status": 409,
+            "body": { "_tag": "RevisionConflict", "code": "revision_conflict", "retryable": false, "message": "Context changed; rebase on current_revision", "current_revision": 3 }
+          }
+        }
+      ],
+      "result": { "error": { "status": 409, "code": "revision_conflict", "retryable": false, "current_revision": 3 } }
+    },
+    {
+      "name": "idempotent write is retried with the same body after a retryable outage",
+      "operation": "actions.requestAction",
+      "input": {
+        "action_key": "linear-create-issue",
+        "configuration_ref": "cfg-linear-create-issue",
+        "version": "1.0.0",
+        "arguments": { "title": "Follow up" },
+        "meeting_id": null,
+        "idempotency_key": "run-1:action"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/actions",
+            "query": {},
+            "body": {
+              "action_key": "linear-create-issue",
+              "configuration_ref": "cfg-linear-create-issue",
+              "version": "1.0.0",
+              "arguments": { "title": "Follow up" },
+              "meeting_id": null,
+              "idempotency_key": "run-1:action"
+            }
+          },
+          "response": { "status": 503, "body": { "_tag": "Unavailable", "code": "unavailable", "retryable": true, "message": "Database unavailable", "retry_after_ms": 1 } }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/actions",
+            "query": {},
+            "body": {
+              "action_key": "linear-create-issue",
+              "configuration_ref": "cfg-linear-create-issue",
+              "version": "1.0.0",
+              "arguments": { "title": "Follow up" },
+              "meeting_id": null,
+              "idempotency_key": "run-1:action"
+            }
+          },
+          "response": { "status": 202, "body": { "action_id": "0d9c8b7a-6f5e-4d3c-9b2a-1f0e9d8c7b6a", "state": "queued" } }
+        }
+      ],
+      "result": { "ok": { "action_id": "0d9c8b7a-6f5e-4d3c-9b2a-1f0e9d8c7b6a", "state": "queued" } }
+    },
+    {
+      "name": "write without an idempotency key is never retried",
+      "operation": "agents.createAgent",
+      "input": { "display_name": "Reader", "scopes": ["context:read"], "meetings": { "kind": "accessible" }, "expires_at": null },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/agents",
+            "query": {},
+            "body": { "display_name": "Reader", "scopes": ["context:read"], "meetings": { "kind": "accessible" }, "expires_at": null }
+          },
+          "response": { "status": 503, "body": { "_tag": "Unavailable", "code": "unavailable", "retryable": true, "message": "Database unavailable" } }
+        }
+      ],
+      "result": { "error": { "status": 503, "code": "unavailable", "retryable": true } }
+    },
+    {
+      "name": "revision with path parameter and body",
+      "operation": "context.reviseContextItem",
+      "input": {
+        "item_id": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+        "expected_revision": 1,
+        "text": "Option B, confirmed",
+        "sources": [{ "segment_id": "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f", "start_ms": 0, "end_ms": 900 }],
+        "idempotency_key": "run-1:revise"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "PATCH",
+            "path": "/api/v1/context/items/1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+            "query": {},
+            "body": {
+              "expected_revision": 1,
+              "text": "Option B, confirmed",
+              "sources": [{ "segment_id": "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f", "start_ms": 0, "end_ms": 900 }],
+              "idempotency_key": "run-1:revise"
+            }
+          },
+          "response": { "status": 404, "body": { "_tag": "NotFound", "code": "not_found", "retryable": false, "message": "Context item not found" } }
+        }
+      ],
+      "result": { "error": { "status": 404, "code": "not_found", "retryable": false } }
+    },
+    {
+      "name": "credential revocation",
+      "operation": "agents.revokeCredential",
+      "input": { "agent_id": "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a", "key_id": "4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b" },
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "path": "/api/v1/agents/3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a/credentials/4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b",
+            "query": {},
+            "body": null
+          },
+          "response": { "status": 204, "body": null }
+        }
+      ],
+      "result": { "ok": null }
+    }
+  ]
+}
