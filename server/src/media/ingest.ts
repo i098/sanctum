@@ -37,6 +37,7 @@ const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.R
     const verdict = yield* startEpoch(access, start.value);
     if (verdict._tag === 'rejected') return yield* new SessionRejected({ message: verdict });
     yield* send(verdict);
+    if (start.value.archive_only) return { code: 1000, reason: 'registered' } satisfies Closing;
     const session = yield* openLiveSession({ access, listener, start: start.value, resume_from_sample: verdict.resume_from_sample, send });
     const loop = Effect.gen(function* () {
       for (;;) {

@@ -1,4 +1,4 @@
-import { NotFound, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt } from '@sanctum/contracts';
+import { NotFound, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListenersClient } from '../src/lib/capture/client.ts';
@@ -53,6 +53,13 @@ class MemoryBuffer implements CaptureBuffer {
   async sealChunk(chunk: SealedChunk) {
     this.chunks.set(chunk.manifest.chunk_id, chunk);
   }
+  readonly starts = new Map<string, typeof StartMessage.Type>();
+  async saveEpoch(start: typeof StartMessage.Type) {
+    this.starts.set(start.epoch_id, start);
+  }
+  async epochStart(epochId: string) {
+    return this.starts.get(epochId) ?? null;
+  }
   readonly refused = new Set<string>();
   async nextPending(listenerId: string) {
     return [...this.chunks.values()].find((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)) ?? null;
@@ -62,6 +69,7 @@ class MemoryBuffer implements CaptureBuffer {
   }
   async acknowledge(manifest: RecordingChunkManifest) {
     this.chunks.delete(manifest.chunk_id);
+    this.starts.delete(manifest.epoch_id);
   }
   async countChunks(listenerId: string | null) {
     const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)).length;
@@ -110,7 +118,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const epochs = new Set(options.epochs);
   /** Epochs another owner's takeover ended; their `start` is rejected as closed, their chunks still upload. */
   const ended = new Set<string>();
-  /** Heartbeats cannot reach the server. */
+  /** Heartbeats and archive registrations cannot reach the server. */
   let offline = false;
   const unknown = () => Effect.fail(new NotFound({ message: 'listener not found' }));
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
@@ -154,8 +162,17 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     openLive: (liveOptions): LiveStream => {
       const live = { options: liveOptions, sent: [] as number[], stopped: null as StopReason | null };
       lives.push(live);
-      if (ended.has(liveOptions.start.epoch_id)) queueMicrotask(() => liveOptions.onStatus('rejected', 'epoch_closed'));
-      else if (owner && liveOptions.start.lease_generation === generation) epochs.add(liveOptions.start.epoch_id);
+      const { start } = liveOptions;
+      const current = owner && start.lease_generation === generation;
+      if (start.archive_only) {
+        queueMicrotask(() => {
+          if (offline) return liveOptions.onStatus('reconnecting');
+          if (!current) return liveOptions.onStatus('rejected', 'stale_generation');
+          epochs.add(start.epoch_id);
+          liveOptions.onStatus('live');
+        });
+      } else if (ended.has(start.epoch_id)) queueMicrotask(() => liveOptions.onStatus('rejected', 'epoch_closed'));
+      else if (current) epochs.add(start.epoch_id);
       liveOptions.onStatus('connecting');
       return { send: (start) => void live.sent.push(start), stop: (reason) => void (live.stopped = reason) };
     },
@@ -494,6 +511,77 @@ describe('capture lifecycle', () => {
     await h.engine.pause(); // seals the epoch's last partial chunk
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([epoch, epoch]));
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 }));
+  });
+
+  it('registers an epoch paused while offline and uploads it after reconnect', async () => {
+    const h = harness({ stored: true });
+    h.setOffline(true);
+    await h.engine.start();
+    h.feed(1.2);
+    const offline = h.lives[0]!.options.start.epoch_id;
+    await h.engine.pause();
+    await settle();
+    expect(h.calls.put).toEqual([]);
+    expect(h.snapshot()).toMatchObject({ bufferedChunks: 2, strandedChunks: 0 }); // waiting, not refused
+
+    h.setOffline(false);
+    h.win.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([offline, offline]));
+    expect(h.lives.at(-1)!.options.start).toMatchObject({ epoch_id: offline, lease_generation: 1, archive_only: true });
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 }));
+    expect(h.buffer.starts.has(offline)).toBe(false);
+  });
+
+  it('registers the epoch a sleep re-anchor left offline without ending the current one', async () => {
+    const h = harness({ stored: true });
+    h.setOffline(true);
+    await h.engine.start();
+    h.feed(1.2);
+    const slept = h.lives[0]!.options.start.epoch_id;
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    h.feed(0.1);
+    await settle();
+    const woke = h.snapshot().epochId;
+    expect(woke).not.toBe(slept);
+
+    h.setOffline(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([slept, slept]));
+    expect(h.lives.filter((live) => live.options.start.archive_only).map((live) => live.options.start.epoch_id)).toContain(slept);
+    expect(h.snapshot().epochId).toBe(woke);
+    expect(h.lives[1]).toMatchObject({ options: { start: { epoch_id: woke } }, stopped: null });
+  });
+
+  it('registers an epoch recorded offline before a tab close and uploads it on the next load', async () => {
+    const closed = harness({ stored: true });
+    closed.setOffline(true);
+    await closed.engine.start();
+    closed.feed(0.6);
+    const epoch = closed.lives[0]!.options.start.epoch_id;
+    closed.win.dispatchEvent(new Event('pagehide'));
+    await vi.waitFor(() => expect(closed.buffer.chunks.size).toBe(1));
+    closed.engine.dispose();
+    expect(closed.calls.put).toEqual([]);
+
+    closed.buffer.orphans = 1;
+    const reloaded = harness({ buffer: closed.buffer, stored: true });
+    await vi.waitFor(() => expect(reloaded.calls.put.map((manifest) => manifest.epoch_id)).toEqual([epoch]));
+    expect(reloaded.lives.map((live) => live.options.start)).toMatchObject([{ epoch_id: epoch, lease_generation: 1, archive_only: true }]);
+    await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0, strandedChunks: 0 }));
+  });
+
+  it('keeps an epoch the server refuses to register as stranded local audio', async () => {
+    const h = harness({ stored: true });
+    h.setOffline(true);
+    await h.engine.start();
+    h.feed(1.2);
+    await h.engine.pause();
+    h.setOwner(false); // another device took the listener over meanwhile
+    h.setOffline(false);
+    h.win.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 2 }));
+    expect(h.calls.put).toEqual([]);
+    expect(h.buffer.chunks.size).toBe(2); // never deleted
   });
 
   it('honours a pause pressed while the microphone prompt is open', async () => {

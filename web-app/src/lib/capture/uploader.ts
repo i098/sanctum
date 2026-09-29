@@ -2,9 +2,10 @@
  * Uploads buffered WAV chunks through `ListenersApi.putChunk` (plan 05, T09 browser half).
  * Local audio is deleted only after a receipt matching the manifest is journaled; a retry
  * resends the same chunk ID and bytes, so the server can return the original receipt or
- * finish a manifest whose R2 write already succeeded. Chunks the server refuses (other bytes under
- * the same ID, or an epoch or listener it does not know) are kept but skipped; authorization
- * failures keep the audio and stop instead of retrying blindly.
+ * finish a manifest whose R2 write already succeeded. A chunk of an epoch the server does not
+ * know waits for, or first gets, that epoch's registration. Chunks the server still refuses (other
+ * bytes under the same ID, or an epoch or listener it will not register) are kept but skipped;
+ * authorization failures keep the audio and stop instead of retrying blindly.
  */
 import type { ListenerId, RecordingChunkManifest, RecordingChunkReceipt } from '@sanctum/contracts';
 import { Data, Duration, Effect, Schedule } from 'effect';
@@ -22,8 +23,11 @@ export interface UploadEvents {
   onSaved(manifest: RecordingChunkManifest, receipt: RecordingChunkReceipt): void;
   /** The server refused the chunk; the local copy is kept, never offered for upload again. */
   onRefused(manifest: RecordingChunkManifest): void;
-  /** Whether the epoch's live `start` may still reach the server; an unknown open epoch waits instead of being refused. */
-  epochOpen(epochId: string): boolean;
+  /**
+   * The server does not know the chunk's epoch: `wait` while its start may still reach the server
+   * (drain again later), `registered` once it recorded the epoch, `refused` when it never will.
+   */
+  unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'>;
 }
 
 export interface UploaderOptions {
@@ -83,6 +87,7 @@ export function drainPending(
 ): Effect.Effect<void, DrainStop> {
   const { timeout = '60 seconds', retry = defaultRetry } = options;
   return Effect.gen(function* () {
+    const registered = new Set<string>();
     for (; ;) {
       const chunk = yield* storage(() => store.nextPending(listenerId));
       if (chunk === null) return;
@@ -91,7 +96,15 @@ export function drainPending(
         Effect.retry({ schedule: retry, while: (error) => error._tag === 'Retryable' }),
         Effect.catchTags({ Conflict: () => Effect.succeed('conflict' as const), UnknownEpoch: () => Effect.succeed('unknown_epoch' as const) }),
       );
-      if (outcome === 'unknown_epoch' && events.epochOpen(chunk.manifest.epoch_id)) return; // later chunks belong to the same open epoch
+      const { epoch_id } = chunk.manifest;
+      if (outcome === 'unknown_epoch' && !registered.has(epoch_id)) {
+        const next = yield* events.unknownEpoch(epoch_id).pipe(Effect.timeoutTo({ duration: timeout, onSuccess: (next) => next, onTimeout: () => 'wait' as const }));
+        if (next === 'wait') return;
+        if (next === 'registered') {
+          registered.add(epoch_id);
+          continue; // the same chunk is next again
+        }
+      }
       if (typeof outcome === 'string') {
         yield* storage(() => store.markRefused(chunk.manifest.chunk_id));
         events.onRefused(chunk.manifest);

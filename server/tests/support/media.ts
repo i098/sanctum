@@ -272,7 +272,7 @@ export const openSocket = (host: string, listener_id: string, token: string) =>
       }),
   ), socket => Effect.sync(socket.close));
 
-export const startMessage = (input: { readonly listener_id: string; readonly epoch_id: string; readonly lease_generation: number; readonly sample_start?: number }) =>
+export const startMessage = (input: { readonly listener_id: string; readonly epoch_id: string; readonly lease_generation: number; readonly sample_start?: number; readonly archive_only?: boolean }) =>
   JSON.stringify({
     _tag: 'start',
     protocol_version: 1,
@@ -281,6 +281,7 @@ export const startMessage = (input: { readonly listener_id: string; readonly epo
     track: 0,
     clock: { sample_rate: 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
     lease_generation: input.lease_generation,
+    ...(input.archive_only === undefined ? {} : { archive_only: input.archive_only }),
   });
 
 /** One binary PCM frame of `count` samples (a quiet ramp) at `sample_start`. */

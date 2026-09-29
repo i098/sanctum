@@ -128,6 +128,38 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
     }),
   );
 
+  it.scoped('registers an archive-only epoch without making it live or ending the live one', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const live = newEpochId();
+      const socket = yield* openSocket(host, listener_id, 'device');
+      socket.send(startMessage({ listener_id, epoch_id: live, lease_generation }));
+      yield* socket.take('accepted');
+
+      const offline = newEpochId();
+      const archive = yield* openSocket(host, listener_id, 'device');
+      archive.send(startMessage({ listener_id, epoch_id: offline, lease_generation, archive_only: true }));
+      expect(yield* archive.take('accepted')).toMatchObject({ epoch_id: offline, resume_from_sample: 0 });
+      expect((yield* archive.closed).code).toBe(1000);
+      expect((yield* epochRow(offline))[0]!.end_reason).toBe('interrupted');
+      expect((yield* epochRow(live))[0]!.end_reason).toBeNull();
+      const [listener] = yield* sql<{ current_epoch_id: string }>`SELECT current_epoch_id FROM listeners WHERE id = ${listener_id}`;
+      expect(listener!.current_epoch_id).toBe(live);
+
+      const again = yield* openSocket(host, listener_id, 'device');
+      again.send(startMessage({ listener_id, epoch_id: offline, lease_generation, archive_only: true }));
+      yield* again.take('accepted');
+      const reopen = yield* openSocket(host, listener_id, 'device');
+      reopen.send(startMessage({ listener_id, epoch_id: offline, lease_generation }));
+      expect(yield* reopen.take('rejected')).toMatchObject({ reason: 'epoch_closed' });
+      const stale = yield* openSocket(host, listener_id, 'device');
+      stale.send(startMessage({ listener_id, epoch_id: newEpochId(), lease_generation: lease_generation + 1, archive_only: true }));
+      expect(yield* stale.take('rejected')).toMatchObject({ reason: 'stale_generation' });
+    }),
+  );
+
   it.scoped('keeps two rooms independent', () =>
     Effect.gen(function* () {
       const { tokens, host } = yield* setup;

@@ -127,7 +127,10 @@ async function start(): Promise<{ server: FakeListenersServer; baseUrl: string }
 
 const fast: UploaderOptions = { timeout: '2 seconds', retry: Schedule.spaced('10 millis') };
 
-function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = fast, openEpoch: string | null = null) {
+type EpochVerdict = 'wait' | 'registered' | 'refused';
+
+function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = fast, verdict: EpochVerdict = 'refused') {
+  const registrations: string[] = [];
   const events: string[] = [];
   const effect = drainPending(
     store,
@@ -137,11 +140,11 @@ function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = 
       onUploading: (manifest) => events.push(`uploading ${manifest.sequence}`),
       onSaved: (manifest) => events.push(`saved ${manifest.sequence}`),
       onRefused: (manifest) => events.push(`refused ${manifest.sequence}`),
-      epochOpen: (epochId) => epochId === openEpoch,
+      unknownEpoch: (epochId) => Effect.sync(() => (registrations.push(epochId), verdict)),
     },
     options,
   );
-  return { events, run: () => Effect.runPromiseExit(effect) };
+  return { events, registrations, run: () => Effect.runPromiseExit(effect) };
 }
 
 describe('chunk uploader', () => {
@@ -224,17 +227,43 @@ describe('chunk uploader', () => {
     const { server, baseUrl } = await start();
     const store = await pendingWith(2);
     server.faults.push('unknown_epoch');
-    const waiting = drain(store, baseUrl, fast, EPOCH);
+    const waiting = drain(store, baseUrl, fast, 'wait');
 
     expect(Exit.isSuccess(await waiting.run())).toBe(true);
     expect(waiting.events).toEqual(['uploading 0']);
     expect(store.refused.size).toBe(0);
     expect(store.chunks.size).toBe(2);
 
-    const later = drain(store, baseUrl, fast, EPOCH);
+    const later = drain(store, baseUrl, fast, 'wait');
     expect(Exit.isSuccess(await later.run())).toBe(true);
     expect(later.events).toEqual(['uploading 0', 'saved 0', 'uploading 1', 'saved 1']);
     expect(store.chunks.size).toBe(0);
+  });
+
+  it('registers an epoch the server never learned, then uploads its chunks', async () => {
+    const { server, baseUrl } = await start();
+    const store = await pendingWith(2);
+    server.faults.push('unknown_epoch');
+    const { events, registrations, run } = drain(store, baseUrl, fast, 'registered');
+
+    expect(Exit.isSuccess(await run())).toBe(true);
+    expect(registrations).toEqual([EPOCH]);
+    expect(events).toEqual(['uploading 0', 'uploading 0', 'saved 0', 'uploading 1', 'saved 1']);
+    expect(store.refused.size).toBe(0);
+    expect(store.chunks.size).toBe(0);
+  });
+
+  it('keeps a chunk the server still does not know after registering its epoch', async () => {
+    const { server, baseUrl } = await start();
+    const store = await pendingWith(2);
+    const [first] = store.chunks.values();
+    server.faults.push('unknown_epoch', 'unknown_epoch');
+    const { events, registrations, run } = drain(store, baseUrl, fast, 'registered');
+
+    expect(Exit.isSuccess(await run())).toBe(true);
+    expect(registrations).toEqual([EPOCH]);
+    expect(events).toEqual(['uploading 0', 'uploading 0', 'refused 0', 'uploading 1', 'saved 1']);
+    expect([...store.chunks.keys()]).toEqual([first!.manifest.chunk_id]);
   });
 
   it('never deletes local audio for a receipt that does not match the manifest', async () => {

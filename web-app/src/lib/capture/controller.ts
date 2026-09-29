@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'epochStart'
 >;
 
 export interface CaptureDeps {
@@ -311,11 +311,13 @@ class CaptureController implements CaptureView {
       },
       lease_generation: session.listener.lease_generation,
     });
+    const onError = (error: unknown) => this.halt(captureIssue(error), false);
+    void session.buffer.saveEpoch(start).catch(onError);
     const assembler = new ChunkAssembler({ listenerId: start.listener_id, epochId: start.epoch_id, sampleRate, startedAtMs }, session.buffer, {
       chunkSamples: Math.round(sampleRate * this.timing.chunkSeconds),
       commitSamples: Math.round(sampleRate * this.timing.commitSeconds),
       onSealed: () => void this.refreshPending().then(() => this.startDrain()),
-      onError: (error) => this.halt(captureIssue(error), false),
+      onError,
     });
     const epoch: Epoch = { id: start.epoch_id, start, base, assembler, live: null, lastWallMs: startedAtMs, lastEnd: base };
     if (!this.leaseLost) epoch.live = this.connectLive(start);
@@ -488,6 +490,38 @@ class CaptureController implements CaptureView {
     if (this.issue === 'lease_lost') this.issue = null;
   }
 
+  /**
+   * An epoch the server does not know: the current one waits for its own live `start`; any other is
+   * registered archive-only from its journaled `start` under the lease a heartbeat just claimed or renewed.
+   */
+  private unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'> {
+    if (this.session?.epoch?.id === epochId) return Effect.succeed('wait');
+    return Effect.promise(async () => {
+      const start = await this.buffer?.then((buffer) => buffer.epochStart(epochId)).catch(() => null);
+      if (!start) return null;
+      await this.beat();
+      return this.listener?.id === start.listener_id ? { ...start, lease_generation: this.listener.lease_generation, archive_only: true } : null;
+    }).pipe(
+      Effect.flatMap((start) =>
+        start === null
+          ? Effect.succeed('refused' as const)
+          : Effect.async<'wait' | 'registered' | 'refused'>((resume) => {
+            const url = (this.deps.streamUrl ?? streamUrl)(start.listener_id);
+            const stream = (this.deps.openLive ?? openLiveStream)({
+              url,
+              start,
+              onStatus: (status) => {
+                if (status === 'connecting') return;
+                stream.stop('close');
+                resume(Effect.succeed(status === 'rejected' ? 'refused' : status === 'reconnecting' ? 'wait' : 'registered'));
+              },
+            });
+            return Effect.sync(() => stream.stop('close'));
+          }),
+      ),
+    );
+  }
+
   private startDrain(): void {
     const listener = this.listener;
     if (this.drain !== null || listener === null || this.buffer === null) return;
@@ -502,10 +536,7 @@ class CaptureController implements CaptureView {
         void this.refreshPending();
       },
       onRefused: () => void this.refreshPending(),
-      epochOpen: (epochId: string) => {
-        const epoch = this.session?.epoch;
-        return epoch?.id === epochId && (epoch.live !== null || this.leaseLost);
-      },
+      unknownEpoch: (epochId: string) => this.unknownEpoch(epochId),
     };
     const fiber = Effect.runFork(
       Effect.promise(() => this.buffer!).pipe(Effect.flatMap((buffer) => drainPending(buffer, this.client, listener.id, events, this.deps.uploader))),

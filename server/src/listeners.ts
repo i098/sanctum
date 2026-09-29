@@ -153,6 +153,7 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
 /**
  * Validates a live `start` against the lease and epoch. An existing open epoch resumes at its live
  * watermark (reconnect); a new epoch ends the listener's previous one and records its clock anchor.
+ * An `archive_only` start passes the same checks but only records its epoch, already ended, for uploads.
  */
 export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type) =>
   Effect.gen(function* () {
@@ -168,18 +169,19 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
         if (Option.isSome(existing)) {
           const epoch = existing.value;
           if (epoch.listener_id !== listener.id || epoch.sample_rate !== start.clock.sample_rate) return rejected('invalid_start', 'The epoch belongs to another listener or clock');
-          return epoch.ended === 1 ? rejected('epoch_closed', 'The epoch ended; start a new one') : accepted(epoch.live_sample_end);
+          return epoch.ended === 1 && !start.archive_only ? rejected('epoch_closed', 'The epoch ended; start a new one') : accepted(epoch.live_sample_end);
         }
-        if (listener.current_epoch_id !== null) {
+        if (listener.current_epoch_id !== null && !start.archive_only) {
           yield* endEpoch(access.workspace_id, listener.id, listener.current_epoch_id, start.start_reason === 'device_change' ? 'device_change' : 'interrupted');
         }
         const { clock } = start;
         yield* sql`
           INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at,
-                                      timezone, start_reason, started_at, live_sample_end)
+                                      timezone, start_reason, started_at, live_sample_end, ended_at, end_reason)
           VALUES (${start.epoch_id}, ${access.workspace_id}, ${listener.id}, ${start.lease_generation}, ${clock.sample_rate}, ${clock.channels},
                   ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, UTC_TIMESTAMP(6),
-                  ${clock.sample_start})`;
+                  ${clock.sample_start}, IF(${start.archive_only === true}, UTC_TIMESTAMP(6), NULL), ${start.archive_only ? 'interrupted' : null})`;
+        if (start.archive_only) return accepted(clock.sample_start);
         yield* sql`UPDATE listeners SET current_epoch_id = ${start.epoch_id}, state = 'listening' WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
         return accepted(clock.sample_start);
       }),

@@ -127,6 +127,11 @@ export const StartMessage = Schema.TaggedStruct('start', {
   lease_generation: LeaseGeneration,
   /** Why a new epoch begins; ignored when `epoch_id` already exists (reconnect keeps the epoch). */
   start_reason: Schema.optionalWith(EpochStartReason, { default: () => 'start' as const }),
+  /**
+   * Registers an epoch whose live `start` never reached the server, only so its archive chunks upload:
+   * the server records its clock anchor, never makes it the live epoch and closes the socket after `accepted`.
+   */
+  archive_only: Schema.optional(Schema.Boolean),
 });
 
 export const StopMessage = Schema.TaggedStruct('stop', {

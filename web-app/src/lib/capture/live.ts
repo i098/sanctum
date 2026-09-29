@@ -94,8 +94,8 @@ export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, 
     ws.onclose = () => {
       if (socket !== ws || stopped) return;
       socket = null;
-      onStatus('reconnecting');
       retry = setTimeout(connect, RETRY_MS);
+      onStatus('reconnecting');
     };
   };
 

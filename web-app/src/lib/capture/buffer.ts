@@ -5,13 +5,15 @@
  * requested where supported. An IndexedDB commit is not an fsync, and clearing or eviction
  * surfaces through `onLost` rather than being hidden.
  */
-import type { RecordingChunkManifest, RecordingChunkReceipt } from '@sanctum/contracts';
+import type { RecordingChunkManifest, RecordingChunkReceipt, StartMessage } from '@sanctum/contracts';
 import { sealChunk, StorageError, type ChunkStore, type PartRecord, type SealedChunk } from './recorder.ts';
 
 const DB_NAME = 'sanctum-capture';
 const PARTS = 'parts';
 const CHUNKS = 'chunks';
 const RECEIPTS = 'receipts';
+/** Each epoch's `start`, kept until a chunk of it is saved, so an epoch the server never learned can be registered later. */
+const EPOCHS = 'epochs';
 /** Journaled receipts kept after their audio is deleted. */
 const RECEIPT_LIMIT = 1_000;
 /** Default application cap on buffered audio: about 58 hours of 48 kHz PCM16. */
@@ -67,6 +69,7 @@ function upgrade(db: IDBDatabase, oldVersion: number, tx: IDBTransaction): void 
     db.createObjectStore(RECEIPTS, { keyPath: 'chunk_id' }).createIndex('saved', 'saved_through_ms');
   }
   if (oldVersion < 2) tx.objectStore(CHUNKS).createIndex('refused', 'refused');
+  if (oldVersion < 3) db.createObjectStore(EPOCHS, { keyPath: 'epoch_id' });
 }
 
 /** Walks a cursor until `visit` returns a value (resolved) or the cursor ends (null). */
@@ -108,7 +111,7 @@ export class RecoveryBuffer implements ChunkStore {
   static open({ capBytes = DEFAULT_CAP_BYTES, idb = globalThis.indexedDB, storage = globalThis.navigator?.storage }: BufferOptions = {}): Promise<RecoveryBuffer> {
     return guarded(async () => {
       if (idb === undefined) throw new StorageError('unavailable');
-      const opening = idb.open(DB_NAME, 2);
+      const opening = idb.open(DB_NAME, 3);
       opening.onupgradeneeded = (event) => upgrade(opening.result, event.oldVersion, opening.transaction!);
       const buffer = new RecoveryBuffer(await request(opening), capBytes, storage);
       await buffer.measure();
@@ -150,6 +153,18 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
+  saveEpoch(start: typeof StartMessage.Type): Promise<void> {
+    return guarded(async () => {
+      const tx = this.db.transaction(EPOCHS, 'readwrite');
+      tx.objectStore(EPOCHS).put(start);
+      await complete(tx);
+    });
+  }
+
+  epochStart(epochId: string): Promise<typeof StartMessage.Type | null> {
+    return guarded(async () => ((await request(this.db.transaction(EPOCHS).objectStore(EPOCHS).get(epochId))) as typeof StartMessage.Type | undefined) ?? null);
+  }
+
   /** Oldest unacknowledged chunk of `listenerId` that the server has not refused. */
   nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {
@@ -188,13 +203,14 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
-  /** Journals the receipt and deletes the local audio in one transaction. */
+  /** Journals the receipt and deletes the local audio in one transaction; the saved chunk proves the server knows its epoch. */
   acknowledge(manifest: RecordingChunkManifest, receipt: RecordingChunkReceipt): Promise<void> {
     return guarded(async () => {
-      const tx = this.db.transaction([CHUNKS, RECEIPTS], 'readwrite');
+      const tx = this.db.transaction([CHUNKS, RECEIPTS, EPOCHS], 'readwrite');
       const saved_through_ms = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
       tx.objectStore(RECEIPTS).put({ chunk_id: receipt.chunk_id, receipt, saved_through_ms } satisfies ReceiptRecord);
       tx.objectStore(CHUNKS).delete(manifest.chunk_id);
+      tx.objectStore(EPOCHS).delete(manifest.epoch_id);
       const receipts = tx.objectStore(RECEIPTS);
       const excess = (await request(receipts.count())) - RECEIPT_LIMIT;
       if (excess > 0) for (const key of await request(receipts.index('saved').getAllKeys(null, excess))) receipts.delete(key);
