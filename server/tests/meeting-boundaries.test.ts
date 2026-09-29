@@ -133,6 +133,26 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('sealing a meeting that began mid-epoch extends only its last range to the watermark', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 100, 130, 'this meeting starts well after capture began');
+        const [meeting] = yield* meetingsOf(listener.workspace_id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${140 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting(owner, MeetingId.make(meeting!.id));
+        expect(yield* rangesOf(meeting!.id)).toEqual([{ epoch_id: epoch, sample_start: 100 * RATE, sample_end: 140 * RATE }]);
+        yield* hear(listener, epoch, 200, 230, 'a later conversation about the offsite plans');
+        const [, later] = yield* meetingsOf(listener.workspace_id);
+        yield* onCaptureEnded({ workspace_id: listener.workspace_id, listener_id: listener.listener_id, epoch_id: epoch, track: 0, sample_end: 250 * RATE, reason: 'interrupted' });
+        expect(yield* rangesOf(later!.id)).toEqual([{ epoch_id: epoch, sample_start: 200 * RATE, sample_end: 250 * RATE }]);
+        expect(yield* rangesOf(meeting!.id)).toEqual([{ epoch_id: epoch, sample_start: 100 * RATE, sample_end: 140 * RATE }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('new speech during old meeting processing goes to a new meeting; finalize leaves it alone', () =>
     withDatabase(
       Effect.gen(function* () {

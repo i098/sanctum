@@ -26,7 +26,7 @@ import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt } from './db.ts';
-import { asJobResult, currentRanges, dbFailures, dbTime, MeetingJobPayload, type MeetingJob, OPEN_STATES, scheduleFinalize, selectMeeting } from './meeting-store.ts';
+import { asJobResult, currentRanges, dbFailures, MeetingJobPayload, type MeetingJob, OPEN_STATES, scheduleFinalize, selectMeeting } from './meeting-store.ts';
 import { ObjectStore } from './object-store.ts';
 import { type DiarizedTurn, PyannoteClient, type VoiceMatch } from './providers/pyannote.ts';
 
@@ -140,7 +140,10 @@ export const recordSpeakerTurns = (input: { readonly workspace_id: WorkspaceId; 
       })
       .filter(row => row.sample_end > row.sample_start);
     if (rows.length === 0) return 0;
-    yield* sql`INSERT INTO speaker_tracks ${sql.insert(rows.map(row => ({ ...row, created_at: dbTime(Date.now()) })))}
+    const values = rows.map(row => sql`(${row.id}, ${row.workspace_id}, ${row.epoch_id}, ${row.track}, ${row.provider_connection_id}, ${row.provider}, ${row.provider_label},
+      ${row.sample_start}, ${row.sample_end}, ${row.profile_id}, ${row.mapping_source}, ${row.attribution_revision}, ${row.confidence}, UTC_TIMESTAMP(6))`);
+    yield* sql`INSERT INTO speaker_tracks (id, workspace_id, epoch_id, track, provider_connection_id, provider, provider_label, sample_start, sample_end, profile_id,
+      mapping_source, attribution_revision, confidence, created_at) VALUES ${sql.csv(values)}
       AS fresh ON DUPLICATE KEY UPDATE sample_end = GREATEST(speaker_tracks.sample_end, fresh.sample_end)`;
     return rows.length;
   });

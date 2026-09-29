@@ -5,6 +5,7 @@ import { SqlClient } from '@effect/sql';
 import { JobId, type JobKind, type PrincipalId, Unavailable, type WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 
+// stand-in: replaced by the kernel slice at integration
 export interface EnqueueJob {
   readonly workspace_id: WorkspaceId;
   readonly kind: JobKind;

@@ -156,17 +156,25 @@ const claimSource = (row: Pick<MeetingRow, 'id' | 'workspace_id' | 'boundary_rev
 
 type Cue = Pick<BoundaryDecision, 'evidence' | 'reason' | 'uncertainty'>;
 
+/** Terminal capture position; the meeting's last range on that epoch/track is extended up to it. */
+type Watermark = Pick<SourceRange, 'epoch_id' | 'track' | 'sample_end'>;
+
 /**
  * Seals an open meeting: extends its range to the terminal capture watermark when given, records
  * the close and schedules final work. The listener is untouched and can open the next meeting.
  */
 const sealMeeting = (
   row: MeetingRow,
-  input: { readonly watermark: SourceRange | null; readonly state: 'closing' | 'interrupted'; readonly cue: Cue; readonly actor: PrincipalId | null },
+  input: { readonly watermark: Watermark | null; readonly state: 'closing' | 'interrupted'; readonly cue: Cue; readonly actor: PrincipalId | null },
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    if (input.watermark !== null) yield* claimSource(row, input.watermark);
+    const before = yield* currentRanges(row.workspace_id, row.id);
+    const { watermark } = input;
+    const tail = watermark === null ? undefined : before.filter(range => range.epoch_id === watermark.epoch_id && range.track === watermark.track).at(-1);
+    if (watermark !== null && tail !== undefined && watermark.sample_end > tail.sample_end) {
+      yield* claimSource(row, { ...watermark, sample_start: tail.sample_end });
+    }
     const ranges = yield* currentRanges(row.workspace_id, row.id);
     const last = ranges.reduce((latest, range) => (range.end_ms > latest.end_ms ? range : latest), ranges[0]!);
     yield* sql`UPDATE meetings SET state = ${input.state}, ended_at = ${dbTime(last.end_ms)}, updated_at = UTC_TIMESTAMP(6)
@@ -304,7 +312,7 @@ export const onCaptureEnded = (event: {
         }
         const open = yield* findOpenRow(key);
         if (open._tag === 'None') return;
-        const watermark = { epoch_id: event.epoch_id as SourceRange['epoch_id'], track: event.track, sample_start: 0, sample_end: event.sample_end };
+        const watermark = { epoch_id: event.epoch_id as SourceRange['epoch_id'], track: event.track, sample_end: event.sample_end };
         yield* sealMeeting(open.value, {
           watermark,
           state: event.reason === 'close' ? 'closing' : 'interrupted',
@@ -351,7 +359,7 @@ export const closeMeeting = (access: AccessScope, meeting_id: MeetingId) =>
           FROM listeners l JOIN capture_epochs e ON e.workspace_id = l.workspace_id AND e.id = l.current_epoch_id
           JOIN meeting_ranges r ON r.meeting_id = ${meeting_id} AND r.boundary_revision = ${row.value.boundary_revision} AND r.epoch_id = e.id
           WHERE l.workspace_id = ${access.workspace_id} AND l.id = ${row.value.listener_id} LIMIT 1`;
-        const watermark = live === undefined ? null : { epoch_id: live.epoch_id, track: live.track, sample_start: 0, sample_end: Number(live.live_sample_end) };
+        const watermark = live === undefined ? null : { epoch_id: live.epoch_id, track: live.track, sample_end: Number(live.live_sample_end) };
         yield* sealMeeting(row.value, {
           watermark,
           state: 'closing',

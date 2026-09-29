@@ -39,10 +39,11 @@ export const AuthenticatedLive = Layer.effect(
 
 export const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));
 
-// stand-in: replaced by the kernel slice at integration (requireScope, authorizeMeeting, listVisibleMeetingIds)
+// stand-in: replaced by the kernel slice at integration
 export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
   access.scopes.includes(scope) ? Effect.void : Effect.fail(new Forbidden({ message: `Missing scope ${scope}`, required_scope: scope }));
 
+// stand-in: replaced by the kernel slice at integration
 /** Workspace-visible meetings (read), explicit grants, or every meeting for owners/admins; then the credential allowlist. */
 const visibleMeetings = (access: AccessScope, need: 'read' | 'write', meetingId: MeetingId | null) =>
   Effect.gen(function* () {
@@ -57,10 +58,12 @@ const visibleMeetings = (access: AccessScope, need: 'read' | 'write', meetingId:
     return rows.map(row => MeetingId.make(row.id)).filter(id => allowed === null || allowed.includes(id));
   });
 
+// stand-in: replaced by the kernel slice at integration
 export const authorizeMeeting = (access: AccessScope, meeting_id: MeetingId, need: 'read' | 'write') =>
   visibleMeetings(access, need, meeting_id).pipe(
     Effect.orDie,
     Effect.flatMap(ids => (ids.length === 1 ? Effect.void : Effect.fail(new NotFound({ message: 'Meeting not found' })))),
   );
 
+// stand-in: replaced by the kernel slice at integration
 export const listVisibleMeetingIds = (access: AccessScope) => visibleMeetings(access, 'read', null);
