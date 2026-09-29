@@ -577,10 +577,10 @@ class CaptureController implements CaptureView {
     });
   }
 
-  /** Listeners whose chunks are pending on this device (the one every tab shares) or still being recorded here: never orphaned, never discarded. */
+  /** Listeners whose chunks are pending on this device (the one every tab shares or this tab's own) or still being recorded here: never orphaned, never discarded. */
   private owned(): string[] {
     const stored = Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
-    return [stored?.id, this.session?.listener.id].filter((id) => id !== undefined);
+    return [stored?.id, this.listener?.id, this.session?.listener.id].filter((id) => id !== undefined);
   }
 
   private async refreshPending(): Promise<void> {

@@ -504,6 +504,21 @@ describe('capture lifecycle', () => {
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
 
+  it('never discards pending audio of its own listener after another tab cleared the shared record', async () => {
+    const buffer = new MemoryBuffer();
+    const h = harness({ buffer, stored: true });
+    await settle();
+    const pending = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(pending);
+    h.storage.delete('sanctum.listener'); // a stale tab learned its older listener was removed
+
+    await h.engine.discardRecording({ listenerId: LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
+  });
+
   it('starts a new epoch after a sleep gap instead of stretching the sample clock', async () => {
     const h = harness();
     await h.engine.start();
