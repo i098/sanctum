@@ -44,7 +44,7 @@ const later = (sql: SqlClient.SqlClient, ms: number) => sql`UTC_TIMESTAMP(6) + I
  * wins, the timer restarts, and a running row returns to pending once its current run completes.
  */
 export const enqueueJob = (input: EnqueueJob) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO jobs (id, workspace_id, kind, work_key, requested_by, source_revision, status, payload, available_at, max_attempts, created_at, updated_at)
       VALUES (${randomUUID()}, ${input.workspace_id}, ${input.kind}, ${input.work_key}, ${input.requested_by}, ${input.source_revision ?? null}, 'pending',
@@ -85,11 +85,11 @@ const ClaimedRow = Schema.Struct({
  * to one row.
  */
 export const claimJob = (kinds: ReadonlyArray<JobKind>, leaseMs: number) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const token = randomUUID();
     const claimed = sql.withTransaction(
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         const [due] = yield* sql<{ id: JobId }>`SELECT id FROM jobs
           WHERE status = 'pending' AND available_at <= UTC_TIMESTAMP(6) AND kind IN ${sql.in(kinds)}
           ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
@@ -113,7 +113,7 @@ const fenced = (sql: SqlClient.SqlClient, lease: Lease) =>
 
 /** Extends the lease; false once another worker owns the row (or it was completed). */
 const renewLease = (lease: Lease, leaseMs: number) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const renewed = yield* write(sql`UPDATE jobs SET lease_until = ${later(sql, leaseMs)} WHERE ${fenced(sql, lease)}`);
     return renewed.affectedRows === 1;
@@ -126,7 +126,7 @@ export type Completion = JobOutcome | { readonly status: 'failed'; readonly erro
  * Assignments run left to right, so `rearmed` and `attempts` are read before being reset.
  */
 export const completeJob = (lease: Lease, completion: Completion) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const release = sql`lease_token = NULL, lease_until = NULL, updated_at = UTC_TIMESTAMP(6)`;
     const update = (() => {
@@ -153,7 +153,7 @@ export const completeJob = (lease: Lease, completion: Completion) =>
   });
 
 /** Resumes due paused jobs and returns expired leases to the queue (or fails them when exhausted). */
-export const sweepJobs = Effect.gen(function*() {
+export const sweepJobs = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* retryDeadlocks(sql`UPDATE jobs SET status = 'pending', updated_at = UTC_TIMESTAMP(6) WHERE status = 'paused' AND available_at <= UTC_TIMESTAMP(6)`);
   yield* retryDeadlocks(sql`UPDATE jobs SET
@@ -167,7 +167,7 @@ type Handlers = typeof jobHandlers;
 
 /** Re-checks the requester, runs the handler while renewing the lease, then completes the row. */
 const runJob = (handlers: Handlers, lease: Lease, leaseMs: number) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const { job } = lease;
     const requester = job.requested_by;
     const authorized = requester === null || Either.isRight(yield* Effect.either(resolveAccess({ workspace_id: job.workspace_id, principal_id: requester })));
@@ -194,7 +194,7 @@ export const runWorker = (handlers: Handlers, options: { readonly leaseMs?: numb
   const { leaseMs = 60_000, pollMs = 1_000, concurrency = 4 } = options;
   const kinds = JobKind.literals.filter(kind => handlers[kind] !== undefined);
   if (kinds.length === 0) return Effect.logWarning('No job handlers registered').pipe(Effect.zipRight(Effect.never));
-  const claimer = Effect.gen(function*() {
+  const claimer = Effect.gen(function* () {
     const lease = yield* claimJob(kinds, leaseMs);
     if (Option.isNone(lease)) return yield* Effect.sleep(pollMs);
     yield* runJob(handlers, lease.value, leaseMs);

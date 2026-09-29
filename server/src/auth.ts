@@ -93,7 +93,7 @@ const findOne = <A, I>(Result: Schema.Schema<A, I>, statement: Effect.Effect<Rea
   SqlSchema.findOne({ Request: Schema.Void, Result, execute: () => statement })(undefined).pipe(Effect.catchTag('ParseError', Effect.die));
 
 const sessionAccess = (token: string, csrfToken: string | null) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const Row = Schema.Struct({ ...MemberRow.fields, csrf_hash: Schema.Uint8ArrayFromSelf });
     const idHash = hashToken(token);
@@ -108,7 +108,7 @@ const sessionAccess = (token: string, csrfToken: string | null) =>
   });
 
 const credentialAccess = (token: string) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const Row = Schema.Struct({ ...MemberRow.fields, id: Schema.String, scopes: Scopes, meeting_allowlist: Allowlist });
     const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.id, x.scopes, x.meeting_allowlist FROM agent_credentials x ${activeMember(sql)}
@@ -143,7 +143,7 @@ export const KernelAuthenticatorLive = Layer.effect(
  * `capture:ingest`); the Origin must be listed in `SANCTUM_ALLOWED_ORIGINS` (comma-separated, none by default).
  */
 export const authenticateUpgrade = (request: IncomingMessage) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const allowed: ReadonlyArray<string> = yield* Config.array(Config.string(), 'SANCTUM_ALLOWED_ORIGINS').pipe(Config.withDefault([]), Effect.orDie);
     const origin = request.headers.origin;
     if (!origin || !allowed.includes(origin)) return yield* new Forbidden({ message: 'Origin is not allowed' });
@@ -165,7 +165,7 @@ const findMember = (input: MemberKey) =>
   );
 
 export const resolveAccess = (input: MemberKey) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const member = yield* findMember(input);
     if (Option.isNone(member)) return yield* new Forbidden({ message: 'Not an active member of this workspace' });
@@ -192,7 +192,7 @@ export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
  * the cookie and CSRF tokens.
  */
 export const openSession = (input: MemberKey) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const member = yield* findMember(input);
     if (Option.isNone(member) || member.value.kind === 'agent') return yield* new Forbidden({ message: 'Not an active human or device member' });
@@ -207,7 +207,7 @@ export const openSession = (input: MemberKey) =>
 
 /** Principal of a verified issuer/subject pair; exact match only, never by email or domain. */
 export const identityPrincipal = (identity: { readonly issuer: string; readonly subject: string }) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const row = yield* findOne(
       Schema.Struct({ principal_id: PrincipalId }),
@@ -220,7 +220,7 @@ type MeetingAccessRow = { visibility: 'restricted' | 'workspace'; access: 'read'
 
 /** Unreadable, unwritable and foreign meetings all fail as the same NotFound. */
 export const authorizeMeeting = (access: AccessScope, meeting_id: MeetingId, need: 'read' | 'write') =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [row] = yield* sql<MeetingAccessRow>`SELECT m.visibility, a.access FROM meetings m
       LEFT JOIN meeting_access a ON a.workspace_id = m.workspace_id AND a.meeting_id = m.id AND a.principal_id = ${access.principal.id}
@@ -234,7 +234,7 @@ export const authorizeMeeting = (access: AccessScope, meeting_id: MeetingId, nee
   }).pipe(Effect.catchTag('SqlError', Effect.die));
 
 export const listVisibleMeetingIds = (access: AccessScope) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { meetings } = access;
     if (meetings.kind === 'allowlist' && meetings.meeting_ids.length === 0) return [];

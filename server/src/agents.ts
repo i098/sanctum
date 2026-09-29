@@ -47,7 +47,7 @@ const isAdmin = (access: AccessScope) => access.scopes.includes('workspace:admin
 
 /** Credentials visible to the caller: all for admins, otherwise only those the caller owns. */
 const credentials = (access: AccessScope, where: (sql: SqlClient.SqlClient) => Statement.Fragment, limit: number) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const owned = isAdmin(access) ? sql`TRUE` : sql`c.owner_principal_id = ${access.principal.id}`;
     return yield* SqlSchema.findAll({
@@ -62,7 +62,7 @@ const credentials = (access: AccessScope, where: (sql: SqlClient.SqlClient) => S
   });
 
 export const createAgent = (access: AccessScope, input: CreateAgent) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     yield* requireScope(access, 'workspace:admin');
     const excess = input.scopes.filter(scope => !access.scopes.includes(scope));
     if (excess.length > 0) return yield* new Forbidden({ message: `Cannot grant scopes the creator lacks: ${excess.join(', ')}` });
@@ -74,7 +74,7 @@ export const createAgent = (access: AccessScope, input: CreateAgent) =>
     const allowlist = input.meetings.kind === 'allowlist' ? JSON.stringify(input.meetings.meeting_ids) : null;
     const expires = input.expires_at === null ? null : Schema.encodeSync(DbUtc)(input.expires_at);
     yield* sql.withTransaction(
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${agent_id}, 'agent', ${input.display_name}, UTC_TIMESTAMP(6))`;
         yield* addMember({ workspace_id: access.workspace_id, principal_id: agent_id, role: 'agent' });
         yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, meeting_allowlist, expires_at, created_at)
@@ -88,7 +88,7 @@ export const createAgent = (access: AccessScope, input: CreateAgent) =>
 
 /** Keyset page ordered by credential ID; the cursor is the last ID returned. */
 const listAgents = (access: AccessScope, page: { readonly cursor?: string | undefined; readonly limit?: number | undefined }) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const limit = page.limit ?? 50;
     const rows = yield* credentials(access, sql => (page.cursor === undefined ? sql`TRUE` : sql`c.id > ${page.cursor}`), limit + 1);
     return { items: rows.slice(0, limit).map(toAgent), next_cursor: rows.length > limit ? rows[limit - 1]!.id : null };
@@ -96,13 +96,13 @@ const listAgents = (access: AccessScope, page: { readonly cursor?: string | unde
 
 /** Idempotent for the credential's owner or an admin; anything else is indistinguishable from missing. */
 const revokeCredential = (access: AccessScope, agent_id: PrincipalId, key_id: AgentCredentialId) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [credential] = yield* credentials(access, sql => sql`c.id = ${key_id} AND c.principal_id = ${agent_id}`, 1);
     if (!credential) return yield* new NotFound({ message: 'Credential not found' });
     yield* sql
       .withTransaction(
-        Effect.gen(function*() {
+        Effect.gen(function* () {
           const revoked = yield* write(sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6)
             WHERE workspace_id = ${access.workspace_id} AND id = ${key_id} AND revoked_at IS NULL`);
           if (revoked.affectedRows === 1) yield* bumpPermissionRevision(access.workspace_id);
