@@ -14,7 +14,9 @@ export const requestContextRefresh = (input: { readonly workspace_id: WorkspaceI
   work_key: input.meeting_id,
   payload: { meeting_id: input.meeting_id },
   requested_by: input.requested_by,
-  delay_ms: input.new_turns >= engineeringDefaults.contextJob.turnThreshold ? 0 : engineeringDefaults.contextJob.quietPeriodMs,
+  ...(input.new_turns >= engineeringDefaults.contextJob.turnThreshold
+   ? { delay_ms: 0, expedite: true }
+   : { delay_ms: engineeringDefaults.contextJob.quietPeriodMs }),
  });
 
 /** Schedules distillation into committed memory, e.g. when a meeting closes. */

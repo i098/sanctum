@@ -17,13 +17,15 @@ export interface EnqueueJob {
   readonly source_revision?: number;
   readonly delay_ms?: number;
   readonly max_attempts?: number;
+  /** Make a re-armed row due no later than this request instead of restarting its timer (e.g. a turn threshold). */
+  readonly expedite?: boolean;
 }
 
 export const later = (sql: SqlClient.SqlClient, ms: number) => sql`UTC_TIMESTAMP(6) + INTERVAL ${Math.round(ms * 1000)} MICROSECOND`;
 
 /**
  * Joins the caller's transaction. An active row with the same key is re-armed: latest payload
- * wins, the timer restarts, and a running row returns to pending once its current run completes.
+ * wins, the timer restarts (or, with `expedite`, moves no later than this request), and a running row returns to pending once its current run completes.
  */
 export const enqueueJob = (input: EnqueueJob) =>
   Effect.gen(function* () {
@@ -34,7 +36,7 @@ export const enqueueJob = (input: EnqueueJob) =>
       ON DUPLICATE KEY UPDATE
         rearmed = IF(jobs.status = 'running', 1, jobs.rearmed),
         attempts = IF(jobs.status = 'running', jobs.attempts, 0),
-        available_at = GREATEST(jobs.available_at, new.available_at),
+        available_at = IF(${input.expedite === true}, LEAST(jobs.available_at, new.available_at), GREATEST(jobs.available_at, new.available_at)),
         payload = new.payload,
         requested_by = new.requested_by,
         source_revision = COALESCE(new.source_revision, jobs.source_revision),

@@ -61,7 +61,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `auth.ts`: `authorizeMeeting(access, meeting_id, need: 'read' | 'write'): Effect<void, NotFound, R>`.
 - `auth.ts`: `listVisibleMeetingIds(access): Effect<ReadonlyArray<MeetingId>, SqlError, R>`.
 - `jobs.ts`: `enqueueJob(input: EnqueueJob): Effect<JobId, SqlError, R>`, joining the caller's transaction.
-- `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number }`; an active row with the same key is re-armed.
+- `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number; expedite?: boolean }`; an active row with the same key is re-armed (timer restarts; `expedite` makes it due no later than this request).
 - `job-runner.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`, plus claim, lease, fenced completion and deadlock retry; only worker.ts imports it.
 - `jobs.ts` holds only `enqueueJob` and imports no application module, so enqueueing never deepens a caller's import chain.
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
