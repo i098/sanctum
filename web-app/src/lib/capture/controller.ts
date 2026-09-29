@@ -198,7 +198,12 @@ class CaptureController implements CaptureView {
   }
 
   async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
-    await (await this.openBuffer()).discardRecording(listenerId, epochId, this.owned());
+    const release = this.session === null ? await holdCaptureLock(this.nav.locks).catch(() => { throw new Error('capture is running in another tab; stop it there before discarding'); }) : async () => { };
+    try {
+      await (await this.openBuffer()).discardRecording(listenerId, epochId, this.owned());
+    } finally {
+      await release();
+    }
     await this.refreshPending();
   }
 

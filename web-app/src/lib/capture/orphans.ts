@@ -34,7 +34,8 @@ function layout<S extends Span>(spans: readonly S[], maxSamples: number, take: (
     for (let offset = 0; offset < span.sampleCount;) {
       const at = span.sampleStart + offset;
       if (kept === maxSamples) {
-        parts.push({ sampleStart: at, sampleEnd: at, gaps: [] });
+        const start = parts.at(-1)?.sampleEnd ?? at;
+        parts.push({ sampleStart: start, sampleEnd: start, gaps: [] });
         kept = 0;
       }
       const part = parts.at(-1)!;

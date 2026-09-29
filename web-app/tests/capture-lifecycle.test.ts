@@ -523,6 +523,29 @@ describe('capture lifecycle', () => {
     expect(h.calls.put).toEqual([]);
   });
 
+  it('refuses to discard audio another tab is still recording under a removed listener', async () => {
+    const buffer = new MemoryBuffer();
+    const locks = new FakeLocks();
+    const recorder = harness({ buffer, locks, stored: true });
+    await recorder.engine.start();
+    const idle = harness({ buffer, locks, stored: true });
+    await settle();
+    recorder.forget();
+    idle.forget();
+    await vi.advanceTimersByTimeAsync(15_000); // both tabs learn the server removed the listener; the recording tab keeps capturing
+    recorder.feed(2.2);
+    await vi.waitFor(() => expect(buffer.chunks.size).toBe(2));
+    const [chunk] = [...buffer.chunks.values()];
+    const live = { listenerId: LISTENER_ID, epochId: chunk!.manifest.epoch_id, sampleRate: RATE, startedAt: chunk!.manifest.captured_at, sampleCount: RATE, chunkCount: 1, parts: [] };
+    await expect(idle.engine.discardRecording(live)).rejects.toThrow('another tab');
+    expect(buffer.chunks.size).toBe(2);
+
+    await recorder.engine.pause();
+    const kept = buffer.chunks.size;
+    await idle.engine.discardRecording(live);
+    expect(buffer.chunks.size).toBeLessThan(kept); // once capture stops, the other tab may discard it
+  });
+
   it('never discards pending audio of the listener another tab registered after this one loaded', async () => {
     const buffer = new MemoryBuffer();
     const seal = (listener_id: string) =>

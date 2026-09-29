@@ -96,4 +96,16 @@ describe('orphaned local recordings', () => {
     const later = await readWav(assembleWav(chunks.map(segment), RATE, 1, 2 * RATE)!.blob);
     expect(later.samples).toEqual([...positions(3 * RATE, RATE), ...positions(5 * RATE, RATE)]);
   });
+
+  it('states a gap that falls on a part boundary as a leading gap of the later part', async () => {
+    const chunks = await Promise.all([chunk(0, 0, RATE), chunk(1, RATE, RATE), chunk(3, 3 * RATE, RATE)]);
+    const [recording] = groupRecordings(chunks.map(({ manifest }) => manifest), 2 * RATE);
+    expect(recording!.parts).toEqual([
+      { sampleStart: 0, sampleEnd: 2 * RATE, gaps: [] },
+      { sampleStart: 2 * RATE, sampleEnd: 4 * RATE, gaps: [{ at: 2 * RATE, missing: RATE }] },
+    ]);
+    const later = assembleWav(chunks.map(segment), RATE, 1, 2 * RATE)!;
+    expect([later.sampleStart, later.sampleEnd]).toEqual([2 * RATE, 4 * RATE]);
+    expect((await readWav(later.blob)).samples).toEqual(positions(3 * RATE, RATE));
+  });
 });
