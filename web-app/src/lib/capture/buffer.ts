@@ -6,7 +6,9 @@
  * surfaces through `onLost` rather than being hidden.
  */
 import type { RecordingChunkManifest, RecordingChunkReceipt, StartMessage } from '@sanctum/contracts';
+import { groupRecordings } from './orphans.ts';
 import { sealChunk, StorageError, type ChunkStore, type PartRecord, type SealedChunk } from './recorder.ts';
+import type { OrphanedRecording } from './view.ts';
 
 const DB_NAME = 'sanctum-capture';
 const PARTS = 'parts';
@@ -73,6 +75,9 @@ function upgrade(db: IDBDatabase, oldVersion: number, tx: IDBTransaction): void 
   if (oldVersion < 2) tx.objectStore(CHUNKS).createIndex('refused', 'refused');
   if (oldVersion < 3) db.createObjectStore(EPOCHS, { keyPath: 'epoch_id' });
 }
+
+/** Every key of one listener in the `listener` index ([listener_id, captured_at]). */
+const listenerRange = (listenerId: string) => IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
 
 /** Walks a cursor until `visit` returns a value (resolved) or the cursor ends (null). */
 function walk<C extends IDBCursor, T>(cursor: IDBRequest<C | null>, visit: (current: C) => T | undefined): Promise<T | null> {
@@ -195,8 +200,7 @@ export class RecoveryBuffer implements ChunkStore {
   /** Oldest unacknowledged chunk of `listenerId` that the server has not refused. */
   nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {
-      const range = IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
-      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(range);
+      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(listenerRange(listenerId));
       return walk(cursor, (current) => {
         const record = current.value as ChunkRecord;
         return record.refused !== undefined ? undefined : { manifest: record.manifest, wav: record.wav };
@@ -227,6 +231,46 @@ export class RecoveryBuffer implements ChunkStore {
       await walk(chunks.index('listener').openKeyCursor(), (current) => void ((current.key as [string, string])[0] === listenerId ? counts.pending++ : counts.stranded++));
       if (listenerId !== null) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.stranded++));
       return counts;
+    });
+  }
+
+  /** Chunks of listeners outside `owned`, grouped per recording; audio values are visited, not kept. */
+  orphanedRecordings(owned: readonly string[]): Promise<OrphanedRecording[]> {
+    return guarded(async () => {
+      const manifests: RecordingChunkManifest[] = [];
+      await walk(this.db.transaction(CHUNKS).objectStore(CHUNKS).openCursor(), (current) => {
+        const { manifest } = current.value as ChunkRecord;
+        if (!owned.includes(manifest.listener_id)) manifests.push(manifest);
+      });
+      return groupRecordings(manifests);
+    });
+  }
+
+  /** Every stored chunk of one recording (listener and capture epoch), for a local export. */
+  recordingChunks(listenerId: string, epochId: string): Promise<SealedChunk[]> {
+    return guarded(async () => {
+      const records = (await request(this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').getAll(listenerRange(listenerId)))) as ChunkRecord[];
+      return records.filter((record) => record.manifest.epoch_id === epochId);
+    });
+  }
+
+  /**
+   * Deletes one orphaned recording's chunks, only on a person's explicit request. Chunks of `owned`
+   * listeners (pending or still being recorded) and journaled receipts are never touched.
+   */
+  discardRecording(listenerId: string, epochId: string, owned: readonly string[]): Promise<void> {
+    return guarded(async () => {
+      if (owned.includes(listenerId)) return;
+      const tx = this.db.transaction(CHUNKS, 'readwrite');
+      let freed = 0;
+      await walk(tx.objectStore(CHUNKS).index('listener').openCursor(listenerRange(listenerId)), (current) => {
+        const { manifest } = current.value as ChunkRecord;
+        if (manifest.epoch_id !== epochId) return;
+        current.delete();
+        freed += manifest.byte_length;
+      });
+      await complete(tx);
+      this.bytes -= freed;
     });
   }
 

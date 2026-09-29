@@ -35,6 +35,25 @@ export interface LevelSource {
   read(bands: Float32Array): number;
 }
 
+/** Samples missing inside a recording; `at` is the position in the exported file, which is not padded. */
+export interface RecordingGap {
+  readonly at: number;
+  readonly missing: number;
+}
+
+/** One capture epoch of a listener the server forgot, kept on this device and never uploadable. */
+export interface OrphanedRecording {
+  readonly listenerId: string;
+  readonly epochId: string;
+  readonly sampleRate: number;
+  /** Wall-clock time of the first kept sample, anchored to the epoch's sample clock. */
+  readonly startedAt: string;
+  /** Kept samples, i.e. the exported file's length. */
+  readonly sampleCount: number;
+  readonly chunkCount: number;
+  readonly gaps: readonly RecordingGap[];
+}
+
 export interface CaptureView {
   getSnapshot(): CaptureSnapshot;
   subscribe(listener: () => void): () => void;
@@ -42,6 +61,12 @@ export interface CaptureView {
   start(): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
+  /** Recordings orphaned by a removed listener; never the pending or in-progress audio. */
+  orphanedRecordings(): Promise<readonly OrphanedRecording[]>;
+  /** One WAV built from the recording's chunks on this device; no server call. */
+  exportRecording(recording: OrphanedRecording): Promise<Blob>;
+  /** Deletes only this orphaned recording's chunks, and only when a person asks. */
+  discardRecording(recording: OrphanedRecording): Promise<void>;
 }
 
 export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({

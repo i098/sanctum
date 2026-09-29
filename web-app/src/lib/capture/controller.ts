@@ -10,10 +10,11 @@ import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type LiveOptions, type LiveStatus, type LiveStream, type RejectReason, type StopReason } from './live.ts';
+import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
-import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type PermissionState } from './view.ts';
+import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState } from './view.ts';
 
 /** Browser-side engineering defaults (plan 02); tests shorten them. */
 export interface CaptureTiming {
@@ -29,7 +30,8 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd'
+  | 'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close'
+  | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd' | 'orphanedRecordings' | 'recordingChunks' | 'discardRecording'
 >;
 
 export interface CaptureDeps {
@@ -178,6 +180,19 @@ class CaptureController implements CaptureView {
   };
 
   readonly resume = (): Promise<void> => this.start();
+
+  async orphanedRecordings(): Promise<readonly OrphanedRecording[]> {
+    return (await this.openBuffer()).orphanedRecordings(this.owned());
+  }
+
+  async exportRecording({ listenerId, epochId }: OrphanedRecording): Promise<Blob> {
+    return assembleWav(await (await this.openBuffer()).recordingChunks(listenerId, epochId));
+  }
+
+  async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
+    await (await this.openBuffer()).discardRecording(listenerId, epochId, this.owned());
+    await this.refreshPending();
+  }
 
   dispose(): void {
     clearInterval(this.heartbeat);
@@ -560,6 +575,11 @@ class CaptureController implements CaptureView {
       this.uploading = false;
       void this.refreshPending();
     });
+  }
+
+  /** Listeners whose chunks are pending or still being recorded: never orphaned, never discarded. */
+  private owned(): string[] {
+    return [this.listener?.id, this.session?.listener.id].filter((id) => id !== undefined);
   }
 
   private async refreshPending(): Promise<void> {

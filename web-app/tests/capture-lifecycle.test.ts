@@ -86,6 +86,13 @@ class MemoryBuffer implements CaptureBuffer {
     const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)).length;
     return { pending, stranded: this.chunks.size - pending };
   }
+  async orphanedRecordings() {
+    return [];
+  }
+  async recordingChunks() {
+    return [];
+  }
+  async discardRecording() { }
   async savedThroughMs() {
     return null;
   }

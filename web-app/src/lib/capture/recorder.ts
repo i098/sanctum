@@ -10,7 +10,7 @@ import type { LevelSource } from './view.ts';
 import { RECORDER_PROCESSOR, type MainMessage, type WorkletMessage } from './recording-worklet.ts';
 import workletUrl from './recording-worklet.ts?worker&url';
 
-const WAV_HEADER_BYTES = 44;
+export const WAV_HEADER_BYTES = 44;
 /** Roughly 33 irregular waveform regions (docs/DESIGN.md). */
 export const WAVEFORM_BANDS = 33;
 /** Queued part/seal writes before storage counts as stalled; bounds retained chunk memory. */
@@ -64,11 +64,14 @@ export interface EpochMeta {
 
 const decodeManifest = Schema.decodeUnknownSync(RecordingChunkManifest);
 
-function encodeWav(samples: Int16Array, sampleRate: number): Uint8Array {
-  const bytes = new Uint8Array(WAV_HEADER_BYTES + samples.length * 2);
+/** Mono PCM16 WAV header; RIFF sizes are 32-bit, so one file holds at most about 4 GiB of samples. */
+export function wavHeader(sampleCount: number, sampleRate: number): Uint8Array<ArrayBuffer> {
+  const dataBytes = sampleCount * 2;
+  if (dataBytes > 0xffff_ffff - (WAV_HEADER_BYTES - 8)) throw new RangeError('audio too long for one WAV file');
+  const bytes = new Uint8Array(WAV_HEADER_BYTES);
   const view = new DataView(bytes.buffer);
   bytes.set(new TextEncoder().encode('RIFF'), 0);
-  view.setUint32(4, bytes.length - 8, true);
+  view.setUint32(4, WAV_HEADER_BYTES - 8 + dataBytes, true);
   bytes.set(new TextEncoder().encode('WAVEfmt '), 8);
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
@@ -78,7 +81,14 @@ function encodeWav(samples: Int16Array, sampleRate: number): Uint8Array {
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   bytes.set(new TextEncoder().encode('data'), 36);
-  view.setUint32(40, samples.length * 2, true);
+  view.setUint32(40, dataBytes, true);
+  return bytes;
+}
+
+function encodeWav(samples: Int16Array, sampleRate: number): Uint8Array {
+  const bytes = new Uint8Array(WAV_HEADER_BYTES + samples.length * 2);
+  bytes.set(wavHeader(samples.length, sampleRate));
+  const view = new DataView(bytes.buffer);
   for (let i = 0; i < samples.length; i++) view.setInt16(WAV_HEADER_BYTES + i * 2, samples[i]!, true);
   return bytes;
 }
