@@ -1254,7 +1254,7 @@ Depends on: T25.
 
 ## Final boundaries
 
-- [ ] Source changes reviewed; Fallow, Sentrux and Conventional Commit gates pass without weakening baselines or configuration.
+- [x] Source changes reviewed; Fallow, Sentrux and Conventional Commit gates pass without weakening baselines or configuration.
 - [x] Authorized CI validates docs and each implemented application slice; no fake app checks or unapproved production deployment.
 - [x] Production migrations, deployment, package publication, and recording activation occur only within explicit authorization.
 - [x] Existing handoff material and any future stored recordings/sessions are preserved.

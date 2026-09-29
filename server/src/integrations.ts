@@ -382,13 +382,13 @@ export const uploadDriveFile = (
     };
   }).pipe(Effect.catchTags({ SqlError: storeFailure, ParseError: storeFailure }));
 
-/** `/api/v1/integrations`: the same gateway functions the MCP adapter calls. */
 /** Connect client from the environment; without credentials every call fails as `Unavailable`. */
 export const PipedreamLive = Layer.effect(
   PipedreamClient,
   Effect.map(serverConfig, config => makePipedreamClient(config.pipedream, engineeringDefaults.pipedream.requestTimeoutMs)),
 );
 
+/** `/api/v1/integrations`: the same gateway functions the MCP adapter calls. */
 export const IntegrationsLive = HttpApiBuilder.group(SanctumApi, 'integrations', handlers =>
   handlers
     .handle('searchIntegrationActions', ({ urlParams }) => Effect.flatMap(CurrentAccess, access => searchIntegrationActions(access, urlParams)))

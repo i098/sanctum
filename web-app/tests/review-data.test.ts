@@ -1,78 +1,25 @@
 import { createClient } from '@sanctum/sdk';
 import { describe, expect, it } from 'vitest';
-import { loadReview } from '../src/pages/listen/review-data.ts';
+import { settle } from '../src/pages/listen/review-data.ts';
 
 const MEETING = '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f';
-const item = (kind: string, state: string, text: string) => ({ id: text, revision: 1, meeting_id: MEETING, kind, text, state, sources: [] });
 
-/** Routes each v1 path to a canned status and body, recording what the loader asked for. */
-function server(routes: Record<string, { status: number; body: unknown }>) {
-  const asked: string[] = [];
-  const fetch: typeof globalThis.fetch = async input => {
-    const url = new URL(String(input));
-    asked.push(url.pathname + url.search);
-    const route = routes[url.pathname] ?? { status: 404, body: { code: 'not_found', message: 'Not found', retryable: false } };
-    return Response.json(route.body, { status: route.status });
-  };
-  return { asked, client: createClient({ baseUrl: 'https://sanctum.test', fetch, maxAttempts: 1 }) };
-}
+const client = (status: number, body: unknown) =>
+  createClient({ baseUrl: 'https://sanctum.test', fetch: async () => Response.json(body, { status }), maxAttempts: 1 });
 
-const context = {
-  status: 200,
-  body: {
-    meeting_id: MEETING,
-    revision: 4,
-    items: [item('decision', 'committed', 'Ship B'), item('open_question', 'provisional', 'Budget?'), item('preference', 'committed', 'Mornings')],
-    changes_cursor: 'c4',
-    truncated: false,
-  },
-};
-
-const notes = {
-  status: 200,
-  body: { meeting_id: MEETING, revision: 2, boundary_revision: 1, title: 'Pilot review', summary: 'Kept the pilot small.', sections: [], model: 'm', generated_at: '2026-09-29T09:00:00Z' },
-};
-
-describe('loadReview', () => {
-  it('fills all six frames from the v1 operations', async () => {
-    const { client, asked } = server({
-      [`/api/v1/meetings/${MEETING}/context`]: context,
-      [`/api/v1/meetings/${MEETING}/notes`]: notes,
-      [`/api/v1/meetings/${MEETING}/transcript`]: { status: 200, body: { segments: [{ id: 's1', text: 'Hello' }], speakers: [], next_cursor: null } },
-      [`/api/v1/meetings/${MEETING}/recording-access`]: { status: 200, body: { url: 'https://objects.test/a.wav', gaps: [] } },
-      '/api/v1/context/changes': {
-        status: 200,
-        body: { events: [{ seq: 4, change: 'item_added', meeting_id: MEETING }, { seq: 5, change: 'item_added', meeting_id: null }], next_cursor: 'c5' },
-      },
-    });
-    const review = await loadReview(client, MEETING);
-    expect(review.notes).toEqual({ status: 'ok', data: notes.body });
-    expect(review.memory).toEqual({ status: 'ok', data: [context.body.items[0], context.body.items[2]] });
-    expect(review.context).toMatchObject({ status: 'ok', data: { revision: 4 } });
-    expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ text: 'Hello' }] } });
-    expect(review.recording).toMatchObject({ status: 'ok', data: { url: 'https://objects.test/a.wav' } });
-    expect(review.activity).toEqual({ status: 'ok', data: { events: [{ seq: 4, change: 'item_added', meeting_id: MEETING }], next_cursor: 'c5' } });
-    expect(asked).toContain('/api/v1/context/changes?limit=50');
+describe('settle', () => {
+  it('keeps a successful SDK result as an ok frame', async () => {
+    const notes = { meeting_id: MEETING, revision: 2, boundary_revision: 1, title: 'Pilot review', summary: 'Kept the pilot small.', sections: [], model: 'm', generated_at: '2026-09-29T09:00:00Z' };
+    expect(await settle(client(200, notes).meetings.getNotes({ meeting_id: MEETING }))).toEqual({ status: 'ok', data: notes });
   });
 
-  it('reports a failing frame truthfully without blanking the others', async () => {
-    const { client } = server({
-      [`/api/v1/meetings/${MEETING}/context`]: context,
-      [`/api/v1/meetings/${MEETING}/recording-access`]: { status: 403, body: { code: 'forbidden', message: 'Requires recordings:read', retryable: false } },
-    });
-    const review = await loadReview(client, MEETING);
-    expect(review.recording).toEqual({ status: 'error', code: 'forbidden', message: 'Requires recordings:read' });
-    expect(review.transcript).toMatchObject({ status: 'error', code: 'not_found' });
-    expect(review.context.status).toBe('ok');
+  it('reports the API error envelope truthfully instead of blanking the frame', async () => {
+    const failed = client(503, { _tag: 'Unavailable', code: 'unavailable', message: 'Notes are not ready yet', retryable: true });
+    expect(await settle(failed.meetings.getNotes({ meeting_id: MEETING }))).toEqual({ status: 'error', code: 'unavailable', message: 'Notes are not ready yet' });
   });
 
-  it('marks memory and context unavailable when the snapshot fails, and notes separately', async () => {
-    const { client } = server({
-      [`/api/v1/meetings/${MEETING}/context`]: { status: 503, body: { code: 'unavailable', message: 'Database unavailable', retryable: false } },
-      [`/api/v1/meetings/${MEETING}/notes`]: notes,
-    });
-    const review = await loadReview(client, MEETING);
-    for (const frame of [review.memory, review.context]) expect(frame).toEqual({ status: 'error', code: 'unavailable', message: 'Database unavailable' });
-    expect(review.notes).toEqual({ status: 'ok', data: notes.body });
+  it('reports network failures as network errors', async () => {
+    const offline = createClient({ baseUrl: 'https://sanctum.test', fetch: async () => Promise.reject(new Error('offline')), maxAttempts: 1 });
+    expect(await settle(offline.meetings.getNotes({ meeting_id: MEETING }))).toMatchObject({ status: 'error', code: 'network' });
   });
 });

@@ -7,7 +7,7 @@ import { engineeringDefaults } from '../../src/config.ts';
 import type { executeIntegrationAction, IntegrationFailure } from '../../src/integrations.ts';
 import type { ClaimedJob } from '../../src/job-types.ts';
 import { LlmClient, makeLlm } from '../../src/llm.ts';
-import { fixturePipedream } from '../../src/providers/pipedream.ts';
+import { fixturePipedream } from './pipedream.ts';
 
 type ExecuteInput = Parameters<typeof executeIntegrationAction>[0];
 

@@ -5,7 +5,7 @@ import { createClient, SanctumError } from '@sanctum/sdk';
 import * as Contracts from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { contextWorkflow } from '../../sdk/examples/typescript/context-workflow.ts';
-import { loadReview } from '../../web-app/src/pages/listen/review-data.ts';
+import { settle } from '../../web-app/src/pages/listen/review-data.ts';
 import { operations, outputs } from '../../scripts/generate-sdks.ts';
 import { openApiDocument } from '../src/api.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
@@ -159,7 +159,7 @@ describe('TypeScript SDK against the running server', () => {
     }),
   );
 
-  it.scoped('gives the website review the same revision and items the SDK wrote', () =>
+  it.scoped('gives the website review the notes frame and context revision the SDK wrote', () =>
     Effect.gen(function* () {
       const { url, domain } = yield* serveFake();
       const owner = fixtureAccess();
@@ -169,14 +169,10 @@ describe('TypeScript SDK against the running server', () => {
       const added = yield* Effect.promise(() =>
         client.context.addContextItem({ meeting_id: meeting.id, expected_revision: 0, kind: 'decision', text: 'Ship B', sources: [{ segment_id: segment.id, start_ms: 0, end_ms: 800 }], idempotency_key: 'ui-1' }),
       );
-      const review = yield* Effect.promise(() => loadReview(client, meeting.id));
-      expect(review.context).toMatchObject({ status: 'ok', data: { revision: 1, items: [added] } });
+      expect(yield* Effect.promise(() => settle(client.context.getContext({ meeting_id: meeting.id })))).toMatchObject({ status: 'ok', data: { revision: 1, items: [added] } });
       // The meeting is still open, so canonical notes do not exist yet and Review says so.
-      expect(review.notes).toMatchObject({ status: 'error', code: 'unavailable', message: 'Notes are not ready yet' });
-      expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ id: segment.id }] } });
-      expect(review.recording).toMatchObject({ status: 'ok', data: { meeting_id: meeting.id } });
-      expect(review.activity).toMatchObject({ status: 'ok', data: { events: [{ change: 'item_added', item: { id: added.id } }] } });
-      expect(review.memory).toEqual({ status: 'ok', data: [] });
+      const notes = yield* Effect.promise(() => settle(client.meetings.getNotes({ meeting_id: meeting.id })));
+      expect(notes).toMatchObject({ status: 'error', code: 'unavailable', message: 'Notes are not ready yet' });
     }),
   );
 

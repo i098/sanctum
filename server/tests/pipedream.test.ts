@@ -20,7 +20,8 @@ import { dbLayer } from '../src/db.ts';
 import { executeIntegrationAction, getIntegrationAction, IntegrationFailure, searchIntegrationActions, uploadDriveFile } from '../src/integrations.ts';
 import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
-import { type ActionProp, type FixtureAction, fixturePipedream, makePipedreamClient, type PipedreamClient, type PipedreamFixture } from '../src/providers/pipedream.ts';
+import { type ActionProp, makePipedreamClient, type PipedreamClient } from '../src/providers/pipedream.ts';
+import { type FixtureAction, fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 import { createTestDatabase, type TestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 

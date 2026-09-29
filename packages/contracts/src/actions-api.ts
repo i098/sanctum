@@ -15,4 +15,4 @@ export class ActionsApi extends HttpApiGroup.make('actions')
   .add(HttpApiEndpoint.post('createActionGrant', '/action-grants').setPayload(CreateActionGrantInput).addSuccess(ActionGrant, { status: 201 }))
   .add(HttpApiEndpoint.del('revokeActionGrant')`/action-grants/${grantId}`.addSuccess(ActionGrant))
   .middleware(Authenticated)
-  .prefix('/api/v1') { }
+  .prefix('/api/v1') {}

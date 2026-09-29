@@ -194,7 +194,7 @@ export class ContextApi extends HttpApiGroup.make('context')
       .addSuccess(ContextChanges),
   )
   .add(HttpApiEndpoint.get('getSource')`/sources/${sourceId}`.addSuccess(Source))
-  .prefix('/api/v1') { }
+  .prefix('/api/v1') {}
 
 /**
  * The one canonical structured summary of a closed meeting (plan sections 08 and 09). Notes,

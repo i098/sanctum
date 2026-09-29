@@ -24,7 +24,6 @@ import { refineSpeakers } from './speakers.ts';
 export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient | SpeechToText | LlmClient | PipedreamClient;
 
 export const jobHandlers: JobHandlers<WorkerServices> = {
-  // One line per slice, e.g. 'context.refresh': refreshContext,
   'meeting.finalize': finalizeMeeting,
   'recording.assemble': assembleRecording,
   'speakers.refine': refineSpeakers,

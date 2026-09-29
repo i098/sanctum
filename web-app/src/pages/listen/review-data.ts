@@ -1,22 +1,10 @@
 /**
- * Data for the Review dialog's six frames (plan section 14), read through the same v1 SDK the
- * agents use. Each frame settles on its own: one failing source shows its real error and never
- * blanks, fakes or delays the others.
+ * Review dialog data read through the same v1 SDK the agents use. Each frame settles on its
+ * own: a failing source shows its real error and never blanks or fakes the others.
  */
-import { type ContextItem, type ContextSnapshot, type MeetingNotes, type SanctumClient, SanctumError } from '@sanctum/sdk';
+import { SanctumError } from '@sanctum/sdk';
 
 export type Frame<A> = { readonly status: 'ok'; readonly data: A } | { readonly status: 'error'; readonly code: string; readonly message: string };
-
-export interface ReviewData {
-  /** The meeting's canonical structured summary; every point cites transcript segments. */
-  readonly notes: Frame<MeetingNotes>;
-  readonly transcript: Frame<Awaited<ReturnType<SanctumClient['meetings']['getTranscript']>>>;
-  readonly recording: Frame<Awaited<ReturnType<SanctumClient['meetings']['recordingAccess']>>>;
-  /** Committed memory only; provisional items stay in Context. */
-  readonly memory: Frame<ReadonlyArray<ContextItem>>;
-  readonly context: Frame<ContextSnapshot>;
-  readonly activity: Frame<Awaited<ReturnType<SanctumClient['context']['getContextChanges']>>>;
-}
 
 export const settle = <A>(promise: Promise<A>): Promise<Frame<A>> =>
   promise.then(
@@ -26,27 +14,3 @@ export const settle = <A>(promise: Promise<A>): Promise<Frame<A>> =>
         ? { status: 'error', code: error.code, message: error.message }
         : { status: 'error', code: 'network', message: error instanceof Error ? error.message : String(error) },
   );
-
-export async function loadReview(client: SanctumClient, meeting_id: string, signal?: AbortSignal): Promise<ReviewData> {
-  const options = signal ? { signal } : {};
-  const snapshot = client.context.getContext({ meeting_id }, options);
-  const [notes, context, transcript, recording, activity] = await Promise.all([
-    settle(client.meetings.getNotes({ meeting_id }, options)),
-    settle(snapshot),
-    settle(client.meetings.getTranscript({ meeting_id, limit: 200 }, options)),
-    settle(client.meetings.recordingAccess({ meeting_id }, options)),
-    // ponytail: the changes feed has no meeting filter, so this keeps this meeting's events among the workspace's
-    // first 50; ask the context slice for a meeting filter before Review serves long-lived workspaces.
-    settle(client.context.getContextChanges({ limit: 50 }, options).then(changes => ({ ...changes, events: changes.events.filter(event => event.meeting_id === meeting_id) }))),
-  ]);
-  if (context.status === 'error') return { notes, transcript, recording, memory: context, context, activity };
-  const items = context.data.items;
-  return {
-    notes,
-    transcript,
-    recording,
-    memory: { status: 'ok', data: items.filter(item => item.state === 'committed') },
-    context,
-    activity,
-  };
-}

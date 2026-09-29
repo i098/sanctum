@@ -108,4 +108,4 @@ export class AgentsApi extends HttpApiGroup.make('agents')
   .add(HttpApiEndpoint.get('listAgents', '/agents').setUrlParams(AgentPageParams).addSuccess(AgentPage))
   .add(HttpApiEndpoint.del('revokeCredential')`/agents/${agentId}/credentials/${keyId}`)
   .middleware(Authenticated)
-  .prefix('/api/v1') { }
+  .prefix('/api/v1') {}

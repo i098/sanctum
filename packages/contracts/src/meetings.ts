@@ -159,4 +159,4 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.get('exportMeeting')`/meetings/${meetingId}/export`.addSuccess(MeetingExport))
   .add(HttpApiEndpoint.post('mapSpeaker')`/meetings/${meetingId}/speakers/map`.setPayload(MapSpeaker).addSuccess(Schema.Array(SpeakerTrack)))
   .middleware(Authenticated)
-  .prefix('/api/v1') { }
+  .prefix('/api/v1') {}
