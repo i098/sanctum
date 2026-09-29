@@ -53,7 +53,8 @@ export async function sample(count: number, op: (i: number) => unknown, rate = 0
   const started = performance.now();
   for (let i = 0; i < count; i++) {
     const due = rate > 0 ? started + (i * 1000) / rate : performance.now();
-    if (due - performance.now() >= 1) await sleep(due - performance.now());
+    const ahead = due - performance.now();
+    if (ahead >= 1) await sleep(ahead);
     const begin = Math.min(due, performance.now());
     await op(i);
     const end = performance.now();
