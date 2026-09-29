@@ -6,7 +6,7 @@
  * with capped backoff.
  */
 import { randomUUID } from 'node:crypto';
-import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
+import { SqlClient, SqlError, SqlSchema } from '@effect/sql';
 import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Cause, Effect, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
@@ -128,6 +128,15 @@ export const sweepJobs = Effect.gen(function* () {
     WHERE status = 'running' AND lease_until <= UTC_TIMESTAMP(6)`);
 });
 
+/** A handler's typed failure; a database error it died on is transient and retryable, any other defect is not. */
+const failureOf = (cause: Cause.Cause<JobFailure>) =>
+  Option.getOrElse(Cause.failureOption(cause), () => {
+    const died = Option.getOrNull(Cause.dieOption(cause));
+    return died instanceof SqlError.SqlError
+      ? new JobFailure({ message: `Database error: ${died.message}`, retryable: true })
+      : new JobFailure({ message: Cause.pretty(cause), retryable: false });
+  });
+
 /**
  * Re-checks the requester (the action handler does so itself to settle the action row), runs the
  * handler under its ceiling while renewing the lease, then completes the row. A ceiling hit
@@ -156,9 +165,7 @@ const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number, ceil
       yield* Effect.logWarning(`Job ${job.id} lost its lease; another worker owns it`);
       return false;
     }
-    const completion: Completion = Exit.isSuccess(raced)
-      ? raced.value
-      : { status: 'failed', error: Option.getOrElse(Cause.failureOption(raced.cause), () => new JobFailure({ message: Cause.pretty(raced.cause), retryable: false })) };
+    const completion: Completion = Exit.isSuccess(raced) ? raced.value : { status: 'failed', error: failureOf(raced.cause) };
     return yield* completeJob(lease, completion);
   });
 

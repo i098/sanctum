@@ -34,7 +34,8 @@ export interface LiveOptions {
 export interface LiveStream {
   /** Sends one block if the server accepted the stream and the socket is not backed up. */
   send(sampleStart: number, samples: Int16Array): void;
-  stop(reason: StopReason): void;
+  /** A `null` reason drops the socket without a `stop`, so the server records the epoch as interrupted. */
+  stop(reason: StopReason | null): void;
 }
 
 type StartMessage = typeof StartMessage.Type;
@@ -116,7 +117,7 @@ export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, 
     stop(reason) {
       stopped = true;
       clearTimeout(retry);
-      if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
+      if (reason !== null && socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
     },

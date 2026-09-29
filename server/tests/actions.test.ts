@@ -302,7 +302,8 @@ describe('research.run', () => {
         const sql = yield* SqlClient.SqlClient;
         const { agent } = yield* setup();
         const meeting_id = yield* seedMeeting(agent.workspace_id, [agent]);
-        vi.mocked(planActions).mockReturnValue(Effect.succeed([request({ idempotency_key: 'ignored' }), request({ action_key: 'slack-send-message' })]));
+        const planned = [request({ idempotency_key: 'plan-send' }), request({ action_key: 'slack-send-message' })];
+        vi.mocked(planActions).mockReturnValue(Effect.succeed(planned));
         yield* sql`INSERT INTO jobs (id, workspace_id, kind, work_key, requested_by, status, payload, available_at, max_attempts, created_at, updated_at)
           VALUES (UUID(), ${agent.workspace_id}, 'research.run', 'follow-up', ${agent.principal.id}, 'pending', ${JSON.stringify({ meeting_id, request: 'Email the notes' })},
             UTC_TIMESTAMP(6), 3, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
@@ -314,6 +315,14 @@ describe('research.run', () => {
         });
         expect(yield* runResearch(job)).toEqual(first);
         expect(vi.mocked(planActions)).toHaveBeenCalledWith(expect.objectContaining({ principal: expect.objectContaining({ id: agent.principal.id }) }), { meeting_id, request: 'Email the notes' });
+        // A retried plan may come back in another order; each planned action still maps to its one request.
+        vi.mocked(planActions).mockReturnValue(Effect.succeed([...planned].reverse()));
+        expect(yield* runResearch(job)).toMatchObject({
+          status: 'succeeded',
+          result: { actions: [{ action_key: 'slack-send-message', refused: 'Forbidden' }, { action_key: SEND, state: 'queued' }] },
+        });
+        const [requested] = yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM actions WHERE workspace_id = ${agent.workspace_id}`;
+        expect(Number(requested!.count)).toBe(1);
 
         vi.mocked(planActions).mockReturnValue(Effect.fail(new Unavailable({ message: 'planner rate limited', retryable: true, retry_after_ms: 4_000 })));
         expect(yield* runResearch(job)).toEqual({ status: 'paused', resume_after_ms: 4_000, reason: 'planner rate limited' });

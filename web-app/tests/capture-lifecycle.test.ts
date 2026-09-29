@@ -46,6 +46,8 @@ class MemoryBuffer implements CaptureBuffer {
   readonly parts: PartRecord[] = [];
   readonly chunks = new Map<string, SealedChunk>();
   orphans = 0;
+  /** Chunks a crashed tab left as committed parts; recovery seals them. */
+  readonly orphaned: SealedChunk[] = [];
   freeBytes = 1e9;
   onLost = () => { };
   async appendPart(part: PartRecord) {
@@ -88,7 +90,9 @@ class MemoryBuffer implements CaptureBuffer {
     return null;
   }
   async recoverOrphans() {
-    return this.orphans;
+    const recovered = this.orphaned.splice(0);
+    recovered.forEach((chunk) => this.chunks.set(chunk.manifest.chunk_id, chunk));
+    return this.orphans + recovered.length;
   }
   async persist() {
     return true;
@@ -105,7 +109,8 @@ class FakeLocks {
   }
 }
 
-type FakeLive = { options: LiveOptions; sent: number[]; stopped: StopReason | null };
+/** `stopped` is `undefined` until the stream stops; `null` means it dropped the socket without a `stop`. */
+type FakeLive = { options: LiveOptions; sent: number[]; stopped?: StopReason | null };
 
 const receipt = (manifest: RecordingChunkManifest) =>
   ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
@@ -125,6 +130,8 @@ class FakeListenerServer {
   private readonly epochs: Map<string, number>;
   /** Heartbeats and archive registrations cannot reach the server. */
   private offline = false;
+  /** Another capture-group member holds live writes: heartbeats still renew this listener but report `owner: false`. */
+  private groupHeld = false;
   private readonly lease = { lease_expires_at: '2026-09-29T09:00:45Z' };
 
   private readonly options: { unclaimed?: boolean; epochs?: string[] };
@@ -158,7 +165,7 @@ class FakeListenerServer {
     if (this.active && held !== this.generation) return Effect.succeed({ ...this.lease, lease_generation: held, owner: false });
     if (held !== this.generation || this.generation === 0) this.claims.push({ generation: ++this.generation, at: Date.now() }); // takeover of an expired (or never claimed) lease
     this.active = true;
-    return Effect.succeed({ ...this.lease, lease_generation: this.generation, owner: true });
+    return Effect.succeed({ ...this.lease, lease_generation: this.generation, owner: !this.groupHeld });
   }
 
   private putChunk(manifest: RecordingChunkManifest) {
@@ -181,12 +188,12 @@ class FakeListenerServer {
   private startLive(liveOptions: LiveOptions): void {
     const { start } = liveOptions;
     if (this.offline) queueMicrotask(() => liveOptions.onStatus('reconnecting'));
-    else if (this.active && start.lease_generation === this.generation) this.epochs.set(start.epoch_id, start.lease_generation);
+    else if (this.active && !this.groupHeld && start.lease_generation === this.generation) this.epochs.set(start.epoch_id, start.lease_generation);
     else queueMicrotask(() => liveOptions.onStatus('rejected', 'stale_generation'));
   }
 
   readonly openLive = (liveOptions: LiveOptions): LiveStream => {
-    const live: FakeLive = { options: liveOptions, sent: [], stopped: null };
+    const live: FakeLive = { options: liveOptions, sent: [] };
     this.lives.push(live);
     if (liveOptions.start.archive_only) queueMicrotask(() => this.registerArchive(liveOptions));
     else this.startLive(liveOptions);
@@ -202,6 +209,10 @@ class FakeListenerServer {
 
   readonly setOffline = (value: boolean) => {
     this.offline = value;
+  };
+
+  readonly setGroupHeld = (value: boolean) => {
+    this.groupHeld = value;
   };
 
   readonly forget = () => {
@@ -272,6 +283,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     /** `false`: another device claims the lease; `true`: the winner's lease expires, so the next heartbeat takes it over. */
     setOwner: server.setOwner,
     setOffline: server.setOffline,
+    setGroupHeld: server.setGroupHeld,
     forget: server.forget,
   };
 }
@@ -356,7 +368,7 @@ describe('capture lifecycle', () => {
 
     h.track.unplug();
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'input_lost', archive: 'interrupted' }));
-    expect(h.lives[0]!.stopped).toBe('close');
+    expect(h.lives[0]!.stopped).toBeNull(); // no clean `stop`: the server records the epoch interrupted
   });
 
   it('keeps capturing while overlays subscribe and unsubscribe', async () => {
@@ -396,7 +408,7 @@ describe('capture lifecycle', () => {
     closed.feed(0.6);
     closed.win.dispatchEvent(new Event('pagehide'));
     expect(closed.track.readyState).toBe('ended');
-    expect(closed.lives[0]!.stopped).toBe('close');
+    expect(closed.lives[0]!.stopped).toBeNull();
 
     const buffer = new MemoryBuffer();
     buffer.orphans = 1;
@@ -408,6 +420,24 @@ describe('capture lifecycle', () => {
     const reloaded = harness({ buffer, stored: true, epochs: [recovered.manifest.epoch_id] });
     await vi.waitFor(() => expect(reloaded.calls.put).toEqual([recovered.manifest]));
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0 }));
+  });
+
+  it('seals parts a crashed tab left behind when this tab starts capture later', async () => {
+    const locks = new FakeLocks();
+    let crash!: () => void;
+    void locks.request('sanctum-capture', { ifAvailable: true }, () => new Promise<void>((resolve) => (crash = resolve)));
+    const orphan = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    const buffer = new MemoryBuffer();
+    const h = harness({ buffer, locks, stored: true, epochs: [orphan.manifest.epoch_id] });
+    await settle();
+    buffer.orphaned.push(orphan);
+    crash();
+    await settle();
+    await h.engine.start();
+    await vi.waitFor(() => expect(h.calls.put).toEqual([orphan.manifest]));
   });
 
   it('keeps chunks of a forgotten listener as stranded local audio, not pending uploads', async () => {
@@ -516,6 +546,28 @@ describe('capture lifecycle', () => {
     expect(h.lives.filter((live) => !live.options.start.archive_only)).toHaveLength(1); // no live start after the loss
     expect(h.snapshot().listener).toBe('degraded');
     expect(h.buffer.starts.get(h.snapshot().epochId!)).toMatchObject({ lease_generation: 1 });
+  });
+
+  it('keeps the listener generation a heartbeat hands it while another group member holds live writes', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.setGroupHeld(true);
+    h.setOwner(false);
+    h.setOwner(true); // the listener lease lapsed too: the next heartbeat takes it over at generation 3
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(JSON.parse(h.storage.get('sanctum.listener')!)).toEqual({ id: LISTENER_ID, lease_generation: 3 });
+    expect(h.snapshot()).toMatchObject({ issue: 'lease_lost', epochId: null });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.calls.heartbeat.at(-1)).toMatchObject({ lease_generation: 3 });
+
+    h.setGroupHeld(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.snapshot().issue).toBeNull();
+    h.feed(0.1);
+    expect(h.lives.at(-1)!.options.start).toMatchObject({ lease_generation: 3 });
+    expect(JSON.parse(h.storage.get('sanctum.listener')!)).toEqual({ id: LISTENER_ID, lease_generation: 3 });
   });
 
   it('opens a fresh epoch under the new generation when the lease comes back', async () => {
@@ -633,7 +685,8 @@ describe('capture lifecycle', () => {
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([slept, slept]));
     expect(h.lives.filter((live) => live.options.start.archive_only).map((live) => live.options.start)).toContainEqual(expect.objectContaining({ epoch_id: slept, end_reason: 'close' }));
     expect(h.snapshot().epochId).toBe(woke);
-    expect(h.lives[1]).toMatchObject({ options: { start: { epoch_id: woke } }, stopped: null });
+    expect(h.lives[1]).toMatchObject({ options: { start: { epoch_id: woke } } });
+    expect(h.lives[1]).not.toHaveProperty('stopped');
   });
 
   it('registers an epoch recorded offline before a tab close and uploads it on the next load', async () => {

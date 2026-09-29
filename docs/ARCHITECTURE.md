@@ -167,7 +167,7 @@ Owns `server/src/mcp.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/py
 
 Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of `web-app/vite.config.ts`, `server/src/capture-groups.ts`, `server/tests/handoff.test.ts`, `server/tests/capabilities.test.ts`.
 
-- `capture-groups.ts`: `claimGroupLease(input: { workspace_id; capture_group_id; listener_id; lease_generation }): Effect<HeartbeatReceipt, SqlError, R>`, called by media's heartbeat.
+- `capture-groups.ts`: `claimGroupLease(input: { workspace_id; capture_group_id; listener_id }): Effect<boolean, SqlError, R>`, called inside media's heartbeat, and `holdsGroupLease(workspace_id, listener): Effect<boolean, SqlError, R>`, required by live `start` and watermark writes.
 - Serves built web assets from main.ts behind the API routes.
 
 ## Hot files

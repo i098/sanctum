@@ -231,6 +231,7 @@ class CaptureController implements CaptureView {
     let stream: MediaStream | null = null;
     try {
       const buffer = await this.openBuffer();
+      if ((await buffer.recoverOrphans()) > 0) void this.refreshPending().then(() => this.startDrain());
       const listener = await this.claimListener(buffer);
       stream = await acquireMicrophone(this.nav.mediaDevices);
       const recorder = await (this.deps.startRecorder ?? startRecorder)(stream, (start, samples) => this.onBlock(start, samples));
@@ -354,7 +355,7 @@ class CaptureController implements CaptureView {
     if (session === null && this.phase === 'starting') this.cancelStart = phase;
     if (session === null || session.stopping) return;
     session.stopping = true;
-    session.epoch?.live?.stop(reason);
+    session.epoch?.live?.stop(journal ? reason : null);
     await session.recorder.flush();
     this.session = null;
     if (journal && session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
@@ -456,11 +457,9 @@ class CaptureController implements CaptureView {
 
   private onHeartbeat(listener: StoredListener, exit: Exit.Exit<{ readonly owner: boolean; readonly lease_generation: StoredListener['lease_generation'] }, { readonly _tag: string }>): void {
     if (Exit.isSuccess(exit)) {
-      // `owner: false` echoes this device's own generation; only a held lease may change it.
-      if (exit.value.owner) {
-        this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
-        if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
-      }
+      // An unowned listener lease echoes this device's generation; a held one may have moved on even when the group lease is elsewhere.
+      this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
+      if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.saveListener(null); // the server no longer knows this listener; the next start registers again

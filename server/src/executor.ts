@@ -163,8 +163,9 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
 
 /**
  * `research.run`: plan the request and submit each planned action through the same grant
- * gateway as any agent. Idempotency keys derive from the job ID, so a retried job never
- * requests twice. A rate-limited planner pauses the job until it may resume.
+ * gateway as any agent. The planner's idempotency keys derive from each action's content, so a
+ * retried job never requests the same action twice, whatever order the plan comes back in.
+ * A rate-limited planner pauses the job until it may resume.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -180,8 +181,8 @@ export const runResearch = (job: Job) =>
       if (retryable && retry_after_ms !== undefined) return { status: 'paused', resume_after_ms: retry_after_ms, reason: message } as const;
       return yield* new JobFailure({ message, retryable });
     }
-    const results = yield* Effect.forEach(plan.right, (input, index) =>
-      requestAction(access, { ...input, meeting_id, idempotency_key: `research:${job.id}:${index}` }).pipe(
+    const results = yield* Effect.forEach(plan.right, input =>
+      requestAction(access, { ...input, meeting_id }).pipe(
         Effect.map(output => ({ action_key: input.action_key, ...output })),
         Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
       ),

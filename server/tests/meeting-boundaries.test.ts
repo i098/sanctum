@@ -211,4 +211,20 @@ describe('automatic meeting lifecycle', () => {
       { migrated: true },
     ),
   );
+
+  it.effect('capture end of an earlier epoch leaves open a meeting holding later audio', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { listener, epoch } = yield* setup;
+        const resumed = yield* seedEpoch(listener, '2026-09-28 17:00:00.000000');
+        yield* hear(listener, resumed, 0, 30, 'a new conversation after the offline gap');
+        const end = { workspace_id: listener.workspace_id, listener_id: listener.listener_id, track: 0 };
+        yield* onCaptureEnded({ ...end, epoch_id: epoch, sample_end: 10 * RATE, reason: 'interrupted' });
+        expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['provisional']);
+        yield* onCaptureEnded({ ...end, epoch_id: resumed, sample_end: 31 * RATE, reason: 'close' });
+        expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['closing']);
+      }),
+      { migrated: true },
+    ),
+  );
 });

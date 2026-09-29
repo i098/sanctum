@@ -225,6 +225,7 @@ describe('job ledger', () => {
               yield* Ref.update(runs, list => [...list, claimed.work_key]);
               if (claimed.work_key === 'slow') yield* Effect.sleep('4500 millis');
               if (claimed.work_key === 'defect') return yield* Effect.die(new Error('handler bug'));
+              if (claimed.work_key === 'db-blip') return yield* Effect.die(new SqlError.SqlError({ cause: { errno: 2013 }, message: 'connection lost' }));
               return { status: 'succeeded' as const, result: { key: claimed.work_key } };
             }),
         };
@@ -232,15 +233,17 @@ describe('job ledger', () => {
 
         const slow = yield* job(owner.workspace_id, 'slow', {}, { requested_by: owner.principal.id });
         const defect = yield* job(owner.workspace_id, 'defect');
+        const blip = yield* job(owner.workspace_id, 'db-blip', {}, { max_attempts: 2 });
         const byAgent = yield* job(owner.workspace_id, 'agent-work', {}, { requested_by: agent.agent.id });
         yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${agent.agent.id}`;
 
         expect(yield* until(slow, current => current.status === 'succeeded')).toMatchObject({ attempts: 1 });
         expect(yield* until(defect, current => current.status === 'failed')).toMatchObject({ attempts: 1 });
         expect((yield* row(defect)).last_error!.message).toContain('handler bug');
+        expect(yield* until(blip, current => current.status === 'failed')).toMatchObject({ attempts: 2, last_error: { message: 'Database error: connection lost', retryable: true } });
         const denied = yield* until(byAgent, current => current.status === 'failed');
         expect(denied.last_error).toEqual({ message: 'Requester is no longer authorized', retryable: false });
-        expect([...(yield* Ref.get(runs))].sort()).toEqual(['defect', 'slow']);
+        expect([...(yield* Ref.get(runs))].sort()).toEqual(['db-blip', 'db-blip', 'defect', 'slow']);
         yield* Fiber.interrupt(worker);
       }),
       migrated,

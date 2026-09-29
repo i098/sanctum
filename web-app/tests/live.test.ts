@@ -4,6 +4,9 @@ import { openLiveStream } from '../src/lib/capture/live.ts';
 /** Minimal WebSocket double: the test drives open/message and reads what was sent. */
 class FakeSocket {
   static last: FakeSocket;
+  static readonly OPEN = 1;
+  readyState = FakeSocket.OPEN;
+  closed = false;
   binaryType = '';
   bufferedAmount = 0;
   sent: unknown[] = [];
@@ -18,7 +21,9 @@ class FakeSocket {
   send(data: unknown) {
     this.sent.push(data);
   }
-  close() {}
+  close() {
+    this.closed = true;
+  }
 }
 
 const start = {
@@ -42,5 +47,19 @@ describe('live stream', () => {
     socket.onmessage!({ data: JSON.stringify(chunk) });
     socket.onmessage!({ data: JSON.stringify(cancel) });
     expect(speech).toEqual([chunk, cancel]);
+  });
+
+  it('sends a clean stop, but drops the socket silently when the stop is an interruption', () => {
+    const open = () => {
+      const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, WebSocket: FakeSocket as never });
+      return { stream, socket: FakeSocket.last };
+    };
+    const paused = open();
+    paused.stream.stop('pause');
+    expect(paused.socket.sent).toEqual([JSON.stringify({ _tag: 'stop', reason: 'pause' })]);
+    const interrupted = open();
+    interrupted.stream.stop(null);
+    expect(interrupted.socket.sent).toEqual([]);
+    expect(interrupted.socket.closed).toBe(true);
   });
 });

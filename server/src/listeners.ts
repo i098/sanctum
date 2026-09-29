@@ -26,6 +26,7 @@ import {
   WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
+import { claimGroupLease, holdsGroupLease } from './capture-groups.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
 import { heldUntil, recordClaim } from './lease-claims.ts';
@@ -123,7 +124,8 @@ const endEpoch = (workspace_id: WorkspaceId, listener_id: ListenerId, epoch_id: 
 /**
  * Renews the caller's lease, or takes it over when the previous owner's lease lapsed. Generation 0
  * means never claimed, so the first claim always increments. A takeover interrupts the old owner's epoch.
- * An owner in a capture group still needs the group lease (`capture_group_id` tells the caller which).
+ * An owner in a capture group also needs the group lease; without it `owner` is false while the
+ * receipt still carries this listener's generation.
  */
 export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: typeof Heartbeat.Type) =>
   Effect.gen(function* () {
@@ -134,8 +136,7 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
         const renew = input.lease_generation === listener.lease_generation && listener.lease_generation > 0;
         if (!renew && listener.lease_active === 1) {
           // The caller keeps its own generation: handing it the holder's would let it act as the holder.
-          const receipt: typeof HeartbeatReceipt.Type = { lease_generation: input.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false };
-          return { ...receipt, capture_group_id: null };
+          return { lease_generation: input.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false } satisfies typeof HeartbeatReceipt.Type;
         }
         if (!renew && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
         const generation = renew ? listener.lease_generation : listener.lease_generation + 1;
@@ -147,8 +148,9 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
           WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id}`;
         if (!renew) yield* recordClaim(access.workspace_id, listener_id, generation);
         const renewed = yield* ownedListener(access, listener_id);
-        const receipt: typeof HeartbeatReceipt.Type = { lease_generation: generation, lease_expires_at: renewed.lease_expires_at!, owner: true };
-        return { ...receipt, capture_group_id: renewed.capture_group_id };
+        const { capture_group_id } = renewed;
+        const owner = capture_group_id === null || (yield* claimGroupLease({ workspace_id: access.workspace_id, capture_group_id, listener_id }));
+        return { lease_generation: generation, lease_expires_at: renewed.lease_expires_at!, owner } satisfies typeof HeartbeatReceipt.Type;
       }),
     );
   });
@@ -216,7 +218,7 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, start.listener_id, true);
         if (start.archive_only) return yield* registerArchive(access, listener, start);
-        if (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation) {
+        if (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener))) {
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
         return yield* startLive(access, listener, start);
@@ -234,7 +236,7 @@ export const advanceLiveWatermark = (access: AccessScope, listener_id: ListenerI
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, listener_id, true);
-        if (listener.lease_generation !== lease_generation) return false;
+        if (listener.lease_generation !== lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener))) return false;
         yield* sql`
           UPDATE capture_epochs SET live_sample_end = GREATEST(live_sample_end, ${sample_end})
           WHERE workspace_id = ${access.workspace_id} AND id = ${epoch_id} AND ended_at IS NULL`;
