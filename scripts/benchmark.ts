@@ -115,6 +115,7 @@ export async function createDatabase(url: string): Promise<{ url: string; ids: F
   await seed.query(`INSERT INTO principals (id, kind, display_name, created_at) VALUES (?, 'human', 'Owner', UTC_TIMESTAMP(6)), (?, 'device', 'Room', UTC_TIMESTAMP(6))`, [owner, device]);
   await seed.query(`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (?, ?, 'owner', UTC_TIMESTAMP(6)), (?, ?, 'device', UTC_TIMESTAMP(6))`, [workspace, owner, workspace, device]);
   await seed.query(`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, state, lease_generation, current_epoch_id, capabilities, created_at) VALUES (?, ?, ?, 'Room', 'room', 'listening', 1, ?, '{}', UTC_TIMESTAMP(6))`, [listener, workspace, device, epoch]);
+  await seed.query(`INSERT INTO listener_lease_claims (workspace_id, listener_id, lease_generation, claimed_at) VALUES (?, ?, 1, UTC_TIMESTAMP(6))`, [workspace, listener]);
   await seed.query(`INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at, timezone, start_reason, started_at, live_sample_end)
         VALUES (?, ?, ?, 1, 48000, 1, 'pcm_s16le', 0, '2026-09-29 09:00:00', 'UTC', 'start', UTC_TIMESTAMP(6), 0)`, [epoch, workspace, listener]);
   await seed.end();

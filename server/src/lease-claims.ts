@@ -4,7 +4,7 @@
  * a later generation was claimed; archive registration and chunk uploads check that instant.
  */
 import { SqlClient } from '@effect/sql';
-import type { ListenerId, WorkspaceId } from '@sanctum/contracts';
+import type { ListenerId, UtcTimestamp, WorkspaceId } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { DbUtc } from './db.ts';
 
@@ -15,16 +15,16 @@ export const recordClaim = (workspace_id: WorkspaceId, listener_id: ListenerId, 
       VALUES (${workspace_id}, ${listener_id}, ${lease_generation}, UTC_TIMESTAMP(6))`);
 
 /**
- * Whether audio that ends at `until_ms` (Unix milliseconds on the device's clock) was captured while
- * `lease_generation` held the lease: that generation was claimed and no later one had been claimed yet.
+ * Whether audio captured at `captured_at` (the device's clock) and lasting `duration_us` was recorded
+ * while `lease_generation` held the lease: that generation was claimed and no later one was claimed before it ended.
  */
-export const heldUntil = (workspace_id: WorkspaceId, listener_id: string, lease_generation: number, until_ms: number) =>
+export const heldUntil = (workspace_id: WorkspaceId, listener_id: string, lease_generation: number, captured_at: UtcTimestamp, duration_us: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const until = Schema.encodeSync(DbUtc)(new Date(until_ms).toISOString() as typeof DbUtc.Type);
     const [row] = yield* sql<{ claimed: number | string; superseded: number | string }>`
       SELECT COUNT(CASE WHEN lease_generation = ${lease_generation} THEN 1 END) AS claimed,
-             COUNT(CASE WHEN lease_generation > ${lease_generation} AND claimed_at < ${until} THEN 1 END) AS superseded
+             COUNT(CASE WHEN lease_generation > ${lease_generation}
+                         AND claimed_at < TIMESTAMPADD(MICROSECOND, ${duration_us}, ${Schema.encodeSync(DbUtc)(captured_at)}) THEN 1 END) AS superseded
       FROM listener_lease_claims WHERE workspace_id = ${workspace_id} AND listener_id = ${listener_id}`;
     return Number(row?.claimed) > 0 && Number(row?.superseded) === 0;
   });

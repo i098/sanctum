@@ -70,17 +70,28 @@ fn validate(conn: &mut impl Queryable, access: &Access, listener: &str, chunk_id
     if !access.scopes.contains(&"capture:ingest") {
         return fail("The capture:ingest scope is required");
     }
-    let epoch: Option<(u64, u64)> = conn.exec_first(
-        "SELECT e.sample_rate, e.sample_start FROM capture_epochs e
+    let epoch: Option<(u64, u64, u64)> = conn.exec_first(
+        "SELECT e.sample_rate, e.sample_start, e.lease_generation FROM capture_epochs e
         JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
         WHERE e.workspace_id = ? AND e.id = ? AND l.id = ? AND l.principal_id = ?",
         (&access.workspace, manifest.epoch_id, listener, &access.principal),
     )?;
-    let Some((rate, start)) = epoch else {
+    let Some((rate, start, generation)) = epoch else {
         return fail("Capture epoch not found for this listener");
     };
     if rate != manifest.sample_rate || manifest.sample_start < start {
         return fail("sample rate or range does not match the epoch clock");
+    }
+    let duration_us = (manifest.sample_count as f64 / manifest.sample_rate as f64 * 1_000_000.0).round() as u64;
+    let held: Option<(u64, u64)> = conn.exec_first(
+        "SELECT COUNT(CASE WHEN lease_generation = ? THEN 1 END) AS claimed,
+             COUNT(CASE WHEN lease_generation > ?
+                         AND claimed_at < TIMESTAMPADD(MICROSECOND, ?, ?) THEN 1 END) AS superseded
+      FROM listener_lease_claims WHERE workspace_id = ? AND listener_id = ?",
+        (generation, generation, duration_us, manifest.captured_at, &access.workspace, listener),
+    )?;
+    if held.is_none_or(|(claimed, superseded)| claimed == 0 || superseded > 0) {
+        return fail("This audio was recorded after the device lost the listener lease");
     }
     if let Some(problem) = wav_error(body, manifest) {
         return fail(problem);

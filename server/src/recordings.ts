@@ -141,8 +141,8 @@ const heldEpoch = (access: AccessScope, listener_id: ListenerId, manifest: Recor
     if (epoch.value.sample_rate !== manifest.sample_rate || manifest.sample_start < epoch.value.sample_start) {
       return yield* invalid('sample rate or range does not match the epoch clock');
     }
-    const ends_ms = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
-    if (!(yield* heldUntil(access.workspace_id, listener_id, epoch.value.lease_generation, ends_ms))) {
+    const duration_us = Math.round((manifest.sample_count / manifest.sample_rate) * 1_000_000);
+    if (!(yield* heldUntil(access.workspace_id, listener_id, epoch.value.lease_generation, manifest.captured_at, duration_us))) {
       return yield* new NotFound({ message: 'This audio was recorded after the device lost the listener lease' });
     }
   });

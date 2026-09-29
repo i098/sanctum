@@ -179,7 +179,7 @@ const sameEpoch = (listener: ListenerRow, start: typeof StartMessage.Type, epoch
  */
 const registerArchive = (access: AccessScope, listener: ListenerRow, start: typeof StartMessage.Type) =>
   Effect.gen(function* () {
-    if (!(yield* heldUntil(access.workspace_id, listener.id, start.lease_generation, Date.parse(start.clock.captured_at)))) {
+    if (!(yield* heldUntil(access.workspace_id, listener.id, start.lease_generation, start.clock.captured_at, 0))) {
       return rejected('stale_generation', `Generation ${start.lease_generation} did not hold this listener when the epoch began`);
     }
     const existing = yield* findEpoch(access.workspace_id, start.epoch_id);
