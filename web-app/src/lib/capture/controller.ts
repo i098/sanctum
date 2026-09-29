@@ -132,7 +132,7 @@ class CaptureController implements CaptureView {
     this.client = deps.client ?? makeListenersClient();
     this.timing = { ...DEFAULT_TIMING, ...deps.timing };
     this.wakeLock = this.nav.wakeLock === undefined ? 'unsupported' : 'released';
-    this.listener = Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
+    this.listener = this.storedListener();
     this.listen(this.win, 'pagehide', () => this.endPage());
     this.listen(this.doc, 'freeze', () => this.endPage());
     this.listen(this.doc, 'visibilitychange', () => this.onVisible());
@@ -283,10 +283,13 @@ class CaptureController implements CaptureView {
     return this.listener!;
   }
 
-  private saveListener(listener: StoredListener | null): void {
+  private saveListener(listener: StoredListener): void {
     this.listener = listener;
-    if (listener === null) this.storage.removeItem(LISTENER_KEY);
-    else this.storage.setItem(LISTENER_KEY, JSON.stringify(listener));
+    this.storage.setItem(LISTENER_KEY, JSON.stringify(listener));
+  }
+
+  private storedListener(): StoredListener | null {
+    return Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
   }
 
   private onBlock(sampleStart: number, samples: Int16Array): void {
@@ -476,7 +479,8 @@ class CaptureController implements CaptureView {
       if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
-      this.saveListener(null); // the server no longer knows this listener; the next start registers again
+      this.listener = null; // the server no longer knows this listener; the next start registers again
+      if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
       void this.refreshPending(); // its chunks are now stranded: kept locally, no longer pending
     }
   }
@@ -579,8 +583,7 @@ class CaptureController implements CaptureView {
 
   /** Listeners whose chunks are pending on this device (the one every tab shares or this tab's own) or still being recorded here: never orphaned, never discarded. */
   private owned(): string[] {
-    const stored = Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
-    return [stored?.id, this.listener?.id, this.session?.listener.id].filter((id) => id !== undefined);
+    return [this.storedListener()?.id, this.listener?.id, this.session?.listener.id].filter((id) => id !== undefined);
   }
 
   private async refreshPending(): Promise<void> {

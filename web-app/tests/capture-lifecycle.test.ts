@@ -519,6 +519,26 @@ describe('capture lifecycle', () => {
     expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
 
+  it('keeps the listener another tab registered when this tab learns its older listener was removed', async () => {
+    const buffer = new MemoryBuffer();
+    const h = harness({ buffer, stored: true });
+    await settle();
+    const pending = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: NEXT_LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(pending);
+    const next = JSON.stringify({ id: NEXT_LISTENER_ID, lease_generation: 1 });
+    h.storage.set('sanctum.listener', next); // another tab registered after the old listener was removed
+    h.forget();
+    await vi.advanceTimersByTimeAsync(15_000); // this tab's heartbeat for the old listener fails NotFound
+    expect(h.storage.get('sanctum.listener')).toBe(next);
+
+    expect(await h.engine.orphanedRecordings()).toEqual([]);
+    await h.engine.discardRecording({ listenerId: NEXT_LISTENER_ID, epochId: pending.manifest.epoch_id, sampleRate: RATE, startedAt: pending.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
+  });
+
   it('starts a new epoch after a sleep gap instead of stretching the sample clock', async () => {
     const h = harness();
     await h.engine.start();
