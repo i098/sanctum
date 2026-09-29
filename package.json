@@ -21,8 +21,10 @@
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
     "@commitlint/config-conventional": "21.2.3",
+    "@effect/platform": "0.97.2",
     "@effect/vitest": "0.30.0",
     "@types/node": "24.19.0",
+    "effect": "3.22.2",
     "fallow": "3.30.0",
     "fast-xml-parser": "5.11.1",
     "parse5": "8.0.1",

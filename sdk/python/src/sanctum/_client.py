@@ -7,14 +7,16 @@ module holds the handwritten parts: typed errors, safe retries, cursor pages and
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from ._generated import OPERATIONS, ActionReceipt, AsyncGroups, Groups, Operation
+from ._generated import OPERATIONS, ActionReceipt, Operation
 
 TERMINAL_ACTION_STATES = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 
@@ -61,11 +63,21 @@ def _is_safe(op: Operation, input: Mapping[str, Any]) -> bool:
     return op.method == "GET" or isinstance(input.get("idempotency_key"), str)
 
 
+def _groups(call: Callable[[str, Mapping[str, Any]], Any]) -> dict[str, SimpleNamespace]:
+    """`client.<group>.<snake_case_operation>(input)` for every generated operation ID."""
+    groups: dict[str, SimpleNamespace] = {}
+    for operation in OPERATIONS:
+        group, name = operation.split(".")
+        method = re.sub(r"[A-Z]", lambda m: "_" + m.group().lower(), name)
+        setattr(groups.setdefault(group, SimpleNamespace()), method, lambda input, op=operation: call(op, input))
+    return groups
+
+
 def _headers(token: str | None) -> dict[str, str]:
     return {"accept": "application/json", **({"authorization": f"Bearer {token}"} if token else {})}
 
 
-class Client(Groups):
+class Client:
     """Synchronous client: ``client.context.get_context({"meeting_id": ...})``."""
 
     def __init__(
@@ -81,7 +93,7 @@ class Client(Groups):
         self._http = httpx.Client(base_url=base_url, headers=_headers(token), timeout=timeout, transport=transport)
         self._max_attempts = max_attempts
         self._retry_delay_ms = retry_delay_ms
-        super().__init__(self.call)
+        self.__dict__.update(_groups(self.call))
 
     def call(self, operation: str, input: Mapping[str, Any]) -> Any:
         op, path, params, body = _request(operation, input)
@@ -123,7 +135,7 @@ class Client(Groups):
         self.close()
 
 
-class AsyncClient(AsyncGroups):
+class AsyncClient:
     """Asyncio client; cancel the awaiting task to abort a request."""
 
     def __init__(
@@ -139,7 +151,7 @@ class AsyncClient(AsyncGroups):
         self._http = httpx.AsyncClient(base_url=base_url, headers=_headers(token), timeout=timeout, transport=transport)
         self._max_attempts = max_attempts
         self._retry_delay_ms = retry_delay_ms
-        super().__init__(self.call)
+        self.__dict__.update(_groups(self.call))
 
     async def call(self, operation: str, input: Mapping[str, Any]) -> Any:
         op, path, params, body = _request(operation, input)

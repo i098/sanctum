@@ -92,14 +92,14 @@ describe('MCP tool surface', () => {
       'list_meetings', 'get_context', 'search_context', 'get_source', 'get_context_changes', 'add_context',
       'revise_context', 'request_action', 'get_action', 'search_integration_actions', 'get_integration_action',
     ]);
-    const paths = mcpTools().map(route => route.path);
-    expect(paths.filter(path => /agents|listeners|session/.test(path))).toEqual([]);
+    const groups = mcpTools().map(route => route.operation.split('.')[0]);
+    expect(groups.filter(group => !['meetings', 'context', 'actions', 'integrations'].includes(group!))).toEqual([]);
   });
 
   it('gives every tool the same input schema as its v1 REST operation', () => {
-    const byRoute = new Map(operations.map(op => [`${op.method} ${op.path.replace(/\{(\w+)\}/g, ':$1')}`, op]));
+    const byId = new Map(operations.map(op => [op.id, op]));
     for (const route of mcpTools()) {
-      const operation = byRoute.get(`${route.method} ${route.path}`);
+      const operation = byId.get(route.operation);
       expect(operation, route.tool.name).toBeDefined();
       const tool = route.tool.inputSchema as JsonSchema & { $defs?: Record<string, JsonSchema> };
       const mcp = normalize(tool, tool.$defs ?? {}) as { properties: Record<string, { type?: string }> };

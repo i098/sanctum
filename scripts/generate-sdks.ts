@@ -55,18 +55,23 @@ const refName = (schema: JsonSchema) => schema.$ref?.split('/').pop();
 export const deref = (schema: JsonSchema): JsonSchema => spec.components.schemas[refName(schema) ?? ''] ?? schema;
 
 /** Flattens path, query and JSON body into one input object, as the SDKs and MCP tools accept it. */
+function inputOf(op: OpenApiOperation, params: ReadonlyArray<Parameter>): JsonSchema {
+  const body = deref(op.requestBody?.content?.['application/json'].schema ?? {});
+  if (params.length === 0 && op.requestBody) return body;
+  const properties: Record<string, JsonSchema> = { ...body.properties };
+  const required = [...(body.required ?? [])];
+  for (const param of params) {
+    if (param.name in properties) throw new Error(`${op.operationId}: ${param.name} is both a parameter and a body field`);
+    // Query strings carry numbers as text; SDK callers pass the number.
+    properties[param.name] = refName(param.schema) === 'NumberFromString' ? { type: 'integer' } : param.schema;
+    if (param.required) required.push(param.name);
+  }
+  return { type: 'object', properties, required, additionalProperties: false };
+}
+
 export const operations: ReadonlyArray<Operation> = Object.entries(spec.paths).flatMap(([path, methods]) =>
   Object.entries(methods).map(([method, op]) => {
     const params = op.parameters ?? [];
-    const body = deref(op.requestBody?.content?.['application/json'].schema ?? {});
-    const properties: Record<string, JsonSchema> = { ...body.properties };
-    const required = [...(body.required ?? [])];
-    for (const param of params) {
-      if (param.name in properties) throw new Error(`${op.operationId}: ${param.name} is both a parameter and a body field`);
-      // Query strings carry numbers as text; SDK callers pass the number.
-      properties[param.name] = refName(param.schema) === 'NumberFromString' ? { type: 'integer' } : param.schema;
-      if (param.required) required.push(param.name);
-    }
     const success = Object.entries(op.responses).find(([status]) => status.startsWith('2'))?.[1];
     return {
       id: op.operationId,
@@ -75,7 +80,7 @@ export const operations: ReadonlyArray<Operation> = Object.entries(spec.paths).f
       pathParams: params.filter(p => p.in === 'path').map(p => p.name),
       queryParams: params.filter(p => p.in === 'query').map(p => p.name),
       body: op.requestBody !== undefined,
-      input: params.length === 0 && op.requestBody ? body : { type: 'object', properties, required, additionalProperties: false },
+      input: inputOf(op, params),
       output: success?.content?.['application/json'].schema ?? { type: 'null' },
     };
   }),
@@ -90,7 +95,6 @@ for (const [name, value] of Object.entries(Contracts)) {
 }
 
 const pascal = (text: string) => text.replace(/(^|_)(\w)/g, (_, __, c: string) => c.toUpperCase());
-const snake = (text: string) => text.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
 
 interface Syntax {
   readonly primitives: Readonly<Record<string, string>>;
@@ -123,9 +127,12 @@ function emitter(syntax: Syntax) {
     if (schema.$ref) return type(deref(schema), refName(schema)!);
     if (schema.anyOf) return schema.anyOf.map(s => type(s, hint)).join(' | ');
     if (schema.enum) return syntax.literals(schema.enum);
+    return container(schema, hint) ?? syntax.primitives[schema.type ?? ''] ?? syntax.unknown;
+  };
+  const container = (schema: JsonSchema, hint: string): string | undefined => {
     if (schema.type === 'array') return syntax.array(type(schema.items ?? {}, `${hint}Item`));
-    if (schema.type === 'object') return Object.keys(schema.properties ?? {}).length > 0 ? object(schema, hint) : syntax.record;
-    return syntax.primitives[schema.type ?? ''] ?? syntax.unknown;
+    if (schema.type !== 'object') return undefined;
+    return Object.keys(schema.properties ?? {}).length > 0 ? object(schema, hint) : syntax.record;
   };
   return { declared, type };
 }
@@ -151,7 +158,13 @@ function renderTypescript() {
   );
   return [
     `// ${HEADER}`,
-    "import type { OperationSpec } from './client.ts';",
+    'export interface OperationSpec {',
+    "  readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';",
+    '  readonly path: string;',
+    '  readonly pathParams: ReadonlyArray<string>;',
+    '  readonly queryParams: ReadonlyArray<string>;',
+    '  readonly body: boolean;',
+    '}',
     '',
     [...emit.declared.values()].join('\n\n'),
     '',
@@ -176,39 +189,17 @@ function renderPython() {
     array: item => `list[${item}]`,
     record: 'dict[str, Any]',
   });
-  const sync = new Map<string, string[]>();
-  const async = new Map<string, string[]>();
   const table = operations.map(op => {
-    const [group, name] = op.id.split('.') as [string, string];
-    const input = emit.type(op.input, `${pascal(name)}Input`);
-    const output = emit.type(op.output, `${pascal(name)}Output`);
-    const signature = `${snake(name)}(self, input: ${input}) -> ${output}:`;
-    sync.set(group, [...(sync.get(group) ?? []), `    def ${signature}\n        return self._call("${op.id}", input)`]);
-    async.set(group, [...(async.get(group) ?? []), `    async def ${signature}\n        return await self._call("${op.id}", input)`]);
+    const name = op.id.split('.')[1]!;
+    const types = `# ${emit.type(op.input, `${pascal(name)}Input`)} -> ${emit.type(op.output, `${pascal(name)}Output`)}`;
     const tuple = (items: ReadonlyArray<string>) => `(${items.map(i => `"${i}", `).join('')})`;
-    return `    "${op.id}": Operation("${op.method}", "${op.path}", ${tuple(op.pathParams)}, ${tuple(op.queryParams)}, ${op.body ? 'True' : 'False'}),`;
+    return `    ${types}\n    "${op.id}": Operation("${op.method}", "${op.path}", ${tuple(op.pathParams)}, ${tuple(op.queryParams)}, ${op.body ? 'True' : 'False'}),`;
   });
-  const classes = (groups: Map<string, string[]>, prefix: string) =>
-    [...groups].map(([group, methods]) =>
-      [`class ${prefix}${pascal(group)}Operations:`, '    def __init__(self, call: Callable[[str, Any], Any]) -> None:', '        self._call = call', '', methods.join('\n\n')].join('\n'),
-    );
-  const groupsClass = (prefix: string) =>
-    [
-      `class ${prefix}Groups:`,
-      `    """Typed operation groups; \`${prefix}Client\` binds them to its \`call\`."""`,
-      '',
-      '    def __init__(self, call: Callable[[str, Any], Any]) -> None:',
-      ...[...sync.keys()].map(g => `        self.${g} = ${prefix}${pascal(g)}Operations(call)`),
-    ].join('\n');
   return `${[
-    `# ${HEADER}\nfrom __future__ import annotations\n\nfrom typing import Any, Callable, Literal, NamedTuple, NotRequired, TypedDict`,
+    `# ${HEADER}\nfrom __future__ import annotations\n\nfrom typing import Any, Literal, NamedTuple, NotRequired, TypedDict`,
     'class Operation(NamedTuple):\n    method: str\n    path: str\n    path_params: tuple[str, ...]\n    query_params: tuple[str, ...]\n    body: bool',
     ...emit.declared.values(),
-    `OPERATIONS: dict[str, Operation] = {\n${table.join('\n')}\n}`,
-    ...classes(sync, ''),
-    ...classes(async, 'Async'),
-    groupsClass(''),
-    groupsClass('Async'),
+    `# Each entry: input TypedDict -> output TypedDict, then the route.\nOPERATIONS: dict[str, Operation] = {\n${table.join('\n')}\n}`,
   ].join('\n\n\n')}\n`;
 }
 

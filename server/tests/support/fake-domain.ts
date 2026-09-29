@@ -46,7 +46,7 @@ interface Workspace {
 }
 
 /** Integration catalog fixture: search returns compact matches, inspection returns one schema. */
-export const CATALOG = [
+const CATALOG = [
   { action_key: 'linear-create-issue', app: 'linear', purpose: 'Create a tracking issue', connection: 'connected', effect: 'write' },
   { action_key: 'gmail-send-email', app: 'gmail', purpose: 'Send an email', connection: 'not_connected', effect: 'send' },
 ] as const;
@@ -60,7 +60,8 @@ const offsetPage = <A>(all: ReadonlyArray<A>, cursor: string | undefined, limit 
   return { items, next_cursor: start + limit < all.length ? `o${start + limit}` : null };
 };
 
-export function fakeDomain() {
+/** Per-test in-memory state and the rules every fake handler shares. */
+function createStore() {
   const workspaces = new Map<string, Workspace>();
   const tokens = new Map<string, AccessScope>();
   const interrupted: Array<string> = [];
@@ -109,7 +110,12 @@ export function fakeDomain() {
     );
   };
 
-  const meetings = HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
+  return { tokens, interrupted, space, need, meetingOf, revisionOf, once, record };
+}
+type Store = ReturnType<typeof createStore>;
+
+const meetingsGroup = ({ space, need, meetingOf }: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
     handlers
       .handle('listMeetings', ({ urlParams }) =>
         Effect.gen(function* () {
@@ -143,7 +149,8 @@ export function fakeDomain() {
       ),
   );
 
-  const context = HttpApiBuilder.group(SanctumApi, 'context', handlers =>
+const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interrupted }: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'context', handlers =>
     handlers
       .handle('getContext', ({ path }) =>
         Effect.gen(function* () {
@@ -268,7 +275,8 @@ export function fakeDomain() {
       ),
   );
 
-  const integrations = HttpApiBuilder.group(SanctumApi, 'integrations', handlers =>
+const integrationsGroup = (_store: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'integrations', handlers =>
     handlers
       .handle('searchIntegrationActions', ({ urlParams }) =>
         Effect.succeed({
@@ -291,7 +299,8 @@ export function fakeDomain() {
       }),
   );
 
-  const actions = HttpApiBuilder.group(SanctumApi, 'actions', handlers =>
+const actionsGroup = ({ space, need, once }: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'actions', handlers =>
     handlers
       .handle('requestAction', ({ payload }) =>
         Effect.gen(function* () {
@@ -330,7 +339,8 @@ export function fakeDomain() {
       ),
   );
 
-  const agents = HttpApiBuilder.group(SanctumApi, 'agents', handlers =>
+const agentsGroup = ({ space, need, tokens }: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'agents', handlers =>
     handlers
       .handle('listAgents', ({ urlParams }) =>
         Effect.flatMap(CurrentAccess, access =>
@@ -379,8 +389,11 @@ export function fakeDomain() {
       ),
   );
 
+export function fakeDomain() {
+  const store = createStore();
+  const { space, tokens, interrupted } = store;
   return {
-    groups: Layer.mergeAll(meetings, context, integrations, actions, agents),
+    groups: Layer.mergeAll(meetingsGroup(store), contextGroup(store), integrationsGroup(store), actionsGroup(store), agentsGroup(store)),
     /** Bearer tokens issued by `token()` or `createAgent`; revocation deletes them. */
     authenticator: Layer.succeed(Authenticator, {
       authenticate: request => {

@@ -22,35 +22,33 @@ import {
   WorkspaceId,
 } from '@sanctum/contracts';
 import { Config, Context, Effect, Either, JSONSchema, Layer, Option, ParseResult, Schema, SchemaAST } from 'effect';
+import { createClient, type OperationId, SanctumError } from '@sanctum/sdk';
 import { createRemoteJWKSet, type JWTVerifyGetKey, jwtVerify } from 'jose';
 import { Authenticator, resolveAccess } from './auth.ts';
 
-/** Tool name, v1 route it runs, and the description agents see. Nothing else is exposed. */
+/** Tool name, v1 operation it runs, and the description agents see. Nothing else is exposed. */
 const TOOLS = [
-  ['list_meetings', 'GET /api/v1/meetings', 'List meetings the caller may read, with cursor paging.'],
-  ['get_context', 'GET /api/v1/meetings/:meeting_id/context', 'Bounded, source-linked context snapshot of one meeting and its revision.'],
-  ['search_context', 'GET /api/v1/context/search', 'Search authorized context items by text.'],
-  ['get_source', 'GET /api/v1/sources/:source_id', 'Read the exact cited transcript segment or artifact.'],
-  ['get_context_changes', 'GET /api/v1/context/changes', 'Context changes after a cursor; keep next_cursor to resume.'],
-  ['add_context', 'POST /api/v1/context/items', 'Add attributed evidence or an observation at expected_revision; retries reuse idempotency_key.'],
-  ['revise_context', 'PATCH /api/v1/context/items/:item_id', 'Supersede one item revision; a stale expected_revision returns current_revision.'],
-  ['request_action', 'POST /api/v1/actions', 'Request one inspected integration action; execution needs a stored grant.'],
-  ['get_action', 'GET /api/v1/actions/:action_id', 'Actual status and provider receipt of a requested action.'],
-  ['search_integration_actions', 'GET /api/v1/integrations/actions', 'Find at most five integration actions for an intent, without schemas.'],
-  ['get_integration_action', 'POST /api/v1/integrations/actions/:action_key/schema', 'Inputs, configuration and options for one selected action.'],
-] as const;
+  ['list_meetings', 'meetings.listMeetings', 'List meetings the caller may read, with cursor paging.'],
+  ['get_context', 'context.getContext', 'Bounded, source-linked context snapshot of one meeting and its revision.'],
+  ['search_context', 'context.searchContext', 'Search authorized context items by text.'],
+  ['get_source', 'context.getSource', 'Read the exact cited transcript segment or artifact.'],
+  ['get_context_changes', 'context.getContextChanges', 'Context changes after a cursor; keep next_cursor to resume.'],
+  ['add_context', 'context.addContextItem', 'Add attributed evidence or an observation at expected_revision; retries reuse idempotency_key.'],
+  ['revise_context', 'context.reviseContextItem', 'Supersede one item revision; a stale expected_revision returns current_revision.'],
+  ['request_action', 'actions.requestAction', 'Request one inspected integration action; execution needs a stored grant.'],
+  ['get_action', 'actions.getAction', 'Actual status and provider receipt of a requested action.'],
+  ['search_integration_actions', 'integrations.searchIntegrationActions', 'Find at most five integration actions for an intent, without schemas.'],
+  ['get_integration_action', 'integrations.getIntegrationAction', 'Inputs, configuration and options for one selected action.'],
+] as const satisfies ReadonlyArray<readonly [string, OperationId, string]>;
 
 export const MCP_TOOL_NAMES = TOOLS.map(([name]) => name);
 const TEXT_LIMIT = 8_000;
 
 interface ToolRoute {
   readonly tool: Tool;
+  readonly operation: OperationId;
   readonly method: string;
-  readonly path: string;
   readonly input: Schema.Schema<unknown, unknown>;
-  readonly pathParams: ReadonlyArray<string>;
-  readonly queryParams: ReadonlyArray<string>;
-  readonly bodyFields: ReadonlyArray<string> | null;
 }
 
 const signatures = (schema: Option.Option<{ readonly ast: SchemaAST.AST }>) =>
@@ -65,12 +63,11 @@ const signatures = (schema: Option.Option<{ readonly ast: SchemaAST.AST }>) =>
 /** Resolves every tool against the v1 contract; a route missing from `SanctumApi` is a startup error. */
 export const mcpTools = (api: HttpApi.HttpApi.Any = SanctumApi): ReadonlyArray<ToolRoute> => {
   const routes = new Map<string, ToolRoute>();
-  const key = (method: string, path: string) => `${method} ${path.replace(/:\w+/g, ':')}`;
-  const wanted = new Map(TOOLS.map(([name, route, description]) => [key(...(route.split(' ') as [string, string])), { name, description }]));
+  const wanted = new Map(TOOLS.map(([name, operation, description]) => [operation as string, { name, operation, description }]));
   HttpApi.reflect(api as HttpApi.HttpApi.AnyWithProps, {
     onGroup: () => {},
-    onEndpoint: ({ endpoint }) => {
-      const want = wanted.get(key(endpoint.method, endpoint.path));
+    onEndpoint: ({ group, endpoint }) => {
+      const want = wanted.get(`${group.identifier}.${endpoint.name}`);
       if (want === undefined) return;
       const [path, query, body] = [endpoint.pathSchema, endpoint.urlParamsSchema, endpoint.payloadSchema].map(signatures) as [
         ReadonlyArray<SchemaAST.PropertySignature>,
@@ -94,12 +91,9 @@ export const mcpTools = (api: HttpApi.HttpApi.Any = SanctumApi): ReadonlyArray<T
             openWorldHint: want.name.includes('action'),
           },
         },
+        operation: want.operation,
         method: endpoint.method,
-        path: endpoint.path,
         input,
-        pathParams: path.map(p => String(p.name)),
-        queryParams: query.map(p => String(p.name)),
-        bodyFields: Option.isSome(endpoint.payloadSchema) ? body.map(p => String(p.name)) : null,
       });
     },
   });
@@ -125,29 +119,26 @@ export const withMcpDelegation = <E, R>(authenticator: Layer.Layer<Authenticator
 
 type Dispatch = (request: Request, context: Context.Context<McpDelegatedAccess>) => Promise<Response>;
 
-function toRequest(route: ToolRoute, args: Readonly<Record<string, unknown>>, signal: AbortSignal) {
-  const path = route.path.replace(/:(\w+)/g, (_, name: string) => encodeURIComponent(String(args[name])));
-  const url = new URL(path, 'http://mcp.internal');
-  for (const name of route.queryParams) if (args[name] !== undefined) url.searchParams.set(name, String(args[name]));
-  const body = route.bodyFields && JSON.stringify(Object.fromEntries(route.bodyFields.filter(f => f in args).map(f => [f, args[f]])));
-  return new Request(url, { method: route.method, headers: { 'content-type': 'application/json' }, body, signal });
-}
-
+/** Runs one tool through the TypeScript SDK against the in-process API, as the delegated principal. */
 async function callTool(route: ToolRoute, args: unknown, access: AccessScope, dispatch: Dispatch, signal: AbortSignal): Promise<CallToolResult> {
   const decoded = Schema.decodeUnknownEither(route.input)(args ?? {}, { onExcessProperty: 'error' });
   if (Either.isLeft(decoded)) {
     return { isError: true, content: [{ type: 'text', text: ParseResult.TreeFormatter.formatErrorSync(decoded.left) }] };
   }
-  // Valid input is already in wire encoding; forward the caller's values unchanged.
-  const values = args as Readonly<Record<string, unknown>>;
-  const response = await dispatch(toRequest(route, values, signal), Context.make(McpDelegatedAccess, access));
-  const text = await response.text();
-  const body: unknown = text === '' ? null : JSON.parse(text);
-  // Errors carry the shared envelope as text: clients validate structuredContent against the success schema.
-  if (!response.ok) return { isError: true, content: [{ type: 'text', text }] };
-  const summary = text.length > TEXT_LIMIT ? `${text.slice(0, TEXT_LIMIT)} … (truncated; full result in structuredContent)` : text;
-  const structured = typeof body === 'object' && body !== null && !Array.isArray(body) ? { structuredContent: { ...body } } : {};
-  return { content: [{ type: 'text', text: summary }], ...structured };
+  const context = Context.make(McpDelegatedAccess, access);
+  const client = createClient({ baseUrl: 'http://mcp.internal', maxAttempts: 1, fetch: (url, init) => dispatch(new Request(url, init), context) });
+  try {
+    // Valid input is already the operation's wire input; forward the caller's values unchanged.
+    const body: unknown = await client.call(route.operation, args as never, { signal });
+    const text = JSON.stringify(body);
+    const summary = text.length > TEXT_LIMIT ? `${text.slice(0, TEXT_LIMIT)} … (truncated; full result in structuredContent)` : text;
+    const structured = typeof body === 'object' && body !== null && !Array.isArray(body) ? { structuredContent: { ...body } } : {};
+    return { content: [{ type: 'text', text: summary }], ...structured };
+  } catch (error) {
+    // Errors carry the shared envelope as text: clients validate structuredContent against the success schema.
+    if (error instanceof SanctumError) return { isError: true, content: [{ type: 'text', text: JSON.stringify(error.body) }] };
+    throw error;
+  }
 }
 
 const DelegatedAccess = Schema.Struct({ access: AccessScope });

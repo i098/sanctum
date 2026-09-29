@@ -199,6 +199,7 @@ describe('HTTP API contract', () => {
       '/readyz',
     ]);
     expect(spec.paths['/api/v1/listeners/{listener_id}/chunks/{chunk_id}']?.put?.operationId).toBe('listeners.putChunk');
-    expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths)).toEqual(['/healthz', '/readyz', '/api/v1/session']);
+    // Slices register their groups on SanctumApi; the foundation routes stay first.
+    expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths).slice(0, 3)).toEqual(['/healthz', '/readyz', '/api/v1/session']);
   });
 });

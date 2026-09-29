@@ -9,7 +9,6 @@ import {
   AgentCredentialId,
   ArtifactId,
   Cursor,
-  IdempotencyKey,
   MeetingId,
   PageLimit,
   PrincipalId,
@@ -17,7 +16,7 @@ import {
   UtcTimestamp,
 } from './common.ts';
 import { AccessScopeName, Authenticated } from './auth.ts';
-import { ContextEvent, ContextItem, ContextSnapshot, AddContextItem, SourceRef } from './context.ts';
+import { AddContextItem, ContextEvent, ContextItem, ContextSnapshot } from './context.ts';
 import { Meeting, MeetingState, RecordingAccess } from './meetings.ts';
 import { TranscriptSegment } from './transcripts.ts';
 import { ActionReceipt } from './actions.ts';
@@ -61,9 +60,7 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
 /** `PATCH /api/v1/context/items/{id}`: a new revision that supersedes `expected_revision`. */
 export const ReviseContextItem = Schema.Struct({
   expected_revision: Revision,
-  text: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(20_000)),
-  sources: Schema.Array(SourceRef).pipe(Schema.minItems(1)),
-  idempotency_key: IdempotencyKey,
+  ...AddContextItem.pick('text', 'sources', 'idempotency_key').fields,
 });
 
 /** `GET /api/v1/sources/{id}`: exact cited text; a segment or an attached artifact. */

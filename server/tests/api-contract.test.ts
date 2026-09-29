@@ -10,6 +10,7 @@ import { operations, outputs } from '../../scripts/generate-sdks.ts';
 import { openApiDocument } from '../src/api.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
 import { fixtureAccess } from './support/fixtures.ts';
+import { fixtureServer } from './support/fixture-server.ts';
 import { serveFake } from './support/serve.ts';
 
 const root = new URL('../../', import.meta.url);
@@ -68,6 +69,19 @@ describe('v1 OpenAPI contract', () => {
       }
     }
   });
+});
+
+describe('database-free fixture API for the Python SDK job', () => {
+  it.scoped('serves the fake domain, refuses readiness, and requires its token', () =>
+    Effect.gen(function* () {
+      const { url, token, meeting_id } = yield* fixtureServer;
+      const client = createClient({ baseUrl: url, token, maxAttempts: 1 });
+      expect(yield* Effect.promise(() => client.meetings.getMeeting({ meeting_id }))).toMatchObject({ id: meeting_id, title: 'Fixture planning meeting' });
+      expect(yield* Effect.promise(() => client.health.readyz({}).catch(e => e))).toMatchObject({ status: 503, code: 'unavailable' });
+      const anonymous = createClient({ baseUrl: url, maxAttempts: 1 });
+      expect(yield* Effect.promise(() => anonymous.meetings.getMeeting({ meeting_id }).catch(e => e))).toMatchObject({ status: 401 });
+    }),
+  );
 });
 
 describe('TypeScript SDK against the running server', () => {

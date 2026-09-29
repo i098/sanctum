@@ -3,15 +3,7 @@
  * table; this file holds the handwritten parts: transport, typed errors, safe retries,
  * cancellation, cursor pages and action receipts. No runtime dependency beyond `fetch`.
  */
-import { type ActionReceipt, operations, type Operations } from './generated.ts';
-
-export interface OperationSpec {
-  readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  readonly path: string;
-  readonly pathParams: ReadonlyArray<string>;
-  readonly queryParams: ReadonlyArray<string>;
-  readonly body: boolean;
-}
+import { type ActionReceipt, type OperationSpec, operations, type Operations } from './generated.ts';
 
 export type OperationId = keyof Operations;
 export type Input<Id extends OperationId> = Operations[Id]['input'];
@@ -74,11 +66,29 @@ async function send(doFetch: typeof fetch, url: URL, init: RequestInit): Promise
   throw new SanctumError(response.status, typeof body === 'object' && body !== null ? { ...body } : {});
 }
 
-function request(spec: OperationSpec, baseUrl: string, values: Readonly<Record<string, unknown>>) {
-  const url = new URL(spec.path.replace(/\{(\w+)\}/g, (_, name: string) => encodeURIComponent(String(values[name]))), baseUrl);
+function request(spec: OperationSpec, options: ClientOptions, values: Readonly<Record<string, unknown>>, signal: AbortSignal | undefined) {
+  const url = new URL(spec.path.replace(/\{(\w+)\}/g, (_, name: string) => encodeURIComponent(String(values[name]))), options.baseUrl);
   for (const name of spec.queryParams) if (values[name] !== undefined) url.searchParams.set(name, String(values[name]));
   const fields = Object.entries(values).filter(([name]) => !spec.pathParams.includes(name) && !spec.queryParams.includes(name));
-  return { url, body: spec.body ? JSON.stringify(Object.fromEntries(fields)) : null };
+  const body = spec.body ? JSON.stringify(Object.fromEntries(fields)) : null;
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+    ...(body === null ? {} : { 'content-type': 'application/json' }),
+    ...(options.token === undefined ? {} : { authorization: `Bearer ${options.token}` }),
+  };
+  // Retrying is safe for reads and for writes the server deduplicates by idempotency key.
+  const retryable = spec.method === 'GET' || typeof values['idempotency_key'] === 'string';
+  return { url, init: { method: spec.method, headers, body, signal: signal ?? null }, retryable };
+}
+
+/** Milliseconds to wait before another attempt, or null when the failure is final. */
+function retryDelay(error: unknown, attempt: number, baseDelay: number, signal: AbortSignal | undefined): number | null {
+  if (signal?.aborted) return null;
+  // fetch rejects with TypeError on network failure; aborts and non-retryable statuses are final.
+  if (error instanceof TypeError) return baseDelay * 2 ** (attempt - 1);
+  if (!(error instanceof SanctumError && error.retryable)) return null;
+  const hinted = error.body['retry_after_ms'];
+  return typeof hinted === 'number' ? hinted : baseDelay * 2 ** (attempt - 1);
 }
 
 export function createClient(options: ClientOptions): SanctumClient {
@@ -88,24 +98,17 @@ export function createClient(options: ClientOptions): SanctumClient {
 
   async function call<Id extends OperationId>(operation: Id, input: Input<Id>, callOptions: CallOptions = {}): Promise<Output<Id>> {
     const spec = operations[operation];
-    const values: Readonly<Record<string, unknown>> = input;
-    const { url, body } = request(spec, options.baseUrl, values);
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (body !== null) headers['content-type'] = 'application/json';
-    if (options.token !== undefined) headers['authorization'] = `Bearer ${options.token}`;
-    // Retrying is safe for reads and for writes the server deduplicates by idempotency key.
-    const safe = spec.method === 'GET' || typeof values['idempotency_key'] === 'string';
+    const { url, init, retryable } = request(spec, options, input, callOptions.signal);
+    const attempts = retryable ? maxAttempts : 1;
     for (let attempt = 1; ; attempt++) {
       try {
         // The generated table and the server share one contract; the body is that operation's output.
-        const output = (await send(doFetch, url, { method: spec.method, headers, body, signal: callOptions.signal ?? null })) as Output<Id>;
+        const output = (await send(doFetch, url, init)) as Output<Id>;
         return output;
       } catch (error) {
-        // fetch rejects with TypeError on network failure; aborts and non-retryable statuses are final.
-        const transient = error instanceof TypeError || (error instanceof SanctumError && error.retryable);
-        if (!safe || !transient || attempt >= maxAttempts || callOptions.signal?.aborted) throw error;
-        const hinted = error instanceof SanctumError ? error.body['retry_after_ms'] : undefined;
-        await sleep(typeof hinted === 'number' ? hinted : baseDelay * 2 ** (attempt - 1), callOptions.signal);
+        const delay = attempt < attempts ? retryDelay(error, attempt, baseDelay, callOptions.signal) : null;
+        if (delay === null) throw error;
+        await sleep(delay, callOptions.signal);
       }
     }
   }
