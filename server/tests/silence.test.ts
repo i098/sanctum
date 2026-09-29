@@ -143,6 +143,20 @@ describe('speech gate', () => {
       expect(session.chunks()).toHaveLength(before);
     }));
 
+  it.effect('treats a late transcript of the request itself as neither a request nor a barge-in', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
+      yield* session.onSegment(heard('Sanctum, summarize the meeting', 35_000, 36_000));
+      yield* settle(endOfTurnMs + 1_500);
+      const before = session.chunks().length;
+      // A slow provider re-sends the request range as a final.
+      yield* session.onSegment(heard('Sanctum, summarize the meeting please', 35_000, 36_000));
+      yield* settle(2_000);
+      expect(session.sent.filter(message => message._tag === 'speech_cancel')).toEqual([]);
+      expect(session.chunks().length).toBeGreaterThan(before);
+      expect(session.requests).toEqual(['summarize the meeting']);
+    }));
+
   it.effect('rejects the older generation when a person asks something new over it', () =>
     Effect.gen(function* () {
       const session = yield* listen(slowly('One.', 'Two.', 'Three.', 'Four.'));

@@ -5,11 +5,11 @@
  */
 import { SqlClient } from '@effect/sql';
 import { ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect, type Either, Option, Schema } from 'effect';
+import { Effect, Either, Fiber, Option, Schema } from 'effect';
 import { type ActionRow, loadAction, requestAction } from './actions.ts';
 import { requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
-import { executeIntegrationAction, type IntegrationFailure } from './integrations.ts';
+import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
 import { planActions } from './planner.ts';
 
 /** The claimed-job fields these handlers read; stated here so this module does not import the registry. */
@@ -109,7 +109,8 @@ export const executeAction = (job: Job) =>
     if (start.status === 'paused') return start;
     if (start.status === 'done') return { status: 'succeeded', result: { action_id, state: start.state } } as const;
     const { row } = start;
-    const outcome = yield* Effect.either(
+    // Daemon: on timeout the submission keeps running so its late answer can still settle the row.
+    const sending = yield* Effect.forkDaemon(Effect.either(
       executeIntegrationAction({
         access: start.access,
         account_id: row.account_id!,
@@ -119,8 +120,15 @@ export const executeAction = (job: Job) =>
         arguments: row.args,
         provider_idempotency_key: row.provider_idempotency_key,
       }),
-    );
-    yield* recordOutcome(row, start.attempt, outcome);
+    ));
+    const answered = yield* Effect.option(Effect.timeout(Fiber.join(sending), engineeringDefaults.actionSubmitTimeoutMs));
+    if (Option.isSome(answered)) {
+      yield* recordOutcome(row, start.attempt, answered.value);
+    } else {
+      const timedOut = new IntegrationFailure({ message: 'No provider answer after submission', status: null, retryable: false, ambiguous: true });
+      yield* recordOutcome(row, start.attempt, Either.left(timedOut));
+      yield* Effect.forkDaemon(Effect.flatMap(Fiber.join(sending), late => recordOutcome(row, start.attempt, late)));
+    }
     const final = yield* loadAction(job.workspace_id, action_id);
     return { status: 'succeeded', result: { action_id, state: Option.getOrThrow(final).state } } as const;
   }).pipe(Effect.catchTags({ SqlError: storageFailure, ParseError: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })) }));

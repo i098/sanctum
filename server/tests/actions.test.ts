@@ -1,9 +1,10 @@
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
-import { Effect } from 'effect';
+import { Effect, Fiber, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import { createActionGrant, getActionReceipt, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
+import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { planActions } from '../src/planner.ts';
 import { withDatabase } from './support/database.ts';
@@ -161,6 +162,27 @@ describe('action gateway', () => {
         const resolved = yield* resolveAction(owner, queued.action_id, { outcome: 'succeeded', provider_receipt: { message_id: 'checked-in-gmail' } });
         expect(resolved).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', provider_receipt: { message_id: 'checked-in-gmail' } });
         expect((yield* Effect.flip(resolveAction(owner, queued.action_id, { outcome: 'failed', provider_receipt: null })))._tag).toBe('Forbidden');
+      }),
+      { migrated: true },
+    ));
+
+  it.effect('records unknown when the provider does not answer in time, then settles from the late answer', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { agent } = yield* setup();
+        const realDelay = Effect.promise(() => new Promise(resolve => setTimeout(resolve, 20)));
+        provider.mode = 'hold';
+        const queued = yield* requestAction(agent, request());
+        const attempt = yield* Effect.fork(execute(agent, queued.action_id));
+        while (provider.release === null) yield* realDelay;
+        yield* TestClock.adjust(`${engineeringDefaults.actionSubmitTimeoutMs} millis`);
+        yield* Fiber.join(attempt);
+        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'unknown', reconciliation: 'pending', last_error: { code: 'ambiguous' } });
+        provider.release!();
+        let row = yield* actionRow(agent.workspace_id, queued.action_id);
+        for (let tries = 0; row.state === 'unknown' && tries < 200; tries++) row = yield* Effect.zipRight(realDelay, actionRow(agent.workspace_id, queued.action_id));
+        expect(row).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', attempts: 1 });
+        expect(provider.sent).toHaveLength(1);
       }),
       { migrated: true },
     ));

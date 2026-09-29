@@ -1,9 +1,9 @@
 /**
-  * Stored grants, the shared action gateway and truthful receipts (plan sections 07 and 10).
-  * Every internal or external agent request enters `requestAction`: authorize the actor and
-  * meeting, match a stored human-created grant, fix idempotency, persist, then enqueue. The
-  * worker (executor.ts) re-checks the grant immediately before the external write.
-  */
+ * Stored grants, the shared action gateway and truthful receipts (plan sections 07 and 10).
+ * Every internal or external agent request enters `requestAction`: authorize the actor and
+ * meeting, match a stored human-created grant, fix idempotency, persist, then enqueue. The
+ * worker (executor.ts) re-checks the grant immediately before the external write.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpApiBuilder } from '@effect/platform';
 import { SqlClient, SqlSchema } from '@effect/sql';
@@ -262,7 +262,7 @@ export const createActionGrant = (access: AccessScope, input: CreateActionGrantI
     yield* sql`
             INSERT INTO action_grants (id, workspace_id, owner_principal_id, grantee_principal_id, action_key, app_slug, account_id, meeting_id, restrictions, expires_at, created_at)
             VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${input.grantee}, ${input.action_key}, ${account.app_slug}, ${input.account_id},
-                ${input.meeting_id}, ${JSON.stringify(input.restrictions)}, ${input.expires_at === null ? null : input.expires_at.slice(0, -1).replace('T', ' ')}, UTC_TIMESTAMP(6))`;
+                ${input.meeting_id}, ${JSON.stringify(input.restrictions)}, ${input.expires_at === null ? null : Schema.encodeSync(DbUtc)(input.expires_at)}, UTC_TIMESTAMP(6))`;
     return toGrant(Option.getOrThrow(yield* loadGrant(access.workspace_id, id)));
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
 

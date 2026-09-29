@@ -178,8 +178,11 @@ export const speechController = (options: {
       onSegment: (segment: TranscriptSegment) =>
         Effect.gen(function* () {
           if (segment.text.trim() === '' || gate.isEcho(listener_id, segment.text)) return;
+          const active = gate.active(listener_id);
+          // A late transcript of the request itself is neither a new turn nor an interruption.
+          if (active?.epoch_id === segment.source.epoch_id && segment.source.sample_start < active.sample_end) return;
           // A person talking over an open response interrupts it.
-          if (gate.active(listener_id)) yield* cancel('barge_in');
+          if (active) yield* cancel('barge_in');
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */

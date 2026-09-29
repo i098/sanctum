@@ -1,7 +1,4 @@
-/**
-  * `ActionsApi` (plan section 12). Lives beside actions.ts because it needs the gateway
-  * schemas from integrations.ts, which itself imports actions.ts.
-  */
+/** `ActionsApi` (plan section 12). */
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { ActionGrant, ActionReceipt, CreateActionGrantInput, ResolveActionInput } from './actions.ts';
 import { Authenticated } from './auth.ts';

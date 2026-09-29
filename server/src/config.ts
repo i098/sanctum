@@ -16,6 +16,8 @@ export const engineeringDefaults = {
   playbackUrlTtlMs: 5 * 60_000,
   /** Per-workspace external action submissions per window; more pause the job until the window frees up. */
   actionBudget: { perWindow: 30, windowMs: 60_000 },
+  /** No provider answer within this after submission: record `unknown` now; a later answer still settles it. */
+  actionSubmitTimeoutMs: 30_000,
   /** Requested speech: open window, quiet time that ends a direct-request turn, echo memory after playback. */
   speech: { windowMs: 30_000, endOfTurnMs: 700, echoTailMs: 1_500 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
