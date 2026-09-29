@@ -104,6 +104,7 @@ At low offered rates the p99 mostly reflects the driver's timer wake-ups on a lo
 
 Long run (`pcm_ingest`, 300 s at 3,200 frames/s): TypeScript RSS grew 5.3 MiB after warm-up (peak 320 MiB); Rust grew 6.6 MiB, which the 7.3 MiB per-frame latency buffer of the harness accounts for.
 Both stayed within the declared 16 MiB bound, and both p99 latencies stayed under 1 ms.
+TypeScript RSS starts near 300 MiB in every mode because each job process loads the application module graph (server, contracts, Effect); compare RSS growth, not the TypeScript/Rust RSS ratio, as per-workload memory.
 
 ## Status and controlled-host run
 
