@@ -1,6 +1,9 @@
 /** Meetings, boundary decisions, source ownership ranges and speaker tracks (plan sections 06 and 09). */
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
+import { Authenticated } from './auth.ts';
 import {
+  Cursor,
   IanaTimeZone,
   MeetingId,
   ProfileId,
@@ -12,6 +15,7 @@ import {
   UtcTimestamp,
   WorkspaceId,
 } from './common.ts';
+import { TranscriptSegment } from './transcripts.ts';
 
 export const MeetingState = Schema.Literal('provisional', 'active', 'closing', 'closed', 'interrupted');
 export type MeetingState = typeof MeetingState.Type;
@@ -83,3 +87,73 @@ export const RecordingAccess = Schema.Struct({
   gaps: Schema.Array(SourceRange),
 });
 export type RecordingAccess = typeof RecordingAccess.Type;
+
+/** `GET /api/v1/meetings` query: newest first, opaque cursor, bounded limit. */
+export const ListMeetingsParams = Schema.Struct({
+  state: Schema.optional(MeetingState),
+  from: Schema.optional(UtcTimestamp),
+  to: Schema.optional(UtcTimestamp),
+  /** Meetings with a speaker mapped to this profile. */
+  participant: Schema.optional(ProfileId),
+  cursor: Schema.optional(Cursor),
+  limit: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, 200))),
+});
+export type ListMeetingsParams = typeof ListMeetingsParams.Type;
+
+export const MeetingPage = Schema.Struct({ meetings: Schema.Array(Meeting), next_cursor: Schema.NullOr(Cursor) });
+export type MeetingPage = typeof MeetingPage.Type;
+
+/** Source position where the later meeting starts; the sample at `sample` belongs to the new meeting. */
+export const SplitMeeting = Schema.Struct({
+  expected_revision: Revision,
+  at: Schema.Struct({ epoch_id: CaptureEpochId, sample: SampleIndex }),
+});
+export type SplitMeeting = typeof SplitMeeting.Type;
+
+export const SplitResult = Schema.Struct({ earlier: Meeting, later: Meeting });
+export type SplitResult = typeof SplitResult.Type;
+
+const RevisionedMeeting = Schema.Struct({ meeting_id: MeetingId, expected_revision: Revision });
+
+/** `source` is folded into `target`; both need matching access before they can merge. */
+export const MergeMeetings = Schema.Struct({ target: RevisionedMeeting, source: RevisionedMeeting });
+export type MergeMeetings = typeof MergeMeetings.Type;
+
+export const TranscriptParams = Schema.Struct({
+  cursor: Schema.optional(Cursor),
+  limit: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, 200))),
+});
+export type TranscriptParams = typeof TranscriptParams.Type;
+
+/** Latest final segment revisions inside the meeting's current ranges, with the speaker tracks they overlap. */
+export const TranscriptPage = Schema.Struct({
+  meeting_id: MeetingId,
+  boundary_revision: Revision,
+  segments: Schema.Array(TranscriptSegment),
+  speakers: Schema.Array(SpeakerTrack),
+  next_cursor: Schema.NullOr(Cursor),
+});
+export type TranscriptPage = typeof TranscriptPage.Type;
+
+/** Map (or with `profile_id: null`, unmap) every turn of one provider-local label; checked against its attribution revision. */
+export const MapSpeaker = Schema.Struct({
+  speaker_track_id: SpeakerTrackId,
+  profile_id: Schema.NullOr(ProfileId),
+  expected_revision: Revision,
+});
+export type MapSpeaker = typeof MapSpeaker.Type;
+
+const meetingId = HttpApiSchema.param('meeting_id', MeetingId);
+
+/** Plan section 12 meeting routes; owned by the meetings slice. */
+export class MeetingsApi extends HttpApiGroup.make('meetings')
+  .add(HttpApiEndpoint.get('listMeetings', '/meetings').setUrlParams(ListMeetingsParams).addSuccess(MeetingPage))
+  .add(HttpApiEndpoint.post('mergeMeetings', '/meetings/merge').setPayload(MergeMeetings).addSuccess(Meeting))
+  .add(HttpApiEndpoint.get('getMeeting')`/meetings/${meetingId}`.addSuccess(Meeting))
+  .add(HttpApiEndpoint.post('closeMeeting')`/meetings/${meetingId}/close`.addSuccess(Meeting))
+  .add(HttpApiEndpoint.post('splitMeeting')`/meetings/${meetingId}/split`.setPayload(SplitMeeting).addSuccess(SplitResult))
+  .add(HttpApiEndpoint.get('getTranscript')`/meetings/${meetingId}/transcript`.setUrlParams(TranscriptParams).addSuccess(TranscriptPage))
+  .add(HttpApiEndpoint.post('recordingAccess')`/meetings/${meetingId}/recording-access`.addSuccess(RecordingAccess))
+  .add(HttpApiEndpoint.post('mapSpeaker')`/meetings/${meetingId}/speakers/map`.setPayload(MapSpeaker).addSuccess(Schema.Array(SpeakerTrack)))
+  .middleware(Authenticated)
+  .prefix('/api/v1') { }

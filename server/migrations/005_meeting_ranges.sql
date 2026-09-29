@@ -82,6 +82,8 @@ CREATE TABLE meeting_recordings (
   byte_length BIGINT UNSIGNED NOT NULL,
   sample_rate INT UNSIGNED NOT NULL,
   sample_count BIGINT UNSIGNED NOT NULL,
+  -- Source ranges actually present in the file, in playback order; meeting ranges minus these are gaps.
+  pieces JSON NOT NULL,
   created_at DATETIME(6) NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY meeting_recordings_revision (meeting_id, boundary_revision),
