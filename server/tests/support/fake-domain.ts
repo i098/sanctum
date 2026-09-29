@@ -11,23 +11,25 @@ import {
   type AccessScope,
   type AccessScopeName,
   ActionReceipt,
-  AgentCredential,
+  AgentWithCredential,
   ContextEvent,
   ContextItem,
   CurrentAccess,
   Forbidden,
   HashConflict,
   Meeting,
+  MeetingAccess,
   NotFound,
   RecordingAccess,
   RevisionConflict,
-  SanctumApi,
-  SourceRecord,
+  Source,
   TranscriptSegment,
   Unauthenticated,
+  Unavailable,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
-import { AuthenticatedLive, Authenticator, SessionLive } from '../../src/auth.ts';
+import { AuthenticatedLive, Authenticator } from '../../src/auth.ts';
 import { HealthLive } from '../../src/health.ts';
 import { loadMigrations } from '../../src/migrate.ts';
 
@@ -39,9 +41,9 @@ interface Workspace {
   readonly meetings: Array<Meeting>;
   readonly items: Map<string, ContextItem>;
   readonly events: Array<ContextEvent>;
-  readonly segments: Map<string, TranscriptSegment>;
+  readonly segments: Map<string, { readonly meeting_id: Meeting['id']; readonly segment: TranscriptSegment }>;
   readonly actions: Map<string, ActionReceipt>;
-  readonly agents: Map<string, AgentCredential>;
+  readonly agents: Map<string, AgentWithCredential>;
   readonly receipts: Map<string, { readonly hash: string; readonly value: unknown }>;
 }
 
@@ -93,7 +95,7 @@ function createStore() {
       if (stored) return Effect.fail(new HashConflict({ message: 'Idempotency key reused with different content', existing_sha256: stored.hash }));
       return Effect.tap(run, value => receipts.set(id, { hash, value }));
     });
-  const record = (access: AccessScope, item: ContextItem, change: 'item_added' | 'item_revised') => {
+  const record = (access: AccessScope, item: ContextItem, change: 'item_added' | 'item_revised' | 'item_superseded') => {
     const w = space(access);
     w.items.set(item.id, item);
     const seq = w.events.length + 1;
@@ -114,6 +116,8 @@ function createStore() {
 }
 type Store = ReturnType<typeof createStore>;
 
+const unmodeled = Effect.fail(new Unavailable({ message: 'Not modeled by the fake domain', retryable: false }));
+
 const meetingsGroup = ({ space, need, meetingOf }: Store) =>
   HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
     handlers
@@ -122,15 +126,18 @@ const meetingsGroup = ({ space, need, meetingOf }: Store) =>
           const access = yield* CurrentAccess;
           yield* need(access, 'context:read');
           const all = space(access).meetings.filter(m => urlParams.state === undefined || m.state === urlParams.state);
-          return offsetPage(all, urlParams.cursor, urlParams.limit);
+          const { items, next_cursor } = offsetPage(all, urlParams.cursor, urlParams.limit);
+          return { meetings: items, next_cursor };
         }),
       )
       .handle('getMeeting', ({ path }) => Effect.flatMap(CurrentAccess, access => meetingOf(access, path.meeting_id)))
       .handle('getTranscript', ({ path, urlParams }) =>
         Effect.gen(function* () {
           const access = yield* CurrentAccess;
-          yield* meetingOf(access, path.meeting_id);
-          return offsetPage([...space(access).segments.values()], urlParams.cursor, urlParams.limit);
+          const meeting = yield* meetingOf(access, path.meeting_id);
+          const own = [...space(access).segments.values()].filter(s => s.meeting_id === meeting.id).map(s => s.segment);
+          const { items, next_cursor } = offsetPage(own, urlParams.cursor, urlParams.limit);
+          return { meeting_id: meeting.id, boundary_revision: meeting.boundary_revision, segments: items, speakers: [], next_cursor };
         }),
       )
       .handle('recordingAccess', ({ path }) =>
@@ -146,7 +153,22 @@ const meetingsGroup = ({ space, need, meetingOf }: Store) =>
             gaps: [],
           });
         }),
-      ),
+      )
+      .handle('closeMeeting', ({ path }) =>
+        Effect.gen(function* () {
+          const access = yield* CurrentAccess;
+          yield* need(access, 'context:write');
+          const meeting = yield* meetingOf(access, path.meeting_id);
+          const closed = { ...meeting, state: 'closed' as const, ended_at: meeting.ended_at ?? wire(ContextItem.fields.created_at, now()) };
+          const meetings = space(access).meetings;
+          meetings[meetings.indexOf(meeting)] = closed;
+          return closed;
+        }),
+      )
+      // ponytail: boundary edits are the meetings slice's job (tested against MySQL); adapters only need the routes.
+      .handle('mergeMeetings', () => unmodeled)
+      .handle('splitMeeting', () => unmodeled)
+      .handle('mapSpeaker', () => unmodeled),
   );
 
 const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interrupted }: Store) =>
@@ -178,7 +200,7 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
           const hits = [...space(access).items.values()].filter(
             item => item.text.toLowerCase().includes(q) && (urlParams.meeting_id === undefined || item.meeting_id === urlParams.meeting_id),
           );
-          return offsetPage(hits, urlParams.cursor, urlParams.limit);
+          return { items: hits.slice(0, urlParams.limit ?? 50) };
         }),
       )
       .handle('addContextItem', ({ payload }) =>
@@ -239,12 +261,14 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
               const next = {
                 ...current,
                 revision: current.revision + 1,
-                text: payload.text,
-                sources: payload.sources,
+                kind: payload.kind ?? current.kind,
+                text: payload.text ?? current.text,
+                sources: payload.sources ?? current.sources,
+                state: payload.state ?? current.state,
                 supersedes: { id: current.id, revision: current.revision },
                 author: { type: access.principal.kind === 'device' ? ('system' as const) : access.principal.kind, id: access.principal.id },
               };
-              record(access, next, 'item_revised');
+              record(access, next, next.state === 'superseded' ? 'item_superseded' : 'item_revised');
               return Effect.succeed(next);
             }),
           );
@@ -256,9 +280,9 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
           yield* need(access, 'context:read');
           const after = urlParams.cursor === undefined ? 0 : Number(urlParams.cursor.slice(1));
           const changes = space(access)
-            .events.filter(e => e.seq > after && (urlParams.meeting_id === undefined || e.meeting_id === urlParams.meeting_id))
+            .events.filter(e => e.seq > after)
             .slice(0, urlParams.limit ?? 50);
-          return { items: changes, next_cursor: `c${changes.at(-1)?.seq ?? after}` };
+          return { events: changes, next_cursor: `c${changes.at(-1)?.seq ?? after}` };
         }),
       )
       .handle('getSource', ({ path }) =>
@@ -268,9 +292,21 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
           if (path.source_id === HOLD_SOURCE_ID) {
             return yield* Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => interrupted.push(path.source_id))));
           }
-          const segment = space(access).segments.get(path.source_id);
-          if (segment === undefined) return yield* new NotFound({ message: 'Source not found' });
-          return wire(SourceRecord, { id: segment.id, kind: 'segment', meeting_id: null, text: segment.text, segment: Schema.encodeSync(TranscriptSegment)(segment) });
+          const found = space(access).segments.get(path.source_id);
+          if (found === undefined) return yield* new NotFound({ message: 'Source not found' });
+          const segment = Schema.encodeSync(TranscriptSegment)(found.segment);
+          return wire(Source, {
+            kind: 'segment',
+            id: segment.id,
+            meeting_id: found.meeting_id,
+            text: segment.text,
+            revision: segment.revision,
+            speaker_label: segment.speaker_label,
+            source: segment.source,
+            event_at: segment.created_at,
+            start_ms: segment.source.sample_start / 16,
+            end_ms: segment.source.sample_end / 16,
+          });
         }),
       ),
   );
@@ -351,49 +387,54 @@ const agentsGroup = ({ space, need, tokens }: Store) =>
         Effect.gen(function* () {
           const access = yield* CurrentAccess;
           yield* need(access, 'workspace:admin');
-          const credential = wire(AgentCredential, {
-            credential_id: randomUUID(),
-            agent_id: randomUUID(),
-            display_name: payload.display_name,
-            scopes: payload.scopes.filter(scope => access.scopes.includes(scope)),
-            meeting_ids: payload.meeting_ids,
-            created_at: now(),
-            expires_at: payload.expires_at,
-            revoked_at: null,
-            last_used_at: null,
+          const created = wire(AgentWithCredential, {
+            agent: { id: randomUUID(), kind: 'agent', display_name: payload.display_name },
+            credential: {
+              id: randomUUID(),
+              scopes: payload.scopes.filter(scope => access.scopes.includes(scope)),
+              meetings: Schema.encodeSync(MeetingAccess)(payload.meetings),
+              created_at: now(),
+              expires_at: payload.expires_at,
+              revoked_at: null,
+              last_used_at: null,
+            },
           });
           const token = `agent_${randomUUID()}`;
-          space(access).agents.set(credential.credential_id, credential);
+          space(access).agents.set(created.credential.id, created);
           tokens.set(token, {
             workspace_id: access.workspace_id,
-            principal: { id: credential.agent_id, kind: 'agent', display_name: credential.display_name },
+            principal: created.agent,
             role: 'agent',
-            scopes: credential.scopes,
-            meetings: credential.meeting_ids === null ? { kind: 'accessible' } : { kind: 'allowlist', meeting_ids: credential.meeting_ids },
+            scopes: created.credential.scopes,
+            meetings: created.credential.meetings,
             permission_revision: access.permission_revision,
           });
-          return { credential, token };
+          return { ...created, token };
         }),
       )
       .handle('revokeCredential', ({ path }) =>
         Effect.gen(function* () {
           const access = yield* CurrentAccess;
           yield* need(access, 'workspace:admin');
-          const credential = space(access).agents.get(path.credential_id);
-          if (credential === undefined || credential.agent_id !== path.agent_id) return yield* new NotFound({ message: 'Credential not found' });
-          const revoked = { ...credential, revoked_at: credential.revoked_at ?? wire(ContextItem.fields.created_at, now()) };
-          space(access).agents.set(revoked.credential_id, revoked);
-          for (const [token, scope] of tokens) if (scope.principal.id === revoked.agent_id) tokens.delete(token);
-          return revoked;
+          const found = space(access).agents.get(path.key_id);
+          if (found === undefined || found.agent.id !== path.agent_id) return yield* new NotFound({ message: 'Credential not found' });
+          const revoked_at = found.credential.revoked_at ?? wire(ContextItem.fields.created_at, now());
+          space(access).agents.set(path.key_id, { ...found, credential: { ...found.credential, revoked_at } });
+          for (const [token, scope] of tokens) if (scope.principal.id === found.agent.id) tokens.delete(token);
         }),
       ),
   );
+
+/** Capture is device-to-server, not an adapter surface; its routes exist only so the API layer is complete. */
+const listenersGroup = HttpApiBuilder.group(SanctumApi, 'listeners', handlers =>
+  handlers.handle('registerListener', () => unmodeled).handle('heartbeat', () => unmodeled).handle('putChunk', () => unmodeled),
+);
 
 export function fakeDomain() {
   const store = createStore();
   const { space, tokens, interrupted } = store;
   return {
-    groups: Layer.mergeAll(meetingsGroup(store), contextGroup(store), integrationsGroup(store), actionsGroup(store), agentsGroup(store)),
+    groups: Layer.mergeAll(listenersGroup, meetingsGroup(store), contextGroup(store), integrationsGroup(store), actionsGroup(store), agentsGroup(store)),
     /** Bearer tokens issued by `token()` or `createAgent`; revocation deletes them. */
     authenticator: Layer.succeed(Authenticator, {
       authenticate: request => {
@@ -422,7 +463,7 @@ export function fakeDomain() {
       space(access).meetings.push(meeting);
       return meeting;
     },
-    addSegment: (access: AccessScope, text: string) => {
+    addSegment: (access: AccessScope, meeting_id: Meeting['id'], text: string) => {
       const segment = wire(TranscriptSegment, {
         id: randomUUID(),
         source: { epoch_id: randomUUID(), track: 0, sample_start: 0, sample_end: 16_000 },
@@ -438,7 +479,7 @@ export function fakeDomain() {
         confidence: null,
         created_at: now(),
       });
-      space(access).segments.set(segment.id, segment);
+      space(access).segments.set(segment.id, { meeting_id, segment });
       return segment;
     },
     settleAction: (access: AccessScope, action_id: string, state: 'succeeded' | 'failed', provider_receipt: Record<string, unknown>) => {
@@ -455,3 +496,5 @@ export const fakeApi = <R = SqlClient.SqlClient>(
   health: Layer.Layer<HttpApiGroup.ApiGroup<'sanctum', 'health'>, never, R> = HealthLive(loadMigrations()) as never,
 ) =>
   HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, domain.groups]), Layer.provide(AuthenticatedLive));
+
+const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));

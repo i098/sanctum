@@ -187,6 +187,12 @@ describe('MCP over Streamable HTTP', () => {
       const { url, db, domain } = yield* serveFake(configured);
       const [owner, agent] = yield* Effect.provide(seedWorkspace('Shared', ['owner', 'agent']), db);
       const [outsider] = yield* Effect.provide(seedWorkspace('Elsewhere', ['owner']), db);
+      // Agent members authenticate only while they hold an active credential.
+      yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
+          VALUES (${randomUUID()}, ${agent!.workspace_id}, ${agent!.principal.id}, ${owner!.principal.id}, UNHEX(SHA2(${randomUUID()}, 256)), '["context:read"]', UTC_TIMESTAMP(6))`),
+        db,
+      );
       const token = (access: AccessScope, scope: string) =>
         Effect.flatMap(Effect.provide(identify(access), db), subject => Effect.promise(() => sign(subject, scope)));
       const meeting = domain.addMeeting(owner!, 'Shared review');
@@ -229,7 +235,7 @@ describe('MCP over Streamable HTTP', () => {
       expect(failure(yield* call(stranger, 'get_context', { meeting_id: meeting.id }))).toMatchObject({ code: 'not_found' });
       const tooMany = yield* call(writer, 'list_meetings', { limit: 201 });
       expect(tooMany.isError).toBe(true);
-      expect(yield* call(writer, 'list_meetings', { limit: 2 })).toMatchObject({ structuredContent: { items: [{ id: meeting.id }], next_cursor: null } });
+      expect(yield* call(writer, 'list_meetings', { limit: 2 })).toMatchObject({ structuredContent: { meetings: [{ id: meeting.id }], next_cursor: null } });
 
       const requested = yield* call(writer, 'request_action', {
         action_key: 'linear-create-issue', configuration_ref: 'cfg', version: '1.0.0', arguments: { title: 'B' }, meeting_id: meeting.id, idempotency_key: 'act-1',

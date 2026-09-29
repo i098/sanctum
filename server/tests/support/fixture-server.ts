@@ -6,7 +6,8 @@
 import { createServer } from 'node:http';
 import { HttpApiBuilder, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
-import { SanctumApi, Unavailable } from '@sanctum/contracts';
+import { Unavailable } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Context, Effect, Layer } from 'effect';
 import { OpenApiLive } from '../../src/api.ts';
 import { fakeApi, fakeDomain } from './fake-domain.ts';
@@ -22,7 +23,7 @@ export const fixtureServer = Effect.gen(function* () {
   const domain = fakeDomain();
   const owner = fixtureAccess({ role: 'owner' });
   const meeting = domain.addMeeting(owner, 'Fixture planning meeting');
-  domain.addSegment(owner, 'We chose option B for the pilot.');
+  domain.addSegment(owner, meeting.id, 'We chose option B for the pilot.');
   const layer = HttpApiBuilder.serve().pipe(
     Layer.provide(OpenApiLive),
     Layer.provide(fakeApi(domain, HealthWithoutDatabase)),

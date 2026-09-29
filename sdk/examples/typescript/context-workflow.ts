@@ -24,9 +24,10 @@ export async function contextWorkflow({ admin, connect, meetingId, runId }: Work
   // 1. Read the meeting and the first transcript segment; cite it by ID.
   const meeting = await admin.meetings.getMeeting({ meeting_id: meetingId });
   const firstPage = (await pages(admin, 'meetings.getTranscript', { meeting_id: meetingId, limit: 1 }).next()).value;
-  const segment = firstPage?.items[0];
+  const segment = firstPage?.segments[0];
   if (segment === undefined) throw new Error('Meeting has no final transcript yet');
   const source = await admin.context.getSource({ source_id: segment.id });
+  if (source.kind !== 'segment') throw new Error('Segment IDs resolve to segment sources');
 
   // 2. Append a research observation at the snapshot revision; a retry with the same key is a no-op.
   const context = await admin.context.getContext({ meeting_id: meetingId });
@@ -52,7 +53,7 @@ export async function contextWorkflow({ admin, connect, meetingId, runId }: Work
   }
 
   // 4. Consume durable changes after the snapshot's cursor.
-  const changes = await admin.context.getContextChanges({ meeting_id: meetingId, cursor: context.changes_cursor });
+  const changes = await admin.context.getContextChanges({ cursor: context.changes_cursor });
 
   // 5. Discover one integration action, inspect it, request it and read the receipt.
   const { matches } = await admin.integrations.searchIntegrationActions({ intent: 'tracking issue', limit: 1 });
@@ -69,11 +70,16 @@ export async function contextWorkflow({ admin, connect, meetingId, runId }: Work
   });
   const receipt = await admin.actions.getAction({ action_id: requested.action_id });
 
-  // 6. Create a read-only agent credential, use it, revoke it, and observe the refusal.
-  const created = await admin.agents.createAgent({ display_name: `Reader ${runId}`, scopes: ['context:read'], meeting_ids: [meetingId], expires_at: null });
+  // 6. Create a read-only agent credential for this meeting, use it, revoke it, and observe the refusal.
+  const created = await admin.agents.createAgent({
+    display_name: `Reader ${runId}`,
+    scopes: ['context:read'],
+    meetings: { kind: 'allowlist', meeting_ids: [meetingId] },
+    expires_at: null,
+  });
   const agent = connect(created.token);
   const agentRevision = (await agent.context.getContext({ meeting_id: meetingId })).revision;
-  await admin.agents.revokeCredential({ agent_id: created.credential.agent_id, credential_id: created.credential.credential_id });
+  await admin.agents.revokeCredential({ agent_id: created.agent.id, key_id: created.credential.id });
   const afterRevoke = await agent.context.getContext({ meeting_id: meetingId }).then(
     () => 'still allowed',
     (error: unknown) => (error instanceof SanctumError ? error.code : String(error)),
@@ -85,7 +91,7 @@ export async function contextWorkflow({ admin, connect, meetingId, runId }: Work
     added_id: added.id,
     retry_returned_same_item: retried.id === added.id,
     rebased_revision: rebasedRevision,
-    changes: changes.items.map(change => change.change),
+    changes: changes.events.map(change => change.change),
     action_state: receipt.state,
     agent_saw_revision: agentRevision,
     after_revoke: afterRevoke,

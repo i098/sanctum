@@ -1,3 +1,4 @@
+import { createClient } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
@@ -8,6 +9,9 @@ import { startWaveform } from './waveform.ts';
 import './listen.css';
 
 type Overlay = 'review' | 'agents' | 'settings';
+
+/** Same-origin v1 client: calls carry the browser session like every other request from this page. */
+const client = createClient({ baseUrl: window.location.origin });
 
 const HELPER: Record<ListenerState, string> = {
   stopped: 'Choose Listen to start the microphone.',
@@ -140,7 +144,7 @@ export function ListenPage() {
       </section>
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog open={overlay === 'review'} onClose={close} />
-      <AgentsDialog open={overlay === 'agents'} onClose={close} />
+      <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
       <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} />
     </main>
   );

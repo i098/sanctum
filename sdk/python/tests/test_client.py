@@ -42,9 +42,9 @@ def expected_requests(case: dict) -> list[dict]:
 class WireCases(unittest.TestCase):
     def check_outcome(self, case: dict, call) -> None:
         if "ok" in case["result"]:
-            result = call()
-            for key, value in case["result"]["ok"].items():
-                self.assertEqual(result[key], value)
+            result, expected = call(), case["result"]["ok"]
+            # A null expectation is a bodiless success (204); otherwise compare the listed fields.
+            self.assertEqual(result if expected is None else {key: result[key] for key in expected}, expected)
             return
         expected = dict(case["result"]["error"])
         with self.assertRaises(SanctumError) as raised:
@@ -94,8 +94,13 @@ class Transport(unittest.TestCase):
             with self.assertRaises(httpx.ConnectError):
                 client.health.healthz({})
 
-    def test_pages_follow_cursor_until_null(self) -> None:
-        pages = [{"items": [1, 2], "next_cursor": "o2"}, {"items": [3], "next_cursor": None}]
+    def test_pages_follow_cursor_until_null_or_empty(self) -> None:
+        first, last = {"meetings": [1, 2], "next_cursor": "o2"}, {"meetings": [3], "next_cursor": None}
+        self.assertEqual(self.drain([first, last]), ([1, 2, 3], [None, "o2"]))
+        empty = {"meetings": [], "next_cursor": "o3"}
+        self.assertEqual(self.drain([first, {**last, "next_cursor": "o3"}, empty]), ([1, 2, 3], [None, "o2", "o3"]))
+
+    def drain(self, pages: list[dict]) -> tuple[list[int], list[str | None]]:
         cursors: list[str | None] = []
 
         def handle(request: httpx.Request) -> httpx.Response:
@@ -103,9 +108,8 @@ class Transport(unittest.TestCase):
             return httpx.Response(200, json=pages.pop(0))
 
         with Client("https://sanctum.test", transport=httpx.MockTransport(handle)) as client:
-            items = [item for page in client.pages("meetings.listMeetings", {"limit": 2}) for item in page["items"]]
-        self.assertEqual(items, [1, 2, 3])
-        self.assertEqual(cursors, [None, "o2"])
+            items = [item for page in client.pages("meetings.listMeetings", {"limit": 2}) for item in page["meetings"]]
+        return items, cursors
 
     def test_waits_for_terminal_action_receipt(self) -> None:
         states = ["queued", "running", "succeeded"]

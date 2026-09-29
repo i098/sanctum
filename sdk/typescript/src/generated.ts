@@ -39,14 +39,50 @@ export type AccessScopeMeetings2 = {
   readonly meeting_ids: ReadonlyArray<string>;
 };
 
+export type RegisterListener = {
+  readonly name: string;
+  readonly mode: "room" | "laptop";
+  readonly capabilities: Readonly<Record<string, unknown>>;
+};
+
+export type Listener = {
+  readonly id: string;
+  readonly workspace_id: string;
+  readonly name: string;
+  readonly mode: "room" | "laptop";
+  readonly state: "stopped" | "starting" | "listening" | "reconnecting" | "paused" | "degraded";
+  readonly lease_generation: number;
+  readonly lease_expires_at: string | null;
+  readonly current_epoch_id: string | null;
+  readonly last_heartbeat_at: string | null;
+};
+
+export type HeartbeatInput = {
+  readonly lease_generation: number;
+  readonly state: "stopped" | "starting" | "listening" | "reconnecting" | "paused" | "degraded";
+  readonly epoch_id: string | null;
+  readonly buffered_chunks: number;
+  readonly storage_bytes_free: number | null;
+  readonly listener_id: string;
+};
+
+export type HeartbeatReceipt = {
+  readonly lease_generation: number;
+  readonly lease_expires_at: string;
+  readonly owner: boolean;
+};
+
 export type ListMeetingsInput = {
   readonly state?: "provisional" | "active" | "closing" | "closed" | "interrupted";
+  readonly from?: string;
+  readonly to?: string;
+  readonly participant?: string;
   readonly cursor?: string;
   readonly limit?: number;
 };
 
-export type ListMeetingsOutput = {
-  readonly items: ReadonlyArray<Meeting>;
+export type MeetingPage = {
+  readonly meetings: ReadonlyArray<Meeting>;
   readonly next_cursor: string | null;
 };
 
@@ -70,8 +106,43 @@ export type MeetingProcessing = {
   readonly recording: "pending" | "partial" | "complete" | "failed";
 };
 
+export type MergeMeetings = {
+  readonly target: MergeMeetingsTarget;
+  readonly source: MergeMeetingsSource;
+};
+
+export type MergeMeetingsTarget = {
+  readonly meeting_id: string;
+  readonly expected_revision: number;
+};
+
+export type MergeMeetingsSource = {
+  readonly meeting_id: string;
+  readonly expected_revision: number;
+};
+
 export type GetMeetingInput = {
   readonly meeting_id: string;
+};
+
+export type CloseMeetingInput = {
+  readonly meeting_id: string;
+};
+
+export type SplitMeetingInput = {
+  readonly expected_revision: number;
+  readonly at: SplitMeetingInputAt;
+  readonly meeting_id: string;
+};
+
+export type SplitMeetingInputAt = {
+  readonly epoch_id: string;
+  readonly sample: number;
+};
+
+export type SplitResult = {
+  readonly earlier: Meeting;
+  readonly later: Meeting;
 };
 
 export type GetTranscriptInput = {
@@ -80,8 +151,11 @@ export type GetTranscriptInput = {
   readonly limit?: number;
 };
 
-export type GetTranscriptOutput = {
-  readonly items: ReadonlyArray<TranscriptSegment>;
+export type TranscriptPage = {
+  readonly meeting_id: string;
+  readonly boundary_revision: number;
+  readonly segments: ReadonlyArray<TranscriptSegment>;
+  readonly speakers: ReadonlyArray<SpeakerTrack>;
   readonly next_cursor: string | null;
 };
 
@@ -108,6 +182,20 @@ export type SourceRange = {
   readonly sample_end: number;
 };
 
+export type SpeakerTrack = {
+  readonly id: string;
+  readonly epoch_id: string;
+  readonly track: number;
+  readonly provider: string;
+  readonly provider_label: string;
+  readonly sample_start: number;
+  readonly sample_end: number;
+  readonly profile_id: string | null;
+  readonly mapping_source: "enrollment" | "user_confirmed" | null;
+  readonly attribution_revision: number;
+  readonly confidence: number | null;
+};
+
 export type RecordingAccessInput = {
   readonly meeting_id: string;
 };
@@ -118,6 +206,13 @@ export type RecordingAccess = {
   readonly url: string;
   readonly expires_at: string;
   readonly gaps: ReadonlyArray<SourceRange>;
+};
+
+export type MapSpeakerInput = {
+  readonly speaker_track_id: string;
+  readonly profile_id: string | null;
+  readonly expected_revision: number;
+  readonly meeting_id: string;
 };
 
 export type GetContextInput = {
@@ -189,13 +284,11 @@ export type ContextItemSupersedes = {
 export type SearchContextInput = {
   readonly q: string;
   readonly meeting_id?: string;
-  readonly cursor?: string;
   readonly limit?: number;
 };
 
 export type SearchContextOutput = {
   readonly items: ReadonlyArray<ContextItem>;
-  readonly next_cursor: string | null;
 };
 
 export type AddContextItem = {
@@ -209,21 +302,22 @@ export type AddContextItem = {
 
 export type ReviseContextItemInput = {
   readonly expected_revision: number;
-  readonly text: string;
-  readonly sources: ReadonlyArray<SegmentSource | ArtifactSource>;
   readonly idempotency_key: string;
+  readonly kind?: "decision" | "commitment" | "constraint" | "project_fact" | "preference" | "open_question" | "research_observation";
+  readonly text?: string;
+  readonly sources?: ReadonlyArray<SegmentSource | ArtifactSource>;
+  readonly state?: "committed" | "superseded";
   readonly item_id: string;
 };
 
 export type GetContextChangesInput = {
-  readonly meeting_id?: string;
   readonly cursor?: string;
   readonly limit?: number;
 };
 
-export type GetContextChangesOutput = {
-  readonly items: ReadonlyArray<ContextEvent>;
-  readonly next_cursor: string | null;
+export type ContextChanges = {
+  readonly events: ReadonlyArray<ContextEvent>;
+  readonly next_cursor: string;
 };
 
 export type ContextEvent = {
@@ -245,12 +339,28 @@ export type GetSourceInput = {
   readonly source_id: string;
 };
 
-export type SourceRecord = {
+export type GetSourceOutput = {
+  readonly kind: "segment";
   readonly id: string;
-  readonly kind: "segment" | "artifact";
-  readonly meeting_id: string | null;
+  readonly meeting_id: string;
   readonly text: string;
-  readonly segment: TranscriptSegment | null;
+  readonly revision: number;
+  readonly speaker_label: string | null;
+  readonly source: SourceRange;
+  readonly event_at: string;
+  readonly start_ms: number;
+  readonly end_ms: number;
+};
+
+export type GetSourceOutput2 = {
+  readonly kind: "artifact";
+  readonly id: string;
+  readonly meeting_id: string | null;
+  readonly title: string;
+  readonly content_type: string;
+  readonly content: string | null;
+  readonly sha256: string;
+  readonly created_at: string;
 };
 
 export type SearchIntegrationActionsInput = {
@@ -345,87 +455,121 @@ export type ActionReceiptGrant = {
   readonly version: number;
 };
 
+export type CreateAgent = {
+  readonly display_name: string;
+  readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
+  readonly meetings: CreateAgentMeetings | CreateAgentMeetings2;
+  readonly expires_at: string | null;
+};
+
+export type CreateAgentMeetings = {
+  readonly kind: "accessible";
+};
+
+export type CreateAgentMeetings2 = {
+  readonly kind: "allowlist";
+  readonly meeting_ids: ReadonlyArray<string>;
+};
+
+export type CreatedAgent = {
+  readonly agent: Principal;
+  readonly credential: AgentCredential;
+  readonly token: string;
+};
+
+export type AgentCredential = {
+  readonly id: string;
+  readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
+  readonly meetings: AgentCredentialMeetings | AgentCredentialMeetings2;
+  readonly expires_at: string | null;
+  readonly revoked_at: string | null;
+  readonly last_used_at: string | null;
+  readonly created_at: string;
+};
+
+export type AgentCredentialMeetings = {
+  readonly kind: "accessible";
+};
+
+export type AgentCredentialMeetings2 = {
+  readonly kind: "allowlist";
+  readonly meeting_ids: ReadonlyArray<string>;
+};
+
 export type ListAgentsInput = {
   readonly cursor?: string;
   readonly limit?: number;
 };
 
-export type ListAgentsOutput = {
-  readonly items: ReadonlyArray<AgentCredential>;
+export type AgentPage = {
+  readonly items: ReadonlyArray<AgentWithCredential>;
   readonly next_cursor: string | null;
 };
 
-export type AgentCredential = {
-  readonly credential_id: string;
-  readonly agent_id: string;
-  readonly display_name: string;
-  readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
-  readonly meeting_ids: ReadonlyArray<string> | null;
-  readonly created_at: string;
-  readonly expires_at: string | null;
-  readonly revoked_at: string | null;
-  readonly last_used_at: string | null;
-};
-
-export type CreateAgent = {
-  readonly display_name: string;
-  readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
-  readonly meeting_ids: ReadonlyArray<string> | null;
-  readonly expires_at: string | null;
-};
-
-export type CreateAgentOutput = {
+export type AgentWithCredential = {
+  readonly agent: Principal;
   readonly credential: AgentCredential;
-  readonly token: string;
 };
 
 export type RevokeCredentialInput = {
   readonly agent_id: string;
-  readonly credential_id: string;
+  readonly key_id: string;
 };
 
 export interface Operations {
   'health.healthz': { input: Readonly<Record<string, unknown>>; output: HealthzOutput };
   'health.readyz': { input: Readonly<Record<string, unknown>>; output: ReadyzOutput };
   'session.getSession': { input: Readonly<Record<string, unknown>>; output: AccessScope };
-  'meetings.listMeetings': { input: ListMeetingsInput; output: ListMeetingsOutput };
+  'listeners.registerListener': { input: RegisterListener; output: Listener };
+  'listeners.heartbeat': { input: HeartbeatInput; output: HeartbeatReceipt };
+  'meetings.listMeetings': { input: ListMeetingsInput; output: MeetingPage };
+  'meetings.mergeMeetings': { input: MergeMeetings; output: Meeting };
   'meetings.getMeeting': { input: GetMeetingInput; output: Meeting };
-  'meetings.getTranscript': { input: GetTranscriptInput; output: GetTranscriptOutput };
+  'meetings.closeMeeting': { input: CloseMeetingInput; output: Meeting };
+  'meetings.splitMeeting': { input: SplitMeetingInput; output: SplitResult };
+  'meetings.getTranscript': { input: GetTranscriptInput; output: TranscriptPage };
   'meetings.recordingAccess': { input: RecordingAccessInput; output: RecordingAccess };
+  'meetings.mapSpeaker': { input: MapSpeakerInput; output: ReadonlyArray<SpeakerTrack> };
   'context.getContext': { input: GetContextInput; output: ContextSnapshot };
   'context.searchContext': { input: SearchContextInput; output: SearchContextOutput };
   'context.addContextItem': { input: AddContextItem; output: ContextItem };
   'context.reviseContextItem': { input: ReviseContextItemInput; output: ContextItem };
-  'context.getContextChanges': { input: GetContextChangesInput; output: GetContextChangesOutput };
-  'context.getSource': { input: GetSourceInput; output: SourceRecord };
+  'context.getContextChanges': { input: GetContextChangesInput; output: ContextChanges };
+  'context.getSource': { input: GetSourceInput; output: GetSourceOutput | GetSourceOutput2 };
   'integrations.searchIntegrationActions': { input: SearchIntegrationActionsInput; output: SearchIntegrationActionsOutput };
   'integrations.getIntegrationAction': { input: GetIntegrationActionInput; output: GetIntegrationActionOutput };
   'actions.requestAction': { input: RequestActionInput; output: RequestActionOutput };
   'actions.getAction': { input: GetActionInput; output: ActionReceipt };
-  'agents.listAgents': { input: ListAgentsInput; output: ListAgentsOutput };
-  'agents.createAgent': { input: CreateAgent; output: CreateAgentOutput };
-  'agents.revokeCredential': { input: RevokeCredentialInput; output: AgentCredential };
+  'agents.createAgent': { input: CreateAgent; output: CreatedAgent };
+  'agents.listAgents': { input: ListAgentsInput; output: AgentPage };
+  'agents.revokeCredential': { input: RevokeCredentialInput; output: null };
 }
 
 export const operations: Record<keyof Operations, OperationSpec> = {
   'health.healthz': {"method":"GET","path":"/healthz","pathParams":[],"queryParams":[],"body":false},
   'health.readyz': {"method":"GET","path":"/readyz","pathParams":[],"queryParams":[],"body":false},
   'session.getSession': {"method":"GET","path":"/api/v1/session","pathParams":[],"queryParams":[],"body":false},
-  'meetings.listMeetings': {"method":"GET","path":"/api/v1/meetings","pathParams":[],"queryParams":["state","cursor","limit"],"body":false},
+  'listeners.registerListener': {"method":"POST","path":"/api/v1/listeners","pathParams":[],"queryParams":[],"body":true},
+  'listeners.heartbeat': {"method":"POST","path":"/api/v1/listeners/{listener_id}/heartbeat","pathParams":["listener_id"],"queryParams":[],"body":true},
+  'meetings.listMeetings': {"method":"GET","path":"/api/v1/meetings","pathParams":[],"queryParams":["state","from","to","participant","cursor","limit"],"body":false},
+  'meetings.mergeMeetings': {"method":"POST","path":"/api/v1/meetings/merge","pathParams":[],"queryParams":[],"body":true},
   'meetings.getMeeting': {"method":"GET","path":"/api/v1/meetings/{meeting_id}","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.closeMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/close","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.splitMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/split","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'meetings.getTranscript': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/transcript","pathParams":["meeting_id"],"queryParams":["cursor","limit"],"body":false},
   'meetings.recordingAccess': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/recording-access","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.mapSpeaker': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/speakers/map","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'context.getContext': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/context","pathParams":["meeting_id"],"queryParams":[],"body":false},
-  'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","meeting_id","cursor","limit"],"body":false},
+  'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","meeting_id","limit"],"body":false},
   'context.addContextItem': {"method":"POST","path":"/api/v1/context/items","pathParams":[],"queryParams":[],"body":true},
   'context.reviseContextItem': {"method":"PATCH","path":"/api/v1/context/items/{item_id}","pathParams":["item_id"],"queryParams":[],"body":true},
-  'context.getContextChanges': {"method":"GET","path":"/api/v1/context/changes","pathParams":[],"queryParams":["meeting_id","cursor","limit"],"body":false},
+  'context.getContextChanges': {"method":"GET","path":"/api/v1/context/changes","pathParams":[],"queryParams":["cursor","limit"],"body":false},
   'context.getSource': {"method":"GET","path":"/api/v1/sources/{source_id}","pathParams":["source_id"],"queryParams":[],"body":false},
   'integrations.searchIntegrationActions': {"method":"GET","path":"/api/v1/integrations/actions","pathParams":[],"queryParams":["intent","app","limit"],"body":false},
   'integrations.getIntegrationAction': {"method":"POST","path":"/api/v1/integrations/actions/{action_key}/schema","pathParams":["action_key"],"queryParams":[],"body":true},
   'actions.requestAction': {"method":"POST","path":"/api/v1/actions","pathParams":[],"queryParams":[],"body":true},
   'actions.getAction': {"method":"GET","path":"/api/v1/actions/{action_id}","pathParams":["action_id"],"queryParams":[],"body":false},
-  'agents.listAgents': {"method":"GET","path":"/api/v1/agents","pathParams":[],"queryParams":["cursor","limit"],"body":false},
   'agents.createAgent': {"method":"POST","path":"/api/v1/agents","pathParams":[],"queryParams":[],"body":true},
-  'agents.revokeCredential': {"method":"DELETE","path":"/api/v1/agents/{agent_id}/credentials/{credential_id}","pathParams":["agent_id","credential_id"],"queryParams":[],"body":false},
+  'agents.listAgents': {"method":"GET","path":"/api/v1/agents","pathParams":[],"queryParams":["cursor","limit"],"body":false},
+  'agents.revokeCredential': {"method":"DELETE","path":"/api/v1/agents/{agent_id}/credentials/{key_id}","pathParams":["agent_id","key_id"],"queryParams":[],"body":false},
 };

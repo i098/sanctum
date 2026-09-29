@@ -2,11 +2,11 @@
  * Agents: scoped credentials for SDK and MCP clients, and their revocation (plan section 14).
  * Calls the same v1 agents operations as every other client; the plain token is shown once.
  */
-import { type AgentCredential, type SanctumClient, SanctumError } from '@sanctum/sdk';
+import { type AgentWithCredential, type SanctumClient, SanctumError } from '@sanctum/sdk';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Dialog } from './Dialog.tsx';
 
-type Scope = AgentCredential['scopes'][number];
+type Scope = AgentWithCredential['credential']['scopes'][number];
 const GRANTABLE: ReadonlyArray<{ scope: Scope; label: string }> = [
   { scope: 'context:read', label: 'Read context' },
   { scope: 'context:write', label: 'Add context' },
@@ -17,7 +17,7 @@ const GRANTABLE: ReadonlyArray<{ scope: Scope; label: string }> = [
 const describe = (error: unknown) => (error instanceof SanctumError ? error.message : 'Network unavailable; nothing was changed.');
 
 export function AgentsDialog({ client, open, onClose }: { client: SanctumClient; open: boolean; onClose: () => void }) {
-  const [credentials, setCredentials] = useState<ReadonlyArray<AgentCredential> | null>(null);
+  const [agents, setAgents] = useState<ReadonlyArray<AgentWithCredential> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +25,7 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
   const refresh = useCallback(
     (signal?: AbortSignal) =>
       client.agents.listAgents({}, signal ? { signal } : {}).then(
-        page => (setCredentials(page.items), setError(null)),
+        page => (setAgents(page.items), setError(null)),
         (failure: unknown) => signal?.aborted || setError(describe(failure)),
       ),
     [client],
@@ -58,15 +58,15 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
     if (scopes.length === 0) return setError('Choose at least one permission.');
     const target = event.currentTarget;
     void run(async () => {
-      const created = await client.agents.createAgent({ display_name, scopes, meeting_ids: null, expires_at: null });
+      const created = await client.agents.createAgent({ display_name, scopes, meetings: { kind: 'accessible' }, expires_at: null });
       setIssued({ name: display_name, token: created.token });
       target.reset();
     });
   };
 
-  const revoke = (credential: AgentCredential) => {
-    if (!window.confirm(`Revoke ${credential.display_name}? Its clients lose access immediately.`)) return;
-    void run(async () => void (await client.agents.revokeCredential({ agent_id: credential.agent_id, credential_id: credential.credential_id })));
+  const revoke = ({ agent, credential }: AgentWithCredential) => {
+    if (!window.confirm(`Revoke ${agent.display_name}? Its clients lose access immediately.`)) return;
+    void run(async () => void (await client.agents.revokeCredential({ agent_id: agent.id, key_id: credential.id })));
   };
 
   return (
@@ -85,18 +85,18 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
         </div>
       )}
       <ul aria-label="Agent credentials" className="mb-4 divide-y divide-divider">
-        {credentials === null && !error && <li className="py-2 text-ink-muted">Loading…</li>}
-        {credentials?.length === 0 && <li className="py-2 text-ink-muted">No agents yet.</li>}
-        {credentials?.map(credential => (
-          <li key={credential.credential_id} className="flex items-center justify-between gap-3 py-2">
+        {agents === null && !error && <li className="py-2 text-ink-muted">Loading…</li>}
+        {agents?.length === 0 && <li className="py-2 text-ink-muted">No agents yet.</li>}
+        {agents?.map(({ agent, credential }) => (
+          <li key={credential.id} className="flex items-center justify-between gap-3 py-2">
             <span>
-              {credential.display_name}
+              {agent.display_name}
               <span className="block text-sm text-ink-muted">
                 {credential.revoked_at ? `Revoked ${credential.revoked_at}` : credential.scopes.join(', ')}
               </span>
             </span>
             {!credential.revoked_at && (
-              <button type="button" disabled={busy} onClick={() => revoke(credential)} className="rounded px-3 py-1 text-warning hover:bg-surface">
+              <button type="button" disabled={busy} onClick={() => revoke({ agent, credential })} className="rounded px-3 py-1 text-warning hover:bg-surface">
                 Revoke
               </button>
             )}
@@ -118,9 +118,6 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
           ))}
         </fieldset>
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded px-4 py-2 hover:bg-surface">
-            Close
-          </button>
           <button type="submit" disabled={busy} className="rounded bg-accent px-4 py-2">
             Create agent
           </button>

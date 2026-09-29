@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { createClient, pages, SanctumError } from '@sanctum/sdk';
+import { createClient, SanctumError } from '@sanctum/sdk';
 import * as Contracts from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { contextWorkflow } from '../../sdk/examples/typescript/context-workflow.ts';
@@ -37,10 +37,8 @@ describe('v1 OpenAPI contract', () => {
   });
 
   it('pages every list with an opaque cursor and a bounded limit', () => {
-    const lists = operations.filter(op => op.output.properties?.['items'] !== undefined && op.output.properties['next_cursor'] !== undefined);
-    expect(lists.map(op => op.id).sort()).toEqual([
-      'agents.listAgents', 'context.getContextChanges', 'context.searchContext', 'meetings.getTranscript', 'meetings.listMeetings',
-    ]);
+    const lists = operations.filter(op => op.output.properties?.['next_cursor'] !== undefined);
+    expect(lists.map(op => op.id).sort()).toEqual(['agents.listAgents', 'context.getContextChanges', 'meetings.getTranscript', 'meetings.listMeetings']);
     for (const op of lists) expect(op.queryParams, op.id).toEqual(expect.arrayContaining(['cursor', 'limit']));
     expect(Schema.decodeUnknownEither(Contracts.PageLimit)(201)._tag).toBe('Left');
   });
@@ -57,8 +55,8 @@ describe('v1 OpenAPI contract', () => {
     const success: Record<string, Schema.Schema.Any> = {
       'context.getContext': Contracts.ContextSnapshot,
       'actions.requestAction': Contracts.RequestActionOutput,
-      'agents.revokeCredential': Contracts.AgentCredential,
-      'meetings.listMeetings': Schema.Struct({ items: Schema.Array(Contracts.Meeting), next_cursor: Schema.NullOr(Contracts.Cursor) }),
+      'agents.revokeCredential': Schema.Null,
+      'meetings.listMeetings': Contracts.MeetingPage,
     };
     for (const wireCase of fixture.cases) {
       expect(byId.has(wireCase.operation), wireCase.operation).toBe(true);
@@ -98,7 +96,7 @@ describe('TypeScript SDK against the running server', () => {
       const { url, domain } = yield* serveFake();
       const owner = fixtureAccess({ role: 'owner' });
       const meeting = domain.addMeeting(owner, 'Pilot review');
-      domain.addSegment(owner, 'We chose option B for the pilot.');
+      domain.addSegment(owner, meeting.id, 'We chose option B for the pilot.');
       const connect = (token: string) => createClient({ baseUrl: url, token });
       const runId = randomUUID();
       const workflow = { admin: connect(domain.token(owner)), connect, meetingId: meeting.id, runId };
@@ -139,16 +137,13 @@ describe('TypeScript SDK against the running server', () => {
           });
         }
       });
-      const seen: string[] = [];
-      yield* Effect.promise(async () => {
-        for await (const page of pages(client, 'context.searchContext', { q: 'budget', limit: 2 })) seen.push(...page.items.map(i => i.text));
-      });
-      expect(seen).toEqual([0, 1, 2, 3, 4].map(n => `budget decision ${n}`));
+      const found = yield* Effect.promise(() => client.context.searchContext({ q: 'budget', limit: 5 }));
+      expect(found.items.map(i => i.text)).toEqual([0, 1, 2, 3, 4].map(n => `budget decision ${n}`));
 
       const first = yield* Effect.promise(() => client.context.getContextChanges({ limit: 2 }));
       const rest = yield* Effect.promise(() => client.context.getContextChanges({ cursor: first.next_cursor! }));
       const replay = yield* Effect.promise(() => client.context.getContextChanges({ cursor: first.next_cursor! }));
-      expect([...first.items, ...rest.items].map(e => e.seq)).toEqual([1, 2, 3, 4, 5]);
+      expect([...first.events, ...rest.events].map(e => e.seq)).toEqual([1, 2, 3, 4, 5]);
       expect(replay).toEqual(rest);
 
       const requested = yield* Effect.promise(() =>
@@ -169,7 +164,7 @@ describe('TypeScript SDK against the running server', () => {
       const { url, domain } = yield* serveFake();
       const owner = fixtureAccess();
       const meeting = domain.addMeeting(owner, 'Review');
-      const segment = domain.addSegment(owner, 'Decision: ship B.');
+      const segment = domain.addSegment(owner, meeting.id, 'Decision: ship B.');
       const client = createClient({ baseUrl: url, token: domain.token(owner) });
       const added = yield* Effect.promise(() =>
         client.context.addContextItem({ meeting_id: meeting.id, expected_revision: 0, kind: 'decision', text: 'Ship B', sources: [{ segment_id: segment.id, start_ms: 0, end_ms: 800 }], idempotency_key: 'ui-1' }),
@@ -177,9 +172,9 @@ describe('TypeScript SDK against the running server', () => {
       const review = yield* Effect.promise(() => loadReview(client, meeting.id));
       expect(review.context).toMatchObject({ status: 'ok', data: { revision: 1, items: [added] } });
       expect(review.notes).toMatchObject({ status: 'ok', data: { decision: [added] } });
-      expect(review.transcript).toMatchObject({ status: 'ok', data: { items: [{ id: segment.id }] } });
+      expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ id: segment.id }] } });
       expect(review.recording).toMatchObject({ status: 'ok', data: { meeting_id: meeting.id } });
-      expect(review.activity).toMatchObject({ status: 'ok', data: { items: [{ change: 'item_added', item: { id: added.id } }] } });
+      expect(review.activity).toMatchObject({ status: 'ok', data: { events: [{ change: 'item_added', item: { id: added.id } }] } });
       expect(review.memory).toEqual({ status: 'ok', data: [] });
     }),
   );

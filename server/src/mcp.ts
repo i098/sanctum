@@ -16,11 +16,11 @@ import {
   AccessScopeName,
   Forbidden,
   PrincipalId,
-  SanctumApi,
   Unauthenticated,
   Unavailable,
   WorkspaceId,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Config, Context, Effect, Either, JSONSchema, Layer, Option, ParseResult, Schema, SchemaAST } from 'effect';
 import { createClient, type OperationId, SanctumError } from '@sanctum/sdk';
 import { createRemoteJWKSet, type JWTVerifyGetKey, jwtVerify } from 'jose';
@@ -55,8 +55,10 @@ const signatures = (schema: Option.Option<{ readonly ast: SchemaAST.AST }>) =>
   Option.match(schema, {
     onNone: () => [],
     onSome: ({ ast }) => {
-      if (!SchemaAST.isTypeLiteral(ast)) throw new Error('MCP tools need object-shaped path, query and payload schemas');
-      return ast.propertySignatures;
+      // A struct with defaulted fields is a transformation; callers send its encoded side.
+      const struct = SchemaAST.isTransformation(ast) ? ast.from : ast;
+      if (!SchemaAST.isTypeLiteral(struct)) throw new Error('MCP tools need object-shaped path, query and payload schemas');
+      return struct.propertySignatures;
     },
   });
 

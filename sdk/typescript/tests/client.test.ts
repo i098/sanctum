@@ -11,7 +11,7 @@ interface WireCase {
   readonly operation: OperationId;
   readonly input: never;
   readonly exchanges: ReadonlyArray<Exchange>;
-  readonly result: { readonly ok?: Record<string, unknown>; readonly error?: Record<string, unknown> };
+  readonly result: { readonly ok?: Record<string, unknown> | null; readonly error?: Record<string, unknown> };
 }
 const fixture: { token: string; cases: ReadonlyArray<WireCase> } = JSON.parse(
   readFileSync(new URL('../../fixtures/wire-cases.json', import.meta.url), 'utf8'),
@@ -32,7 +32,8 @@ function replay(exchanges: ReadonlyArray<Exchange>) {
     });
     const next = exchanges[sent.length - 1];
     if (next === undefined) throw new Error('Unexpected extra request');
-    return new Response(JSON.stringify(next.response.body), { status: next.response.status, headers: { 'content-type': 'application/json' } });
+    const body = next.response.body === null ? null : JSON.stringify(next.response.body);
+    return new Response(body, { status: next.response.status, headers: { 'content-type': 'application/json' } });
   };
   return { sent, fetch };
 }
@@ -46,7 +47,7 @@ describe('TypeScript SDK wire behavior (shared with the Python SDK)', () => {
       (error: unknown) => ({ error }),
     );
     expect(sent).toEqual(wireCase.exchanges.map(e => ({ ...e.request, authorization: `Bearer ${fixture.token}` })));
-    if (wireCase.result.ok) expect(outcome).toMatchObject({ ok: wireCase.result.ok });
+    if ('ok' in wireCase.result) expect(outcome).toMatchObject({ ok: wireCase.result.ok });
     else {
       const { status, code, retryable, ...details } = wireCase.result.error!;
       expect('error' in outcome && outcome.error).toBeInstanceOf(SanctumError);
@@ -56,7 +57,7 @@ describe('TypeScript SDK wire behavior (shared with the Python SDK)', () => {
 });
 
 describe('TypeScript SDK transport', () => {
-  const page = (items: ReadonlyArray<number>, next_cursor: string | null) => ({ items, next_cursor });
+  const page = (meetings: ReadonlyArray<number>, next_cursor: string | null) => ({ meetings, next_cursor });
 
   it('retries a read after a network failure and stops after maxAttempts', async () => {
     let calls = 0;
@@ -99,7 +100,7 @@ describe('TypeScript SDK transport', () => {
       fetch: async input => (cursors.push(new URL(String(input)).searchParams.get('cursor')), Response.json(responses.shift())),
     });
     const seen: unknown[] = [];
-    for await (const p of pages(client, 'meetings.listMeetings', { limit: 2 })) seen.push(...p.items);
+    for await (const p of pages(client, 'meetings.listMeetings', { limit: 2 })) seen.push(...p.meetings);
     expect(seen).toEqual([1, 2, 3]);
     expect(cursors).toEqual([null, 'o2', 'o3']);
   });

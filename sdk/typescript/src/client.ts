@@ -124,16 +124,19 @@ export function createClient(options: ClientOptions): SanctumClient {
 }
 
 type Paged = {
-  [Id in OperationId]: Output<Id> extends { readonly items: ReadonlyArray<unknown>; readonly next_cursor: string | null } ? Id : never;
+  [Id in OperationId]: Output<Id> extends { readonly next_cursor: string | null } ? Id : never;
 }[OperationId];
 
-/** Cursor pages in order; stops on a null cursor or an empty page. Keep `next_cursor` to resume later. */
+/**
+ * Cursor pages in order; stops on a null cursor or an empty page (every list in it empty, since
+ * each operation names its own: `meetings`, `segments`, `events`, `items`). Keep `next_cursor` to resume later.
+ */
 export async function* pages<Id extends Paged>(client: SanctumClient, operation: Id, input: Input<Id>, options?: CallOptions) {
   let next: Input<Id> = input;
   for (;;) {
     const page: Output<Paged> = await client.call(operation, next, options);
     yield page as Output<Id>;
-    if (page.next_cursor === null || page.items.length === 0) return;
+    if (page.next_cursor === null || Object.values(page).every(value => !Array.isArray(value) || value.length === 0)) return;
     next = { ...next, cursor: page.next_cursor };
   }
 }

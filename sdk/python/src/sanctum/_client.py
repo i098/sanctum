@@ -63,6 +63,11 @@ def _is_safe(op: Operation, input: Mapping[str, Any]) -> bool:
     return op.method == "GET" or isinstance(input.get("idempotency_key"), str)
 
 
+def _is_last(page: Mapping[str, Any]) -> bool:
+    """A null cursor or an empty page ends paging; each operation names its own list (``meetings``, ``events``, ...)."""
+    return page["next_cursor"] is None or not any(isinstance(value, list) and value for value in page.values())
+
+
 def _groups(call: Callable[[str, Mapping[str, Any]], Any]) -> dict[str, SimpleNamespace]:
     """`client.<group>.<snake_case_operation>(input)` for every generated operation ID."""
     groups: dict[str, SimpleNamespace] = {}
@@ -113,7 +118,7 @@ class Client:
         while True:
             page = self.call(operation, request)
             yield page
-            if page["next_cursor"] is None or not page["items"]:
+            if _is_last(page):
                 return
             request["cursor"] = page["next_cursor"]
 
@@ -170,7 +175,7 @@ class AsyncClient:
         while True:
             page = await self.call(operation, request)
             yield page
-            if page["next_cursor"] is None or not page["items"]:
+            if _is_last(page):
                 return
             request["cursor"] = page["next_cursor"]
 

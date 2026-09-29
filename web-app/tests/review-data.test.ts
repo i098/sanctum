@@ -32,18 +32,21 @@ describe('loadReview', () => {
   it('fills all six frames from the v1 operations', async () => {
     const { client, asked } = server({
       [`/api/v1/meetings/${MEETING}/context`]: context,
-      [`/api/v1/meetings/${MEETING}/transcript`]: { status: 200, body: { items: [{ id: 's1', text: 'Hello' }], next_cursor: null } },
+      [`/api/v1/meetings/${MEETING}/transcript`]: { status: 200, body: { segments: [{ id: 's1', text: 'Hello' }], speakers: [], next_cursor: null } },
       [`/api/v1/meetings/${MEETING}/recording-access`]: { status: 200, body: { url: 'https://objects.test/a.wav', gaps: [] } },
-      '/api/v1/context/changes': { status: 200, body: { items: [{ seq: 4, change: 'item_added' }], next_cursor: 'c4' } },
+      '/api/v1/context/changes': {
+        status: 200,
+        body: { events: [{ seq: 4, change: 'item_added', meeting_id: MEETING }, { seq: 5, change: 'item_added', meeting_id: null }], next_cursor: 'c5' },
+      },
     });
     const review = await loadReview(client, MEETING);
     expect(review.notes).toEqual({ status: 'ok', data: { decision: [context.body.items[0]], commitment: [], open_question: [context.body.items[1]] } });
     expect(review.memory).toEqual({ status: 'ok', data: [context.body.items[0], context.body.items[2]] });
     expect(review.context).toMatchObject({ status: 'ok', data: { revision: 4 } });
-    expect(review.transcript).toMatchObject({ status: 'ok', data: { items: [{ text: 'Hello' }] } });
+    expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ text: 'Hello' }] } });
     expect(review.recording).toMatchObject({ status: 'ok', data: { url: 'https://objects.test/a.wav' } });
-    expect(review.activity).toMatchObject({ status: 'ok', data: { items: [{ change: 'item_added' }] } });
-    expect(asked).toContain(`/api/v1/context/changes?meeting_id=${MEETING}&limit=50`);
+    expect(review.activity).toEqual({ status: 'ok', data: { events: [{ seq: 4, change: 'item_added', meeting_id: MEETING }], next_cursor: 'c5' } });
+    expect(asked).toContain('/api/v1/context/changes?limit=50');
   });
 
   it('reports a failing frame truthfully without blanking the others', async () => {

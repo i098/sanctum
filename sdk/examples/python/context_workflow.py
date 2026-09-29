@@ -21,9 +21,9 @@ def context_workflow(admin: Client, connect: Callable[[str], Client], meeting_id
     # 1. Read the meeting and the first transcript segment; cite it by ID.
     meeting = admin.meetings.get_meeting({"meeting_id": meeting_id})
     first_page = next(admin.pages("meetings.getTranscript", {"meeting_id": meeting_id, "limit": 1}))
-    if not first_page["items"]:
+    if not first_page["segments"]:
         raise RuntimeError("Meeting has no final transcript yet")
-    segment = first_page["items"][0]
+    segment = first_page["segments"][0]
     source = admin.context.get_source({"source_id": segment["id"]})
 
     # 2. Append a research observation at the snapshot revision; a retry with the same key is a no-op.
@@ -52,7 +52,7 @@ def context_workflow(admin: Client, connect: Callable[[str], Client], meeting_id
         )
 
     # 4. Consume durable changes after the snapshot's cursor.
-    changes = admin.context.get_context_changes({"meeting_id": meeting_id, "cursor": context["changes_cursor"]})
+    changes = admin.context.get_context_changes({"cursor": context["changes_cursor"]})
 
     # 5. Discover one integration action, inspect it, request it and read the receipt.
     matches = admin.integrations.search_integration_actions({"intent": "tracking issue", "limit": 1})["matches"]
@@ -71,15 +71,18 @@ def context_workflow(admin: Client, connect: Callable[[str], Client], meeting_id
     )
     receipt = admin.actions.get_action({"action_id": requested["action_id"]})
 
-    # 6. Create a read-only agent credential, use it, revoke it, and observe the refusal.
+    # 6. Create a read-only agent credential for this meeting, use it, revoke it, and observe the refusal.
     created = admin.agents.create_agent(
-        {"display_name": f"Reader {run_id}", "scopes": ["context:read"], "meeting_ids": [meeting_id], "expires_at": None}
+        {
+            "display_name": f"Reader {run_id}",
+            "scopes": ["context:read"],
+            "meetings": {"kind": "allowlist", "meeting_ids": [meeting_id]},
+            "expires_at": None,
+        }
     )
     agent = connect(created["token"])
     agent_revision = agent.context.get_context({"meeting_id": meeting_id})["revision"]
-    admin.agents.revoke_credential(
-        {"agent_id": created["credential"]["agent_id"], "credential_id": created["credential"]["credential_id"]}
-    )
+    admin.agents.revoke_credential({"agent_id": created["agent"]["id"], "key_id": created["credential"]["id"]})
     try:
         agent.context.get_context({"meeting_id": meeting_id})
         after_revoke = "still allowed"
@@ -92,7 +95,7 @@ def context_workflow(admin: Client, connect: Callable[[str], Client], meeting_id
         "added_id": added["id"],
         "retry_returned_same_item": retried["id"] == added["id"],
         "rebased_revision": rebased_revision,
-        "changes": [change["change"] for change in changes["items"]],
+        "changes": [change["change"] for change in changes["events"]],
         "action_state": receipt["state"],
         "agent_saw_revision": agent_revision,
         "after_revoke": after_revoke,

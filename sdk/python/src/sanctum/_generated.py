@@ -44,14 +44,50 @@ class AccessScopeMeetings2(TypedDict):
     meeting_ids: list[str]
 
 
+class RegisterListener(TypedDict):
+    name: str
+    mode: Literal["room", "laptop"]
+    capabilities: dict[str, Any]
+
+
+class Listener(TypedDict):
+    id: str
+    workspace_id: str
+    name: str
+    mode: Literal["room", "laptop"]
+    state: Literal["stopped", "starting", "listening", "reconnecting", "paused", "degraded"]
+    lease_generation: int
+    lease_expires_at: str | None
+    current_epoch_id: str | None
+    last_heartbeat_at: str | None
+
+
+class HeartbeatInput(TypedDict):
+    lease_generation: int
+    state: Literal["stopped", "starting", "listening", "reconnecting", "paused", "degraded"]
+    epoch_id: str | None
+    buffered_chunks: int
+    storage_bytes_free: float | None
+    listener_id: str
+
+
+class HeartbeatReceipt(TypedDict):
+    lease_generation: int
+    lease_expires_at: str
+    owner: bool
+
+
 class ListMeetingsInput(TypedDict):
     state: NotRequired[Literal["provisional", "active", "closing", "closed", "interrupted"]]
+    from: NotRequired[str]
+    to: NotRequired[str]
+    participant: NotRequired[str]
     cursor: NotRequired[str]
     limit: NotRequired[int]
 
 
-class ListMeetingsOutput(TypedDict):
-    items: list[Meeting]
+class MeetingPage(TypedDict):
+    meetings: list[Meeting]
     next_cursor: str | None
 
 
@@ -75,8 +111,43 @@ class MeetingProcessing(TypedDict):
     recording: Literal["pending", "partial", "complete", "failed"]
 
 
+class MergeMeetings(TypedDict):
+    target: MergeMeetingsTarget
+    source: MergeMeetingsSource
+
+
+class MergeMeetingsTarget(TypedDict):
+    meeting_id: str
+    expected_revision: int
+
+
+class MergeMeetingsSource(TypedDict):
+    meeting_id: str
+    expected_revision: int
+
+
 class GetMeetingInput(TypedDict):
     meeting_id: str
+
+
+class CloseMeetingInput(TypedDict):
+    meeting_id: str
+
+
+class SplitMeetingInput(TypedDict):
+    expected_revision: int
+    at: SplitMeetingInputAt
+    meeting_id: str
+
+
+class SplitMeetingInputAt(TypedDict):
+    epoch_id: str
+    sample: int
+
+
+class SplitResult(TypedDict):
+    earlier: Meeting
+    later: Meeting
 
 
 class GetTranscriptInput(TypedDict):
@@ -85,8 +156,11 @@ class GetTranscriptInput(TypedDict):
     limit: NotRequired[int]
 
 
-class GetTranscriptOutput(TypedDict):
-    items: list[TranscriptSegment]
+class TranscriptPage(TypedDict):
+    meeting_id: str
+    boundary_revision: int
+    segments: list[TranscriptSegment]
+    speakers: list[SpeakerTrack]
     next_cursor: str | None
 
 
@@ -113,6 +187,20 @@ class SourceRange(TypedDict):
     sample_end: int
 
 
+class SpeakerTrack(TypedDict):
+    id: str
+    epoch_id: str
+    track: int
+    provider: str
+    provider_label: str
+    sample_start: int
+    sample_end: int
+    profile_id: str | None
+    mapping_source: Literal["enrollment", "user_confirmed"] | None
+    attribution_revision: int
+    confidence: float | None
+
+
 class RecordingAccessInput(TypedDict):
     meeting_id: str
 
@@ -123,6 +211,13 @@ class RecordingAccess(TypedDict):
     url: str
     expires_at: str
     gaps: list[SourceRange]
+
+
+class MapSpeakerInput(TypedDict):
+    speaker_track_id: str
+    profile_id: str | None
+    expected_revision: int
+    meeting_id: str
 
 
 class GetContextInput(TypedDict):
@@ -194,13 +289,11 @@ class ContextItemSupersedes(TypedDict):
 class SearchContextInput(TypedDict):
     q: str
     meeting_id: NotRequired[str]
-    cursor: NotRequired[str]
     limit: NotRequired[int]
 
 
 class SearchContextOutput(TypedDict):
     items: list[ContextItem]
-    next_cursor: str | None
 
 
 class AddContextItem(TypedDict):
@@ -214,21 +307,22 @@ class AddContextItem(TypedDict):
 
 class ReviseContextItemInput(TypedDict):
     expected_revision: int
-    text: str
-    sources: list[SegmentSource | ArtifactSource]
     idempotency_key: str
+    kind: NotRequired[Literal["decision", "commitment", "constraint", "project_fact", "preference", "open_question", "research_observation"]]
+    text: NotRequired[str]
+    sources: NotRequired[list[SegmentSource | ArtifactSource]]
+    state: NotRequired[Literal["committed", "superseded"]]
     item_id: str
 
 
 class GetContextChangesInput(TypedDict):
-    meeting_id: NotRequired[str]
     cursor: NotRequired[str]
     limit: NotRequired[int]
 
 
-class GetContextChangesOutput(TypedDict):
-    items: list[ContextEvent]
-    next_cursor: str | None
+class ContextChanges(TypedDict):
+    events: list[ContextEvent]
+    next_cursor: str
 
 
 class ContextEvent(TypedDict):
@@ -250,12 +344,28 @@ class GetSourceInput(TypedDict):
     source_id: str
 
 
-class SourceRecord(TypedDict):
+class GetSourceOutput(TypedDict):
+    kind: Literal["segment"]
     id: str
-    kind: Literal["segment", "artifact"]
-    meeting_id: str | None
+    meeting_id: str
     text: str
-    segment: TranscriptSegment | None
+    revision: int
+    speaker_label: str | None
+    source: SourceRange
+    event_at: str
+    start_ms: float
+    end_ms: float
+
+
+class GetSourceOutput2(TypedDict):
+    kind: Literal["artifact"]
+    id: str
+    meeting_id: str | None
+    title: str
+    content_type: str
+    content: str | None
+    sha256: str
+    created_at: str
 
 
 class SearchIntegrationActionsInput(TypedDict):
@@ -350,43 +460,65 @@ class ActionReceiptGrant(TypedDict):
     version: int
 
 
+class CreateAgent(TypedDict):
+    display_name: str
+    scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
+    meetings: CreateAgentMeetings | CreateAgentMeetings2
+    expires_at: str | None
+
+
+class CreateAgentMeetings(TypedDict):
+    kind: Literal["accessible"]
+
+
+class CreateAgentMeetings2(TypedDict):
+    kind: Literal["allowlist"]
+    meeting_ids: list[str]
+
+
+class CreatedAgent(TypedDict):
+    agent: Principal
+    credential: AgentCredential
+    token: str
+
+
+class AgentCredential(TypedDict):
+    id: str
+    scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
+    meetings: AgentCredentialMeetings | AgentCredentialMeetings2
+    expires_at: str | None
+    revoked_at: str | None
+    last_used_at: str | None
+    created_at: str
+
+
+class AgentCredentialMeetings(TypedDict):
+    kind: Literal["accessible"]
+
+
+class AgentCredentialMeetings2(TypedDict):
+    kind: Literal["allowlist"]
+    meeting_ids: list[str]
+
+
 class ListAgentsInput(TypedDict):
     cursor: NotRequired[str]
     limit: NotRequired[int]
 
 
-class ListAgentsOutput(TypedDict):
-    items: list[AgentCredential]
+class AgentPage(TypedDict):
+    items: list[AgentWithCredential]
     next_cursor: str | None
 
 
-class AgentCredential(TypedDict):
-    credential_id: str
-    agent_id: str
-    display_name: str
-    scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
-    meeting_ids: list[str] | None
-    created_at: str
-    expires_at: str | None
-    revoked_at: str | None
-    last_used_at: str | None
-
-
-class CreateAgent(TypedDict):
-    display_name: str
-    scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
-    meeting_ids: list[str] | None
-    expires_at: str | None
-
-
-class CreateAgentOutput(TypedDict):
+class AgentWithCredential(TypedDict):
+    agent: Principal
     credential: AgentCredential
-    token: str
 
 
 class RevokeCredentialInput(TypedDict):
     agent_id: str
-    credential_id: str
+    key_id: str
 
 
 # Each entry: input TypedDict -> output TypedDict, then the route.
@@ -397,25 +529,37 @@ OPERATIONS: dict[str, Operation] = {
     "health.readyz": Operation("GET", "/readyz", (), (), False),
     # dict[str, Any] -> AccessScope
     "session.getSession": Operation("GET", "/api/v1/session", (), (), False),
-    # ListMeetingsInput -> ListMeetingsOutput
-    "meetings.listMeetings": Operation("GET", "/api/v1/meetings", (), ("state", "cursor", "limit", ), False),
+    # RegisterListener -> Listener
+    "listeners.registerListener": Operation("POST", "/api/v1/listeners", (), (), True),
+    # HeartbeatInput -> HeartbeatReceipt
+    "listeners.heartbeat": Operation("POST", "/api/v1/listeners/{listener_id}/heartbeat", ("listener_id", ), (), True),
+    # ListMeetingsInput -> MeetingPage
+    "meetings.listMeetings": Operation("GET", "/api/v1/meetings", (), ("state", "from", "to", "participant", "cursor", "limit", ), False),
+    # MergeMeetings -> Meeting
+    "meetings.mergeMeetings": Operation("POST", "/api/v1/meetings/merge", (), (), True),
     # GetMeetingInput -> Meeting
     "meetings.getMeeting": Operation("GET", "/api/v1/meetings/{meeting_id}", ("meeting_id", ), (), False),
-    # GetTranscriptInput -> GetTranscriptOutput
+    # CloseMeetingInput -> Meeting
+    "meetings.closeMeeting": Operation("POST", "/api/v1/meetings/{meeting_id}/close", ("meeting_id", ), (), False),
+    # SplitMeetingInput -> SplitResult
+    "meetings.splitMeeting": Operation("POST", "/api/v1/meetings/{meeting_id}/split", ("meeting_id", ), (), True),
+    # GetTranscriptInput -> TranscriptPage
     "meetings.getTranscript": Operation("GET", "/api/v1/meetings/{meeting_id}/transcript", ("meeting_id", ), ("cursor", "limit", ), False),
     # RecordingAccessInput -> RecordingAccess
     "meetings.recordingAccess": Operation("POST", "/api/v1/meetings/{meeting_id}/recording-access", ("meeting_id", ), (), False),
+    # MapSpeakerInput -> list[SpeakerTrack]
+    "meetings.mapSpeaker": Operation("POST", "/api/v1/meetings/{meeting_id}/speakers/map", ("meeting_id", ), (), True),
     # GetContextInput -> ContextSnapshot
     "context.getContext": Operation("GET", "/api/v1/meetings/{meeting_id}/context", ("meeting_id", ), (), False),
     # SearchContextInput -> SearchContextOutput
-    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "meeting_id", "cursor", "limit", ), False),
+    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "meeting_id", "limit", ), False),
     # AddContextItem -> ContextItem
     "context.addContextItem": Operation("POST", "/api/v1/context/items", (), (), True),
     # ReviseContextItemInput -> ContextItem
     "context.reviseContextItem": Operation("PATCH", "/api/v1/context/items/{item_id}", ("item_id", ), (), True),
-    # GetContextChangesInput -> GetContextChangesOutput
-    "context.getContextChanges": Operation("GET", "/api/v1/context/changes", (), ("meeting_id", "cursor", "limit", ), False),
-    # GetSourceInput -> SourceRecord
+    # GetContextChangesInput -> ContextChanges
+    "context.getContextChanges": Operation("GET", "/api/v1/context/changes", (), ("cursor", "limit", ), False),
+    # GetSourceInput -> GetSourceOutput | GetSourceOutput2
     "context.getSource": Operation("GET", "/api/v1/sources/{source_id}", ("source_id", ), (), False),
     # SearchIntegrationActionsInput -> SearchIntegrationActionsOutput
     "integrations.searchIntegrationActions": Operation("GET", "/api/v1/integrations/actions", (), ("intent", "app", "limit", ), False),
@@ -425,10 +569,10 @@ OPERATIONS: dict[str, Operation] = {
     "actions.requestAction": Operation("POST", "/api/v1/actions", (), (), True),
     # GetActionInput -> ActionReceipt
     "actions.getAction": Operation("GET", "/api/v1/actions/{action_id}", ("action_id", ), (), False),
-    # ListAgentsInput -> ListAgentsOutput
-    "agents.listAgents": Operation("GET", "/api/v1/agents", (), ("cursor", "limit", ), False),
-    # CreateAgent -> CreateAgentOutput
+    # CreateAgent -> CreatedAgent
     "agents.createAgent": Operation("POST", "/api/v1/agents", (), (), True),
-    # RevokeCredentialInput -> AgentCredential
-    "agents.revokeCredential": Operation("DELETE", "/api/v1/agents/{agent_id}/credentials/{credential_id}", ("agent_id", "credential_id", ), (), False),
+    # ListAgentsInput -> AgentPage
+    "agents.listAgents": Operation("GET", "/api/v1/agents", (), ("cursor", "limit", ), False),
+    # RevokeCredentialInput -> None
+    "agents.revokeCredential": Operation("DELETE", "/api/v1/agents/{agent_id}/credentials/{key_id}", ("agent_id", "key_id", ), (), False),
 }

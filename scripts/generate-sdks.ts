@@ -4,9 +4,10 @@
  * Usage: node scripts/generate-sdks.ts [--check]
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { OpenApiJsonSchema } from '@effect/platform';
+import { HttpApi, OpenApiJsonSchema } from '@effect/platform';
 import * as Contracts from '@sanctum/contracts';
-import { Schema } from 'effect';
+import { SanctumApi } from '@sanctum/contracts/api';
+import { Option, Schema, SchemaAST } from 'effect';
 import { openApiDocument } from '../server/src/api.ts';
 
 /** The JSON Schema subset Effect emits for wire contracts. */
@@ -21,7 +22,7 @@ export interface JsonSchema {
   readonly additionalProperties?: boolean | JsonSchema;
 }
 
-type Content = { readonly content?: { readonly 'application/json': { readonly schema: JsonSchema } } };
+type Content = { readonly content?: { readonly 'application/json'?: { readonly schema: JsonSchema } } };
 interface Parameter {
   readonly name: string;
   readonly in: 'path' | 'query';
@@ -53,37 +54,58 @@ export interface Operation {
 
 const refName = (schema: JsonSchema) => schema.$ref?.split('/').pop();
 export const deref = (schema: JsonSchema): JsonSchema => spec.components.schemas[refName(schema) ?? ''] ?? schema;
+const jsonOf = (content: Content | undefined) => content?.content?.['application/json']?.schema;
+
+const isNumeric = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isNumberKeyword(ast) || (SchemaAST.isRefinement(ast) && isNumeric(ast.from)) || (SchemaAST.isUnion(ast) && ast.types.some(isNumeric));
+
+/** `group.endpoint.param` of every query parameter that decodes to a number; the OpenAPI document only shows its text form. */
+const numericQuery = new Set<string>();
+HttpApi.reflect(SanctumApi, {
+  onGroup: () => {},
+  onEndpoint: ({ group, endpoint }) => {
+    if (Option.isNone(endpoint.urlParamsSchema)) return;
+    const { ast } = endpoint.urlParamsSchema.value;
+    // A struct with defaulted fields is a transformation; callers send its encoded side.
+    for (const p of SchemaAST.getPropertySignatures(SchemaAST.isTransformation(ast) ? ast.from : ast)) {
+      if (isNumeric(SchemaAST.typeAST(p.type))) numericQuery.add(`${group.identifier}.${endpoint.name}.${String(p.name)}`);
+    }
+  },
+});
 
 /** Flattens path, query and JSON body into one input object, as the SDKs and MCP tools accept it. */
 function inputOf(op: OpenApiOperation, params: ReadonlyArray<Parameter>): JsonSchema {
-  const body = deref(op.requestBody?.content?.['application/json'].schema ?? {});
+  const body = deref(jsonOf(op.requestBody) ?? {});
   if (params.length === 0 && op.requestBody) return body;
   const properties: Record<string, JsonSchema> = { ...body.properties };
   const required = [...(body.required ?? [])];
   for (const param of params) {
     if (param.name in properties) throw new Error(`${op.operationId}: ${param.name} is both a parameter and a body field`);
     // Query strings carry numbers as text; SDK callers pass the number.
-    properties[param.name] = refName(param.schema) === 'NumberFromString' ? { type: 'integer' } : param.schema;
+    properties[param.name] = numericQuery.has(`${op.operationId}.${param.name}`) ? { type: 'integer' } : param.schema;
     if (param.required) required.push(param.name);
   }
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
 export const operations: ReadonlyArray<Operation> = Object.entries(spec.paths).flatMap(([path, methods]) =>
-  Object.entries(methods).map(([method, op]) => {
-    const params = op.parameters ?? [];
-    const success = Object.entries(op.responses).find(([status]) => status.startsWith('2'))?.[1];
-    return {
-      id: op.operationId,
-      method: method.toUpperCase(),
-      path,
-      pathParams: params.filter(p => p.in === 'path').map(p => p.name),
-      queryParams: params.filter(p => p.in === 'query').map(p => p.name),
-      body: op.requestBody !== undefined,
-      input: inputOf(op, params),
-      output: success?.content?.['application/json'].schema ?? { type: 'null' },
-    };
-  }),
+  Object.entries(methods)
+    // The SDKs speak JSON; binary uploads (the listener chunk PUT) stay with the device client.
+    .filter(([, op]) => op.requestBody === undefined || op.requestBody.content?.['application/json'] !== undefined)
+    .map(([method, op]) => {
+      const params = op.parameters ?? [];
+      const success = Object.entries(op.responses).find(([status]) => status.startsWith('2'))?.[1];
+      return {
+        id: op.operationId,
+        method: method.toUpperCase(),
+        path,
+        pathParams: params.filter(p => p.in === 'path').map(p => p.name),
+        queryParams: params.filter(p => p.in === 'query').map(p => p.name),
+        body: op.requestBody !== undefined,
+        input: inputOf(op, params),
+        output: jsonOf(success) ?? { type: 'null' },
+      };
+    }),
 );
 
 // Names: every component, then every exported contract schema that renders as an object.

@@ -1,38 +1,35 @@
 import { expect, type Page, test } from '@playwright/test';
 
-interface Credential {
-  credential_id: string;
-  agent_id: string;
-  display_name: string;
-  scopes: string[];
-  meeting_ids: null;
-  created_at: string;
-  expires_at: null;
-  revoked_at: string | null;
-  last_used_at: null;
+interface Agent {
+  agent: { id: string; kind: 'agent'; display_name: string };
+  credential: { id: string; scopes: string[]; meetings: unknown; expires_at: null; revoked_at: string | null; last_used_at: null; created_at: string };
 }
 
 /** In-page stand-in for the v1 agents routes; records every write the dialog sends. */
 async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
-  const credentials: Credential[] = [];
+  const agents: Agent[] = [];
   const writes: Array<{ method: string; path: string; body: unknown }> = [];
   await page.route('**/api/v1/agents**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (request.method() === 'GET') return route.fulfill({ json: { items: credentials, next_cursor: null } });
+    if (request.method() === 'GET') return route.fulfill({ json: { items: agents, next_cursor: null } });
     writes.push({ method: request.method(), path, body: request.postDataJSON() });
     if (request.method() === 'POST') {
       if (options.failCreate) return route.fulfill({ status: 403, json: { code: 'forbidden', message: 'Requires workspace:admin', retryable: false } });
-      const body = request.postDataJSON();
-      const credential = { credential_id: `c${credentials.length + 1}`, agent_id: `a${credentials.length + 1}`, ...body, created_at: '2026-09-29T00:00:00Z', revoked_at: null, last_used_at: null };
-      credentials.push(credential);
-      return route.fulfill({ status: 201, json: { credential, token: 'agent_secret_once' } });
+      const { display_name, scopes, meetings } = request.postDataJSON();
+      const n = agents.length + 1;
+      const created: Agent = {
+        agent: { id: `a${n}`, kind: 'agent', display_name },
+        credential: { id: `c${n}`, scopes, meetings, expires_at: null, revoked_at: null, last_used_at: null, created_at: '2026-09-29T00:00:00Z' },
+      };
+      agents.push(created);
+      return route.fulfill({ status: 201, json: { ...created, token: 'agent_secret_once' } });
     }
-    const credential = credentials.find(c => path.endsWith(`/credentials/${c.credential_id}`))!;
+    const { credential } = agents.find(a => path.endsWith(`/credentials/${a.credential.id}`))!;
     credential.revoked_at = '2026-09-29T00:05:00Z';
-    return route.fulfill({ json: credential });
+    return route.fulfill({ status: 204 });
   });
-  return { credentials, writes };
+  return { agents, writes };
 }
 
 test('creates a scoped agent, shows its token once, and revokes it', async ({ page }) => {
@@ -50,7 +47,7 @@ test('creates a scoped agent, shows its token once, and revokes it', async ({ pa
   expect(api.writes[0]).toEqual({
     method: 'POST',
     path: '/api/v1/agents',
-    body: { display_name: 'Research bot', scopes: ['context:read', 'context:write'], meeting_ids: null, expires_at: null },
+    body: { display_name: 'Research bot', scopes: ['context:read', 'context:write'], meetings: { kind: 'accessible' }, expires_at: null },
   });
 
   page.once('dialog', confirm => confirm.accept());

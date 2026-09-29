@@ -34,7 +34,9 @@ export async function loadReview(client: SanctumClient, meeting_id: string, sign
     settle(snapshot),
     settle(client.meetings.getTranscript({ meeting_id, limit: 200 }, options)),
     settle(client.meetings.recordingAccess({ meeting_id }, options)),
-    settle(client.context.getContextChanges({ meeting_id, limit: 50 }, options)),
+    // ponytail: the changes feed has no meeting filter, so this keeps this meeting's events among the workspace's
+    // first 50; ask the context slice for a meeting filter before Review serves long-lived workspaces.
+    settle(client.context.getContextChanges({ limit: 50 }, options).then(changes => ({ ...changes, events: changes.events.filter(event => event.meeting_id === meeting_id) }))),
   ]);
   if (context.status === 'error') return { notes: context, transcript, recording, memory: context, context, activity };
   const items = context.data.items;
