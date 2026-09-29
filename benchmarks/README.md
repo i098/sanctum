@@ -52,7 +52,10 @@ It runs three modes:
 
 - `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets a fresh seeded database.
 - `open_loop_sweep`: `pcm_ingest` at the manifest's offered frame rates, then doubling, for 2 s per rate until achieved throughput falls below 95% of the offered rate.
-- `long_run`: `pcm_ingest` at 3,200 frames/s (64 listeners) for `--soak-seconds`; RSS growth from the end of a 10% warm-up to the end must stay within 16 MiB.
+- `long_run`: `pcm_ingest` at 3,200 frames/s for `--soak-seconds`; RSS growth from the end of a 10% warm-up to the end must stay within 16 MiB.
+
+Every open-loop run is one sequential stream of frames, so its records carry `offered_load.concurrency: 1`.
+The listener count a rate models at 50 frames/s per listener (64 at 3,200 frames/s) is `parameters.equivalent_listeners_at_50fps`; no run drives concurrent listeners.
 
 Open-loop latency counts from each frame's scheduled arrival, so a stall cannot hide tail latency; the driver sleeps only when at least 1 ms ahead.
 The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, their MySQL end states differ, or a long run exceeds its bound.
@@ -66,39 +69,40 @@ Both result files come from uncontrolled hosts: they are not reference-hardware 
 
 [results/typescript-52866cd-local.jsonl](results/typescript-52866cd-local.jsonl) holds one full-scale TypeScript-only run at commit `52866cd` (SHA-256 `a3c9a570f5cc641f09d23aeebaf6108c23f6efeccf3be91df461352ba54111e1`).
 
-[results/rust-vs-typescript-bf12035-uncontrolled.jsonl](results/rust-vs-typescript-bf12035-uncontrolled.jsonl) holds one matched run of both implementations at commit `bf12035` (file SHA-256 `deb3bebdf3010e5a6ad7b5d2b482bc0813d5365d5fa7895df8ecc04fb4ad1083`): 38 records, zero failed operations.
-Commits after `bf12035` change only documentation and make the runner stamp the manifest host on every record (still `null` here).
+[results/rust-vs-typescript-c24a695-uncontrolled.jsonl](results/rust-vs-typescript-c24a695-uncontrolled.jsonl) holds one matched run of both implementations at commit `c24a695` (file SHA-256 `01add9d9e34fa688ded47ad95f471b71208a25aa8d0e6c70b75356cab632b782`): 38 records, zero failed operations.
+Commits after `c24a695` change only documentation.
+An earlier run at `bf12035` was withdrawn because its open-loop records gave the modelled listener count as `offered_load.concurrency`.
 
-- Source SHA-256: TypeScript `11a5aab7a376c8723bf4f85304198a33d7e5ab75a86fd8f1e758de5d57da67f2`, Rust `752a23c1fd96b66ef2310c832492f82bba97f82fe87203d4dd429448e0d38143`.
+- Source SHA-256: TypeScript `d5c2a283720bf7e65cc884c41afe533d4fb7ee6b4f3ad898f1078798d340144d`, Rust `a3c84cd16b59ce5b0d385428bb7bf8af0560873e86b6158f9699662e15d33061`.
 - Fixture SHA-256, identical for both implementations: `pcm_ingest` `63faf10d…82c0`, `cosine_ranking` `cde45701…c941`, `archive_streaming` `d2203657…ae10`, `transcript_ingest` `9875572f…d893`, `context_read_write` `5feceb66…57e9` (full values in each record).
 - MySQL end-state fingerprint, identical for both: SHA-256 `8b07c217fbbe4d06d9c26eeddb1200b9d33ca45bd0ceb8f4140e838d2db5f282`.
-- Host: shared 8-core virtual machine (Intel Haswell class, no TSX, 23 GiB RAM) running other agents' builds and tests, load average 4.6 at the start and 2.4 at the end; MySQL 8.4 server shared with other test runs.
+- Host: shared 8-core virtual machine (Intel Haswell class, no TSX, 23 GiB RAM) running other agents' builds and tests, load average 4.4 at the start and 2.4 at the end; MySQL 8.4 server shared with other test runs.
 - Runtimes: Node.js 24.19.0 (V8 13.6.233.17); rustc 1.97.1 release build (opt-level 3, thin LTO, one codegen unit).
 
 | Workload | Phase | TS ops/s | Rust ops/s | TS p50 / p95 / p99 ms | Rust p50 / p95 / p99 ms | CPU % TS / Rust | Peak RSS MiB TS / Rust |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `pcm_ingest` (50,000 frames) | steady | 455,765 | 3,988,050 | 0.001 / 0.004 / 0.012 | 0.000 / 0.000 / 0.000 | 216 / 99 | 308 / 4 |
-| `cosine_ranking` (10,000 x 1,024) | cold | 9.7 | 69.8 | 102.7 / 102.7 / 102.7 | 14.2 / 14.2 / 14.2 | 217 / 100 | 331 / 44 |
-| `cosine_ranking` (10,000 x 1,024) | steady | 15.6 | 67.8 | 61.1 / 74.8 / 131.3 | 14.5 / 16.2 / 22.0 | 99 / 98 | 332 / 44 |
-| `archive_streaming` (24 x 30 s) | steady | 42.2 | 44.9 | 18.9 / 26.8 / 123.4 | 21.5 / 29.9 / 32.6 | 104 / 76 | 320 / 11 |
-| `transcript_ingest` (2,000) | steady | 60.7 | 83.3 | 15.0 / 25.8 / 31.7 | 11.8 / 16.8 / 20.1 | 47 / 11 | 441 / 10 |
-| `context_read_write` (5,000) | steady | 240.0 | 351.1 | 2.6 / 11.6 / 16.2 | 1.7 / 8.3 / 11.3 | 66 / 19 | 490 / 113 |
+| `pcm_ingest` (50,000 frames) | steady | 551,992 | 3,706,470 | 0.001 / 0.004 / 0.008 | 0.000 / 0.000 / 0.000 | 178 / 90 | 320 / 4 |
+| `cosine_ranking` (10,000 x 1,024) | cold | 9.1 | 68.8 | 110.0 / 110.0 / 110.0 | 14.4 / 14.4 / 14.4 | 143 / 100 | 350 / 44 |
+| `cosine_ranking` (10,000 x 1,024) | steady | 14.9 | 67.7 | 63.5 / 85.8 / 140.0 | 14.5 / 16.5 / 17.7 | 98 / 99 | 351 / 44 |
+| `archive_streaming` (24 x 30 s) | steady | 25.8 | 39.6 | 36.2 / 54.0 / 112.3 | 23.5 / 32.2 / 37.6 | 65 / 75 | 319 / 11 |
+| `transcript_ingest` (2,000) | steady | 63.2 | 82.4 | 15.3 / 21.7 / 27.6 | 12.2 / 16.6 / 19.7 | 48 / 11 | 439 / 10 |
+| `context_read_write` (5,000) | steady | 244.2 | 408.9 | 2.6 / 11.7 / 16.1 | 1.5 / 7.1 / 9.0 | 66 / 20 | 487 / 113 |
 
-Saturation (`pcm_ingest`, open loop):
+Saturation (`pcm_ingest`, open loop, one stream):
 
 | Offered frames/s | TS p99 ms | Rust p99 ms | TS achieved | Rust achieved |
 | --- | --- | --- | --- | --- |
-| 3,200 | 2.1 | 0.372 | 3,201 | 3,202 |
-| 102,400 | 5.3 | 0.724 | 102,423 | 102,397 |
-| 819,200 | 24.6 | 0.744 | 819,456 | 819,328 |
-| 1,638,400 | 1,133.5 | 14.8 | 1,042,797 (saturated) | 1,638,872 |
-| 3,276,800 | not run | 8.5 | - | 3,277,246 |
-| 6,553,600 | not run | 1,175.1 | - | 4,113,739 (saturated) |
+| 3,200 | 1.4 | 0.833 | 3,201 | 3,201 |
+| 102,400 | 4.6 | 0.399 | 102,430 | 102,429 |
+| 819,200 | 31.8 | 0.666 | 819,369 | 819,484 |
+| 1,638,400 | 1,443.4 | 0.065 | 948,210 (saturated) | 1,639,118 |
+| 3,276,800 | not run | 2.7 | - | 3,273,965 |
+| 6,553,600 | not run | 1,187.7 | - | 4,097,801 (saturated) |
 
 TypeScript sustained 819,200 offered frames/s and saturated at 1,638,400; Rust sustained 3,276,800 and saturated at 6,553,600.
 At low offered rates the p99 mostly reflects the driver's timer wake-ups on a loaded host rather than frame work.
 
-Long run (`pcm_ingest`, 300 s at 3,200 frames/s): TypeScript RSS peaked at 340 MiB and ended 144 MiB below its post-warm-up level; Rust grew 6.6 MiB, which the 7.3 MiB per-frame latency buffer of the harness accounts for.
+Long run (`pcm_ingest`, 300 s at 3,200 frames/s): TypeScript RSS grew 5.3 MiB after warm-up (peak 320 MiB); Rust grew 6.6 MiB, which the 7.3 MiB per-frame latency buffer of the harness accounts for.
 Both stayed within the declared 16 MiB bound, and both p99 latencies stayed under 1 ms.
 
 ## Status and controlled-host run
