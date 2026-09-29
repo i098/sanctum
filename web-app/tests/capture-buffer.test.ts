@@ -22,9 +22,12 @@ function parseWav(bytes: Uint8Array) {
     tags: [text(0), text(8), text(12), text(36)],
     riffSize: view.getUint32(4, true),
     format: [view.getUint16(20, true), view.getUint16(22, true), view.getUint32(24, true), view.getUint32(28, true), view.getUint16(32, true), view.getUint16(34, true)],
-    samples: Int16Array.from({ length: dataBytes / 2 }, (_, i) => view.getInt16(44 + i * 2, true)),
+    samples: new Int16Array(bytes.slice(44, 44 + dataBytes).buffer),
   };
 }
+
+/** Byte comparison; `toEqual` on 100k-element typed arrays is too slow for a loaded CI host. */
+const sameSamples = (a: Int16Array, b: Int16Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 
 class MemoryStore implements ChunkStore {
   readonly parts: PartRecord[] = [];
@@ -60,19 +63,19 @@ function assembler(store: ChunkStore, chunkSeconds: number, commitSeconds: numbe
 describe('recording worklet block writer', () => {
   it('delivers every fixture sample exactly once with a contiguous sample clock', () => {
     const fixture = syntheticPcm({ sampleRate: RATE, seconds: 1.013, toneHz: 440 });
-    const received: number[] = [];
+    const received = new Int16Array(fixture.length);
     let expectedStart = 0;
     const writer: PcmBlockWriter = new PcmBlockWriter(RATE / 20, 4, (message: WorkletMessage) => {
       if (message.type !== 'block') return;
       expect(message.sampleStart).toBe(expectedStart);
-      received.push(...message.samples.subarray(0, message.count));
+      received.set(message.samples.subarray(0, message.count), message.sampleStart);
       expectedStart += message.count;
       writer.release(message.samples);
     });
     feed(writer, toFloat(fixture));
     writer.flush();
-    expect(received).toHaveLength(fixture.length);
-    expect(Int16Array.from(received)).toEqual(fixture);
+    expect(expectedStart).toBe(fixture.length);
+    expect(sameSamples(received, fixture)).toBe(true);
   });
 
   it('never rewrites a block before the consumer returns it, and keeps the clock across drops', () => {
@@ -115,7 +118,7 @@ describe('chunk assembler', () => {
       expect(parsed.tags).toEqual(['RIFF', 'WAVE', 'fmt ', 'data']);
       expect(parsed.riffSize).toBe(wav.length - 8);
       expect(parsed.format).toEqual([1, 1, RATE, RATE * 2, 2, 16]);
-      expect(parsed.samples).toEqual(fixture.subarray(manifest.sample_start, manifest.sample_start + manifest.sample_count));
+      expect(sameSamples(parsed.samples, fixture.subarray(manifest.sample_start, manifest.sample_start + manifest.sample_count))).toBe(true);
       expect(manifest.byte_length).toBe(wav.length);
       expect(manifest.sha256).toBe(createHash('sha256').update(wav).digest('hex'));
       expect(manifest.captured_at).toBe(new Date(EPOCH.startedAtMs + (manifest.sample_start / RATE) * 1000).toISOString());
