@@ -38,6 +38,19 @@ export type ActionId = typeof ActionId.Type;
 export const JobId = id('JobId');
 export type JobId = typeof JobId.Type;
 
+/** `unknown`: submitted but outcome ambiguous; never retried automatically before reconciliation. */
+export const ActionState = Schema.Literal(
+  'proposed',
+  'awaiting_authorization',
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'unknown',
+  'cancelled',
+);
+export type ActionState = typeof ActionState.Type;
+
 /** UTC instant with microsecond precision at most, e.g. `2026-09-26T17:08:16.123456Z`. */
 export const UtcTimestamp = Schema.String.pipe(
   Schema.pattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/),

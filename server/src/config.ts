@@ -16,6 +16,8 @@ export const engineeringDefaults = {
   playbackUrlTtlMs: 5 * 60_000,
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
+  /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
+  pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
 } as const;
 
 /** Decisions still open in docs/DECISIONS.md; each blocks production activation until selected. */
@@ -40,6 +42,18 @@ export const serverConfig = Config.all({
   }),
   /** Open decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...openDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
+  /** Pipedream Connect; without credentials every integration call fails as `Unavailable`. */
+  pipedream: Config.all({
+    apiUrl: Config.string('PIPEDREAM_API_URL').pipe(Config.withDefault('https://api.pipedream.com')),
+    environment: Config.literal('development', 'production')('PIPEDREAM_ENVIRONMENT').pipe(Config.withDefault('development')),
+    credentials: Config.option(
+      Config.all({
+        projectId: Config.string('PIPEDREAM_PROJECT_ID'),
+        clientId: Config.string('PIPEDREAM_CLIENT_ID'),
+        clientSecret: Config.redacted('PIPEDREAM_CLIENT_SECRET'),
+      }),
+    ),
+  }),
 });
 export type ServerConfig = Config.Config.Success<typeof serverConfig>;
 

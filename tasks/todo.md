@@ -188,9 +188,9 @@ Depends on: T05, T11, T15.
 
 ## T17. Implement Pipedream discovery and execution access
 
-- [ ] Implement one Connect client for discovery, account scope, and Google/Drive operations.
-- [ ] Expose only search, inspect, and request-action gateways: at most five metadata search hits, one selected action schema/configuration, and bounded paginated options.
-- [ ] Bind connected accounts to stable principals and explicit meeting/workspace permissions.
+- [x] Implement one Connect client for discovery, account scope, and Google/Drive operations.
+- [x] Expose only search, inspect, and request-action gateways: at most five metadata search hits, one selected action schema/configuration, and bounded paginated options.
+- [x] Bind connected accounts to stable principals and explicit meeting/workspace permissions.
 
 Files: `server/src/providers/pipedream.ts`, `server/src/agents.ts`, `server/src/integrations.ts`, `server/tests/pipedream.test.ts`.
 Verify: a 10,000-action fixture does not expand the eleven-tool MCP surface; check account isolation, Drive bytes, missing connections, provider failure, dynamic schema, stale configuration, paginated options, and output budgets.

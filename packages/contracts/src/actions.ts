@@ -3,6 +3,7 @@ import { Schema } from 'effect';
 import {
   ActionGrantId,
   ActionId,
+  ActionState,
   IntegrationAccountId,
   MeetingId,
   PrincipalId,
@@ -10,19 +11,6 @@ import {
   Sha256Hex,
   UtcTimestamp,
 } from './common.ts';
-
-/** `unknown`: submitted but outcome ambiguous; never retried automatically before reconciliation. */
-export const ActionState = Schema.Literal(
-  'proposed',
-  'awaiting_authorization',
-  'queued',
-  'running',
-  'succeeded',
-  'failed',
-  'unknown',
-  'cancelled',
-);
-export type ActionState = typeof ActionState.Type;
 
 /** Created by an authorized human; a prompt can never create one. */
 export const ActionGrant = Schema.Struct({

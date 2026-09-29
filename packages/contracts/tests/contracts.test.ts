@@ -199,6 +199,13 @@ describe('HTTP API contract', () => {
       '/readyz',
     ]);
     expect(spec.paths['/api/v1/listeners/{listener_id}/chunks/{chunk_id}']?.put?.operationId).toBe('listeners.putChunk');
-    expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths)).toEqual(['/healthz', '/readyz', '/api/v1/session']);
+    expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths)).toEqual([
+      '/healthz',
+      '/readyz',
+      '/api/v1/session',
+      '/api/v1/integrations/actions',
+      '/api/v1/integrations/actions/{action_key}/schema',
+    ]);
+    expect(OpenApi.fromApi(Contracts.SanctumApi).paths['/api/v1/integrations/actions']?.get?.operationId).toBe('integrations.searchIntegrationActions');
   });
 });
