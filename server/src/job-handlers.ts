@@ -12,6 +12,7 @@ import type { LlmClient } from './llm.ts';
 import type { PipedreamClient } from './providers/pipedream.ts';
 import type { SpeechToText } from './media/providers.ts';
 import { reconcileTranscript } from './media/reconcile.ts';
+import { rankMatchesJob } from './matching.ts';
 import { finalizeMeeting } from './meetings.ts';
 import type { ObjectStore } from './providers/object-store.ts';
 import { summarizeNotes } from './notes-job.ts';
@@ -31,6 +32,7 @@ export const jobHandlers: JobHandlers<WorkerServices> = {
   'context.refresh': refreshContext(extractCandidates),
   'memory.commit': commitMemory(extractCandidates),
   'notes.summarize': summarizeNotes,
+  'matching.rank': rankMatchesJob,
   'action.execute': executeAction,
   'research.run': runResearch,
 };

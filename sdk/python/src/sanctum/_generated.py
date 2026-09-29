@@ -531,6 +531,23 @@ class RevokeActionGrantInput(TypedDict):
     grant_id: str
 
 
+class RankMatchesInput(TypedDict):
+    profile_id: str
+    kind: Literal["needs", "offers"]
+    top_k: NotRequired[int]
+
+
+class ProfileMatches(TypedDict):
+    profile_id: str
+    kind: Literal["needs", "offers"]
+    matches: list[ProfileMatch]
+
+
+class ProfileMatch(TypedDict):
+    profile_id: str
+    score: float
+
+
 class CreateAgent(TypedDict):
     display_name: str
     scopes: list[Literal["context:read", "context:write", "recordings:read", "actions:request", "actions:execute", "workspace:admin", "capture:ingest"]]
@@ -650,6 +667,8 @@ OPERATIONS: dict[str, Operation] = {
     "actions.createActionGrant": Operation("POST", "/api/v1/action-grants", (), (), True),
     # RevokeActionGrantInput -> ActionGrant
     "actions.revokeActionGrant": Operation("DELETE", "/api/v1/action-grants/{grant_id}", ("grant_id", ), (), False),
+    # RankMatchesInput -> ProfileMatches
+    "matching.rankMatches": Operation("GET", "/api/v1/profiles/{profile_id}/matches", ("profile_id", ), ("kind", "top_k", ), False),
     # CreateAgent -> CreatedAgent
     "agents.createAgent": Operation("POST", "/api/v1/agents", (), (), True),
     # ListAgentsInput -> AgentPage

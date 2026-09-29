@@ -12,6 +12,7 @@ import { AuthenticatedLive } from './auth.ts';
 import { ContextLive } from './context.ts';
 import { HealthLive } from './health.ts';
 import { ListenersLive } from './listeners-api.ts';
+import { MatchingLive } from './matching.ts';
 import { MeetingsLive } from './meetings-api.ts';
 import { IntegrationsLive } from './integrations.ts';
 import type { Migration } from './migrate.ts';
@@ -30,6 +31,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       ContextLive,
       IntegrationsLive,
       ActionsLive,
+      MatchingLive,
       AgentsLive,
     ]),
     Layer.provide(AuthenticatedLive),

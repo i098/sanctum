@@ -525,6 +525,23 @@ export type RevokeActionGrantInput = {
   readonly grant_id: string;
 };
 
+export type RankMatchesInput = {
+  readonly profile_id: string;
+  readonly kind: "needs" | "offers";
+  readonly top_k?: number;
+};
+
+export type ProfileMatches = {
+  readonly profile_id: string;
+  readonly kind: "needs" | "offers";
+  readonly matches: ReadonlyArray<ProfileMatch>;
+};
+
+export type ProfileMatch = {
+  readonly profile_id: string;
+  readonly score: number;
+};
+
 export type CreateAgent = {
   readonly display_name: string;
   readonly scopes: ReadonlyArray<"context:read" | "context:write" | "recordings:read" | "actions:request" | "actions:execute" | "workspace:admin" | "capture:ingest">;
@@ -615,6 +632,7 @@ export interface Operations {
   'actions.resolveAction': { input: ResolveActionInput; output: ActionReceipt };
   'actions.createActionGrant': { input: CreateActionGrantInput; output: ActionGrant };
   'actions.revokeActionGrant': { input: RevokeActionGrantInput; output: ActionGrant };
+  'matching.rankMatches': { input: RankMatchesInput; output: ProfileMatches };
   'agents.createAgent': { input: CreateAgent; output: CreatedAgent };
   'agents.listAgents': { input: ListAgentsInput; output: AgentPage };
   'agents.revokeCredential': { input: RevokeCredentialInput; output: null };
@@ -649,6 +667,7 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'actions.resolveAction': {"method":"POST","path":"/api/v1/actions/{action_id}/resolve","pathParams":["action_id"],"queryParams":[],"body":true},
   'actions.createActionGrant': {"method":"POST","path":"/api/v1/action-grants","pathParams":[],"queryParams":[],"body":true},
   'actions.revokeActionGrant': {"method":"DELETE","path":"/api/v1/action-grants/{grant_id}","pathParams":["grant_id"],"queryParams":[],"body":false},
+  'matching.rankMatches': {"method":"GET","path":"/api/v1/profiles/{profile_id}/matches","pathParams":["profile_id"],"queryParams":["kind","top_k"],"body":false},
   'agents.createAgent': {"method":"POST","path":"/api/v1/agents","pathParams":[],"queryParams":[],"body":true},
   'agents.listAgents': {"method":"GET","path":"/api/v1/agents","pathParams":[],"queryParams":["cursor","limit"],"body":false},
   'agents.revokeCredential': {"method":"DELETE","path":"/api/v1/agents/{agent_id}/credentials/{key_id}","pathParams":["agent_id","key_id"],"queryParams":[],"body":false},

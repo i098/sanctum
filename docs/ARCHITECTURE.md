@@ -96,6 +96,7 @@ Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `ser
 - `planner.ts`: `planActions(access, input: { meeting_id; request: string }): Effect<ReadonlyArray<RequestActionInput>, Unavailable, LlmClient>`.
 - `planner.ts`: `respondToRequest(input: { request: string; context: ContextSnapshot }): Stream<string, Unavailable, LlmClient>` for requested speech.
 - `matcher.ts`: `rankMatches(access, query: { profile_id; kind: 'needs' | 'offers'; top_k: number }): Effect<ReadonlyArray<{ profile_id: ProfileId; score: number }>, NotFound, R>`.
+- Matching (integration-owned): `MatchingApi` (contracts `matching.ts`, `GET /api/v1/profiles/{profile_id}/matches`) and the `matching.rank` job live in server `matching.ts`; both call `rankMatches` after a `context:read` check, and the job stores its ranking as a workspace `document` artifact.
 
 ### pipedream (T17)
 

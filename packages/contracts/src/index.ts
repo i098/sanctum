@@ -9,3 +9,4 @@ export * from './context.ts';
 export * from './integrations.ts';
 export * from './actions.ts';
 export * from './jobs.ts';
+export * from './matching.ts';

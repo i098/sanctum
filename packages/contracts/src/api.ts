@@ -10,6 +10,7 @@ import { IntegrationsApi } from './integrations.ts';
 import { ContextApi } from './context.ts';
 import { ActionsApi } from './actions-api.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
+import { MatchingApi } from './matching.ts';
 import { MeetingsApi } from './meetings.ts';
 
 /** Process health and dependency readiness without tenant content. */
@@ -26,6 +27,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(ContextApi.middleware(Authenticated))
   .add(IntegrationsApi)
   .add(ActionsApi)
+  .add(MatchingApi.middleware(Authenticated))
   .add(AgentsApi)
   .addError(Unauthenticated)
   .addError(Forbidden)

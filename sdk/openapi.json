@@ -7633,6 +7633,173 @@
         }
       }
     },
+    "/api/v1/profiles/{profile_id}/matches": {
+      "get": {
+        "tags": [
+          "matching"
+        ],
+        "operationId": "matching.rankMatches",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "a Universally Unique Identifier",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "required": true,
+            "description": "a Universally Unique Identifier"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "needs",
+                "offers"
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "top_k",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string to be decoded into a number"
+            },
+            "required": false,
+            "description": "a string to be decoded into a number"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "profile_id",
+                    "kind",
+                    "matches"
+                  ],
+                  "properties": {
+                    "profile_id": {
+                      "type": "string",
+                      "description": "a Universally Unique Identifier",
+                      "format": "uuid",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "needs",
+                        "offers"
+                      ]
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "profile_id",
+                          "score"
+                        ],
+                        "properties": {
+                          "profile_id": {
+                            "type": "string",
+                            "description": "a Universally Unique Identifier",
+                            "format": "uuid",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not match the expected schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpApiDecodeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthenticated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RevisionConflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionConflict"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HashConflict"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents": {
       "post": {
         "tags": [
@@ -8745,6 +8912,9 @@
     },
     {
       "name": "actions"
+    },
+    {
+      "name": "matching"
     },
     {
       "name": "agents"

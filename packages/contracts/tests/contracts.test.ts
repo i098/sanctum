@@ -232,6 +232,7 @@ describe('HTTP API contract', () => {
       '/api/v1/actions/{action_id}/resolve',
       '/api/v1/action-grants',
       '/api/v1/action-grants/{grant_id}',
+      '/api/v1/profiles/{profile_id}/matches',
       '/api/v1/agents',
       '/api/v1/agents/{agent_id}/credentials/{key_id}',
     ]);

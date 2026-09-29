@@ -418,6 +418,17 @@ const actionsGroup = ({ space, need, once }: Store) =>
       .handle('revokeActionGrant', unmodelled),
   );
 
+/** The fake directory holds no profile embeddings, so every ranking is empty (the real ranking is tested against MySQL). */
+const matchingGroup = ({ need }: Store) =>
+  HttpApiBuilder.group(SanctumApi, 'matching', handlers =>
+    handlers.handle('rankMatches', ({ path, urlParams }) =>
+      Effect.gen(function* () {
+        yield* need(yield* CurrentAccess, 'context:read');
+        return { profile_id: path.profile_id, kind: urlParams.kind, matches: [] };
+      }),
+    ),
+  );
+
 const agentsGroup = ({ space, need, tokens }: Store) =>
   HttpApiBuilder.group(SanctumApi, 'agents', handlers =>
     handlers
@@ -477,7 +488,7 @@ export function fakeDomain() {
   const store = createStore();
   const { space, tokens, interrupted } = store;
   return {
-    groups: Layer.mergeAll(listenersGroup, meetingsGroup(store), contextGroup(store), integrationsGroup(store), actionsGroup(store), agentsGroup(store)),
+    groups: Layer.mergeAll(listenersGroup, meetingsGroup(store), contextGroup(store), integrationsGroup(store), actionsGroup(store), agentsGroup(store), matchingGroup(store)),
     /** Bearer tokens issued by `token()` or `createAgent`; revocation deletes them. */
     authenticator: Layer.succeed(Authenticator, {
       authenticate: request => {
