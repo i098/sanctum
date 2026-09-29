@@ -245,9 +245,11 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
         if (frame.track !== track) return yield* reject('protocol_error', 'Frame track differs from the accepted start');
         const end = frame.sample_start + frame.sample_count;
         if (end <= watermark) return yield* send({ _tag: 'ack', sequence: frame.sequence, sample_end: watermark });
-        if (frame.sample_start < watermark) return yield* reject('protocol_error', 'Frame overlaps audio already accepted');
+        // A resumed client may cut frames at its own boundaries: keep only the part past the watermark.
+        const skip = watermark - frame.sample_start;
+        const fresh = skip > 0 ? { ...frame, sample_start: watermark, sample_count: end - watermark, samples: frame.samples.subarray(skip) } : frame;
         watermark = end;
-        yield* asr.feed(frame);
+        yield* asr.feed(fresh);
         yield* send({ _tag: 'ack', sequence: frame.sequence, sample_end: end });
       });
 

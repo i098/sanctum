@@ -3,6 +3,7 @@
  * Credentials stay in this process; browsers only ever receive short-lived presigned GET URLs.
  * Missing configuration builds a store whose every call fails visibly instead of pretending to save.
  */
+import { createHash } from 'node:crypto';
 import { AwsClient } from 'aws4fetch';
 import { Config, Effect, Layer, Option, Redacted } from 'effect';
 import { ObjectStore, ObjectStoreError, type StoredObject } from '../object-store.ts';
@@ -28,7 +29,8 @@ function r2Store(config: R2Config) {
     Effect.tryPromise(signal =>
       client.fetch(objectUrl(name), {
         method,
-        headers: body === undefined ? extra : { ...extra, 'x-amz-content-sha256': extra['x-amz-meta-sha256']! },
+        // Sign the actual bytes so R2 rejects a body altered in transit.
+        headers: body === undefined ? extra : { ...extra, 'x-amz-content-sha256': createHash('sha256').update(body).digest('hex') },
         body: body ?? null,
         signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
       }),

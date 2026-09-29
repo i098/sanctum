@@ -146,9 +146,9 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
-  it.scoped('rejects malformed, overlapping and premature frames', () =>
+  it.scoped('rejects malformed and premature frames and trims frames straddling the watermark', () =>
     Effect.gen(function* () {
-      const { host, listener_id, socket, connect } = yield* setup;
+      const { host, speech, listener_id, socket, connect } = yield* setup;
       socket.send(new Uint8Array([1, 2, 3]));
       expect(yield* socket.take('rejected')).toMatchObject({ reason: 'protocol_error', message: 'Malformed frame: too_short' });
       expect((yield* socket.closed).code).toBe(1008);
@@ -156,7 +156,9 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const { socket: second } = yield* connect;
       second.send(pcmFrame(0, 0));
       second.send(pcmFrame(1, 800));
-      expect(yield* second.take('rejected')).toMatchObject({ reason: 'protocol_error', message: 'Frame overlaps audio already accepted' });
+      yield* second.take('ack');
+      expect(yield* second.take('ack')).toMatchObject({ sequence: 1, sample_end: 2_400 });
+      yield* eventually(Effect.sync(() => speech.streams[0]?.received), received => received === 2_400);
 
       const premature = yield* openSocket(host, listener_id, 'device');
       premature.send(pcmFrame(0, 0));

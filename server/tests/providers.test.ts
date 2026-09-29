@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
 import { NodeHttpServer } from '@effect/platform-node';
@@ -57,7 +58,7 @@ describe('R2 object store', () => {
       const put = server.requests[0]!;
       expect(put.url).toBe('/audio/private/w/1.wav');
       expect(put.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=key-id\/\d{8}\/auto\/s3\/aws4_request, SignedHeaders=\S*x-amz-meta-sha256\S*, Signature=[0-9a-f]{64}$/);
-      expect(put.headers['x-amz-content-sha256']).toBe(sha);
+      expect(put.headers['x-amz-content-sha256']).toBe(createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex'));
       expect(yield* store.head('w/1.wav')).toEqual({ key: 'w/1.wav', byte_length: 3, sha256: sha });
       expect(yield* store.head('missing.wav')).toBeNull();
       expect([...(yield* store.get('w/1.wav'))]).toEqual([1, 2, 3]);
