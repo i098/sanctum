@@ -90,7 +90,8 @@ const ensureLedger = Effect.gen(function*() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
 });
 
-const LOCK_NAME = 'sanctum.schema_migrations';
+/** Named locks are server-wide; scope ours to the schema being migrated (names are limited to 64 chars). */
+const LOCK_NAME = "CONCAT('sanctum_migrate:', LEFT(SHA2(DATABASE(), 256), 40))";
 
 /** Holds a MySQL named lock on one reserved connection for the duration of `effect`. */
 const withMigrationLock = <A, E, R>(effect: Effect.Effect<A, E, R>, timeoutSeconds: number) =>
@@ -99,8 +100,8 @@ const withMigrationLock = <A, E, R>(effect: Effect.Effect<A, E, R>, timeoutSecon
       const sql = yield* SqlClient.SqlClient;
       const connection = yield* sql.reserve;
       const acquired = yield* Effect.acquireRelease(
-        connection.executeRaw('SELECT GET_LOCK(?, ?) AS acquired', [LOCK_NAME, timeoutSeconds]),
-        () => Effect.ignore(connection.executeRaw('SELECT RELEASE_LOCK(?)', [LOCK_NAME])),
+        connection.executeRaw(`SELECT GET_LOCK(${LOCK_NAME}, ?) AS acquired`, [timeoutSeconds]),
+        () => Effect.ignore(connection.executeRaw(`SELECT RELEASE_LOCK(${LOCK_NAME})`, [])),
       );
       const [row] = Array.isArray(acquired) ? acquired : [];
       const granted = typeof row === 'object' && row !== null && 'acquired' in row && Number(row.acquired) === 1;
