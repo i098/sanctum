@@ -8,7 +8,6 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
-import { Unavailable } from '@sanctum/contracts';
 import { Effect, Layer, flow } from 'effect';
 import { ApiLive } from './api.ts';
 import { type Authenticator, UnconfiguredAuthenticator } from './auth.ts';
@@ -41,11 +40,7 @@ if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
-    const built = existsSync(BUILT_WEBSITE);
-    // Development serves the website from Vite; a production image without its build must not look healthy.
-    if (!built && config.environment === 'production') {
-      return yield* new Unavailable({ message: `Website build missing at ${BUILT_WEBSITE}`, retryable: false });
-    }
-    return yield* Layer.launch(serverLayer({ ...config, webRoot: built ? BUILT_WEBSITE : undefined }));
+    // Development serves the website from Vite; the image always contains the build (server/Dockerfile).
+    return yield* Layer.launch(serverLayer({ ...config, webRoot: existsSync(BUILT_WEBSITE) ? BUILT_WEBSITE : undefined }));
   }).pipe(NodeRuntime.runMain);
 }

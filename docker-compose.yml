@@ -1,6 +1,6 @@
 # Local production-shaped stack: MySQL, the API and worker from one image, and Caddy for HTTPS.
 #   MYSQL_PASSWORD=... docker compose up -d mysql
-#   MYSQL_PASSWORD=... docker compose run --rm migrate    # explicit schema step
+#   MYSQL_PASSWORD=... docker compose run --rm api node server/dist/migrate.js   # explicit schema step
 #   MYSQL_PASSWORD=... docker compose up -d api worker caddy
 # SANCTUM_ENV defaults to production, which refuses to start until the open decisions in
 # docs/DECISIONS.md are selected; use SANCTUM_ENV=development for a local fixture stack.
@@ -42,11 +42,6 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
-
-  migrate:
-    <<: *app
-    command: ['node', 'server/dist/migrate.js']
-    profiles: [migrate]
 
   api:
     <<: *app
