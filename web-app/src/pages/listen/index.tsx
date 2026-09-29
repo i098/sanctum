@@ -143,7 +143,7 @@ export function ListenPage() {
         <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
       </section>
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
-      <ReviewDialog open={overlay === 'review'} onClose={close} />
+      <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
       <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} />
     </main>

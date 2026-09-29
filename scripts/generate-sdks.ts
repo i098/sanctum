@@ -201,13 +201,21 @@ function renderTypescript() {
   ].join('\n');
 }
 
+const PYTHON_KEYWORDS = new Set(['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else',
+  'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield']);
+
 function renderPython() {
   const emit = emitter({
     primitives: { string: 'str', integer: 'int', number: 'float', boolean: 'bool', null: 'None' },
     unknown: 'Any',
     literals: values => `Literal[${values.map(v => JSON.stringify(v)).join(', ')}]`,
-    declare: (name, fields) =>
-      `class ${name}(TypedDict):\n${fields.map(([key, type, required]) => `    ${key}: ${required ? type : `NotRequired[${type}]`}`).join('\n')}`,
+    declare: (name, fields) => {
+      const typed = fields.map(([key, type, required]) => [key, required ? type : `NotRequired[${type}]`] as const);
+      // A Python keyword (e.g. `from`) cannot be a class attribute; the functional form takes any key.
+      return typed.some(([key]) => PYTHON_KEYWORDS.has(key))
+        ? `${name} = TypedDict(${JSON.stringify(name)}, {\n${typed.map(([key, type]) => `    ${JSON.stringify(key)}: ${JSON.stringify(type)},`).join('\n')}\n})`
+        : `class ${name}(TypedDict):\n${typed.map(([key, type]) => `    ${key}: ${type}`).join('\n')}`;
+    },
     array: item => `list[${item}]`,
     record: 'dict[str, Any]',
   });

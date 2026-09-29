@@ -171,7 +171,8 @@ describe('TypeScript SDK against the running server', () => {
       );
       const review = yield* Effect.promise(() => loadReview(client, meeting.id));
       expect(review.context).toMatchObject({ status: 'ok', data: { revision: 1, items: [added] } });
-      expect(review.notes).toMatchObject({ status: 'ok', data: { decision: [added] } });
+      // The meeting is still open, so canonical notes do not exist yet and Review says so.
+      expect(review.notes).toMatchObject({ status: 'error', code: 'unavailable', message: 'Notes are not ready yet' });
       expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ id: segment.id }] } });
       expect(review.recording).toMatchObject({ status: 'ok', data: { meeting_id: meeting.id } });
       expect(review.activity).toMatchObject({ status: 'ok', data: { events: [{ change: 'item_added', item: { id: added.id } }] } });

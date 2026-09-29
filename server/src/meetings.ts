@@ -441,6 +441,7 @@ export const finalizeMeeting = (job: MeetingJob) =>
           const derived = { workspace_id: row.workspace_id, work_key: `meeting:${row.id}`, payload: { meeting_id: row.id }, requested_by: job.requested_by, source_revision: row.boundary_revision };
           yield* enqueueJob({ ...derived, kind: 'recording.assemble' });
           yield* enqueueJob({ ...derived, kind: 'memory.commit' });
+          yield* enqueueJob({ ...derived, kind: 'notes.summarize' });
           return { state, processing, boundary_revision: row.boundary_revision };
         }),
       );

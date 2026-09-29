@@ -28,10 +28,16 @@ const context = {
   },
 };
 
+const notes = {
+  status: 200,
+  body: { meeting_id: MEETING, revision: 2, boundary_revision: 1, title: 'Pilot review', summary: 'Kept the pilot small.', sections: [], model: 'm', generated_at: '2026-09-29T09:00:00Z' },
+};
+
 describe('loadReview', () => {
   it('fills all six frames from the v1 operations', async () => {
     const { client, asked } = server({
       [`/api/v1/meetings/${MEETING}/context`]: context,
+      [`/api/v1/meetings/${MEETING}/notes`]: notes,
       [`/api/v1/meetings/${MEETING}/transcript`]: { status: 200, body: { segments: [{ id: 's1', text: 'Hello' }], speakers: [], next_cursor: null } },
       [`/api/v1/meetings/${MEETING}/recording-access`]: { status: 200, body: { url: 'https://objects.test/a.wav', gaps: [] } },
       '/api/v1/context/changes': {
@@ -40,7 +46,7 @@ describe('loadReview', () => {
       },
     });
     const review = await loadReview(client, MEETING);
-    expect(review.notes).toEqual({ status: 'ok', data: { decision: [context.body.items[0]], commitment: [], open_question: [context.body.items[1]] } });
+    expect(review.notes).toEqual({ status: 'ok', data: notes.body });
     expect(review.memory).toEqual({ status: 'ok', data: [context.body.items[0], context.body.items[2]] });
     expect(review.context).toMatchObject({ status: 'ok', data: { revision: 4 } });
     expect(review.transcript).toMatchObject({ status: 'ok', data: { segments: [{ text: 'Hello' }] } });
@@ -60,11 +66,13 @@ describe('loadReview', () => {
     expect(review.context.status).toBe('ok');
   });
 
-  it('marks notes, memory and context unavailable when the snapshot fails', async () => {
+  it('marks memory and context unavailable when the snapshot fails, and notes separately', async () => {
     const { client } = server({
       [`/api/v1/meetings/${MEETING}/context`]: { status: 503, body: { code: 'unavailable', message: 'Database unavailable', retryable: false } },
+      [`/api/v1/meetings/${MEETING}/notes`]: notes,
     });
     const review = await loadReview(client, MEETING);
-    for (const frame of [review.notes, review.memory, review.context]) expect(frame).toEqual({ status: 'error', code: 'unavailable', message: 'Database unavailable' });
+    for (const frame of [review.memory, review.context]) expect(frame).toEqual({ status: 'error', code: 'unavailable', message: 'Database unavailable' });
+    expect(review.notes).toEqual({ status: 'ok', data: notes.body });
   });
 });

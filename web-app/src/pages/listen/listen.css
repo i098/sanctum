@@ -212,3 +212,28 @@
 .listen-settings dd {
   margin: 0;
 }
+
+.listen-notes h3 {
+  margin: 0 0 6px;
+  color: #e7ecf3;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.listen-notes h4 {
+  margin: 16px 0 6px;
+  color: #e7ecf3;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.listen-notes ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.listen-source {
+  color: #8b919c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}

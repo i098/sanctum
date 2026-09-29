@@ -3,13 +3,13 @@
  * agents use. Each frame settles on its own: one failing source shows its real error and never
  * blanks, fakes or delays the others.
  */
-import { type ContextItem, type ContextSnapshot, type SanctumClient, SanctumError } from '@sanctum/sdk';
+import { type ContextItem, type ContextSnapshot, type MeetingNotes, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
 export type Frame<A> = { readonly status: 'ok'; readonly data: A } | { readonly status: 'error'; readonly code: string; readonly message: string };
 
 export interface ReviewData {
-  /** Decisions, commitments and open questions, each linked to its cited sources. */
-  readonly notes: Frame<Record<'decision' | 'commitment' | 'open_question', ReadonlyArray<ContextItem>>>;
+  /** The meeting's canonical structured summary; every point cites transcript segments. */
+  readonly notes: Frame<MeetingNotes>;
   readonly transcript: Frame<Awaited<ReturnType<SanctumClient['meetings']['getTranscript']>>>;
   readonly recording: Frame<Awaited<ReturnType<SanctumClient['meetings']['recordingAccess']>>>;
   /** Committed memory only; provisional items stay in Context. */
@@ -18,7 +18,7 @@ export interface ReviewData {
   readonly activity: Frame<Awaited<ReturnType<SanctumClient['context']['getContextChanges']>>>;
 }
 
-const settle = <A>(promise: Promise<A>): Promise<Frame<A>> =>
+export const settle = <A>(promise: Promise<A>): Promise<Frame<A>> =>
   promise.then(
     data => ({ status: 'ok', data }),
     (error: unknown) =>
@@ -30,7 +30,8 @@ const settle = <A>(promise: Promise<A>): Promise<Frame<A>> =>
 export async function loadReview(client: SanctumClient, meeting_id: string, signal?: AbortSignal): Promise<ReviewData> {
   const options = signal ? { signal } : {};
   const snapshot = client.context.getContext({ meeting_id }, options);
-  const [context, transcript, recording, activity] = await Promise.all([
+  const [notes, context, transcript, recording, activity] = await Promise.all([
+    settle(client.meetings.getNotes({ meeting_id }, options)),
     settle(snapshot),
     settle(client.meetings.getTranscript({ meeting_id, limit: 200 }, options)),
     settle(client.meetings.recordingAccess({ meeting_id }, options)),
@@ -38,15 +39,10 @@ export async function loadReview(client: SanctumClient, meeting_id: string, sign
     // first 50; ask the context slice for a meeting filter before Review serves long-lived workspaces.
     settle(client.context.getContextChanges({ limit: 50 }, options).then(changes => ({ ...changes, events: changes.events.filter(event => event.meeting_id === meeting_id) }))),
   ]);
-  if (context.status === 'error') return { notes: context, transcript, recording, memory: context, context, activity };
+  if (context.status === 'error') return { notes, transcript, recording, memory: context, context, activity };
   const items = context.data.items;
-  const notes = {
-    decision: items.filter(item => item.kind === 'decision'),
-    commitment: items.filter(item => item.kind === 'commitment'),
-    open_question: items.filter(item => item.kind === 'open_question'),
-  };
   return {
-    notes: { status: 'ok', data: notes },
+    notes,
     transcript,
     recording,
     memory: { status: 'ok', data: items.filter(item => item.state === 'committed') },

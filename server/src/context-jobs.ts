@@ -27,6 +27,7 @@ import { resolveTime } from './context-time.ts';
 import { lockMeeting, meetingItems, type NewItem, writeItem } from './context.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
 import type { ExtractionInput } from './extraction.ts';
+import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
 interface LedgerJob {
@@ -38,19 +39,12 @@ interface LedgerJob {
 /** Structured extraction as context consumes it (the models slice's `extractCandidates`). */
 export type Extractor<R> = (input: ExtractionInput) => Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, R>;
 
-const EpochAnchorRow = Schema.Struct({ epoch_id: CaptureEpochId, sample_rate: Schema.Number, sample_start: DbSafeInt, captured_at: DbUtc });
 
 /** Final segments one refresh reads; the rest wait for the next round. */
 const BATCH_SEGMENTS = 100;
 
 const Payload = Schema.Struct({ meeting_id: MeetingId });
 
-const MeetingRow = Schema.Struct({
- ...Meeting.fields,
- started_at: DbUtc,
- ended_at: Schema.NullOr(DbUtc),
- processing: DbJson(MeetingProcessing),
-});
 
 interface Target {
  readonly workspace_id: WorkspaceId;
@@ -88,21 +82,6 @@ function grounded(candidate: ExtractionCandidate, batch: ReadonlyMap<string, Seg
  }];
 }
 
-const toSegment = (row: SegmentRow): TranscriptSegment => ({
- id: row.id,
- source: { epoch_id: row.epoch_id, track: row.track, sample_start: row.sample_start, sample_end: row.sample_end },
- text: row.text,
- status: row.status,
- revision: row.revision,
- origin: row.origin,
- provider: row.provider,
- model: row.model,
- provider_connection_id: row.provider_connection_id,
- speaker_label: row.speaker_label,
- speaker_track_id: row.speaker_track_id,
- confidence: row.confidence,
- created_at: row.created_at,
-});
 
 /**
  * One refresh round: the next unprocessed final segments of the meeting, extraction outside

@@ -208,6 +208,49 @@ export type RecordingAccess = {
   readonly gaps: ReadonlyArray<SourceRange>;
 };
 
+export type GetNotesInput = {
+  readonly meeting_id: string;
+};
+
+export type MeetingNotes = {
+  readonly meeting_id: string;
+  readonly revision: number;
+  readonly boundary_revision: number;
+  readonly model: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly sections: ReadonlyArray<MeetingNotesSectionsItem>;
+  readonly generated_at: string;
+};
+
+export type MeetingNotesSectionsItem = {
+  readonly heading: string;
+  readonly points: ReadonlyArray<MeetingNotesSectionsItemPointsItem>;
+};
+
+export type MeetingNotesSectionsItemPointsItem = {
+  readonly text: string;
+  readonly sources: ReadonlyArray<SegmentSource>;
+};
+
+export type SegmentSource = {
+  readonly segment_id: string;
+  readonly start_ms: number;
+  readonly end_ms: number;
+};
+
+export type ExportMeetingInput = {
+  readonly meeting_id: string;
+};
+
+export type MeetingExport = {
+  readonly meeting_id: string;
+  readonly notes_revision: number;
+  readonly format: "markdown";
+  readonly filename: string;
+  readonly content: string;
+};
+
 export type MapSpeakerInput = {
   readonly speaker_track_id: string;
   readonly profile_id: string | null;
@@ -264,12 +307,6 @@ export type TimeExpression = {
 export type Author = {
   readonly type: "human" | "agent" | "system";
   readonly id: string;
-};
-
-export type SegmentSource = {
-  readonly segment_id: string;
-  readonly start_ms: number;
-  readonly end_ms: number;
 };
 
 export type ArtifactSource = {
@@ -562,6 +599,8 @@ export interface Operations {
   'meetings.splitMeeting': { input: SplitMeetingInput; output: SplitResult };
   'meetings.getTranscript': { input: GetTranscriptInput; output: TranscriptPage };
   'meetings.recordingAccess': { input: RecordingAccessInput; output: RecordingAccess };
+  'meetings.getNotes': { input: GetNotesInput; output: MeetingNotes };
+  'meetings.exportMeeting': { input: ExportMeetingInput; output: MeetingExport };
   'meetings.mapSpeaker': { input: MapSpeakerInput; output: ReadonlyArray<SpeakerTrack> };
   'context.getContext': { input: GetContextInput; output: ContextSnapshot };
   'context.searchContext': { input: SearchContextInput; output: SearchContextOutput };
@@ -594,6 +633,8 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'meetings.splitMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/split","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'meetings.getTranscript': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/transcript","pathParams":["meeting_id"],"queryParams":["cursor","limit"],"body":false},
   'meetings.recordingAccess': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/recording-access","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.getNotes': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/notes","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.exportMeeting': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/export","pathParams":["meeting_id"],"queryParams":[],"body":false},
   'meetings.mapSpeaker': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/speakers/map","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'context.getContext': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/context","pathParams":["meeting_id"],"queryParams":[],"body":false},
   'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","meeting_id","limit"],"body":false},

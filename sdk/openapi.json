@@ -3160,6 +3160,353 @@
         }
       }
     },
+    "/api/v1/meetings/{meeting_id}/notes": {
+      "get": {
+        "tags": [
+          "meetings"
+        ],
+        "operationId": "meetings.getNotes",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "a Universally Unique Identifier",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "required": true,
+            "description": "a Universally Unique Identifier"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "meeting_id",
+                    "revision",
+                    "boundary_revision",
+                    "model",
+                    "title",
+                    "summary",
+                    "sections",
+                    "generated_at"
+                  ],
+                  "properties": {
+                    "meeting_id": {
+                      "type": "string",
+                      "description": "a Universally Unique Identifier",
+                      "format": "uuid",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "description": "a positive number",
+                      "title": "positive",
+                      "exclusiveMinimum": 0
+                    },
+                    "boundary_revision": {
+                      "type": "integer",
+                      "description": "a positive number",
+                      "title": "positive",
+                      "exclusiveMinimum": 0
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "heading",
+                          "points"
+                        ],
+                        "properties": {
+                          "heading": {
+                            "type": "string"
+                          },
+                          "points": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "text",
+                                "sources"
+                              ],
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "sources": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "segment_id",
+                                      "start_ms",
+                                      "end_ms"
+                                    ],
+                                    "properties": {
+                                      "segment_id": {
+                                        "type": "string",
+                                        "description": "a Universally Unique Identifier",
+                                        "format": "uuid",
+                                        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                                      },
+                                      "start_ms": {
+                                        "type": "integer",
+                                        "description": "a non-negative number",
+                                        "title": "nonNegative",
+                                        "minimum": 0
+                                      },
+                                      "end_ms": {
+                                        "type": "integer",
+                                        "description": "a non-negative number",
+                                        "title": "nonNegative",
+                                        "minimum": 0
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not match the expected schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpApiDecodeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthenticated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RevisionConflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionConflict"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HashConflict"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meetings/{meeting_id}/export": {
+      "get": {
+        "tags": [
+          "meetings"
+        ],
+        "operationId": "meetings.exportMeeting",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "a Universally Unique Identifier",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "required": true,
+            "description": "a Universally Unique Identifier"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "meeting_id",
+                    "notes_revision",
+                    "format",
+                    "filename",
+                    "content"
+                  ],
+                  "properties": {
+                    "meeting_id": {
+                      "type": "string",
+                      "description": "a Universally Unique Identifier",
+                      "format": "uuid",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "notes_revision": {
+                      "type": "integer",
+                      "description": "a positive number",
+                      "title": "positive",
+                      "exclusiveMinimum": 0
+                    },
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "markdown"
+                      ]
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not match the expected schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpApiDecodeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthenticated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RevisionConflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionConflict"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HashConflict"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meetings/{meeting_id}/speakers/map": {
       "post": {
         "tags": [

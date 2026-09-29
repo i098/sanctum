@@ -195,3 +195,31 @@ export class ContextApi extends HttpApiGroup.make('context')
   )
   .add(HttpApiEndpoint.get('getSource')`/sources/${sourceId}`.addSuccess(Source))
   .prefix('/api/v1') { }
+
+/**
+ * The one canonical structured summary of a closed meeting (plan sections 08 and 09). Notes,
+ * email discussion sections and exports all render from it; every point cites final segments.
+ */
+export const MeetingNotes = Schema.Struct({
+  meeting_id: MeetingId,
+  /** Increments each time notes are regenerated (close, boundary or attribution corrections). */
+  revision: Revision,
+  boundary_revision: Revision,
+  model: Schema.String,
+  title: Schema.String,
+  summary: Schema.String,
+  sections: Schema.Array(Schema.Struct({ heading: Schema.String, points: Schema.Array(Schema.Struct({ text: Schema.String, sources: Schema.Array(SegmentSource) })) })),
+  generated_at: UtcTimestamp,
+});
+export type MeetingNotes = typeof MeetingNotes.Type;
+
+/** A rendered export of the canonical notes; `content` is Markdown with source timestamps. */
+export const MeetingExport = Schema.Struct({
+  meeting_id: MeetingId,
+  notes_revision: Revision,
+  format: Schema.Literal('markdown'),
+  filename: Schema.String,
+  content: Schema.String,
+});
+export type MeetingExport = typeof MeetingExport.Type;
+

@@ -10,6 +10,7 @@ export const JobKind = Schema.Literal(
   'recording.assemble',
   'speakers.refine',
   'memory.commit',
+  'notes.summarize',
   'matching.rank',
   'research.run',
   'action.execute',

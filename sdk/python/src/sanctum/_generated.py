@@ -77,13 +77,14 @@ class HeartbeatReceipt(TypedDict):
     owner: bool
 
 
-class ListMeetingsInput(TypedDict):
-    state: NotRequired[Literal["provisional", "active", "closing", "closed", "interrupted"]]
-    from: NotRequired[str]
-    to: NotRequired[str]
-    participant: NotRequired[str]
-    cursor: NotRequired[str]
-    limit: NotRequired[int]
+ListMeetingsInput = TypedDict("ListMeetingsInput", {
+    "state": "NotRequired[Literal[\"provisional\", \"active\", \"closing\", \"closed\", \"interrupted\"]]",
+    "from": "NotRequired[str]",
+    "to": "NotRequired[str]",
+    "participant": "NotRequired[str]",
+    "cursor": "NotRequired[str]",
+    "limit": "NotRequired[int]",
+})
 
 
 class MeetingPage(TypedDict):
@@ -213,6 +214,49 @@ class RecordingAccess(TypedDict):
     gaps: list[SourceRange]
 
 
+class GetNotesInput(TypedDict):
+    meeting_id: str
+
+
+class MeetingNotes(TypedDict):
+    meeting_id: str
+    revision: int
+    boundary_revision: int
+    model: str
+    title: str
+    summary: str
+    sections: list[MeetingNotesSectionsItem]
+    generated_at: str
+
+
+class MeetingNotesSectionsItem(TypedDict):
+    heading: str
+    points: list[MeetingNotesSectionsItemPointsItem]
+
+
+class MeetingNotesSectionsItemPointsItem(TypedDict):
+    text: str
+    sources: list[SegmentSource]
+
+
+class SegmentSource(TypedDict):
+    segment_id: str
+    start_ms: int
+    end_ms: int
+
+
+class ExportMeetingInput(TypedDict):
+    meeting_id: str
+
+
+class MeetingExport(TypedDict):
+    meeting_id: str
+    notes_revision: int
+    format: Literal["markdown"]
+    filename: str
+    content: str
+
+
 class MapSpeakerInput(TypedDict):
     speaker_track_id: str
     profile_id: str | None
@@ -269,12 +313,6 @@ class TimeExpression(TypedDict):
 class Author(TypedDict):
     type: Literal["human", "agent", "system"]
     id: str
-
-
-class SegmentSource(TypedDict):
-    segment_id: str
-    start_ms: int
-    end_ms: int
 
 
 class ArtifactSource(TypedDict):
@@ -580,6 +618,10 @@ OPERATIONS: dict[str, Operation] = {
     "meetings.getTranscript": Operation("GET", "/api/v1/meetings/{meeting_id}/transcript", ("meeting_id", ), ("cursor", "limit", ), False),
     # RecordingAccessInput -> RecordingAccess
     "meetings.recordingAccess": Operation("POST", "/api/v1/meetings/{meeting_id}/recording-access", ("meeting_id", ), (), False),
+    # GetNotesInput -> MeetingNotes
+    "meetings.getNotes": Operation("GET", "/api/v1/meetings/{meeting_id}/notes", ("meeting_id", ), (), False),
+    # ExportMeetingInput -> MeetingExport
+    "meetings.exportMeeting": Operation("GET", "/api/v1/meetings/{meeting_id}/export", ("meeting_id", ), (), False),
     # MapSpeakerInput -> list[SpeakerTrack]
     "meetings.mapSpeaker": Operation("POST", "/api/v1/meetings/{meeting_id}/speakers/map", ("meeting_id", ), (), True),
     # GetContextInput -> ContextSnapshot

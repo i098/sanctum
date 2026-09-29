@@ -19,6 +19,8 @@ import {
   HashConflict,
   Meeting,
   MeetingAccess,
+  type MeetingId,
+  MeetingNotes,
   NotFound,
   RecordingAccess,
   RevisionConflict,
@@ -118,8 +120,30 @@ type Store = ReturnType<typeof createStore>;
 
 const unmodeled = Effect.fail(new Unavailable({ message: 'Not modeled by the fake domain', retryable: false }));
 
-const meetingsGroup = ({ space, need, meetingOf }: Store) =>
-  HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
+/** Closed meetings summarize their fake transcript; open ones have no notes yet, as in the real service. */
+const fakeNotes = ({ space, need, meetingOf }: Store, access: AccessScope, meeting_id: MeetingId) =>
+  Effect.gen(function* () {
+    yield* need(access, 'context:read');
+    const meeting = yield* meetingOf(access, meeting_id);
+    if (meeting.state !== 'closed') return yield* new Unavailable({ message: 'Notes are not ready yet', retryable: true });
+    const points = [...space(access).segments.values()]
+      .filter(s => s.meeting_id === meeting.id)
+      .map(s => ({ text: s.segment.text, sources: [{ segment_id: s.segment.id, start_ms: 0, end_ms: 1_000 }] }));
+    return wire(MeetingNotes, {
+      meeting_id: meeting.id,
+      revision: 1,
+      boundary_revision: meeting.boundary_revision,
+      model: 'fake-notes',
+      title: meeting.title ?? 'Meeting',
+      summary: `${points.length} points discussed`,
+      sections: [{ heading: 'Discussion', points }],
+      generated_at: now(),
+    });
+  });
+
+const meetingsGroup = (store: Store) => {
+  const { space, need, meetingOf } = store;
+  return HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
     handlers
       .handle('listMeetings', ({ urlParams }) =>
         Effect.gen(function* () {
@@ -165,11 +189,24 @@ const meetingsGroup = ({ space, need, meetingOf }: Store) =>
           return closed;
         }),
       )
+      .handle('getNotes', ({ path }) => Effect.flatMap(CurrentAccess, access => fakeNotes(store, access, path.meeting_id)))
+      .handle('exportMeeting', ({ path }) =>
+        Effect.flatMap(CurrentAccess, access =>
+          Effect.map(fakeNotes(store, access, path.meeting_id), notes => ({
+            meeting_id: notes.meeting_id,
+            notes_revision: notes.revision,
+            format: 'markdown' as const,
+            filename: `meeting-${notes.meeting_id}-notes-r${notes.revision}.md`,
+            content: `# ${notes.title}\n\n## Summary\n\n${notes.summary}\n`,
+          })),
+        ),
+      )
       // ponytail: boundary edits are the meetings slice's job (tested against MySQL); adapters only need the routes.
       .handle('mergeMeetings', () => unmodeled)
       .handle('splitMeeting', () => unmodeled)
       .handle('mapSpeaker', () => unmodeled),
   );
+};
 
 const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interrupted }: Store) =>
   HttpApiBuilder.group(SanctumApi, 'context', handlers =>

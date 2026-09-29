@@ -14,6 +14,7 @@ import type { SpeechToText } from './media/providers.ts';
 import { reconcileTranscript } from './media/reconcile.ts';
 import { finalizeMeeting } from './meetings.ts';
 import type { ObjectStore } from './providers/object-store.ts';
+import { summarizeNotes } from './notes-job.ts';
 import { assembleRecording } from './playback.ts';
 import type { PyannoteClient } from './providers/pyannote.ts';
 import { refineSpeakers } from './speakers.ts';
@@ -29,6 +30,7 @@ export const jobHandlers: JobHandlers<WorkerServices> = {
   'transcript.reconcile': reconcileTranscript,
   'context.refresh': refreshContext(extractCandidates),
   'memory.commit': commitMemory(extractCandidates),
+  'notes.summarize': summarizeNotes,
   'action.execute': executeAction,
   'research.run': runResearch,
 };

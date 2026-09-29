@@ -23,6 +23,7 @@ import { DbSafeInt, DbUtc } from './db.ts';
 import { mergeMeetings, splitMeeting } from './meeting-corrections.ts';
 import { currentRanges, dbFailures, selectMeeting } from './meeting-store.ts';
 import { closeMeeting, getMeeting, listMeetings } from './meetings.ts';
+import { exportMeeting, getMeetingNotes } from './notes.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { issueRecordingAccess } from './playback.ts';
 import { mapSpeaker, tracksOverlapping } from './speakers.ts';
@@ -118,5 +119,7 @@ export const MeetingsLive = HttpApiBuilder.group(SanctumApi, 'meetings', handler
         ),
       ),
     )
+    .handle('getNotes', ({ path }) => Effect.flatMap(CurrentAccess, access => Effect.map(getMeetingNotes(access, path.meeting_id), found => found.notes)))
+    .handle('exportMeeting', ({ path }) => Effect.flatMap(CurrentAccess, access => exportMeeting(access, path.meeting_id)))
     .handle('mapSpeaker', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => mapSpeaker(access, path.meeting_id, payload))),
 );

@@ -169,7 +169,7 @@ describe('automatic meeting lifecycle', () => {
         expect(yield* rangesOf(old!.id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 30 * RATE }]);
         expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 31 * RATE, sample_end: 36 * RATE }]);
         const kinds = (yield* jobsOf(listener.workspace_id)).map(job => `${job.kind}:${job.status}`);
-        expect(kinds).toEqual(['meeting.finalize:pending', 'memory.commit:pending', 'recording.assemble:pending']);
+        expect(kinds).toEqual(['meeting.finalize:pending', 'memory.commit:pending', 'notes.summarize:pending', 'recording.assemble:pending']);
         // Replayed segments (reconnect or batch reconciliation) are already owned and change nothing.
         yield* onFinalSegments({ ...listener, segments: [early] });
         yield* hear(listener, epoch, 36, 40, 'is the cafeteria open');

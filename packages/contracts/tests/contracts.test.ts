@@ -216,6 +216,8 @@ describe('HTTP API contract', () => {
       '/api/v1/meetings/{meeting_id}/split',
       '/api/v1/meetings/{meeting_id}/transcript',
       '/api/v1/meetings/{meeting_id}/recording-access',
+      '/api/v1/meetings/{meeting_id}/notes',
+      '/api/v1/meetings/{meeting_id}/export',
       '/api/v1/meetings/{meeting_id}/speakers/map',
       '/api/v1/meetings/{meeting_id}/context',
       '/api/v1/context/search',

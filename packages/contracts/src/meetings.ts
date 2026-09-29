@@ -15,6 +15,7 @@ import {
   UtcTimestamp,
   WorkspaceId,
 } from './common.ts';
+import { MeetingExport, MeetingNotes } from './context.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
 export const MeetingState = Schema.Literal('provisional', 'active', 'closing', 'closed', 'interrupted');
@@ -154,6 +155,8 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.post('splitMeeting')`/meetings/${meetingId}/split`.setPayload(SplitMeeting).addSuccess(SplitResult))
   .add(HttpApiEndpoint.get('getTranscript')`/meetings/${meetingId}/transcript`.setUrlParams(TranscriptParams).addSuccess(TranscriptPage))
   .add(HttpApiEndpoint.post('recordingAccess')`/meetings/${meetingId}/recording-access`.addSuccess(RecordingAccess))
+  .add(HttpApiEndpoint.get('getNotes')`/meetings/${meetingId}/notes`.addSuccess(MeetingNotes))
+  .add(HttpApiEndpoint.get('exportMeeting')`/meetings/${meetingId}/export`.addSuccess(MeetingExport))
   .add(HttpApiEndpoint.post('mapSpeaker')`/meetings/${meetingId}/speakers/map`.setPayload(MapSpeaker).addSuccess(Schema.Array(SpeakerTrack)))
   .middleware(Authenticated)
   .prefix('/api/v1') { }
