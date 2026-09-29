@@ -1,16 +1,13 @@
-// stand-in: replaced by the capture slice at integration
-import { createCaptureStore, type CaptureView } from '../../lib/capture/view.ts';
+/**
+ * The page's single capture engine. It lives above every overlay and router lifecycle, so
+ * opening or closing Review, Agents or Settings never recreates the microphone stream.
+ */
+import { createCaptureController } from '../../lib/capture/controller.ts';
+import type { CaptureView } from '../../lib/capture/view.ts';
 
-const unavailable = (): Promise<void> => Promise.reject(new Error('Microphone capture is not available in this build.'));
-
-const engine: CaptureView = {
-  ...createCaptureStore().view,
-  levels: { bandCount: 33, read: bands => (bands.fill(0), 0) },
-  start: unavailable,
-  pause: unavailable,
-  resume: unavailable,
-};
+let engine: CaptureView | null = null;
 
 export function getCaptureEngine(): CaptureView {
+  engine ??= createCaptureController();
   return engine;
 }

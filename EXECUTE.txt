@@ -1023,9 +1023,9 @@ Depends on: T04; production issuer configuration remains a live gate.
 
 ## T06. Establish browser microphone capture
 
-- [ ] Implement the React website and browser microphone permission flow on room computers and laptops.
-- [ ] Keep the capture controller independent of overlay mounts; closing a tab stops capture and produces an interrupted state.
-- [ ] Handle secure-context, permission pending/denied, missing/dead input, and optional Wake Lock behavior.
+- [x] Implement the React website and browser microphone permission flow on room computers and laptops.
+- [x] Keep the capture controller independent of overlay mounts; closing a tab stops capture and produces an interrupted state.
+- [x] Handle secure-context, permission pending/denied, missing/dead input, and optional Wake Lock behavior.
 
 Files: `web-app/src/lib/capture/controller.ts`, `web-app/src/pages/listen/engine.ts`, `web-app/src/lib/capture/permissions.ts`, `web-app/tests/capture-lifecycle.test.ts`.
 Verify: permission grant/denial/revocation, input unplug, overlay close, tab reload, sleep/discard recovery; no native install required.
@@ -1033,9 +1033,9 @@ Depends on: T01, T05.
 
 ## T07. Buffer independent audio chunks in the browser
 
-- [ ] Tap the selected microphone, preserve source/sample clocks, and produce independent valid WAV chunks.
-- [ ] Commit bounded recovery records to IndexedDB and monitor quota; persistent storage is requested only where supported.
-- [ ] Distinguish buffered data from R2-confirmed data and expose eviction/quota failures honestly.
+- [x] Tap the selected microphone, preserve source/sample clocks, and produce independent valid WAV chunks.
+- [x] Commit bounded recovery records to IndexedDB and monitor quota; persistent storage is requested only where supported.
+- [x] Distinguish buffered data from R2-confirmed data and expose eviction/quota failures honestly.
 
 Files: `web-app/src/lib/capture/recorder.ts`, `web-app/src/lib/capture/recording-worklet.ts`, `web-app/src/lib/capture/buffer.ts`, `web-app/tests/capture-buffer.test.ts`.
 Verify: sample-count fixture, reload recovery, storage denied/cleared/full, no cleanup of unacknowledged chunks, bounded allocations and no buffer reuse before consumer completion.
@@ -1054,7 +1054,7 @@ Depends on: T05.
 ## T09. Upload audio to R2 with durable receipts
 
 - [ ] Add chunk ingest validation and server-side R2 writes, manifest commit, and reconciliation.
-- [ ] Implement browser retry/receipt journaling and local cleanup only after acknowledgement.
+- [x] Implement browser retry/receipt journaling and local cleanup only after acknowledgement.
 - [ ] Keep object credentials server-side and distinguish locally saved from remotely saved data.
 
 Files: `server/src/recordings.ts`, `web-app/src/lib/capture/uploader.ts`, `server/tests/recording-uploads.test.ts`, `web-app/tests/uploader.test.ts`.
