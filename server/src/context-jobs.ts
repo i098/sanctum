@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient, type SqlError } from '@effect/sql';
 import {
+ CaptureEpochId,
  ContextItemId,
  type ContextItem,
  type ExtractionCandidate,
@@ -23,7 +24,8 @@ import { Effect, Schema } from 'effect';
 import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { resolveTime } from './context-time.ts';
 import { lockMeeting, meetingItems, type NewItem, writeItem } from './context.ts';
-import { DbJson, DbUtc } from './db.ts';
+import { DbJson, DbSafeInt, DbUtc } from './db.ts';
+import type { ExtractionInput } from './extraction.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
 interface LedgerJob {
@@ -33,12 +35,9 @@ interface LedgerJob {
 }
 
 /** Structured extraction as context consumes it (the models slice's `extractCandidates`). */
-export interface ExtractionInput {
- readonly meeting: Meeting;
- readonly segments: ReadonlyArray<TranscriptSegment>;
- readonly snapshot: ReadonlyArray<ContextItem>;
-}
 export type Extractor<R> = (input: ExtractionInput) => Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, R>;
+
+const EpochAnchorRow = Schema.Struct({ epoch_id: CaptureEpochId, sample_rate: Schema.Number, sample_start: DbSafeInt, captured_at: DbUtc });
 
 /** Final segments one refresh reads; the rest wait for the next round. */
 const BATCH_SEGMENTS = 100;
@@ -124,7 +123,12 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
   const batch = pending.slice(0, BATCH_SEGMENTS);
   if (batch.length === 0) return { processed: 0, added: 0, rejected: 0, backlog: false };
   const { items } = yield* meetingItems(workspace_id, meeting_id);
-  const candidates = yield* extract({ meeting, segments: batch.map(toSegment), snapshot: items }).pipe(
+  const epochs = yield* decodeRows(
+   EpochAnchorRow,
+   sql`SELECT id AS epoch_id, sample_rate, sample_start, captured_at FROM capture_epochs
+          WHERE workspace_id = ${workspace_id} AND ${sql.in('id', [...new Set(batch.map(segment => segment.epoch_id))])}`,
+  );
+  const candidates = yield* extract({ meeting, segments: batch.map(toSegment), snapshot: items, epochs }).pipe(
    Effect.mapError(error => new JobFailure({ message: error.message, retryable: error.retryable })),
   );
   const byId = new Map(batch.map(segment => [segment.id as string, segment]));

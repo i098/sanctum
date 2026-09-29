@@ -15,7 +15,8 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Either, Layer, Ref } from 'effect';
 import { getContextChanges } from '../src/context-changes.ts';
-import { type ExtractionInput, commitMemory, refreshContext } from '../src/context-jobs.ts';
+import { commitMemory, refreshContext } from '../src/context-jobs.ts';
+import type { ExtractionInput } from '../src/extraction.ts';
 import { requestContextRefresh, requestMemoryCommit } from '../src/context-schedule.ts';
 import { addContextItem, appendContextEvent, getContextSnapshot, reviseContextItem } from '../src/context.ts';
 import { jobHandlers } from '../src/job-handlers.ts';
@@ -127,6 +128,7 @@ layer(Layer.merge(migratedDatabase, Layer.succeed(LlmClient, null)), { timeout: 
       expect(outcome).toEqual({ status: 'succeeded', result: { processed: 2, added: 2, rejected: 2, backlog: false } });
       const [call] = yield* Ref.get(fake.calls);
       expect(call!.segments.map(segment => segment.id)).toEqual([said, other]);
+      expect(call!.epochs).toEqual([{ epoch_id: meeting.epoch_id, sample_rate: 16_000, sample_start: 0, captured_at: '2026-09-30T06:59:50Z' }]);
       expect(call!.meeting).toMatchObject({ id: meeting.meeting_id, timezone: 'America/Los_Angeles', started_at: '2026-09-30T06:59:50Z' });
 
       const snapshot = yield* getContextSnapshot(owner!, meeting.meeting_id);
