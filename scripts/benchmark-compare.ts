@@ -39,7 +39,7 @@ const SOAK_GROWTH_BOUND_BYTES = 16 * 2 ** 20;
 const SATURATION_RATIO = 0.95;
 
 interface Workload { id: string; fixture: { seed: number }; parameters: Record<string, number | number[]> }
-const manifest: { workloads: Workload[] } = JSON.parse(readFileSync(new URL('../benchmarks/workload.json', import.meta.url), 'utf8'));
+const manifest: { reference_hardware: { name: string | null }; workloads: Workload[] } = JSON.parse(readFileSync(new URL('../benchmarks/workload.json', import.meta.url), 'utf8'));
 const workload = (id: string) => manifest.workloads.find(entry => entry.id === id)!;
 
 /** SHA-256 over the tracked files under `paths`, path and content, in path order. */
@@ -232,7 +232,8 @@ async function main(options: Options & { readonly out: string | undefined }) {
   run.sweep(options);
   run.longRun(options);
   const sources = { typescript: sourceSha(SOURCES.typescript), rust: sourceSha(SOURCES.rust) };
-  const records = run.records.map(record => ({ ...record, parameters: { ...record.parameters, harness: { ...HOST, runtime: runtime[record.implementation], source_sha256: sources[record.implementation] } } }));
+  // The Rust binary does not read the manifest: every record names the manifest reference host, as `validateResult` requires.
+  const records = run.records.map(record => ({ ...record, host: manifest.reference_hardware.name, parameters: { ...record.parameters, harness: { ...HOST, runtime: runtime[record.implementation], source_sha256: sources[record.implementation] } } }));
   if (options.out) writeFileSync(options.out, records.map(record => `${JSON.stringify(record)}\n`).join(''));
   console.log('| Workload | Mode | Offered/s | TS ops/s | Rust ops/s | TS/Rust ops | TS p50 / p95 / p99 ms | Rust p50 / p95 / p99 ms | TS/Rust p99 | CPU % TS / Rust | RSS MiB TS / Rust |');
   console.log('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
