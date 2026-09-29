@@ -14,6 +14,8 @@ export const engineeringDefaults = {
   contextJob: { quietPeriodMs: 25_000, turnThreshold: 4 },
   boundaryEvaluationGapMs: 5 * 60_000,
   playbackUrlTtlMs: 5 * 60_000,
+  /** Per-workspace external action submissions per window; more pause the job until the window frees up. */
+  actionBudget: { perWindow: 30, windowMs: 60_000 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
 } as const;

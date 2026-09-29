@@ -5,6 +5,7 @@
 import type { SqlClient } from '@effect/sql';
 import type { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import type { Effect } from 'effect';
+import { executeAction, runResearch } from './executor.ts';
 
 export interface ClaimedJob {
   readonly id: JobId;
@@ -33,4 +34,6 @@ export type JobHandler = (job: ClaimedJob) => Effect.Effect<JobOutcome, JobFailu
 
 export const jobHandlers: Partial<Record<JobKind, JobHandler>> = {
   // One line per slice, e.g. 'context.refresh': refreshContext,
+  'action.execute': executeAction,
+  'research.run': runResearch,
 };
