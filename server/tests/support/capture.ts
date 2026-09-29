@@ -16,7 +16,7 @@ import {
   type WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import type { ClaimedJob } from '../../src/job-handlers.ts';
+import type { ClaimedJob } from '../../src/job-types.ts';
 import { onFinalSegments } from '../../src/meetings.ts';
 
 export const RATE = 16_000;

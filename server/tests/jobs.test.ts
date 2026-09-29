@@ -4,7 +4,7 @@ import { JobFailure, type JobKind, type PrincipalId, type WorkspaceId } from '@s
 import { Effect, Fiber, Option, Ref, Schedule } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { resolveAccess } from '../src/auth.ts';
-import type { ClaimedJob, JobHandlers } from '../src/job-handlers.ts';
+import type { ClaimedJob, JobHandlers } from '../src/job-types.ts';
 import { claimJob, completeJob, enqueueJob, type Lease, retryDeadlocks, runWorker, sweepJobs } from '../src/jobs.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';

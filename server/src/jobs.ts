@@ -11,7 +11,7 @@ import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/c
 import { Cause, Effect, Either, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
-import type { ClaimedJob, JobHandlers, JobOutcome } from './job-handlers.ts';
+import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
 import { write } from './store.ts';
 
 export interface EnqueueJob {
