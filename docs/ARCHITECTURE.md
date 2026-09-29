@@ -48,9 +48,9 @@ Each entry lists owned files, then the exact exports siblings import. `R` is `Sq
 
 ### kernel (T03, T05, job ledger core from T11/T19)
 
-Owns `server/src/store.ts`, `server/src/auth.ts` (extends the foundation file), `server/src/agents.ts`, `server/src/cache.ts`, `server/src/jobs.ts` (replaces the stand-in), migrations `001_initial` and `004_jobs`, `packages/contracts/src/agents.ts`.
+Owns `server/src/store.ts`, `server/src/auth.ts` (extends the foundation file), `server/src/agents.ts`, `server/src/cache.ts`, `server/src/jobs.ts` (replaces the stand-in), migrations `001_initial` and `004_jobs`, and the agent section of `packages/contracts/src/auth.ts` (kept beside `SessionApi` so no import chain deepens).
 
-- `auth.ts`: `KernelAuthenticatorLive: Layer<Authenticator, never, R>`; main.ts swaps it for `UnconfiguredAuthenticator`.
+- `auth.ts`: `KernelAuthenticatorLive: Layer<Authenticator, never, R>` (sessions + hashed bearer credentials) is main.ts's default; the unconfigured authenticator is gone.
 - `auth.ts`: `resolveAccess(input: { workspace_id; principal_id }): Effect<AccessScope, Forbidden, R>` for workers and sockets.
 - `auth.ts`: `authenticateUpgrade(request: IncomingMessage): Effect<AccessScope, Unauthenticated | Forbidden, R>` with the Origin allowlist.
 - `auth.ts`: `requireScope(access, scope: AccessScopeName): Effect<void, Forbidden>`.
@@ -62,7 +62,7 @@ Owns `server/src/store.ts`, `server/src/auth.ts` (extends the foundation file), 
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
-- contracts: `AgentsApi` with `createAgent`, `revokeCredential`.
+- contracts: `AgentsApi` with `createAgent`, `listAgents`, `revokeCredential`.
 
 ### capture (T06, T07, browser half of T09)
 

@@ -987,9 +987,9 @@ Depends on: T01.
 
 ## T03. Implement scoped persistence operations
 
-- [ ] Add repositories for workspace/principal/meeting ownership using parameterized MySQL queries.
-- [ ] Define uniqueness, upsert, pagination, and revision semantics explicitly.
-- [ ] Test case-sensitive identifiers and isolation from the first query layer.
+- [x] Add repositories for workspace/principal/meeting ownership using parameterized MySQL queries.
+- [x] Define uniqueness, upsert, pagination, and revision semantics explicitly.
+- [x] Test case-sensitive identifiers and isolation from the first query layer.
 
 Files: `server/src/store.ts`, `packages/contracts/src/index.ts`, `server/tests/store.test.ts`.
 Verify: two workspaces, duplicate keys, empty results, revision conflicts, and correct transaction rollback for DML.
@@ -1007,9 +1007,9 @@ Depends on: T03.
 
 ## T05. Enforce a shared authorization boundary
 
-- [ ] Implement verified human identity and workspace membership; distinguish login from Pipedream action linking.
-- [ ] Add credential principal/scope resolution and consistent resource access checks.
-- [ ] Apply the same authorization functions to all API routes and worker jobs.
+- [x] Implement verified human identity and workspace membership; distinguish login from Pipedream action linking.
+- [x] Add credential principal/scope resolution and consistent resource access checks.
+- [x] Apply the same authorization functions to all API routes and worker jobs.
 
 Files: `server/src/auth.ts`, `server/src/main.ts`, `server/src/agents.ts`, `server/src/cache.ts`, `server/tests/authorization.test.ts`.
 Verify: two workspaces, colliding names, expired/revoked credentials, missing session membership, and denied cross-workspace access.
@@ -1017,9 +1017,9 @@ Depends on: T04; production issuer configuration remains a live gate.
 
 ## Checkpoint A. Identity and migration safety
 
-- [ ] MySQL schema and transactions preserve explicit ownership and semantic matching records.
-- [ ] Every API surface enforces ownership.
-- [ ] No cached response can cross principal/workspace scope.
+- [x] MySQL schema and transactions preserve explicit ownership and semantic matching records.
+- [x] Every API surface enforces ownership.
+- [x] No cached response can cross principal/workspace scope.
 
 ## T06. Establish browser microphone capture
 

@@ -4,11 +4,12 @@
  * belongs to the separate worker entrypoint (worker.ts), never to this process.
  */
 import { createServer } from 'node:http';
+import type { SqlClient } from '@effect/sql';
 import { HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
 import { Effect, Layer } from 'effect';
 import { ApiLive } from './api.ts';
-import { type Authenticator, UnconfiguredAuthenticator } from './auth.ts';
+import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
 import { loadMigrations } from './migrate.ts';
@@ -16,7 +17,7 @@ import { loadMigrations } from './migrate.ts';
 /** Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free port). */
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: MysqlOptions },
-  authenticator: Layer.Layer<Authenticator> = UnconfiguredAuthenticator,
+  authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
 ) =>
   HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
     HttpServer.withLogAddress,

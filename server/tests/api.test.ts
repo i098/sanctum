@@ -48,13 +48,15 @@ describe('API entrypoint', () => {
     }),
   );
 
-  it.scoped('is not ready while migrations are pending and refuses sessions without configured auth', () =>
+  it.scoped('is not ready while migrations are pending and never grants a session without the credential tables', () =>
     Effect.gen(function* () {
       const base = yield* serve({ migrated: false });
       const ready = yield* get(`${base}/readyz`);
       expect(ready.status).toBe(503);
       expect(ready.body).toMatchObject({ code: 'unavailable', retryable: true });
-      expect((yield* get(`${base}/api/v1/session`, { authorization: 'Bearer fixture' })).status).toBe(401);
+      // The kernel authenticator cannot read its tables: a server error, never an unchecked grant.
+      const session = yield* Effect.promise(() => fetch(`${base}/api/v1/session`, { headers: { authorization: 'Bearer fixture' } }));
+      expect(session.status).toBe(500);
     }),
   );
 

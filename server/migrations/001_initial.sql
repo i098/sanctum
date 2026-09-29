@@ -51,9 +51,11 @@ CREATE TABLE workspace_members (
   CONSTRAINT workspace_members_principal FOREIGN KEY (principal_id) REFERENCES principals (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- HttpOnly browser sessions; only hashes of the cookie and CSRF token are stored.
+-- HttpOnly browser sessions bound to one workspace membership; only hashes of the cookie and
+-- CSRF token are stored. Human sessions follow a verified login; device sessions follow enrollment.
 CREATE TABLE browser_sessions (
   id_hash BINARY(32) NOT NULL,
+  workspace_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   principal_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   csrf_hash BINARY(32) NOT NULL,
   created_at DATETIME(6) NOT NULL,
@@ -61,8 +63,8 @@ CREATE TABLE browser_sessions (
   last_seen_at DATETIME(6) NOT NULL,
   revoked_at DATETIME(6) NULL,
   PRIMARY KEY (id_hash),
-  KEY browser_sessions_principal_idx (principal_id),
-  CONSTRAINT browser_sessions_principal FOREIGN KEY (principal_id) REFERENCES principals (id)
+  KEY browser_sessions_member_idx (workspace_id, principal_id),
+  CONSTRAINT browser_sessions_member FOREIGN KEY (workspace_id, principal_id) REFERENCES workspace_members (workspace_id, principal_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- Plain tokens are returned once and never stored or logged.
