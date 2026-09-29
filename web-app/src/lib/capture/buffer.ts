@@ -257,6 +257,9 @@ export class RecoveryBuffer implements ChunkStore {
   /** Seals parts left by a closed or crashed page into chunks; returns how many were recovered. */
   recoverOrphans(): Promise<number> {
     return guarded(async () => {
+      this.partBytes.clear();
+      this.bytes = 0;
+      await this.measure();
       const ids = [...this.partBytes.keys()];
       for (const id of ids) {
         const range = IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]);

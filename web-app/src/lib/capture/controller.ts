@@ -349,16 +349,15 @@ class CaptureController implements CaptureView {
     this.publish();
   }
 
-  /** `journal` records `reason` as the epoch's end; an interrupted stop leaves it unjournaled so the server records `interrupted`. */
-  private async stopSession(reason: StopReason, phase: 'paused' | 'stopped', journal = true): Promise<void> {
+  private async stopSession(reason: StopReason, phase: 'paused' | 'stopped'): Promise<void> {
     const session = this.session;
     if (session === null && this.phase === 'starting') this.cancelStart = phase;
     if (session === null || session.stopping) return;
     session.stopping = true;
-    session.epoch?.live?.stop(journal ? reason : null);
+    session.epoch?.live?.stop(reason);
     await session.recorder.flush();
     this.session = null;
-    if (journal && session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
+    if (session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
     await session.epoch?.assembler.close();
     await session.recorder.close().catch(() => { });
     session.stream.getTracks().forEach((track) => track.stop());
@@ -374,7 +373,7 @@ class CaptureController implements CaptureView {
   private halt(issue: CaptureIssue, interrupted: boolean): void {
     this.issue = issue;
     this.interrupted ||= interrupted;
-    void this.stopSession('close', 'paused', !interrupted);
+    void this.stopSession(interrupted ? 'interrupted' : 'close', 'paused');
     this.publish();
   }
 

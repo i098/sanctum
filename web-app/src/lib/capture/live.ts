@@ -15,7 +15,7 @@ import {
 import { Either, Schema } from 'effect';
 
 export type LiveStatus = 'connecting' | 'reconnecting' | 'live' | 'degraded' | 'rejected';
-export type StopReason = 'pause' | 'close' | 'device_change';
+export type StopReason = 'pause' | 'close' | 'device_change' | 'interrupted';
 
 /** About two seconds of 48 kHz PCM16 queued in the socket before live frames are dropped. */
 const MAX_BUFFERED_BYTES = 192_000;
@@ -34,8 +34,7 @@ export interface LiveOptions {
 export interface LiveStream {
   /** Sends one block if the server accepted the stream and the socket is not backed up. */
   send(sampleStart: number, samples: Int16Array): void;
-  /** A `null` reason drops the socket without a `stop`, so the server records the epoch as interrupted. */
-  stop(reason: StopReason | null): void;
+  stop(reason: StopReason): void;
 }
 
 type StartMessage = typeof StartMessage.Type;
@@ -117,7 +116,7 @@ export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, 
     stop(reason) {
       stopped = true;
       clearTimeout(retry);
-      if (reason !== null && socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
+      if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
     },

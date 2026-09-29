@@ -142,7 +142,7 @@ export const StartMessage = Schema.TaggedStruct('start', {
 });
 
 export const StopMessage = Schema.TaggedStruct('stop', {
-  reason: Schema.Literal('pause', 'close', 'device_change'),
+  reason: Schema.Literal('pause', 'close', 'device_change', 'interrupted'),
 });
 
 export const ClientControlMessage = Schema.Union(StartMessage, StopMessage);

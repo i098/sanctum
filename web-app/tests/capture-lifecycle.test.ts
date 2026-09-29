@@ -109,8 +109,8 @@ class FakeLocks {
   }
 }
 
-/** `stopped` is `undefined` until the stream stops; `null` means it dropped the socket without a `stop`. */
-type FakeLive = { options: LiveOptions; sent: number[]; stopped?: StopReason | null };
+/** `stopped` is `undefined` until the stream stops. */
+type FakeLive = { options: LiveOptions; sent: number[]; stopped?: StopReason };
 
 const receipt = (manifest: RecordingChunkManifest) =>
   ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
@@ -368,7 +368,7 @@ describe('capture lifecycle', () => {
 
     h.track.unplug();
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'input_lost', archive: 'interrupted' }));
-    expect(h.lives[0]!.stopped).toBeNull(); // no clean `stop`: the server records the epoch interrupted
+    expect(h.lives[0]!.stopped).toBe('interrupted');
   });
 
   it('keeps capturing while overlays subscribe and unsubscribe', async () => {
@@ -408,7 +408,7 @@ describe('capture lifecycle', () => {
     closed.feed(0.6);
     closed.win.dispatchEvent(new Event('pagehide'));
     expect(closed.track.readyState).toBe('ended');
-    expect(closed.lives[0]!.stopped).toBeNull();
+    expect(closed.lives[0]!.stopped).toBe('interrupted');
 
     const buffer = new MemoryBuffer();
     buffer.orphans = 1;
@@ -704,7 +704,7 @@ describe('capture lifecycle', () => {
     const reloaded = harness({ buffer: closed.buffer, stored: true });
     await vi.waitFor(() => expect(reloaded.calls.put.map((manifest) => manifest.epoch_id)).toEqual([epoch]));
     expect(reloaded.lives.map((live) => live.options.start)).toMatchObject([{ epoch_id: epoch, lease_generation: 1, archive_only: true }]);
-    expect(reloaded.lives[0]!.options.start).not.toHaveProperty('end_reason'); // a tab close never journals: the server records interrupted
+    expect(reloaded.lives[0]!.options.start).toMatchObject({ end_reason: 'interrupted' });
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0, strandedChunks: 0 }));
   });
 

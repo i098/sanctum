@@ -48,18 +48,4 @@ describe('live stream', () => {
     socket.onmessage!({ data: JSON.stringify(cancel) });
     expect(speech).toEqual([chunk, cancel]);
   });
-
-  it('sends a clean stop, but drops the socket silently when the stop is an interruption', () => {
-    const open = () => {
-      const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, WebSocket: FakeSocket as never });
-      return { stream, socket: FakeSocket.last };
-    };
-    const paused = open();
-    paused.stream.stop('pause');
-    expect(paused.socket.sent).toEqual([JSON.stringify({ _tag: 'stop', reason: 'pause' })]);
-    const interrupted = open();
-    interrupted.stream.stop(null);
-    expect(interrupted.socket.sent).toEqual([]);
-    expect(interrupted.socket.closed).toBe(true);
-  });
 });

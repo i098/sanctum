@@ -216,6 +216,23 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
     }),
   );
 
+  it.scoped('ends the live epoch as interrupted when the client stops for an interruption', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host } = yield* setup;
+      const { listener_id, lease_generation } = yield* claimListener(host, 'device');
+      const epoch_id = newEpochId();
+      const socket = yield* openSocket(host, listener_id, 'device');
+      socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
+      yield* socket.take('accepted');
+      socket.send(JSON.stringify({ _tag: 'stop', reason: 'interrupted' }));
+      expect(yield* socket.closed).toMatchObject({ code: 1000, reason: 'stopped' });
+      expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
+      const [listener] = yield* sql<{ current_epoch_id: string | null; state: string }>`SELECT current_epoch_id, state FROM listeners WHERE id = ${listener_id}`;
+      expect(listener).toMatchObject({ current_epoch_id: null, state: 'stopped' });
+    }),
+  );
+
   it.scoped('keeps two rooms independent', () =>
     Effect.gen(function* () {
       const { tokens, host } = yield* setup;

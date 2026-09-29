@@ -18,6 +18,7 @@ import {
   type ServerControlMessage,
   type SourceRange,
   type StartMessage,
+  type StopMessage,
   TranscriptSegment,
 } from '@sanctum/contracts';
 import { Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
@@ -283,7 +284,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       });
 
     /** Client `stop`: persist the watermark, flush finals, then end the epoch. */
-    const stop = (reason: 'pause' | 'close' | 'device_change') =>
+    const stop = (reason: (typeof StopMessage.Type)['reason']) =>
       Effect.gen(function* () {
         yield* flush;
         yield* asr.close('stopped');

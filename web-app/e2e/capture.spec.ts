@@ -1,9 +1,11 @@
 /** Real-browser capture against the harness in capture-server.ts. */
 import { createHash } from 'node:crypto';
 import { expect, test } from '@playwright/test';
+import type * as Buffer from '../src/lib/capture/buffer.ts';
 import type * as Engine from '../src/pages/listen/engine.ts';
 import { capture, fakeServer, LISTENER, snapshot } from './capture-server.ts';
 
+type BufferModule = typeof Buffer;
 type EngineModule = typeof Engine;
 
 function wavInfo(body: globalThis.Buffer) {
@@ -69,6 +71,25 @@ test('keeps unacknowledged audio across a reload and uploads it as an interrupte
   expect(manifest.sample_count).toBeGreaterThanOrEqual(manifest.sample_rate);
   expect(wavInfo(body).samples.length).toBe(manifest.sample_count);
   await expect.poll(async () => (await snapshot(page)).bufferedChunks).toBe(0);
+});
+
+test('seals parts another tab committed after this tab opened its buffer', async ({ page }) => {
+  await fakeServer(page, true);
+  await capture(page, { start: false, chunkSeconds: 30 });
+  const result = await page.evaluate(async (listener) => {
+    const { RecoveryBuffer } = (await import('/src/lib/capture/buffer.ts' as string)) as BufferModule;
+    const idle = await RecoveryBuffer.open();
+    const before = await idle.countChunks(listener);
+    const crashed = await RecoveryBuffer.open();
+    const samples = new Int16Array(48_000);
+    await crashed.appendPart({ chunk_id: crypto.randomUUID(), listener_id: listener, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: 48_000, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z', part_start: 0, byte_length: samples.byteLength, samples });
+    crashed.close();
+    const recovered = await idle.recoverOrphans();
+    const after = await idle.countChunks(listener);
+    idle.close();
+    return { recovered, sealed: after.pending + after.stranded - before.pending - before.stranded };
+  }, LISTENER);
+  expect(result).toEqual({ recovered: 1, sealed: 1 });
 });
 
 test('pauses visibly when the recovery buffer is full and keeps what it stored', async ({ page }) => {

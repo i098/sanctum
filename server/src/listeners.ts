@@ -245,8 +245,8 @@ export const advanceLiveWatermark = (access: AccessScope, listener_id: ListenerI
     );
   });
 
-/** Client `stop`: ends the epoch (pause, close or device change) unless a newer owner already took over. */
-export const stopEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: CaptureEpochId, lease_generation: number, reason: 'pause' | 'close' | 'device_change') =>
+/** Client `stop`: ends the epoch (pause, close, device change or interruption) unless a newer owner already took over. */
+export const stopEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: CaptureEpochId, lease_generation: number, reason: 'pause' | 'close' | 'device_change' | 'interrupted') =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.withTransaction(
