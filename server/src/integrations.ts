@@ -96,7 +96,19 @@ const configure = (action: ActionComponent, account: Account | undefined, config
  * Account-bound props for one action. `ref` names the schema the caller saw: it changes with the
  * component version, the dynamic props, the account, and the caller's permission revision.
  */
-const resolveSchema = (access: AccessScope, action: ActionComponent, account: Account | undefined, configuration: Readonly<Record<string, unknown>>) =>
+interface ResolvedSchema {
+  readonly configured: Readonly<Record<string, unknown>>;
+  readonly props: ReadonlyArray<ActionProp>;
+  readonly dynamic_props_id: string | undefined;
+  readonly ref: string;
+}
+
+const resolveSchema = (
+  access: AccessScope,
+  action: ActionComponent,
+  account: Account | undefined,
+  configuration: Readonly<Record<string, unknown>>,
+): Effect.Effect<ResolvedSchema, IntegrationFailure, PipedreamClient> =>
   Effect.gen(function*() {
     const client = yield* PipedreamClient;
     const configured = configure(action, account, configuration);
@@ -106,8 +118,6 @@ const resolveSchema = (access: AccessScope, action: ActionComponent, account: Ac
     const shape = [access.workspace_id, access.principal.id, access.permission_revision, action.key, account?.id, props.map(prop => [prop.name, prop.type, !prop.optional])];
     return { configured, props, dynamic_props_id: dynamic?.id, ref: `${action.version}:${sha256(JSON.stringify(shape)).slice(0, 32)}` };
   });
-
-type ResolvedSchema = Effect.Effect.Success<ReturnType<typeof resolveSchema>>;
 
 const toUnavailable = (error: { readonly message: string; readonly retryable?: boolean }) => new Unavailable({ message: error.message, retryable: error.retryable ?? true });
 
