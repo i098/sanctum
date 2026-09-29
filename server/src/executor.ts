@@ -82,7 +82,7 @@ const startAttempt = (job: Job, action_id: ActionId) =>
  * Records the provider's answer for this attempt. A late answer (after another attempt marked
  * the action `unknown`) still lands and reconciles it; the attempt fence stops stale overwrites.
  */
-const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{ readonly receipt: Record<string, unknown> }, IntegrationFailure>) =>
+const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{ readonly receipt: Record<string, unknown>; readonly artifact: Uint8Array | null }, IntegrationFailure>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fence = sql`workspace_id = ${row.workspace_id} AND id = ${row.id} AND attempts = ${attempt}`;
@@ -117,7 +117,7 @@ export const executeAction = (job: Job) =>
         version: row.version,
         configuration_ref: row.configuration_ref ?? '',
         arguments: row.args,
-        provider_idempotency_key: row.provider_idempotency_key!,
+        provider_idempotency_key: row.provider_idempotency_key,
       }),
     );
     yield* recordOutcome(row, start.attempt, outcome);

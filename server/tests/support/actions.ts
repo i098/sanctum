@@ -24,7 +24,7 @@ export const provider = {
 /** `vi.mock('../src/integrations.ts', ...)` factory body. */
 export const fakeIntegrations = async (importOriginal: () => Promise<typeof import('../../src/integrations.ts')>) => {
   const original = await importOriginal();
-  const fail = (message: string, ambiguous: boolean): IntegrationFailure => new original.IntegrationFailure({ message, ambiguous });
+  const fail = (message: string, ambiguous: boolean): IntegrationFailure => new original.IntegrationFailure({ message, status: null, retryable: ambiguous, ambiguous });
   return {
     ...original,
     executeIntegrationAction: (input: ExecuteInput) =>
@@ -33,8 +33,8 @@ export const fakeIntegrations = async (importOriginal: () => Promise<typeof impo
         provider.sent.push(input);
         const receipt = { message_id: `msg-${provider.sent.length}`, idempotency_key: input.provider_idempotency_key };
         if (provider.mode === 'ambiguous_after_send') return Effect.fail(fail('Timed out after submission', true));
-        if (provider.mode === 'hold') return Effect.as(Effect.promise(() => new Promise<void>(resolve => (provider.release = resolve))), { receipt });
-        return Effect.succeed({ receipt });
+        if (provider.mode === 'hold') return Effect.as(Effect.promise(() => new Promise<void>(resolve => (provider.release = resolve))), { receipt, artifact: null });
+        return Effect.succeed({ receipt, artifact: null });
       }),
   };
 };
