@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import type { SqlClient } from '@effect/sql';
 import { Effect, Redacted } from 'effect';
 import { createConnection } from 'mysql2/promise';
-import { inject } from 'vitest';
 import { dbLayer, type MysqlOptions } from '../../src/db.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 
@@ -12,15 +11,14 @@ export interface TestDatabase {
   readonly mysql: MysqlOptions;
 }
 
-const admin = () => createConnection(inject('mysqlAdminUrl'));
-
-/** Creates `sanctum_t_<random>`; the returned `drop` removes it. */
-export async function createTestDatabase(): Promise<TestDatabase & { drop: () => Promise<void> }> {
+/** Creates `sanctum_t_<random>` on the server at `adminUrl`; the returned `drop` removes it. Usable outside Vitest. */
+export async function createDatabaseOn(adminUrl: string): Promise<TestDatabase & { drop: () => Promise<void> }> {
+  const admin = () => createConnection(adminUrl);
   const name = `sanctum_t_${randomBytes(6).toString('hex')}`;
   const connection = await admin();
   await connection.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
   await connection.end();
-  const url = new URL(inject('mysqlAdminUrl'));
+  const url = new URL(adminUrl);
   const mysql = {
     host: url.hostname,
     port: Number(url.port),
@@ -37,6 +35,9 @@ export async function createTestDatabase(): Promise<TestDatabase & { drop: () =>
   };
   return { name, mysql, drop };
 }
+
+/** A database on the Vitest run's shared server (Vitest is imported lazily so other processes can load this module). */
+export const createTestDatabase = async () => createDatabaseOn((await import('vitest')).inject('mysqlAdminUrl'));
 
 /** Runs `use` against a fresh database (optionally fully migrated) and drops it afterwards. */
 export const withDatabase = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>, options: { readonly migrated?: boolean } = {}) =>

@@ -2,7 +2,7 @@
  * Test-side stand-in for the media slice: listeners, capture epochs and final transcript
  * segments inserted the way media's session persists them before calling the meeting hooks.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import {
   type AccessScope,
@@ -18,8 +18,10 @@ import {
 import { Effect } from 'effect';
 import type { ClaimedJob } from '../../src/job-types.ts';
 import { onFinalSegments } from '../../src/meetings.ts';
+import type { MemoryObjectStore } from './object-store.ts';
 
 export const RATE = 16_000;
+const CHUNK_SECONDS = 10;
 const T0 = '2026-09-28 16:00:00.000000';
 
 export interface Listener {
@@ -54,6 +56,21 @@ export const seedEpoch = (listener: Listener, captured_at = T0, live_sample_end 
       VALUES (${id}, ${listener.workspace_id}, ${listener.listener_id}, 1, ${RATE}, 1, 'pcm_s16le', 0, ${captured_at}, 'America/Los_Angeles', 'start', ${captured_at}, ${live_sample_end})`;
     yield* sql`UPDATE listeners SET current_epoch_id = ${id} WHERE id = ${listener.listener_id}`;
     return id;
+  });
+
+/** 10-second WAV chunk whose every sample holds its chunk sequence number, so any cut shows exactly which audio it contains. */
+export const commitChunk = (listener: Listener, epoch: CaptureEpochId, sequence: number, store: MemoryObjectStore) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const count = CHUNK_SECONDS * RATE;
+    const wav = new Uint8Array(44 + count * 2);
+    new Int16Array(wav.buffer, 44).fill(sequence + 1);
+    const sha256 = createHash('sha256').update(wav).digest('hex');
+    const key = `chunks/${epoch}/${sequence}.wav`;
+    store.objects.set(key, { body: wav, sha256, contentType: 'audio/wav' });
+    yield* sql`INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at, byte_length, sha256, object_key, upload_state, created_at, committed_at)
+      VALUES (${randomUUID()}, ${listener.workspace_id}, ${listener.listener_id}, ${epoch}, 0, ${sequence}, ${sequence * count}, ${count}, ${RATE}, UTC_TIMESTAMP(6), ${wav.byteLength},
+        ${Buffer.from(sha256, 'hex')}, ${key}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
   });
 
 export const seedConnection = (listener: Listener, epoch_id: CaptureEpochId, purpose = 'asr', provider = 'deepgram') =>

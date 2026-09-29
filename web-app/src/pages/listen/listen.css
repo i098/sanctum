@@ -237,3 +237,41 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
+
+.listen-panel h3 {
+  margin: 16px 0 6px;
+  color: #e7ecf3;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.listen-transcript,
+.listen-items {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.listen-transcript li,
+.listen-items li {
+  margin-bottom: 6px;
+}
+
+.listen-transcript li[aria-current='true'] {
+  color: #e7ecf3;
+  box-shadow: -8px 0 0 -6px #3d7dff;
+}
+
+.listen-source button {
+  padding: 0 4px;
+  text-decoration: underline;
+}
+
+.listen-recording audio {
+  width: 100%;
+  color-scheme: dark;
+}
+
+.listen-recording p {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
