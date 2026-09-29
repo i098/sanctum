@@ -79,13 +79,13 @@ test('seals parts another tab committed after this tab opened its buffer', async
   const result = await page.evaluate(async (listener) => {
     const { RecoveryBuffer } = (await import('/src/lib/capture/buffer.ts' as string)) as BufferModule;
     const idle = await RecoveryBuffer.open();
-    const before = await idle.countChunks([listener]);
+    const before = await idle.countChunks([listener], false);
     const crashed = await RecoveryBuffer.open();
     const samples = new Int16Array(48_000);
     await crashed.appendPart({ chunk_id: crypto.randomUUID(), listener_id: listener, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: 48_000, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z', part_start: 0, byte_length: samples.byteLength, samples });
     crashed.close();
     const recovered = await idle.recoverOrphans();
-    const after = await idle.countChunks([listener]);
+    const after = await idle.countChunks([listener], false);
     idle.close();
     return { recovered, sealed: after.pending + after.stranded - before.pending - before.stranded };
   }, LISTENER);

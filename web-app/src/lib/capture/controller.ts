@@ -11,7 +11,7 @@ import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type LiveOptions, type LiveStatus, type LiveStream, type RejectReason, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
-import { acquireMicrophone, captureIssue, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
+import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
 import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
@@ -115,9 +115,9 @@ class CaptureController implements CaptureView {
   private uploading = false;
   private claimed = false;
   private pending = 0;
-  /** Local chunks of removed listeners: kept, never pending, listed for export or discard. */
+  /** Local chunks of removed listeners in ended epochs: kept, never pending, listed for export or discard. */
   private stranded = 0;
-  /** Local chunks of the removed listener this tab still records under: never pending, listed once capture stops. */
+  /** Local chunks of removed listeners in epochs still being recorded, here or in another tab: never pending, listed once capture stops. */
   private recording = 0;
   /** Local chunks of this device's listeners that the server refused: kept, never pending. */
   private refused = 0;
@@ -188,7 +188,7 @@ class CaptureController implements CaptureView {
   readonly resume = (): Promise<void> => this.start();
 
   async orphanedRecordings(): Promise<readonly OrphanedRecording[]> {
-    return (await this.openBuffer()).orphanedRecordings(this.owned(), this.deps.wavMaxSamples);
+    return (await this.openBuffer()).orphanedRecordings(this.uploadable(), await this.capturing(), this.deps.wavMaxSamples);
   }
 
   async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording, part: number): Promise<WavPart | null> {
@@ -198,9 +198,9 @@ class CaptureController implements CaptureView {
   }
 
   async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
-    const release = this.session === null ? await holdCaptureLock(this.nav.locks).catch(() => { throw new Error('capture is running in another tab; stop it there before discarding'); }) : async () => { };
+    const release = this.session === null ? await holdCaptureLock(this.nav.locks).catch(() => { throw new Error('capture is starting or running; stop it before discarding'); }) : async () => { };
     try {
-      await (await this.openBuffer()).discardRecording(listenerId, epochId, this.owned());
+      await (await this.openBuffer()).discardRecording(listenerId, epochId, this.uploadable(), this.session !== null);
     } finally {
       await release();
     }
@@ -228,14 +228,14 @@ class CaptureController implements CaptureView {
     try {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) this.interrupted = true;
-      await this.count(buffer);
       this.savedThroughMs = await buffer.savedThroughMs();
-      this.claimed = this.interrupted || this.pending > 0;
     } catch {
       // Storage problems surface as issues when capture starts.
     } finally {
       await release();
     }
+    await this.refreshPending();
+    this.claimed = this.interrupted || this.pending > 0;
     this.publish();
     this.startDrain();
   }
@@ -472,7 +472,7 @@ class CaptureController implements CaptureView {
 
   private async beat(): Promise<void> {
     const listener = this.listener;
-    if (listener === null) return;
+    if (listener === null) return this.refreshPending();
     this.startDrain();
     const buffer = await this.buffer?.catch(() => null);
     const payload = {
@@ -494,7 +494,7 @@ class CaptureController implements CaptureView {
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.listener = null; // the server no longer knows this listener; the next start registers again
       if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
-      void this.refreshPending(); // its chunks are now stranded once no tab still owns it: kept locally, no longer pending
+      void this.refreshPending(); // its chunks are now removed-listener audio once no tab still owns it: kept locally, no longer pending
     }
   }
 
@@ -599,14 +599,14 @@ class CaptureController implements CaptureView {
     return [this.storedListener()?.id, this.listener?.id].filter((id) => id !== undefined);
   }
 
-  /** The uploadable listeners and the one this tab still records under (removed or not): never orphaned, never discarded. */
-  private owned(): string[] {
-    return [...this.uploadable(), this.session?.listener.id].filter((id) => id !== undefined);
+  /** Whether capture runs in this tab or any tab holds the capture lock: epochs without an end record are then still being recorded. */
+  private async capturing(): Promise<boolean> {
+    return this.session !== null || (await captureLockHeld(this.nav.locks));
   }
 
-  /** Counts every local chunk in exactly one category, from the same listeners `owned` lists. */
+  /** Counts every local chunk in exactly one category, from the same listeners and recording rule the list uses. */
   private async count(buffer: CaptureBuffer): Promise<void> {
-    ({ pending: this.pending, refused: this.refused, recording: this.recording, stranded: this.stranded } = await buffer.countChunks(this.uploadable(), this.session?.listener.id ?? null));
+    ({ pending: this.pending, refused: this.refused, recording: this.recording, stranded: this.stranded } = await buffer.countChunks(this.uploadable(), await this.capturing()));
   }
 
   private async refreshPending(): Promise<void> {

@@ -23,9 +23,9 @@ export interface CaptureSnapshot {
   readonly issue: CaptureIssue | null;
   readonly epochId: string | null;
   readonly bufferedChunks: number;
-  /** Chunks of removed listeners (the server no longer knows them) kept on this device: never uploadable, listed for export or discard. */
+  /** Chunks of removed listeners (the server no longer knows them) in ended epochs, kept on this device: never uploadable, listed for export or discard. */
   readonly strandedChunks: number;
-  /** Chunks of the removed listener this tab is still recording under: never pending, listed for export or discard once capture stops. */
+  /** Chunks of removed listeners in epochs still being recorded, in this tab or another: never pending, listed for export or discard once capture stops. */
   readonly recordingChunks: number;
   /** Chunks of this device's listeners that the server refused (e.g. recorded after another device took the lease) kept on this device. */
   readonly refusedChunks: number;
