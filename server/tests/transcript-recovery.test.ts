@@ -51,7 +51,10 @@ const texts = (access: AccessScope, epoch_id: CaptureEpochId, sample_end = 10 * 
     segments.map(segment => [segment.origin, segment.source.sample_start, segment.source.sample_end, segment.text, segment.revision]),
   );
 
-/** Recovered offline audio: an archive-only epoch journaled with `end_reason`, 5 s uploaded, then reconciled. */
+/**
+ * Recovered offline audio: an archive-only epoch journaled with `end_reason` and 5 s of audio, uploaded
+ * and reconciled one chunk job at a time. Returns the meeting states before the last job and after it.
+ */
 const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause') =>
   Effect.gen(function* () {
     const access = yield* seedDevice('Room');
@@ -59,7 +62,7 @@ const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause') =>
     const { lease_generation } = yield* heartbeat(access, listener.id, { lease_generation: 0, state: 'starting', epoch_id: null, buffered_chunks: 0, storage_bytes_free: null });
     const epoch_id = newEpochId();
     const clock = { sample_rate: RATE, channels: 1, encoding: 'pcm_s16le', sample_start: 0, captured_at: '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' } as const;
-    const start = { _tag: 'start', protocol_version: 1, listener_id: listener.id, epoch_id, track: 0, clock: clock as never, lease_generation, start_reason: 'start', archive_only: true, end_reason } as const;
+    const start = { _tag: 'start', protocol_version: 1, listener_id: listener.id, epoch_id, track: 0, clock: clock as never, lease_generation, start_reason: 'start', archive_only: true, end_reason, sample_end: 5 * RATE } as const;
     expect(yield* startEpoch(access, start)).toMatchObject({ _tag: 'accepted' });
     const store = memoryObjectStore();
     const speech = fakeSpeech();
@@ -70,18 +73,24 @@ const recoverArchive = (end_reason: 'close' | 'interrupted' | 'pause') =>
       const upload = chunk({ listener_id: listener.id, epoch_id, sequence: second, sample_start: second * RATE, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }) });
       yield* Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers);
     }
-    yield* Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: 0, sample_end: 5 * RATE } }), providers);
     const sql = yield* SqlClient.SqlClient;
-    return yield* sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`;
+    const states = () => Effect.map(sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`, rows => rows.map(row => row.state));
+    const reconcile = (second: number) =>
+      Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: second * RATE, sample_end: (second + 1) * RATE } }), providers);
+    for (const second of [4, 0, 1, 2]) yield* reconcile(second);
+    const before = yield* states();
+    yield* reconcile(3);
+    return { before, after: yield* states() };
   });
 
 layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation', it => {
   it.effect('seals the meeting of recovered offline audio with the journaled end reason once it is reconciled', () =>
     Effect.gen(function* () {
-      expect(yield* recoverArchive('close')).toEqual([{ state: 'closing' }]);
-      expect(yield* recoverArchive('interrupted')).toEqual([{ state: 'interrupted' }]);
+      // Chunk jobs finish out of order; the meeting seals only once the last gap is reconciled.
+      expect(yield* recoverArchive('close')).toEqual({ before: ['provisional'], after: ['closing'] });
+      expect(yield* recoverArchive('interrupted')).toEqual({ before: ['provisional'], after: ['interrupted'] });
       // A pause is not an end of the meeting: it stays open for the next capture.
-      expect((yield* recoverArchive('pause')).map(row => row.state)).not.toContain('closing');
+      expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));
 
   it.effect('batch-transcribes an upload that arrives before live ASR, and later live finals do not duplicate it', () =>

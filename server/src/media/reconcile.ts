@@ -30,15 +30,16 @@ const WAV_HEADER_BYTES = 44;
 const ArchiveEnd = Schema.Struct({
   listener_id: ListenerId,
   end_reason: Schema.NullOr(EpochEndReason),
-  archive: DbSafeInt,
   idle: DbSafeInt,
+  sample_start: DbSafeInt,
   sample_end: Schema.NullOr(DbSafeInt),
 });
 
 /**
  * An archive-only epoch (recovered offline audio, never live) that ended by close or interruption
- * seals its meeting once its uploaded audio is reconciled, so notes and memory run without waiting
- * for a later boundary. Skipped while the listener captures live: that session owns the open meeting.
+ * seals its meeting once final transcript covers all the audio the device reported, however many
+ * chunk jobs that took, so notes and memory run without waiting for a later boundary. Skipped while
+ * the listener captures live: that session owns the open meeting.
  */
 const sealArchiveEpoch = (workspace_id: WorkspaceId, epoch_id: CaptureEpochId, track: number) =>
   Effect.gen(function* () {
@@ -47,14 +48,14 @@ const sealArchiveEpoch = (workspace_id: WorkspaceId, epoch_id: CaptureEpochId, t
       Request: CaptureEpochId,
       Result: ArchiveEnd,
       execute: id => sql`
-        SELECT e.listener_id, e.end_reason, e.ended_at IS NOT NULL AND e.live_sample_end = e.sample_start AS archive,
-               l.current_epoch_id IS NULL OR l.current_epoch_id = e.id AS idle,
-               (SELECT MAX(c.sample_start + c.sample_count) FROM recording_chunks c
-                WHERE c.workspace_id = e.workspace_id AND c.epoch_id = e.id AND c.track = ${track} AND c.upload_state = 'committed') AS sample_end
+        SELECT e.listener_id, e.end_reason, l.current_epoch_id IS NULL OR l.current_epoch_id = e.id AS idle,
+               e.sample_start, e.archive_sample_end AS sample_end
         FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
         WHERE e.workspace_id = ${workspace_id} AND e.id = ${id}`,
     })(epoch_id).pipe(Effect.catchTag('ParseError', Effect.die));
-    if (end === undefined || end.archive !== 1 || end.idle !== 1 || end.sample_end === null || end.end_reason === null) return;
+    if (end === undefined || end.idle !== 1 || end.sample_end === null || end.end_reason === null) return;
+    const span = { sample_start: end.sample_start, sample_end: end.sample_end };
+    if (uncovered(span, yield* coverageIn(workspace_id, epoch_id, track, span)).length > 0) return;
     yield* onCaptureEnded({ workspace_id, listener_id: end.listener_id, epoch_id, track, sample_end: end.sample_end, reason: end.end_reason });
   });
 

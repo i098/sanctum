@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd'
 >;
 
 export interface CaptureDeps {
@@ -511,8 +511,11 @@ class CaptureController implements CaptureView {
   private unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'> {
     if (this.session?.epoch?.id === epochId) return Effect.succeed('wait');
     return Effect.promise(async () => {
-      const start = await this.buffer?.then((buffer) => buffer.epochStart(epochId)).catch(() => null);
-      return start && this.listener?.id === start.listener_id ? { ...start, archive_only: true } : null;
+      const buffer = await this.buffer?.catch(() => null);
+      const start = await buffer?.epochStart(epochId).catch(() => null);
+      if (!start || this.listener?.id !== start.listener_id) return null;
+      const end = await buffer!.epochSampleEnd(start.listener_id, epochId).catch(() => null);
+      return { ...start, archive_only: true, ...(end === null ? {} : { sample_end: end }) };
     }).pipe(
       Effect.flatMap((start) =>
         start === null

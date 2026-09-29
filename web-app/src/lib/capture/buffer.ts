@@ -178,6 +178,20 @@ export class RecoveryBuffer implements ChunkStore {
     return guarded(async () => ((await request(this.db.transaction(EPOCHS).objectStore(EPOCHS).get(epochId))) as typeof StartMessage.Type | undefined) ?? null);
   }
 
+  /** End of the audio buffered for `epochId`, so an archive registration can say where the epoch stops. */
+  epochSampleEnd(listenerId: string, epochId: string): Promise<number | null> {
+    return guarded(async () => {
+      let end: number | null = null;
+      const range = IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
+      await walk(this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(range), (current) => {
+        const { manifest } = current.value as ChunkRecord;
+        if (manifest.epoch_id === epochId) end = Math.max(end ?? 0, manifest.sample_start + manifest.sample_count);
+        return undefined;
+      });
+      return end;
+    });
+  }
+
   /** Oldest unacknowledged chunk of `listenerId` that the server has not refused. */
   nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {

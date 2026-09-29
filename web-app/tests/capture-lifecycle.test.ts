@@ -66,6 +66,10 @@ class MemoryBuffer implements CaptureBuffer {
     return this.starts.get(epochId) ?? null;
   }
   readonly refused = new Set<string>();
+  async epochSampleEnd(listenerId: string, epochId: string) {
+    const ends = [...this.chunks.values()].filter(({ manifest }) => manifest.listener_id === listenerId && manifest.epoch_id === epochId).map(({ manifest }) => manifest.sample_start + manifest.sample_count);
+    return ends.length === 0 ? null : Math.max(...ends);
+  }
   async nextPending(listenerId: string) {
     return [...this.chunks.values()].find((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)) ?? null;
   }
@@ -607,7 +611,7 @@ describe('capture lifecycle', () => {
     h.setOffline(false);
     h.win.dispatchEvent(new Event('online'));
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([offline, offline]));
-    expect(h.lives.at(-1)!.options.start).toMatchObject({ epoch_id: offline, lease_generation: 1, archive_only: true, end_reason: 'pause' });
+    expect(h.lives.at(-1)!.options.start).toMatchObject({ epoch_id: offline, lease_generation: 1, archive_only: true, end_reason: 'pause', sample_end: expect.any(Number) });
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 }));
     expect(h.buffer.starts.has(offline)).toBe(false);
   });

@@ -162,10 +162,10 @@ const insertEpoch = (access: AccessScope, start: typeof StartMessage.Type, ended
     const { clock } = start;
     return sql`
       INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at,
-                                  timezone, start_reason, started_at, live_sample_end, ended_at, end_reason)
+                                  timezone, start_reason, started_at, live_sample_end, ended_at, end_reason, archive_sample_end)
       VALUES (${start.epoch_id}, ${access.workspace_id}, ${start.listener_id}, ${start.lease_generation}, ${clock.sample_rate}, ${clock.channels},
               ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, UTC_TIMESTAMP(6),
-              ${clock.sample_start}, IF(${ended !== null}, UTC_TIMESTAMP(6), NULL), ${ended})`;
+              ${clock.sample_start}, IF(${ended !== null}, UTC_TIMESTAMP(6), NULL), ${ended}, ${ended === null ? null : (start.sample_end ?? null)})`;
   });
 
 /** An existing epoch must belong to this listener and clock. */

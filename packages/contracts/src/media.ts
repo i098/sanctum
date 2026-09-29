@@ -137,6 +137,8 @@ export const StartMessage = Schema.TaggedStruct('start', {
    * device never saw it end (tab closed, crash), which the server records as `interrupted`.
    */
   end_reason: Schema.optional(EpochEndReason),
+  /** With `archive_only`: end of the epoch's audio buffered on the device, so the server knows when all of it is reconciled. */
+  sample_end: Schema.optional(SampleIndex),
 });
 
 export const StopMessage = Schema.TaggedStruct('stop', {

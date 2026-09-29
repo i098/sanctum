@@ -66,6 +66,8 @@ CREATE TABLE capture_epochs (
   live_sample_end BIGINT UNSIGNED NOT NULL,
   ended_at DATETIME(6) NULL,
   end_reason ENUM('pause', 'close', 'interrupted', 'device_change', 'lease_lost') NULL,
+  -- Archive-only epochs: end of the audio the device reported, sealed once reconciled through it.
+  archive_sample_end BIGINT UNSIGNED NULL,
   PRIMARY KEY (id),
   UNIQUE KEY capture_epochs_owned (workspace_id, id),
   KEY capture_epochs_listener_idx (listener_id, started_at),
