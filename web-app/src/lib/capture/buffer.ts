@@ -234,14 +234,17 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
-  /** Chunks of listeners outside `owned`, grouped per recording; audio values are visited, not kept. */
+  /** Chunks of listeners outside `owned`, grouped per recording; owned audio is never read, orphaned audio is visited, not kept. */
   orphanedRecordings(owned: readonly string[]): Promise<OrphanedRecording[]> {
     return guarded(async () => {
+      const index = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener');
+      const listeners = new Set<string>();
+      await walk(index.openKeyCursor(), (current) => void listeners.add((current.key as [string, string])[0]));
       const manifests: RecordingChunkManifest[] = [];
-      await walk(this.db.transaction(CHUNKS).objectStore(CHUNKS).openCursor(), (current) => {
-        const { manifest } = current.value as ChunkRecord;
-        if (!owned.includes(manifest.listener_id)) manifests.push(manifest);
-      });
+      for (const listenerId of listeners) {
+        if (owned.includes(listenerId)) continue;
+        await walk(index.openCursor(listenerRange(listenerId)), (current) => void manifests.push((current.value as ChunkRecord).manifest));
+      }
       return groupRecordings(manifests);
     });
   }

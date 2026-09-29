@@ -92,7 +92,10 @@ class MemoryBuffer implements CaptureBuffer {
   async recordingChunks() {
     return [];
   }
-  async discardRecording() { }
+  async discardRecording(listenerId: string, epochId: string, owned: readonly string[]) {
+    if (owned.includes(listenerId)) return;
+    for (const [id, { manifest }] of this.chunks) if (manifest.listener_id === listenerId && manifest.epoch_id === epochId) this.chunks.delete(id);
+  }
   async savedThroughMs() {
     return null;
   }
@@ -483,6 +486,22 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'stopped', archive: null, bufferedChunks: 0, strandedChunks: 1 });
     expect(h.calls.put).toEqual([]);
     expect(buffer.chunks.has(old.manifest.chunk_id)).toBe(true);
+  });
+
+  it('never discards pending audio of the listener another tab registered after this one loaded', async () => {
+    const buffer = new MemoryBuffer();
+    const seal = (listener_id: string) =>
+      sealChunk({ chunk_id: crypto.randomUUID(), listener_id, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' }, new Int16Array(RATE));
+    const [removed, pending] = await Promise.all([seal(LISTENER_ID), seal(NEXT_LISTENER_ID)]);
+    await Promise.all([buffer.sealChunk(removed), buffer.sealChunk(pending)]);
+    const h = harness({ buffer });
+    await settle();
+    h.storage.set('sanctum.listener', JSON.stringify({ id: NEXT_LISTENER_ID, lease_generation: 1 })); // another tab registered and records
+
+    const recording = (chunk: SealedChunk) => ({ listenerId: chunk.manifest.listener_id, epochId: chunk.manifest.epoch_id, sampleRate: RATE, startedAt: chunk.manifest.captured_at, sampleCount: RATE, chunkCount: 1, gaps: [] });
+    await h.engine.discardRecording(recording(pending));
+    await h.engine.discardRecording(recording(removed));
+    expect([...buffer.chunks.keys()]).toEqual([pending.manifest.chunk_id]);
   });
 
   it('starts a new epoch after a sleep gap instead of stretching the sample clock', async () => {
