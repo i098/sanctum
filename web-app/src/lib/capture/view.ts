@@ -23,7 +23,7 @@ export interface CaptureSnapshot {
   readonly issue: CaptureIssue | null;
   readonly epochId: string | null;
   readonly bufferedChunks: number;
-  /** Chunks kept on this device whose listener the server no longer knows; they cannot be uploaded. */
+  /** Chunks kept on this device that cannot be uploaded: their listener is gone or the server refused them. */
   readonly strandedChunks: number;
   readonly savedThroughMs: number | null;
   readonly wakeLock: 'unsupported' | 'released' | 'held';

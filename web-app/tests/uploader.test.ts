@@ -13,7 +13,7 @@ const LISTENER = '0b7a2c55-8a8e-4f35-9d5e-3c6b2f1d0a10' as ListenerId;
 const EPOCH = '0b7a2c55-8a8e-4f35-9d5e-3c6b2f1d0a11';
 const RATE = 16_000;
 
-type Fault = 'db_fail' | 'hang' | 'unauthorized' | 'wrong_receipt';
+type Fault = 'db_fail' | 'hang' | 'unauthorized' | 'unknown_epoch' | 'wrong_receipt';
 
 /**
  * In-process stand-in for the media slice's `putChunk`: an object map plays R2, a receipt map
@@ -44,6 +44,7 @@ class FakeListenersServer {
     const fault = this.faults.shift();
     if (fault === 'hang') return;
     if (fault === 'unauthorized') return send(res, 401, { _tag: 'Unauthenticated', code: 'unauthenticated', retryable: false, message: 'sign in' });
+    if (fault === 'unknown_epoch') return send(res, 404, { _tag: 'NotFound', code: 'not_found', retryable: false, message: 'Capture epoch not found for this listener' });
     const [status, reply] = this.store(manifest.chunk_id, sha256, body.length, fault);
     send(res, status, reply);
   }
@@ -74,14 +75,14 @@ class MemoryPending implements PendingStore {
   readonly chunks = new Map<string, SealedChunk>();
   readonly journal: RecordingChunkReceipt[] = [];
 
-  readonly conflicts = new Set<string>();
+  readonly refused = new Set<string>();
 
   async nextPending(listenerId: string): Promise<SealedChunk | null> {
-    return [...this.chunks.values()].find(({ manifest }) => manifest.listener_id === listenerId && !this.conflicts.has(manifest.chunk_id)) ?? null;
+    return [...this.chunks.values()].find(({ manifest }) => manifest.listener_id === listenerId && !this.refused.has(manifest.chunk_id)) ?? null;
   }
 
-  async markConflict(chunkId: string): Promise<void> {
-    this.conflicts.add(chunkId);
+  async markRefused(chunkId: string): Promise<void> {
+    this.refused.add(chunkId);
   }
 
   async acknowledge(manifest: RecordingChunkManifest, receipt: RecordingChunkReceipt): Promise<void> {
@@ -126,7 +127,7 @@ async function start(): Promise<{ server: FakeListenersServer; baseUrl: string }
 
 const fast: UploaderOptions = { timeout: '2 seconds', retry: Schedule.spaced('10 millis') };
 
-function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = fast) {
+function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = fast, openEpoch: string | null = null) {
   const events: string[] = [];
   const effect = drainPending(
     store,
@@ -135,7 +136,8 @@ function drain(store: PendingStore, baseUrl: string, options: UploaderOptions = 
     {
       onUploading: (manifest) => events.push(`uploading ${manifest.sequence}`),
       onSaved: (manifest) => events.push(`saved ${manifest.sequence}`),
-      onConflict: (manifest) => events.push(`conflict ${manifest.sequence}`),
+      onRefused: (manifest) => events.push(`refused ${manifest.sequence}`),
+      epochOpen: (epochId) => epochId === openEpoch,
     },
     options,
   );
@@ -196,13 +198,43 @@ describe('chunk uploader', () => {
     const { events, run } = drain(store, baseUrl);
 
     expect(Exit.isSuccess(await run())).toBe(true);
-    expect(events).toEqual(['uploading 0', 'conflict 0', 'uploading 1', 'saved 1']);
+    expect(events).toEqual(['uploading 0', 'refused 0', 'uploading 1', 'saved 1']);
     expect([...store.chunks.keys()]).toEqual([first!.manifest.chunk_id]);
 
     const again = drain(store, baseUrl);
     expect(Exit.isSuccess(await again.run())).toBe(true);
     expect(again.events).toEqual([]);
     expect(server.requests).toHaveLength(2);
+  });
+
+  it('keeps a chunk of an epoch the server never learned and continues with the rest', async () => {
+    const { server, baseUrl } = await start();
+    const store = await pendingWith(2);
+    const [first] = store.chunks.values();
+    server.faults.push('unknown_epoch');
+    const { events, run } = drain(store, baseUrl);
+
+    expect(Exit.isSuccess(await run())).toBe(true);
+    expect(events).toEqual(['uploading 0', 'refused 0', 'uploading 1', 'saved 1']);
+    expect([...store.chunks.keys()]).toEqual([first!.manifest.chunk_id]);
+    expect(store.refused.has(first!.manifest.chunk_id)).toBe(true);
+  });
+
+  it('waits, without refusing, for an open epoch whose start has not reached the server yet', async () => {
+    const { server, baseUrl } = await start();
+    const store = await pendingWith(2);
+    server.faults.push('unknown_epoch');
+    const waiting = drain(store, baseUrl, fast, EPOCH);
+
+    expect(Exit.isSuccess(await waiting.run())).toBe(true);
+    expect(waiting.events).toEqual(['uploading 0']);
+    expect(store.refused.size).toBe(0);
+    expect(store.chunks.size).toBe(2);
+
+    const later = drain(store, baseUrl, fast, EPOCH);
+    expect(Exit.isSuccess(await later.run())).toBe(true);
+    expect(later.events).toEqual(['uploading 0', 'saved 0', 'uploading 1', 'saved 1']);
+    expect(store.chunks.size).toBe(0);
   });
 
   it('never deletes local audio for a receipt that does not match the manifest', async () => {

@@ -47,7 +47,7 @@ const ARCHIVE: Record<ArchiveState, string> = {
 function health(snapshot: CaptureSnapshot): string {
   const archive = snapshot.archive ? ARCHIVE[snapshot.archive] : 'not recording';
   const pending = snapshot.bufferedChunks > 0 ? ` · ${snapshot.bufferedChunks} chunks pending` : '';
-  const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks kept on this device, not uploadable (listener gone)` : '';
+  const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks kept on this device, not uploadable` : '';
   return `Silent · ${archive}${pending}${stranded}`;
 }
 

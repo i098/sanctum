@@ -19,7 +19,8 @@ export const DEFAULT_CAP_BYTES = 2 ** 34;
 
 interface ChunkRecord extends SealedChunk {
   readonly chunk_id: string;
-  readonly conflict?: true;
+  /** Listener id, set once the server refused the chunk; indexed so counts never load audio. */
+  readonly refused?: string;
 }
 
 interface ReceiptRecord {
@@ -57,12 +58,15 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-function upgrade(db: IDBDatabase): void {
-  db.createObjectStore(PARTS, { keyPath: ['chunk_id', 'part_start'] }).createIndex('bytes', 'byte_length');
-  const chunks = db.createObjectStore(CHUNKS, { keyPath: 'chunk_id' });
-  chunks.createIndex('listener', ['manifest.listener_id', 'manifest.captured_at']);
-  chunks.createIndex('bytes', 'manifest.byte_length');
-  db.createObjectStore(RECEIPTS, { keyPath: 'chunk_id' }).createIndex('saved', 'saved_through_ms');
+function upgrade(db: IDBDatabase, oldVersion: number, tx: IDBTransaction): void {
+  if (oldVersion < 1) {
+    db.createObjectStore(PARTS, { keyPath: ['chunk_id', 'part_start'] }).createIndex('bytes', 'byte_length');
+    const chunks = db.createObjectStore(CHUNKS, { keyPath: 'chunk_id' });
+    chunks.createIndex('listener', ['manifest.listener_id', 'manifest.captured_at']);
+    chunks.createIndex('bytes', 'manifest.byte_length');
+    db.createObjectStore(RECEIPTS, { keyPath: 'chunk_id' }).createIndex('saved', 'saved_through_ms');
+  }
+  if (oldVersion < 2) tx.objectStore(CHUNKS).createIndex('refused', 'refused');
 }
 
 /** Walks a cursor until `visit` returns a value (resolved) or the cursor ends (null). */
@@ -104,8 +108,8 @@ export class RecoveryBuffer implements ChunkStore {
   static open({ capBytes = DEFAULT_CAP_BYTES, idb = globalThis.indexedDB, storage = globalThis.navigator?.storage }: BufferOptions = {}): Promise<RecoveryBuffer> {
     return guarded(async () => {
       if (idb === undefined) throw new StorageError('unavailable');
-      const opening = idb.open(DB_NAME, 1);
-      opening.onupgradeneeded = () => upgrade(opening.result);
+      const opening = idb.open(DB_NAME, 2);
+      opening.onupgradeneeded = (event) => upgrade(opening.result, event.oldVersion, opening.transaction!);
       const buffer = new RecoveryBuffer(await request(opening), capBytes, storage);
       await buffer.measure();
       return buffer;
@@ -146,39 +150,40 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
-  /** Oldest unacknowledged chunk of `listenerId` that the server has not refused as a hash conflict. */
+  /** Oldest unacknowledged chunk of `listenerId` that the server has not refused. */
   nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {
       const range = IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
       const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(range);
       return walk(cursor, (current) => {
         const record = current.value as ChunkRecord;
-        return record.conflict ? undefined : { manifest: record.manifest, wav: record.wav };
+        return record.refused !== undefined ? undefined : { manifest: record.manifest, wav: record.wav };
       });
     });
   }
 
-  /** Keeps a chunk the server holds with other bytes, but never offers it for upload again. */
-  markConflict(chunkId: string): Promise<void> {
+  /** Keeps a chunk the server refused (hash conflict, unknown epoch or listener), but never offers it for upload again. */
+  markRefused(chunkId: string): Promise<void> {
     return guarded(async () => {
       const tx = this.db.transaction(CHUNKS, 'readwrite');
       const chunks = tx.objectStore(CHUNKS);
       const record = (await request(chunks.get(chunkId))) as ChunkRecord | undefined;
-      if (record !== undefined) chunks.put({ ...record, conflict: true } satisfies ChunkRecord);
+      if (record !== undefined) chunks.put({ ...record, refused: record.manifest.listener_id } satisfies ChunkRecord);
       await complete(tx);
     });
   }
 
   /**
-   * Chunks still owed to `listenerId`, and stranded chunks sealed under any other listener id.
-   * `nextPending` never offers stranded chunks (the server no longer knows their listener), but
-   * their audio is kept, never deleted here.
+   * Chunks still owed to `listenerId`, and stranded chunks that can no longer be uploaded: sealed
+   * under any other listener id (the server no longer knows it) or refused by the server. Their
+   * audio is kept, never deleted here.
    */
   countChunks(listenerId: string | null): Promise<{ pending: number; stranded: number }> {
     return guarded(async () => {
       const counts = { pending: 0, stranded: 0 };
-      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openKeyCursor();
-      await walk(cursor, (current) => void ((current.key as [string, string])[0] === listenerId ? counts.pending++ : counts.stranded++));
+      const chunks = this.db.transaction(CHUNKS).objectStore(CHUNKS);
+      await walk(chunks.index('listener').openKeyCursor(), (current) => void ((current.key as [string, string])[0] === listenerId ? counts.pending++ : counts.stranded++));
+      if (listenerId !== null) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.stranded++));
       return counts;
     });
   }

@@ -53,18 +53,18 @@ class MemoryBuffer implements CaptureBuffer {
   async sealChunk(chunk: SealedChunk) {
     this.chunks.set(chunk.manifest.chunk_id, chunk);
   }
-  readonly conflicts = new Set<string>();
+  readonly refused = new Set<string>();
   async nextPending(listenerId: string) {
-    return [...this.chunks.values()].find((chunk) => chunk.manifest.listener_id === listenerId && !this.conflicts.has(chunk.manifest.chunk_id)) ?? null;
+    return [...this.chunks.values()].find((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)) ?? null;
   }
-  async markConflict(chunkId: string) {
-    this.conflicts.add(chunkId);
+  async markRefused(chunkId: string) {
+    this.refused.add(chunkId);
   }
   async acknowledge(manifest: RecordingChunkManifest) {
     this.chunks.delete(manifest.chunk_id);
   }
   async countChunks(listenerId: string | null) {
-    const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId).length;
+    const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId && !this.refused.has(chunk.manifest.chunk_id)).length;
     return { pending, stranded: this.chunks.size - pending };
   }
   async savedThroughMs() {
@@ -88,7 +88,7 @@ class FakeLocks {
   }
 }
 
-function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean } = {}) {
+function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[] } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
   const tracks: FakeTrack[] = [];
@@ -106,6 +106,8 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   let generation = 1;
   /** The server forgot LISTENER_ID: its heartbeat and uploads fail NotFound, and registration issues a new id. */
   let forgotten = false;
+  /** Epochs the server inserted from a `start` carrying the current lease; chunks of any other epoch are NotFound. */
+  const epochs = new Set(options.epochs);
   const unknown = () => Effect.fail(new NotFound({ message: 'listener not found' }));
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const receipt = (manifest: RecordingChunkManifest) =>
@@ -123,6 +125,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => {
       const manifest = request.headers['x-sanctum-manifest'];
       if (forgotten && manifest.listener_id === LISTENER_ID) return unknown();
+      if (!epochs.has(manifest.epoch_id)) return Effect.fail(new NotFound({ message: 'Capture epoch not found for this listener' }));
       calls.put.push(manifest);
       return Effect.succeed(receipt(manifest));
     },
@@ -146,6 +149,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     openLive: (liveOptions): LiveStream => {
       const live = { options: liveOptions, sent: [] as number[], stopped: null as StopReason | null };
       lives.push(live);
+      if (owner && liveOptions.start.lease_generation === generation) epochs.add(liveOptions.start.epoch_id);
       liveOptions.onStatus('connecting');
       return { send: (start) => void live.sent.push(start), stop: (reason) => void (live.stopped = reason) };
     },
@@ -314,7 +318,7 @@ describe('capture lifecycle', () => {
       new Int16Array(RATE),
     );
     await buffer.sealChunk(recovered);
-    const reloaded = harness({ buffer, stored: true });
+    const reloaded = harness({ buffer, stored: true, epochs: [recovered.manifest.epoch_id] });
     await vi.waitFor(() => expect(reloaded.calls.put).toEqual([recovered.manifest]));
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0 }));
   });
@@ -328,8 +332,7 @@ describe('capture lifecycle', () => {
     await buffer.sealChunk(old);
     const h = harness({ buffer, stored: true });
     h.forget();
-    await settle();
-    expect(h.snapshot()).toMatchObject({ archive: 'buffered_locally', bufferedChunks: 1, strandedChunks: 0 });
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, strandedChunks: 1 })); // the upload was refused
 
     await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server no longer knows the listener
     expect(h.storage.has('sanctum.listener')).toBe(false);
@@ -406,7 +409,7 @@ describe('capture lifecycle', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
     expect(h.lives[0]!.stopped).toBe('close');
-    expect(h.calls.heartbeat[0]).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
+    expect(h.calls.heartbeat.at(-1)).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
   });
 
   it('reopens the live stream in a new epoch when ownership comes back', async () => {
@@ -428,21 +431,34 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });
   });
 
-  it('opens live in a new epoch once a heartbeat claims the lease a first start lacked', async () => {
+  it('claims the lease before the first start, so a new device uploads its first epoch', async () => {
     const h = harness({ unclaimed: true });
     await h.engine.start();
-    h.feed(0.1);
-    expect(h.lives[0]!.options.start.lease_generation).toBe(0);
-    h.lives[0]!.options.onStatus('rejected', 'stale_generation');
+    expect(h.calls.heartbeat).toHaveLength(1);
+    h.feed(1.2);
+    const { start } = h.lives[0]!.options;
+    expect(start.lease_generation).toBe(1);
+    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([start.epoch_id]));
+    expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 0 });
+  });
+
+  it('keeps audio recorded without the lease as not uploadable and still uploads later epochs', async () => {
+    const h = harness();
+    h.setOwner(false);
+    await h.engine.start();
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(h.snapshot()).toMatchObject({ listener: 'starting', issue: null });
-    h.feed(0.1);
-    expect(h.lives).toHaveLength(2);
-    expect(h.lives[1]!.options.start.lease_generation).toBe(1);
-    h.accept();
+    h.feed(1.2);
     await settle();
-    expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });
+    const orphaned = h.snapshot().epochId;
+    expect(h.lives).toHaveLength(0);
+
+    h.setOwner(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    h.feed(1.2);
+    const accepted = h.lives[0]!.options.start.epoch_id;
+    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toEqual([accepted]));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ archive: 'capturing', bufferedChunks: 0, strandedChunks: 2 }));
+    expect([...h.buffer.chunks.values()].map((chunk) => chunk.manifest.epoch_id)).toEqual([orphaned, orphaned]); // never deleted
   });
 
   it('honours a pause pressed while the microphone prompt is open', async () => {

@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markConflict' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
 >;
 
 export interface CaptureDeps {
@@ -109,7 +109,7 @@ class CaptureController implements CaptureView {
   private uploading = false;
   private claimed = false;
   private pending = 0;
-  /** Local chunks of a listener the server forgot: kept, but never uploadable as they are. */
+  /** Local chunks that can no longer be uploaded (listener forgotten or chunk refused): kept, never pending. */
   private stranded = 0;
   private savedThroughMs: number | null = null;
   private wakeLock: 'unsupported' | 'released' | 'held';
@@ -229,7 +229,7 @@ class CaptureController implements CaptureView {
     let stream: MediaStream | null = null;
     try {
       const buffer = await this.openBuffer();
-      const listener = await this.ensureListener(buffer);
+      const listener = await this.claimListener(buffer);
       stream = await acquireMicrophone(this.nav.mediaDevices);
       const recorder = await (this.deps.startRecorder ?? startRecorder)(stream, (start, samples) => this.onBlock(start, samples));
       if (!isSampleRate(recorder.sampleRate)) {
@@ -243,6 +243,13 @@ class CaptureController implements CaptureView {
       await releaseLock();
       throw error;
     }
+  }
+
+  /** Registers when needed and claims the lease before any epoch opens, so the first `start` carries a live generation. */
+  private async claimListener(buffer: CaptureBuffer, retry = true): Promise<StoredListener> {
+    await this.ensureListener(buffer);
+    await this.beat();
+    return this.listener ?? (retry ? this.claimListener(buffer, false) : this.ensureListener(buffer));
   }
 
   private async ensureListener(buffer: CaptureBuffer): Promise<StoredListener> {
@@ -480,7 +487,11 @@ class CaptureController implements CaptureView {
         this.savedThroughMs = Math.max(this.savedThroughMs ?? end, end);
         void this.refreshPending();
       },
-      onConflict: () => void this.refreshPending(),
+      onRefused: () => void this.refreshPending(),
+      epochOpen: (epochId: string) => {
+        const epoch = this.session?.epoch;
+        return epoch?.id === epochId && epoch.live !== null;
+      },
     };
     const fiber = Effect.runFork(
       Effect.promise(() => this.buffer!).pipe(Effect.flatMap((buffer) => drainPending(buffer, this.client, listener.id, events, this.deps.uploader))),

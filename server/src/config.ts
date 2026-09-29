@@ -25,7 +25,14 @@ export const engineeringDefaults = {
    */
   jobs: {
     ceilingMs: 5 * 60_000,
-    ceilingByKind: { 'recording.assemble': 30 * 60_000, 'transcript.reconcile': 20 * 60_000 } as Partial<Record<JobKind, number>>,
+    ceilingByKind: {
+      'recording.assemble': 30 * 60_000,
+      'transcript.reconcile': 20 * 60_000,
+      /** Above pyannote's poll budget (maxPolls × pollIntervalMs = 10 min) plus audio preparation. */
+      'speakers.refine': 20 * 60_000,
+      /** Above one research call with transport retries (3 × 4 min) plus planning. */
+      'research.run': 20 * 60_000,
+    } as Partial<Record<JobKind, number>>,
   },
   /** Requested speech: open window, quiet time that ends a direct-request turn, echo memory after playback. */
   speech: { windowMs: 30_000, endOfTurnMs: 700, echoTailMs: 1_500 },
