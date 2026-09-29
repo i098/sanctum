@@ -85,7 +85,7 @@ class FakeLocks {
   }
 }
 
-function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean } = {}) {
+function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
   const tracks: FakeTrack[] = [];
@@ -107,7 +107,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const client = {
     registerListener: () => {
       calls.register++;
-      return Effect.succeed({ id: LISTENER_ID, lease_generation: 1 });
+      return Effect.succeed({ id: LISTENER_ID, lease_generation: options.unclaimed ? 0 : 1 });
     },
     heartbeat: (request: { payload: unknown }) => {
       calls.heartbeat.push(request.payload);
@@ -372,6 +372,23 @@ describe('capture lifecycle', () => {
     expect(h.lives).toHaveLength(2);
     expect(h.lives[1]!.options.start.epoch_id).not.toBe(h.lives[0]!.options.start.epoch_id);
     expect(h.lives[1]!.options.start.lease_generation).toBe(2);
+    h.accept();
+    await settle();
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });
+  });
+
+  it('opens live in a new epoch once a heartbeat claims the lease a first start lacked', async () => {
+    const h = harness({ unclaimed: true });
+    await h.engine.start();
+    h.feed(0.1);
+    expect(h.lives[0]!.options.start.lease_generation).toBe(0);
+    h.lives[0]!.options.onStatus('rejected', 'stale_generation');
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.snapshot()).toMatchObject({ listener: 'starting', issue: null });
+    h.feed(0.1);
+    expect(h.lives).toHaveLength(2);
+    expect(h.lives[1]!.options.start.lease_generation).toBe(1);
     h.accept();
     await settle();
     expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });

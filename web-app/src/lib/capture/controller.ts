@@ -315,6 +315,10 @@ class CaptureController implements CaptureView {
   private onLive(status: LiveStatus, reason?: RejectReason): void {
     this.live = status;
     if (status === 'rejected') this.issue = reason === 'stale_generation' ? 'lease_lost' : 'socket_unavailable';
+    if (status === 'rejected' && reason === 'stale_generation') {
+      this.leaseLost = true;
+      if (this.session?.epoch) this.session.epoch.live = null;
+    }
     this.publish();
   }
 
