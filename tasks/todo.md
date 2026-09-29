@@ -265,9 +265,9 @@ Depends on: T05, T21, T22.
 
 ## T24. Build and serve the complete website
 
-- [ ] Serve the website over HTTPS with microphone permissions policy, secure session cookies, and appropriate CSP.
-- [ ] Build frontend assets and compiled server code into one Node image; run separate API and worker entrypoints.
-- [ ] Add worker command, persistent storage, reverse-proxy routes, and configurable local ports.
+- [x] Serve the website over HTTPS with microphone permissions policy, secure session cookies, and appropriate CSP.
+- [x] Build frontend assets and compiled server code into one Node image; run separate API and worker entrypoints.
+- [x] Add worker command, persistent storage, reverse-proxy routes, and configurable local ports.
 
 Files: `web-app/vite.config.ts`, `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`.
 Verify: fresh browser visit, HTTPS microphone permission, WebSocket upgrade routing, API/MCP routing, worker restart, page reconnect, and secret-free web assets.
@@ -275,9 +275,9 @@ Depends on: T19, T21, T23.
 
 ## T25. Complete multi-listener handoff and capability coverage
 
-- [ ] Verify capture-group membership, room preference, ownership lease, and laptop takeover.
+- [x] Verify capture-group membership, room preference, ownership lease, and laptop takeover.
 - [ ] Verify notes, matching, exports, meeting links, and scoped account mapping.
-- [ ] Rehearse safe release rollback with recorded sources and action receipts preserved.
+- [x] Rehearse safe release rollback with recorded sources and action receipts preserved.
 
 Files: `server/src/listeners.ts`, `web-app/src/lib/capture/controller.ts`, `server/src/api.ts`, `server/tests/handoff.test.ts`, `server/tests/capabilities.test.ts`.
 Verify: simultaneous room/laptop, network partition, stale owner, different private meeting, account isolation and meeting deep links.
