@@ -1196,9 +1196,9 @@ Depends on: T06, T13, T16, T20.
 
 ## T22. Add scoped REST contracts and generated SDKs
 
-- [ ] Define Effect Schema wire contracts and export v1 OpenAPI with operation IDs, pagination, errors, idempotency and conflicts; share validation across adapters.
-- [ ] Implement TypeScript/Python clients and runnable examples using generated DTOs.
-- [ ] Verify UI and both SDKs call the same domain behavior.
+- [x] Define Effect Schema wire contracts and export v1 OpenAPI with operation IDs, pagination, errors, idempotency and conflicts; share validation across adapters.
+- [x] Implement TypeScript/Python clients and runnable examples using generated DTOs.
+- [x] Verify UI and both SDKs call the same domain behavior.
 
 Files: `server/src/api.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/python/`, `server/tests/api-contract.test.ts`.
 Verify: contract snapshot, pagination, cancellation, safe retries, context read/write/conflict, changes replay, action receipt retrieval.
@@ -1206,9 +1206,9 @@ Depends on: T16, T18.
 
 ## T23. Add authenticated MCP and agent management
 
-- [ ] Mount eleven explicit tools through the stable TypeScript MCP SDK over shared Effect services; verify wire-schema equivalence and resources where useful.
-- [ ] Wire delegated OAuth to a maintained authorization server with durable grants, resource metadata, audience checks and scope mapping; issuer configuration remains an explicit live gate.
-- [ ] Add agent permission/revoke UI and test real MCP clients with different principals.
+- [x] Mount eleven explicit tools through the stable TypeScript MCP SDK over shared Effect services; verify wire-schema equivalence and resources where useful.
+- [x] Wire delegated OAuth to a maintained authorization server with durable grants, resource metadata, audience checks and scope mapping; issuer configuration remains an explicit live gate.
+- [x] Add agent permission/revoke UI and test real MCP clients with different principals.
 
 Files: `server/src/mcp.ts`, `server/src/auth.ts`, `web-app/src/pages/listen/AgentsDialog.tsx`, `server/tests/mcp.test.ts`, `sdk/examples/`.
 Verify: auth/discovery/schema/read/write/conflict/revoke; client-version compatibility; no admin/capture routes auto-exposed.
@@ -1217,8 +1217,8 @@ Depends on: T05, T21, T22.
 ## Checkpoint D. Human and agent interfaces agree
 
 - [ ] Fullscreen listener works without a permanent dashboard.
-- [ ] Both SDKs and MCP see the same authorized context revisions and receipts.
-- [ ] Revocation and stale writes are verified, not only documented.
+- [x] Both SDKs and MCP see the same authorized context revisions and receipts.
+- [x] Revocation and stale writes are verified, not only documented.
 
 ## T24. Build and serve the complete website
 

@@ -15,7 +15,8 @@
     "quality:fallow": "fallow audit --gate new-only",
     "quality:sentrux": "sentrux gate .",
     "commitlint": "commitlint",
-    "check:app": "node scripts/check-app.ts"
+    "check:app": "node scripts/check-app.ts",
+    "sdk:generate": "node scripts/generate-sdks.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
