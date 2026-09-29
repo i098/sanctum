@@ -34,15 +34,12 @@ const AccountRow = Schema.Struct({
   app_slug: Schema.String,
   external_user_id: Schema.String,
   provider_account_id: Schema.String,
-  usable: DbSafeInt,
+  usable: Schema.transform(DbSafeInt, Schema.Boolean, { strict: true, decode: value => value === 1, encode: value => (value ? 1 : 0) }),
 });
-
-interface Account extends Omit<typeof AccountRow.Type, 'usable'> {
-  readonly usable: boolean;
-}
+type Account = typeof AccountRow.Type;
 
 /**
- * Active accounts of the caller's workspace. `usable`: the caller may request actions and either
+ * Active accounts of the caller's workspace. `usable`: the caller holds `actions:request` and either
  * owns the account or holds an active grant for it whose meeting (if any) it may access.
  */
 const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string; readonly id?: IntegrationAccountId }) =>
@@ -56,27 +53,25 @@ const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string;
         : meetings.meeting_ids.length === 0
           ? sql`g.meeting_id IS NULL`
           : sql`(g.meeting_id IS NULL OR ${sql.in('g.meeting_id', meetings.meeting_ids)})`;
-    const rows = yield* SqlSchema.findAll({
+    return yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: AccountRow,
       execute: () => sql`
         SELECT a.id, a.app_slug, a.external_user_id, a.provider_account_id,
-          (a.owner_principal_id = ${principal} OR EXISTS (
+          (${access.scopes.includes('actions:request')} AND (a.owner_principal_id = ${principal} OR EXISTS (
             SELECT 1 FROM action_grants g
             WHERE g.workspace_id = a.workspace_id AND g.account_id = a.id AND g.grantee_principal_id = ${principal}
               AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND ${meetingVisible}
-          )) AS usable
+          ))) AS usable
         FROM integration_accounts a
         WHERE ${sql.and([
-          sql`a.workspace_id = ${access.workspace_id}`,
-          sql`a.status = 'active'`,
-          ...(filter.app === undefined ? [] : [sql`a.app_slug = ${filter.app}`]),
-          ...(filter.id === undefined ? [] : [sql`a.id = ${filter.id}`]),
-        ])}
+    sql`a.workspace_id = ${access.workspace_id}`,
+    sql`a.status = 'active'`,
+    ...(filter.app === undefined ? [] : [sql`a.app_slug = ${filter.app}`]),
+    ...(filter.id === undefined ? [] : [sql`a.id = ${filter.id}`]),
+   ])}
         ORDER BY a.created_at, a.id`,
     })(undefined);
-    const mayRequest = access.scopes.includes('actions:request');
-    return rows.map((row): Account => ({ ...row, usable: mayRequest && row.usable === 1 }));
   });
 
 const appPropOf = (action: ActionComponent) => action.configurable_props.find(prop => prop.type === 'app');
