@@ -81,12 +81,10 @@ jobs:
       # Node serves only the database-free fixture API for the example test; no application image.
       - name: Install locked workspace dependencies
         run: npm ci --ignore-scripts
-      - name: Install the SDK's only runtime dependency in an isolated environment
-        run: python3 -m venv "$RUNNER_TEMP/sdk-venv" && "$RUNNER_TEMP/sdk-venv/bin/pip" install --quiet 'httpx==0.28.1'
+      - name: Install the SDK in an isolated environment
+        run: python3 -m venv "$RUNNER_TEMP/sdk-venv" && "$RUNNER_TEMP/sdk-venv/bin/pip" install --quiet ./sdk/python
       - name: Test the client and run the example end to end
         working-directory: sdk/python
-        env:
-          PYTHONPATH: src
         run: '"$RUNNER_TEMP/sdk-venv/bin/python" -m unittest discover -s tests -p "test_*.py" -v'
 
   fallow:

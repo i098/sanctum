@@ -19,7 +19,6 @@ The check job has read-only repository permissions and a ten-minute timeout.
 ## Quality regression gates
 
 Every pull request and push to main runs Fallow, Sentrux and commit-standard checks in addition to handoff validation.
-Documentation publication waits for all six jobs, including Application checks and the Python SDK.
 Missing binaries, invalid results, missing Sentrux baselines and scanner failures fail the job; no continue-on-error bypass is configured.
 The scanners check code structure and static findings; they do not prove runtime performance or Rust parity.
 
@@ -78,10 +77,10 @@ The Vitest suites include the TypeScript SDK, the v1 contract snapshot (`sdk/ope
 
 ## Python SDK
 
-The `python-sdk` job tests `sdk/python` in a virtual environment holding only `httpx`; no Python enters an application image.
+The `python-sdk` job installs `sdk/python` (its only dependency is `httpx`) into a virtual environment; no Python enters an application image.
 It replays the golden exchanges in `sdk/fixtures/wire-cases.json` that the TypeScript SDK also replays, then runs the Python example end to end against the database-free fixture API (`server/tests/support/fixture-server.ts`).
 The job has no secrets, no database, and a ten-minute timeout.
-Run it locally: `cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'` with `httpx` installed.
+Run it locally: `pip install ./sdk/python`, then `cd sdk/python && python3 -m unittest discover -s tests -p 'test_*.py'`.
 
 ## When implementation is added
 
