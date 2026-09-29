@@ -50,25 +50,19 @@ test('exports one epoch of a listener and discards only the chosen orphaned reco
     const { blob, sampleStart, sampleEnd } = assembleWav(await buffer.recordingSegments(removed, epochs[1]), rate, 0)!;
     const samples = new Int16Array(await blob.arrayBuffer(), 44);
     const exported = { sampleStart, sampleEnd, samples: samples.length, first: samples[0], last: samples.at(-1) };
-    const live = { counts: await buffer.countChunks([owned], true), listed: (await buffer.orphanedRecordings([owned], true)).map(recording => recording.epochId) };
-    await buffer.discardRecording(removed, epochs[1], [owned], true);
-    await buffer.endEpoch(epochs[1], 'pause');
-    const ended = { counts: await buffer.countChunks([owned], true), listed: (await buffer.orphanedRecordings([owned], true)).map(recording => recording.epochId) };
-    const before = (await buffer.orphanedRecordings([owned], false)).map(recording => [recording.epochId, recording.chunkCount]);
-    await buffer.discardRecording(removed, epochs[1], [owned], false);
-    await buffer.discardRecording(owned, epochs[0], [owned], false);
-    const after = (await buffer.orphanedRecordings([owned], false)).map(recording => [recording.epochId, recording.chunkCount]);
+    const before = (await buffer.orphanedRecordings([owned])).map(recording => [recording.epochId, recording.chunkCount]);
+    await buffer.discardRecording(removed, epochs[1], [owned]);
+    await buffer.discardRecording(owned, epochs[0], [owned]);
+    const after = (await buffer.orphanedRecordings([owned])).map(recording => [recording.epochId, recording.chunkCount]);
     const starts = [(await buffer.epochStart(epochs[0])) !== null, (await buffer.epochStart(epochs[1])) !== null];
-    return { exported, live, ended, before, after, starts, counts: await buffer.countChunks([owned], false), pending: (await buffer.nextPending(owned))?.manifest.epoch_id };
+    return { exported, before, after, starts, counts: await buffer.countChunks([owned]), pending: (await buffer.nextPending(owned))?.manifest.epoch_id };
   }, { owned: OWNED, removed: REMOVED, epochs: EPOCHS, rate: RATE });
   expect(result).toEqual({
     exported: { sampleStart: 0, sampleEnd: 2 * RATE, samples: 2 * RATE, first: 0, last: 2 * RATE - 1 },
-    live: { counts: { pending: 1, refused: 0, recording: 3, stranded: 0 }, listed: [] },
-    ended: { counts: { pending: 1, refused: 0, recording: 1, stranded: 2 }, listed: [EPOCHS[1]] },
     before: [[EPOCHS[1], 2], [EPOCHS[2], 1]],
     after: [[EPOCHS[2], 1]],
     starts: [true, false],
-    counts: { pending: 1, refused: 0, recording: 0, stranded: 1 },
+    counts: { pending: 1, refused: 0, stranded: 1 },
     pending: EPOCHS[0],
   });
 });
@@ -114,8 +108,8 @@ test('exports an orphaned recording as one WAV, then discards it only after conf
   await expect(page.getByText('not uploadable')).toBeHidden();
   expect(await page.evaluate(async () => {
     const { RecoveryBuffer } = (await import('/src/lib/capture/buffer.ts' as string)) as BufferModule;
-    return (await RecoveryBuffer.open()).countChunks([], false);
-  })).toEqual({ pending: 0, refused: 0, recording: 0, stranded: 0 });
+    return (await RecoveryBuffer.open()).countChunks([]);
+  })).toEqual({ pending: 0, refused: 0, stranded: 0 });
 });
 
 test('exports a recording over the WAV size limit one part per click, with ranges and gaps on the capture clock', async ({ page }) => {
@@ -158,14 +152,23 @@ export function getCaptureEngine() { return engine; }`,
   expect(downloads).toHaveLength(2);
 });
 
-test('reports audio being recorded under a removed listener in the footer and the panel alike', async ({ page }) => {
-  await openListening(page);
-  await page.evaluate(() => window.__capture.update({ recordingChunks: 3 }));
-  await expect(page.getByText('3 chunks being recorded under a removed listener, listed in Settings when capture stops')).toBeVisible();
-  await expect(page.getByText('not uploadable')).toBeHidden();
+test('lists recordings of removed listeners only while no tab captures', async ({ page }) => {
+  await seed(page, [{ listener: REMOVED, epoch: EPOCHS[1], sequence: 0, start: 0, count: RATE }]);
+  await page.reload();
+  await expect(page.getByText('1 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
+  const other = await page.context().newPage(); // another tab of this browser captures
+  await other.goto('/');
+  await other.evaluate(() => new Promise<void>(held => void navigator.locks.request('sanctum-capture', () => (held(), new Promise<void>(() => { })))));
   await page.getByRole('button', { name: 'Settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await expect(settings.getByText('3 chunks are being recorded under a removed listener; they are listed here when capture stops.')).toBeVisible();
-  await expect(settings.getByText('No recordings of removed listeners on this device.')).toBeHidden();
-  await expect(settings.getByRole('button', { name: 'Discard' })).toHaveCount(0);
+  await expect(settings.getByText('1 chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.')).toBeVisible();
+  await expect(settings.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByText('1 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
+
+  await other.close(); // closing the capturing tab frees the capture lock
+  await settings.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(settings.getByRole('listitem')).toContainText('1 chunks · listener removed');
+  await expect(settings.getByRole('button', { name: 'Export WAV' })).toBeVisible();
+  await expect(settings.getByRole('button', { name: 'Discard' })).toBeVisible();
 });

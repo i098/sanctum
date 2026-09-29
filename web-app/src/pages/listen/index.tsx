@@ -33,6 +33,7 @@ const ISSUE: Record<CaptureIssue, string> = {
   storage_unavailable: 'Device storage is unavailable, so audio cannot be buffered.',
   socket_unavailable: 'The server connection is unavailable.',
   lease_lost: 'Another listener took over this room.',
+  listener_removed: 'This device was removed, so listening stopped. Resume registers it again.',
 };
 
 const ARCHIVE: Record<ArchiveState, string> = {
@@ -48,9 +49,8 @@ function health(snapshot: CaptureSnapshot): string {
   const archive = snapshot.archive ? ARCHIVE[snapshot.archive] : 'not recording';
   const pending = snapshot.bufferedChunks > 0 ? ` · ${snapshot.bufferedChunks} chunks pending` : '';
   const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks of removed listeners kept on this device, not uploadable` : '';
-  const recording = snapshot.recordingChunks > 0 ? ` · ${snapshot.recordingChunks} chunks being recorded under a removed listener, listed in Settings when capture stops` : '';
   const refused = snapshot.refusedChunks > 0 ? ` · ${snapshot.refusedChunks} chunks refused by the server kept on this device, not uploadable` : '';
-  return `Silent · ${archive}${pending}${recording}${stranded}${refused}`;
+  return `Silent · ${archive}${pending}${stranded}${refused}`;
 }
 
 function statusMessage(snapshot: CaptureSnapshot, failure: string | null): { text: string; warning: boolean } {
@@ -148,7 +148,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
-      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} stranded={snapshot.strandedChunks} recording={snapshot.recordingChunks} />
+      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} />
     </main>
   );
 }

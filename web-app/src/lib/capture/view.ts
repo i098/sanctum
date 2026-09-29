@@ -13,7 +13,8 @@ export type CaptureIssue =
   | 'storage_full'
   | 'storage_unavailable'
   | 'socket_unavailable'
-  | 'lease_lost';
+  | 'lease_lost'
+  | 'listener_removed';
 
 export interface CaptureSnapshot {
   readonly listener: ListenerState;
@@ -23,10 +24,8 @@ export interface CaptureSnapshot {
   readonly issue: CaptureIssue | null;
   readonly epochId: string | null;
   readonly bufferedChunks: number;
-  /** Chunks of removed listeners (the server no longer knows them) in ended epochs, kept on this device: never uploadable, listed for export or discard. */
+  /** Chunks of removed listeners (the server no longer knows them) kept on this device: never uploadable, listed for export or discard while no tab captures. */
   readonly strandedChunks: number;
-  /** Chunks of removed listeners in epochs still being recorded, in this tab or another: never pending, listed for export or discard once capture stops. */
-  readonly recordingChunks: number;
   /** Chunks of this device's listeners that the server refused (e.g. recorded after another device took the lease) kept on this device. */
   readonly refusedChunks: number;
   readonly savedThroughMs: number | null;
@@ -80,8 +79,8 @@ export interface CaptureView {
   start(): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
-  /** Recordings orphaned by a removed listener; never the pending or in-progress audio. */
-  orphanedRecordings(): Promise<readonly OrphanedRecording[]>;
+  /** Recordings orphaned by a removed listener, never pending audio; null while any tab of this browser captures. */
+  orphanedRecordings(): Promise<readonly OrphanedRecording[] | null>;
   /** One WAV file (`part` of `recording.parts`) of the recording's chunks on this device, or null once they are gone; no server call. */
   exportRecording(recording: OrphanedRecording, part: number): Promise<WavPart | null>;
   /** Deletes only this orphaned recording's chunks, and only when a person asks. */
@@ -96,7 +95,6 @@ export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
   epochId: null,
   bufferedChunks: 0,
   strandedChunks: 0,
-  recordingChunks: 0,
   refusedChunks: 0,
   savedThroughMs: null,
   wakeLock: 'released',

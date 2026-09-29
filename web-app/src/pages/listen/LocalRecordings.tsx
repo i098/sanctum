@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import type { CaptureView, OrphanedRecording, WavPart } from '../../lib/capture/view.ts';
 import { Dialog } from './Dialog.tsx';
 
@@ -36,19 +36,16 @@ function download(wav: WavPart, recording: OrphanedRecording, part: number): voi
 
 interface LocalRecordingsProps {
   engine: CaptureView;
-  /** Chunks of removed listeners from the capture snapshot; the list reloads when it changes. */
-  stranded: number;
-  /** Chunks still being recorded under a removed listener; listed once capture stops. */
-  recording: number;
 }
 
 /**
- * Recordings orphaned by a removed listener, which can never be uploaded. Export (WAV files built
- * in the browser) is the primary action; discard is separate, confirmed, and deletes only that
- * recording. Nothing is deleted automatically and capture keeps running throughout.
+ * Recordings orphaned by a removed listener, which can never be uploaded, listed only while no tab
+ * of this browser captures. Export (WAV files built in the browser) is the primary action; discard
+ * is separate, confirmed, and deletes only that recording. Nothing is deleted automatically.
  */
-export function LocalRecordings({ engine, stranded, recording: inProgress }: LocalRecordingsProps) {
-  const [recordings, setRecordings] = useState<readonly OrphanedRecording[]>([]);
+export function LocalRecordings({ engine }: LocalRecordingsProps) {
+  const { strandedChunks: stranded, listener } = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
+  const [recordings, setRecordings] = useState<readonly OrphanedRecording[] | null>([]);
   const [confirming, setConfirming] = useState<OrphanedRecording | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -59,7 +56,7 @@ export function LocalRecordings({ engine, stranded, recording: inProgress }: Loc
     let current = true;
     engine.orphanedRecordings().then(list => current && setRecordings(list), (error: unknown) => current && fail(error));
     return () => void (current = false);
-  }, [engine, stranded]);
+  }, [engine, stranded, listener]);
 
   const exportWav = (recording: OrphanedRecording, part: number): void => {
     setFailure(null);
@@ -74,9 +71,10 @@ export function LocalRecordings({ engine, stranded, recording: inProgress }: Loc
   return (
     <section className="listen-panel listen-local" aria-labelledby={`${id}-heading`}>
       <h3 id={`${id}-heading`} ref={heading} tabIndex={-1}>Recordings of removed listeners</h3>
-      {inProgress > 0 && <p>{inProgress} chunks are being recorded under a removed listener; they are listed here when capture stops.</p>}
-      {recordings.length === 0 ? (
-        inProgress === 0 && <p>No recordings of removed listeners on this device.</p>
+      {recordings === null ? (
+        <p>{stranded} chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.</p>
+      ) : recordings.length === 0 ? (
+        <p>No recordings of removed listeners on this device.</p>
       ) : (
         <ul className="listen-items">
           {recordings.map((recording, index) => (
