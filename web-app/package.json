@@ -13,6 +13,7 @@
   "dependencies": {
     "@effect/platform": "0.97.2",
     "@sanctum/contracts": "*",
+    "@sanctum/sdk": "*",
     "effect": "3.22.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"

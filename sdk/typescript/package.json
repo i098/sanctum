@@ -2,5 +2,12 @@
   "name": "@sanctum/sdk",
   "private": true,
   "type": "module",
-  "description": "Promise-based TypeScript client for the Sanctum API"
+  "description": "Promise-based TypeScript client for the Sanctum API",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  }
 }

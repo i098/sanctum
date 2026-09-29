@@ -6,14 +6,15 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import type { SqlClient } from '@effect/sql';
-import { HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
+import { type HttpApi, HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
+import type { SqlClient } from '@effect/sql';
 import { type ConfigError, Effect, Layer, flow } from 'effect';
-import { ApiLive } from './api.ts';
+import { ApiLive, OpenApiLive } from './api.ts';
 import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
+import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpDelegation } from './mcp.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, type SpeechToText } from './media/providers.ts';
 import { loadMigrations } from './migrate.ts';
@@ -30,15 +31,21 @@ const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.u
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
-  media: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError> = MediaProvidersLive,
+  // Tests replace providers, the handler set or the MCP authorization server; production uses the defaults.
+  overrides: {
+    readonly media?: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError>;
+    readonly api?: Layer.Layer<HttpApi.Api, never, SqlClient.SqlClient | Authenticator>;
+    readonly mcp?: Layer.Layer<McpAuthorizationServer>;
+  } = {},
 ) =>
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
-    Layer.provide(ListenerStreamLive),
-    Layer.provide(ApiLive(loadMigrations())),
-    Layer.provide(media),
-    Layer.provide(authenticator),
+    Layer.provide([ListenerStreamLive, McpLive, OpenApiLive]),
+    Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
+    Layer.provide(overrides.media ?? MediaProvidersLive),
+    Layer.provide(withMcpDelegation(authenticator)),
+    Layer.provide(overrides.mcp ?? McpAuthorizationFromEnv),
     Layer.provide(dbLayer(config.mysql)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),
   );

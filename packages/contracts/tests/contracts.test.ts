@@ -225,6 +225,8 @@ describe('HTTP API contract', () => {
       '/api/v1/sources/{source_id}',
       '/api/v1/integrations/actions',
       '/api/v1/integrations/actions/{action_key}/schema',
+      '/api/v1/actions',
+      '/api/v1/actions/{action_id}',
       '/api/v1/agents',
       '/api/v1/agents/{agent_id}/credentials/{key_id}',
     ]);

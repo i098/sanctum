@@ -171,7 +171,7 @@ const liveClock = Clock.make();
 export const serveApi = (server: typeof serverLayer, tokens: Map<string, AccessScope>, media: Layer.Layer<ObjectStore | SpeechToText>) =>
   Effect.gen(function* () {
     const mysql = yield* TestMysql;
-    const context = yield* Effect.withClock(Layer.build(server({ apiPort: 0, mysql }, tokenAuthenticator(tokens), media)), liveClock);
+    const context = yield* Effect.withClock(Layer.build(server({ apiPort: 0, mysql }, tokenAuthenticator(tokens), { media })), liveClock);
     const address = Context.get(context, HttpServer.HttpServer).address;
     if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
     return `127.0.0.1:${address.port}`;
