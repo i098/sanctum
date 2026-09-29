@@ -1,0 +1,79 @@
+# Local production-shaped stack: MySQL, the API and worker from one image, and Caddy for HTTPS.
+#   MYSQL_PASSWORD=... docker compose up -d mysql
+#   MYSQL_PASSWORD=... docker compose run --rm migrate    # explicit schema step
+#   MYSQL_PASSWORD=... docker compose up -d api worker caddy
+# SANCTUM_ENV defaults to production, which refuses to start until the open decisions in
+# docs/DECISIONS.md are selected; use SANCTUM_ENV=development for a local fixture stack.
+# Rollback: set SANCTUM_IMAGE to the previous validated tag and `up -d api worker`; data
+# volumes and R2 objects are untouched and migrations are never reversed.
+name: sanctum
+
+x-app: &app
+  image: ${SANCTUM_IMAGE:-sanctum:local}
+  build:
+    context: .
+    dockerfile: server/Dockerfile
+  environment:
+    SANCTUM_ENV: ${SANCTUM_ENV:-production}
+    # Passed through only when set: comma-separated decisions an operator has selected.
+    SANCTUM_SELECTED_DECISIONS:
+    MYSQL_HOST: mysql
+    MYSQL_DATABASE: sanctum
+    MYSQL_USER: sanctum
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+  depends_on:
+    mysql:
+      condition: service_healthy
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: sanctum
+      MYSQL_USER: sanctum
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
+      TZ: UTC
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ['node', 'server/dist/migrate.js']
+    profiles: [migrate]
+
+  api:
+    <<: *app
+    ports:
+      - 127.0.0.1:${API_PORT:-7102}:7102
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ['node', 'server/dist/worker.js']
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    environment:
+      SANCTUM_SITE_ADDRESS: ${SANCTUM_SITE_ADDRESS:-localhost}
+    ports:
+      - ${WEB_PORT:-3102}:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  caddy-data:
+  caddy-config:
