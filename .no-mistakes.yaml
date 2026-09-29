@@ -1,2 +1,2 @@
 commit:
-  fix_message: "fix: {{.Step}}: {{printf \"%.57s\" .Summary}}"
+  fix_message: "fix: {{.Step}}: {{.Summary}}"
