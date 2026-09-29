@@ -1,0 +1,213 @@
+/* Fullscreen listening view (docs/DESIGN.md). Offsets are measured from the 1280 × 720 reference. */
+.listen {
+  position: fixed;
+  inset: 0;
+  background: #0a0c10;
+  color: #8b919c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 10px;
+}
+
+.listen p {
+  margin: 0;
+}
+
+.listen-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.listen-header,
+.listen-footer {
+  position: absolute;
+  left: 32px;
+  right: 32px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.listen-header {
+  top: 30px;
+  align-items: flex-start;
+}
+
+.listen-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px;
+}
+
+.listen-wordmark {
+  margin-top: 7px;
+  color: #a7adb8;
+  font-size: 14px;
+  letter-spacing: 1.2px;
+}
+
+.listen-clock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.listen-meeting {
+  color: #a7adb8;
+  font-size: 12px;
+}
+
+.listen-status {
+  position: absolute;
+  top: 65.3%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 0 32px;
+  text-align: center;
+}
+
+.listen-state {
+  font-size: 12px;
+  letter-spacing: 1.4px;
+}
+
+.listen-helper {
+  font-size: 11px;
+}
+
+.listen-helper[data-warning='true'] {
+  color: #f2a23b;
+}
+
+.listen-footer {
+  bottom: 30px;
+  align-items: center;
+}
+
+.listen-health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.listen-health::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #8b919c;
+}
+
+.listen-health[data-tone='listening']::before {
+  background: #22d3c5;
+}
+
+.listen-health[data-tone='warning']::before {
+  background: #f2a23b;
+}
+
+.listen-controls {
+  display: flex;
+  gap: 8px;
+  margin-right: -8px;
+}
+
+.listen button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.listen button:hover,
+.listen button:focus-visible {
+  color: #e7ecf3;
+}
+
+.listen button:focus-visible {
+  outline: 1px solid #3d7dff;
+}
+
+.listen button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.listen-dialog {
+  width: min(720px, calc(100vw - 64px));
+  max-height: calc(100vh - 96px);
+  padding: 24px 28px;
+  border: 1px solid #222936;
+  border-radius: 8px;
+  background: #12161e;
+  color: #e7ecf3;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+}
+
+.listen-dialog::backdrop {
+  background: rgb(10 12 16 / 0.72);
+}
+
+.listen-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.listen-dialog h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.listen-dialog button {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: #a7adb8;
+}
+
+.listen-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid #222936;
+  margin-bottom: 16px;
+}
+
+.listen-tabs [aria-selected='true'] {
+  color: #e7ecf3;
+  box-shadow: inset 0 -1px #3d7dff;
+}
+
+.listen-panel {
+  margin: 0;
+  color: #a7adb8;
+}
+
+.listen-settings div {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #171c26;
+}
+
+.listen-settings dt {
+  color: #8b919c;
+}
+
+.listen-settings dd {
+  margin: 0;
+}
