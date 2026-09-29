@@ -1,7 +1,7 @@
 /** Synthetic meetings, capture epochs and final transcript for context tests; never real data. */
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, MeetingId, TranscriptSegmentId } from '@sanctum/contracts';
+import { type AccessScope, MeetingId, TranscriptSegmentId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Layer } from 'effect';
 import { dbLayer } from '../../src/db.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
@@ -16,7 +16,7 @@ export const migratedDatabase = Layer.unwrapScoped(
 const SAMPLE_RATE = 16_000;
 
 export interface FixtureMeeting {
- readonly workspace_id: string;
+ readonly workspace_id: WorkspaceId;
  readonly meeting_id: MeetingId;
  readonly epoch_id: string;
 }

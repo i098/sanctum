@@ -10,7 +10,6 @@ import { SqlClient, SqlError, type Statement } from '@effect/sql';
 import {
  type AccessScope,
  CurrentAccess,
- SanctumApi,
  Unavailable,
  type AddContextItem,
  Author,
@@ -25,6 +24,7 @@ import {
  HashConflict,
  IanaTimeZone,
  MeetingId,
+ type WorkspaceId,
  NotFound,
  PrincipalId,
  Revision,
@@ -35,12 +35,13 @@ import {
  UtcTimestamp,
  CaptureEpochId,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { scopedCacheKey } from './cache.ts';
 import { decodeRows, encodeCursor, getContextChanges, getSource, resolveSources, type VisibleScope, visibleScope, visibleWhere } from './context-changes.ts';
+import { appendContextEvent } from './context-events.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc } from './db.ts';
-import { nextContextSeq } from './store.ts';
 
 /** Most items one snapshot or search returns; `truncated` reports the rest. */
 const ITEM_LIMIT = 200;
@@ -108,31 +109,6 @@ export const meetingItems = (workspace_id: string, meeting_id: string) =>
   return { items: items.slice(0, ITEM_LIMIT).reverse(), truncated: items.length > ITEM_LIMIT };
  });
 
-/**
- * Appends one committed-order event inside the caller's transaction and returns its sequence.
- * A meeting event also advances that meeting's context revision, so snapshots and caches move on.
- */
-export const appendContextEvent = (input: {
- readonly workspace_id: string;
- readonly meeting_id: MeetingId | null;
- readonly item: { readonly id: ContextItemId; readonly revision: number } | null;
- readonly change: ContextChangeKind;
- readonly actor: PrincipalId;
- readonly source_revision?: number | undefined;
-}) =>
- Effect.gen(function*() {
-  const sql = yield* SqlClient.SqlClient;
-  if (input.meeting_id !== null) {
-   yield* sql`UPDATE meetings SET context_revision = context_revision + 1 WHERE workspace_id = ${input.workspace_id} AND id = ${input.meeting_id}`;
-  }
-  const seq = yield* nextContextSeq(input.workspace_id);
-  yield* sql`INSERT INTO context_events (workspace_id, seq, meeting_id, item_id, item_revision, change_kind, actor_principal_id, source_revision, permission_revision, created_at)
-      SELECT id, ${seq}, ${input.meeting_id}, ${input.item?.id ?? null}, ${input.item?.revision ?? null}, ${input.change}, ${input.actor},
-        ${input.source_revision ?? null}, permission_revision, UTC_TIMESTAMP(6)
-      FROM workspaces WHERE id = ${input.workspace_id}`;
-  return seq;
- });
-
 /** Fields of a new revision; the database assigns `created_at`. */
 export type NewItem = Omit<ContextItem, 'created_at'>;
 
@@ -147,7 +123,7 @@ const ItemColumns = Schema.Struct({
 
 /** Inserts `item` and its event inside the caller's transaction; the event actor defaults to the author. */
 export const writeItem = (
- workspace_id: string,
+ workspace_id: WorkspaceId,
  item: NewItem,
  options: {
   readonly change: ContextChangeKind;
@@ -205,7 +181,7 @@ const lockContainer = (workspace_id: string, meeting_id: string | null) =>
  });
 
 /** A write needs `context:write` plus write access to the meeting, or workspace-wide access for workspace-level items. */
-const authorizeWrite = (access: AccessScope, meeting_id: string | null) =>
+const authorizeWrite = (access: AccessScope, meeting_id: MeetingId | null) =>
  Effect.gen(function*() {
   yield* requireScope(access, 'context:write');
   if (meeting_id !== null) return yield* authorizeMeeting(access, meeting_id, 'write');

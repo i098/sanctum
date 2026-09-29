@@ -19,6 +19,7 @@ import {
  type PrincipalId,
  type TranscriptSegment,
  type Unavailable,
+ type WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
@@ -29,7 +30,7 @@ import type { ExtractionInput } from './extraction.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
 interface LedgerJob {
- readonly workspace_id: string;
+ readonly workspace_id: WorkspaceId;
  readonly payload: unknown;
  readonly requested_by: PrincipalId | null;
 }
@@ -52,7 +53,7 @@ const MeetingRow = Schema.Struct({
 });
 
 interface Target {
- readonly workspace_id: string;
+ readonly workspace_id: WorkspaceId;
  readonly meeting_id: MeetingId;
  readonly actor: PrincipalId;
 }

@@ -19,7 +19,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
-import { appendContextEvent } from './context.ts';
+import { appendContextEvent } from './context-events.ts';
 import {
   currentRanges,
   dbFailures,

@@ -132,9 +132,9 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 
 ### context (T16)
 
-Owns `server/src/context.ts`, `server/src/context-changes.ts`, migration `007_context`, `ContextApi` in contracts context.ts.
+Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/context-changes.ts`, `server/src/context-jobs.ts`, `server/src/context-schedule.ts`, migration `007_context`, `ContextApi` in contracts context.ts.
 
-- `context.ts`: `appendContextEvent(input: { workspace_id; meeting_id: MeetingId | null; item: { id; revision } | null; change: ContextChangeKind; actor: PrincipalId; source_revision?: number }): Effect<number, SqlError, R>`, inside the caller's transaction.
+- `context-events.ts`: `appendContextEvent(input: { workspace_id; meeting_id: MeetingId | null; item: { id; revision } | null; change: ContextChangeKind; actor: PrincipalId; source_revision?: number }): Effect<number, SqlError, R>`, inside the caller's transaction.
 - `context.ts`: `getContextSnapshot(access, meeting_id): Effect<ContextSnapshot, NotFound, R>` and `addContextItem(access, input: AddContextItem): Effect<ContextItem, RevisionConflict | HashConflict | NotFound, R>`.
 - Handles job kinds `context.refresh` and `memory.commit` using `extractCandidates`.
 - `ContextApi` operations: `getContext`, `searchContext`, `addContextItem`, `reviseContextItem`, `getContextChanges`, `getSource`.

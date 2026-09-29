@@ -13,12 +13,13 @@ import {
   Unavailable,
   UtcTimestamp,
 } from '@sanctum/contracts';
-import { Effect, Either, Layer, Ref } from 'effect';
+import { Effect, Either, Layer, Ref, Stream } from 'effect';
 import { getContextChanges } from '../src/context-changes.ts';
 import { commitMemory, refreshContext } from '../src/context-jobs.ts';
-import type { ExtractionInput } from '../src/extraction.ts';
+import { type ExtractionInput, extractCandidates } from '../src/extraction.ts';
 import { requestContextRefresh, requestMemoryCommit } from '../src/context-schedule.ts';
-import { addContextItem, appendContextEvent, getContextSnapshot, reviseContextItem } from '../src/context.ts';
+import { appendContextEvent } from '../src/context-events.ts';
+import { addContextItem, getContextSnapshot, reviseContextItem } from '../src/context.ts';
 import { jobHandlers } from '../src/job-handlers.ts';
 import { LlmClient } from '../src/llm.ts';
 import { type FixtureMeeting, migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
@@ -107,7 +108,15 @@ layer(migratedDatabase, { timeout: 120_000 })('context change feed', it => {
     }));
 });
 
-layer(Layer.merge(migratedDatabase, Layer.succeed(LlmClient, null)), { timeout: 120_000 })('context jobs', it => {
+/** Worker model client with no provider configured: every call fails visibly. */
+const unconfigured = new Unavailable({ message: 'No model provider is configured', retryable: false });
+const UnconfiguredLlm = Layer.succeed(LlmClient, {
+  generate: () => Effect.fail(unconfigured),
+  stream: () => Stream.fail(unconfigured),
+  research: () => Effect.fail(unconfigured),
+});
+
+layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('context jobs', it => {
   it.effect('extracts grounded candidates once, resolving delayed-upload time against the utterance', () =>
     Effect.gen(function*() {
       const [owner, device] = yield* seedWorkspace('Refresh', ['owner', 'device']);
@@ -164,8 +173,9 @@ layer(Layer.merge(migratedDatabase, Layer.succeed(LlmClient, null)), { timeout: 
       expect(yield* Effect.flip(refreshContext(down.extract)(job(meeting, null)))).toMatchObject({ retryable: false });
       expect(yield* Effect.flip(refreshContext(down.extract)({ ...job(meeting, owner!.principal.id), payload: {} }))).toMatchObject({ retryable: false });
       // The unconfigured extractor in the worker registry reports Unavailable, never invented candidates.
-      const registered = yield* Effect.flip(jobHandlers['context.refresh']!({ ...job(meeting, owner!.principal.id), workspace_id: owner!.workspace_id, id: JobId.make(randomUUID()), kind: 'context.refresh', work_key: meeting.meeting_id, source_revision: null, attempt: 1, lease_generation: 1 }));
-      expect(registered).toMatchObject({ _tag: 'JobFailure', retryable: true });
+      expect(jobHandlers['context.refresh']).toBeDefined();
+      const registered = yield* Effect.flip(refreshContext(extractCandidates)(job(meeting, owner!.principal.id)));
+      expect(registered).toMatchObject({ _tag: 'JobFailure', message: 'No model provider is configured' });
       const recovered = yield* fakeExtractor(input => [candidate(input.segments[0]!.id, { quote: 'pause hiring', time: null, kind: 'decision', text: 'Hiring paused' })]);
       expect(yield* refreshContext(recovered.extract)(job(meeting, owner!.principal.id))).toMatchObject({ status: 'succeeded', result: { added: 1 } });
     }));
