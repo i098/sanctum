@@ -28,6 +28,8 @@ export const engineeringDefaults = {
   },
   /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
   modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
+  /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
+  pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
 } as const;
 
 export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
@@ -69,6 +71,18 @@ export const serverConfig = Config.all({
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ cerebras: Config.option(Config.redacted('CEREBRAS_API_KEY')), anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
+  /** Pipedream Connect; without credentials every integration call fails as `Unavailable`. */
+  pipedream: Config.all({
+    apiUrl: Config.string('PIPEDREAM_API_URL').pipe(Config.withDefault('https://api.pipedream.com')),
+    environment: Config.literal('development', 'production')('PIPEDREAM_ENVIRONMENT').pipe(Config.withDefault('development')),
+    credentials: Config.option(
+      Config.all({
+        projectId: Config.string('PIPEDREAM_PROJECT_ID'),
+        clientId: Config.string('PIPEDREAM_CLIENT_ID'),
+        clientSecret: Config.redacted('PIPEDREAM_CLIENT_SECRET'),
+      }),
+    ),
+  }),
 });
 export type ServerConfig = Config.Config.Success<typeof serverConfig>;
 

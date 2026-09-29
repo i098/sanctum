@@ -2,9 +2,11 @@
  * The only three integration gateways that enter model context (plan section 10).
  * `action_key` names a catalog operation; `ActionId` names Sanctum's persisted request.
  */
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
 import { ActionId, IdempotencyKey, IntegrationAccountId, MeetingId } from './common.ts';
 import { ActionState } from './actions.ts';
+import { Authenticated } from './auth.ts';
 
 export const ActionKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255));
 export const AppSlug = Schema.String.pipe(Schema.pattern(/^[a-z0-9_-]{1,128}$/));
@@ -80,3 +82,25 @@ export const RequestActionOutput = Schema.Struct({
   action_id: ActionId,
   state: ActionState,
 });
+
+const actionKey = HttpApiSchema.param('action_key', ActionKey);
+
+/** Connector discovery over HTTP (plan section 12); REST, SDKs and MCP share the same gateway functions. */
+export class IntegrationsApi extends HttpApiGroup.make('integrations')
+  .add(
+    HttpApiEndpoint.get('searchIntegrationActions', '/integrations/actions')
+      .setUrlParams(
+        Schema.Struct({
+          ...SearchIntegrationActionsInput.fields,
+          limit: Schema.optionalWith(Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, SEARCH_MAX_LIMIT)), { default: () => SEARCH_DEFAULT_LIMIT }),
+        }),
+      )
+      .addSuccess(SearchIntegrationActionsOutput),
+  )
+  .add(
+    HttpApiEndpoint.post('getIntegrationAction')`/integrations/actions/${actionKey}/schema`
+      .setPayload(GetIntegrationActionInput.pipe(Schema.omit('action_key')))
+      .addSuccess(GetIntegrationActionOutput),
+  )
+  .middleware(Authenticated)
+  .prefix('/api/v1') {}

@@ -214,8 +214,11 @@ describe('HTTP API contract', () => {
       '/api/v1/meetings/{meeting_id}/transcript',
       '/api/v1/meetings/{meeting_id}/recording-access',
       '/api/v1/meetings/{meeting_id}/speakers/map',
+      '/api/v1/integrations/actions',
+      '/api/v1/integrations/actions/{action_key}/schema',
       '/api/v1/agents',
       '/api/v1/agents/{agent_id}/credentials/{key_id}',
     ]);
+    expect(OpenApi.fromApi(SanctumApi).paths['/api/v1/integrations/actions']?.get?.operationId).toBe('integrations.searchIntegrationActions');
   });
 });

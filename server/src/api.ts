@@ -10,6 +10,7 @@ import { AgentsLive } from './agents.ts';
 import { AuthenticatedLive } from './auth.ts';
 import { HealthLive } from './health.ts';
 import { MeetingsLive } from './meetings-api.ts';
+import { IntegrationsLive } from './integrations.ts';
 import type { Migration } from './migrate.ts';
 
 /** `GET /api/v1/session` returns the caller's resolved access. Kept here so auth.ts stays below the HTTP contract. */
@@ -22,6 +23,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       SessionLive,
       // Slice handler layers: one line each.
       MeetingsLive,
+      IntegrationsLive,
       AgentsLive,
     ]),
     Layer.provide(AuthenticatedLive),
