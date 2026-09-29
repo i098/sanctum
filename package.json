@@ -16,17 +16,21 @@
     "quality:sentrux": "sentrux gate .",
     "commitlint": "commitlint",
     "check:app": "node scripts/check-app.ts",
-    "sdk:generate": "node scripts/generate-sdks.ts"
+    "sdk:generate": "node scripts/generate-sdks.ts",
+    "benchmark": "node scripts/benchmark.ts",
+    "replay:capture": "node scripts/replay-capture.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
     "@commitlint/config-conventional": "21.2.3",
     "@effect/platform": "0.97.2",
+    "@effect/sql": "0.52.1",
     "@effect/vitest": "0.30.0",
     "@types/node": "24.19.0",
     "effect": "3.22.2",
     "fallow": "3.30.0",
     "fast-xml-parser": "5.11.1",
+    "mysql2": "3.24.4",
     "parse5": "8.0.1",
     "typescript": "7.0.2",
     "vitest": "3.2.7"

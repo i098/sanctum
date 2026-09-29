@@ -1,0 +1,15 @@
+{
+  "description": "Synthetic 24-hour room trace for accelerated replay (plan section 18). Times are minutes after capture start; no real speech or people.",
+  "timezone": "America/Los_Angeles",
+  "captured_at": "2026-09-28T07:00:00Z",
+  "sample_rate": 48000,
+  "utterance_seconds": 6,
+  "blocks": [
+    { "label": "standup", "at_minute": 120, "utterances": 30, "every_seconds": 12, "first": "Good morning everyone, let's get started with the standup." },
+    { "label": "standup after a ten minute pause", "at_minute": 132, "utterances": 10, "every_seconds": 12, "first": "Okay, picking the standup back up after the coffee break." },
+    { "label": "planning", "at_minute": 240, "utterances": 60, "every_seconds": 15, "first": "Welcome everyone, this is the quarterly planning session." },
+    { "label": "back-to-back review with a start cue", "at_minute": 262, "utterances": 40, "every_seconds": 15, "first": "Let's get started with the design review now." },
+    { "label": "late call across local midnight", "at_minute": 1015, "utterances": 50, "every_seconds": 20, "first": "Good evening everybody, let's begin the late call." }
+  ],
+  "expected": { "meetings": 4, "segments": 190 }
+}
