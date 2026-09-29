@@ -114,9 +114,10 @@ async function fingerprint(url: string): Promise<string> {
 }
 
 const base = (git_sha: string) => ({ git_sha, started_at: new Date().toISOString() });
-const pcmJob = (git_sha: string, frames: number, rate: number, concurrency: number): Job => {
+/** Both drivers are one sequential stream, so `concurrency` is 1; the listener count a rate models is recorded separately. */
+const pcmJob = (git_sha: string, frames: number, rate: number): Job => {
   const { fixture, parameters } = workload('pcm_ingest');
-  return { ...base(git_sha), workload: 'pcm_ingest', frames, rate, concurrency, seed: fixture.seed, samples_per_frame: Number(parameters['samples_per_frame']) };
+  return { ...base(git_sha), workload: 'pcm_ingest', frames, rate, concurrency: 1, seed: fixture.seed, samples_per_frame: Number(parameters['samples_per_frame']) };
 };
 
 /** Offered frame rates: the manifest's, then doublings of the largest (the manifest asks to sweep until saturation). */
@@ -140,7 +141,8 @@ class Run {
   }
 
   job(implementation: Implementation, job: Job, mode: Mode): Result[] {
-    const records = runChild(implementation, job, this.binary).map(record => ({ ...record, parameters: { ...record.parameters, mode } }));
+    const modelled = job.workload === 'pcm_ingest' && job.rate > 0 ? { equivalent_listeners_at_50fps: job.rate / 50 } : {};
+    const records = runChild(implementation, job, this.binary).map(record => ({ ...record, parameters: { ...record.parameters, mode, ...modelled } }));
     this.records.push(...records);
     return records;
   }
@@ -148,7 +150,7 @@ class Run {
   closedLoop(options: Options) {
     const cosine = workload('cosine_ranking');
     const jobs: Job[] = [
-      pcmJob(this.git_sha, options.smoke ? 2_000 : 50_000, 0, 1),
+      pcmJob(this.git_sha, options.smoke ? 2_000 : 50_000, 0),
       { ...base(this.git_sha), workload: 'cosine_ranking', size: options.smoke ? 2_000 : 10_000, dimension: options.smoke ? 64 : Number(cosine.parameters['dimension']), queries: options.smoke ? 10 : 200, verify: 10, top_k: Number(cosine.parameters['top_k']), seed: cosine.fixture.seed },
     ];
     jobs.forEach(job => IMPLEMENTATIONS.forEach(implementation => this.job(implementation, job, 'closed_loop')));
@@ -173,12 +175,11 @@ class Run {
 
   sweep(options: Options) {
     const { parameters } = workload('pcm_ingest');
-    const listeners = parameters['concurrent_listeners'] as number[];
     const rates = sweepRates(parameters['offered_frames_per_second'] as number[], options.smoke ? 0 : 10);
     for (const implementation of IMPLEMENTATIONS) {
       let sustained = 0;
-      for (const [i, rate] of rates.entries()) {
-        const [record] = this.job(implementation, pcmJob(this.git_sha, Math.max(10, Math.round(rate * (options.smoke ? 0.25 : 2))), rate, listeners[i] ?? Math.round(rate / 50)), 'open_loop_sweep');
+      for (const rate of rates) {
+        const [record] = this.job(implementation, pcmJob(this.git_sha, Math.max(10, Math.round(rate * (options.smoke ? 0.25 : 2))), rate), 'open_loop_sweep');
         if (!saturated(record!)) sustained = rate;
         else {
           this.notes.push(`pcm_ingest ${implementation}: sustained ${sustained} frames/s; saturated at ${rate} offered (${record!.metrics['throughput']!.toFixed(0)} achieved)`);
@@ -192,7 +193,7 @@ class Run {
   longRun(options: Options) {
     const rate = (workload('pcm_ingest').parameters['offered_frames_per_second'] as number[])[2]!;
     for (const implementation of IMPLEMENTATIONS) {
-      const [record] = this.job(implementation, pcmJob(this.git_sha, rate * options.soakSeconds, rate, rate / 50), 'long_run');
+      const [record] = this.job(implementation, pcmJob(this.git_sha, rate * options.soakSeconds, rate), 'long_run');
       const verdict = longRunVerdict((record!.parameters['rss_series_bytes'] as number[] | undefined) ?? []);
       Object.assign(record!.parameters, { long_run: verdict });
       if (verdict.within_bound) this.notes.push(`${implementation} long run: ${options.soakSeconds} s at ${rate} frames/s, RSS growth ${(verdict.growth_bytes / 2 ** 20).toFixed(1)} MiB after warm-up (bound ${verdict.bound_bytes / 2 ** 20} MiB)`);
