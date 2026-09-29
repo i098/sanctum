@@ -21,7 +21,10 @@ import { actionRow, provider, seedAccount } from './support/actions.ts';
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
-vi.mock('../src/integrations.ts', async importOriginal => (await import('./support/actions.ts')).fakeIntegrations(importOriginal as never));
+vi.mock('../src/integrations.ts', async importOriginal => {
+  const { fakeIntegrations } = await import('./support/actions.ts');
+  return fakeIntegrations(importOriginal as never);
+});
 
 beforeEach(() => provider.reset());
 

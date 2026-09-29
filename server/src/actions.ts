@@ -52,7 +52,7 @@ const requestHash = (input: ActionRequest) =>
     .digest('hex');
 
 /** Each restricted argument must be present and every value it carries must be listed. */
-export const restrictionsAllow = (restrictions: Args, args: Args) =>
+const restrictionsAllow = (restrictions: Args, args: Args) =>
   Object.entries(restrictions).every(([key, allowed]) => {
     if (!(key in args)) return false;
     const permitted = new Set((Array.isArray(allowed) ? allowed : [allowed]).map(canonical));
@@ -60,7 +60,7 @@ export const restrictionsAllow = (restrictions: Args, args: Args) =>
     return values.length > 0 && values.every(value => permitted.has(canonical(value)));
   });
 
-export const ActionRow = Schema.Struct({
+const ActionRow = Schema.Struct({
   id: ActionId,
   workspace_id: WorkspaceId,
   meeting_id: Schema.NullOr(MeetingId),
@@ -110,7 +110,7 @@ const toGrant = (row: typeof GrantRow.Type): ActionGrant => ({
   version: row.version,
 });
 
-export const toReceipt = (row: ActionRow): ActionReceipt => ({
+const toReceipt = (row: ActionRow): ActionReceipt => ({
   action_id: row.id,
   action_key: row.action_key,
   meeting_id: row.meeting_id,

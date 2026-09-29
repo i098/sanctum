@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient, type SqlError } from '@effect/sql';
 import { JobId, type JobKind, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import type { ClaimedJob, JobHandler, WorkerServices } from './job-handlers.ts';
 
 export interface EnqueueJob {
   readonly workspace_id: WorkspaceId;
@@ -62,13 +61,21 @@ const claim = Effect.gen(function* () {
         attempt: row.attempts + 1,
         lease_generation: generation,
         max_attempts: row.max_attempts,
-      } satisfies ClaimedJob & { max_attempts: number };
+      };
     }),
   );
 });
 
 /** Every completion write is fenced by the lease generation, so a late worker cannot overwrite a newer claim. */
-const run = (job: ClaimedJob & { max_attempts: number }, handler: JobHandler | undefined) =>
+type Claimed = NonNullable<Effect.Effect.Success<typeof claim>>;
+/** Structural twin of job-handlers.ts `JobHandler`, so the ledger does not import the handler registry. */
+type Handler = (job: Claimed) => Effect.Effect<
+  { readonly status: 'succeeded'; readonly result: unknown } | { readonly status: 'paused'; readonly resume_after_ms: number; readonly reason: string },
+  { readonly message: string; readonly retryable: boolean },
+  SqlClient.SqlClient
+>;
+
+const run = (job: Claimed, handler: Handler | undefined) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fence = sql`id = ${job.id} AND lease_generation = ${job.lease_generation}`;
@@ -93,7 +100,7 @@ const run = (job: ClaimedJob & { max_attempts: number }, handler: JobHandler | u
       UPDATE jobs SET status = 'succeeded', result = ${JSON.stringify(done.result ?? null)}, lease_until = NULL, updated_at = UTC_TIMESTAMP(6) WHERE ${fence}`;
   }).pipe(Effect.asVoid);
 
-export const runWorker = (handlers: Partial<Record<JobKind, JobHandler>>): Effect.Effect<never, SqlError.SqlError, WorkerServices> =>
+export const runWorker = (handlers: Partial<Record<JobKind, Handler>>): Effect.Effect<never, SqlError.SqlError, SqlClient.SqlClient> =>
   Effect.forever(
     Effect.flatMap(claim, job => (job === null ? Effect.sleep(POLL_MS) : run(job, handlers[job.kind]))),
   );

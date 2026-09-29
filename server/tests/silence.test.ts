@@ -18,7 +18,10 @@ import { provider, queuedJob, seedAccount } from './support/actions.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
-vi.mock('../src/integrations.ts', async importOriginal => (await import('./support/actions.ts')).fakeIntegrations(importOriginal as never));
+vi.mock('../src/integrations.ts', async importOriginal => {
+  const { fakeIntegrations } = await import('./support/actions.ts');
+  return fakeIntegrations(importOriginal as never);
+});
 vi.mock('../src/planner.ts', () => ({ planActions: vi.fn() }));
 
 const LISTENER = randomUUID() as ListenerId;
@@ -213,7 +216,7 @@ describe('background work', () => {
         provider.mode = 'reject';
         yield* Effect.flatMap(queuedJob(agent!.workspace_id, 'action.execute', rejected.action_id), executeAction);
         vi.mocked(planActions).mockReturnValue(Effect.succeed([input('planned')]));
-        yield* runResearch({ ...(yield* queuedJob(agent!.workspace_id, 'action.execute', ok.action_id)), kind: 'research.run', payload: { meeting_id: null, request: 'follow up' } });
+        yield* runResearch({ ...(yield* queuedJob(agent!.workspace_id, 'action.execute', ok.action_id)), payload: { meeting_id: null, request: 'follow up' } });
         yield* session.onSegment(heard('Let us wrap up.', 3_000, 4_000));
         yield* Effect.sleep(`${endOfTurnMs * 2} millis`);
         yield* session.onEnd('pause');

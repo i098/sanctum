@@ -8,11 +8,11 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { CaptureEpochId, ListenerId, SpeechCancelMessage, SpeechCancelReason, SpeechChunkMessage, TranscriptSegment, Unavailable } from '@sanctum/contracts';
-import { Context, Effect, Fiber, Layer, Stream } from 'effect';
+import { Context, Effect, Fiber, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
 import { SPEECH_SAMPLE_RATE, SpeechSynthesizer } from '../providers/cartesia.ts';
 
-export interface SpeechWindow {
+interface SpeechWindow {
   readonly listener_id: ListenerId;
   readonly epoch_id: CaptureEpochId;
   readonly request_id: string;
@@ -68,10 +68,8 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
   };
 };
 
-export class SpeechGate extends Context.Tag('sanctum/SpeechGate')<SpeechGate, ReturnType<typeof makeSpeechGate>>() {}
-
-/** One gate per API process: live sockets for a listener always land in the process that owns them. */
-export const SpeechGateLive = Layer.sync(SpeechGate, () => makeSpeechGate());
+/** One gate per API process by default: a listener's live socket always lands in the process that owns it. */
+export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
 /** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
 export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
@@ -91,6 +89,46 @@ const sentences = <E>(text: Stream.Stream<string, E>) =>
   });
 
 type SpeechMessage = SpeechChunkMessage | SpeechCancelMessage;
+
+/**
+ * Streams one requested reply as audio. Every sentence and every audio chunk re-checks the
+ * window, so cancellation stops output at the next chunk even if the provider keeps sending.
+ */
+const speak = (
+  io: {
+    readonly gate: ReturnType<typeof makeSpeechGate>;
+    readonly synthesizer: Context.Tag.Service<SpeechSynthesizer>;
+    readonly listener_id: ListenerId;
+    readonly send: (message: SpeechMessage) => Effect.Effect<void>;
+    readonly reply: Stream.Stream<string, Unavailable>;
+  },
+  window: SpeechWindow,
+) =>
+  Effect.gen(function* () {
+    const { gate, listener_id } = io;
+    const live = () => gate.mayEmit(window.request_id, window.generation);
+    let sequence = 0;
+    let playedUntil = gate.now();
+    yield* sentences(io.reply).pipe(
+      Stream.takeWhile(live),
+      Stream.runForEach(sentence =>
+        io.synthesizer.synthesize(sentence).pipe(
+          Stream.takeWhile(live),
+          Stream.runForEach(audio => {
+            playedUntil = Math.max(playedUntil, gate.now()) + (audio.byteLength / 2 / SPEECH_SAMPLE_RATE) * 1000;
+            gate.notePlayed(listener_id, sentence, playedUntil);
+            return io.send({ _tag: 'speech_chunk', request_id: window.request_id, generation: window.generation, sequence: sequence++,
+              sample_rate: SPEECH_SAMPLE_RATE, audio: Buffer.from(audio).toString('base64') });
+          }),
+        ),
+      ),
+    );
+    // A cancel from the controller would interrupt this very fiber before sending, so close the window here.
+    if (gate.active(listener_id)?.generation !== window.generation) return;
+    const expired = !live();
+    const message = gate.cancel(listener_id, 'expired');
+    if (expired && message) yield* io.send(message);
+  }).pipe(Effect.catchAll(error => Effect.logWarning('Requested speech failed', error.message)));
 
 /**
  * Per-socket speech ownership for media's session: feed every transcript segment and the
@@ -118,41 +156,24 @@ export const speechController = (options: {
         if (message) yield* send(message);
       });
 
-    const speak = (window: SpeechWindow, request: string) =>
-      Effect.gen(function* () {
-        const live = () => gate.mayEmit(window.request_id, window.generation);
-        let sequence = 0;
-        let playedUntil = gate.now();
-        yield* sentences(options.respond(request)).pipe(
-          Stream.takeWhile(live),
-          Stream.runForEach(sentence =>
-            synthesizer.synthesize(sentence).pipe(
-              Stream.takeWhile(live),
-              Stream.runForEach(audio => {
-                playedUntil = Math.max(playedUntil, gate.now()) + (audio.byteLength / 2 / SPEECH_SAMPLE_RATE) * 1000;
-                gate.notePlayed(listener_id, sentence, playedUntil);
-                const message = { _tag: 'speech_chunk', request_id: window.request_id, generation: window.generation, sequence: sequence++,
-                  sample_rate: SPEECH_SAMPLE_RATE, audio: Buffer.from(audio).toString('base64') } as const;
-                return send(message);
-              }),
-            ),
-          ),
-        );
-        // Close our own window here: `cancel` would interrupt this very fiber before sending.
-        if (gate.active(listener_id)?.generation !== window.generation) return;
-        const expired = !live();
-        const message = gate.cancel(listener_id, 'expired');
-        if (expired && message) yield* send(message);
-      }).pipe(Effect.catchAll(error => Effect.logWarning('Requested speech failed', error.message)));
-
     const completeTurn = Effect.gen(function* () {
       const finished = turn;
       turn = null;
       const request = finished ? directRequest(finished.texts.join(' ')) : null;
       if (!finished || request === null) return;
       const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: randomUUID(), sample_end: finished.sample_end });
-      speaking = yield* Effect.forkDaemon(speak(window, request));
+      speaking = yield* Effect.forkDaemon(speak({ gate, synthesizer, listener_id, send, reply: options.respond(request) }, window));
     });
+
+    /** Extends the open turn, or completes it first when this segment starts after a pause or in a new epoch. */
+    const extendTurn = (segment: TranscriptSegment) =>
+      Effect.gen(function* () {
+        const { epoch_id, sample_start, sample_end } = segment.source;
+        if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples)) yield* completeTurn;
+        turn = turn ? { ...turn, texts: [...turn.texts, segment.text], sample_end } : { epoch_id, texts: [segment.text], sample_end };
+        if (turnTimer) yield* Fiber.interrupt(turnTimer);
+        turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.endOfTurnMs));
+      });
 
     return {
       onSegment: (segment: TranscriptSegment) =>
@@ -160,12 +181,7 @@ export const speechController = (options: {
           if (segment.text.trim() === '' || gate.isEcho(listener_id, segment.text)) return;
           // A person talking over an open response interrupts it.
           if (gate.active(listener_id)) yield* cancel('barge_in');
-          if (segment.status !== 'final') return;
-          const { epoch_id, sample_start, sample_end } = segment.source;
-          if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples)) yield* completeTurn;
-          turn = turn ? { ...turn, texts: [...turn.texts, segment.text], sample_end } : { epoch_id, texts: [segment.text], sample_end };
-          if (turnTimer) yield* Fiber.interrupt(turnTimer);
-          turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.endOfTurnMs));
+          if (segment.status === 'final') yield* extendTurn(segment);
         }),
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */
       onEnd: (reason: 'pause' | 'disconnect') =>
