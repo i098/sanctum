@@ -1,26 +1,36 @@
 /**
- * API entrypoint: one Node HTTP server for `/api/v1`, health, and (added by their slices)
- * `/mcp`, the live-ingest WebSocket upgrade and built website assets. Accepted durable work
+ * API entrypoint: one Node HTTP server for `/api/v1`, health, built website assets and (added
+ * by their slices) `/mcp` and the live-ingest WebSocket upgrade. Accepted durable work
  * belongs to the separate worker entrypoint (worker.ts), never to this process.
  */
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import type { SqlClient } from '@effect/sql';
 import { HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, flow } from 'effect';
 import { ApiLive } from './api.ts';
 import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
 import { loadMigrations } from './migrate.ts';
+import { secureResponses, webAssetsLive } from './web.ts';
 
-/** Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free port). */
+/** `vite build` output; the same relative path from `src/` in the repository and `dist/` in the image. */
+const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.url));
+
+/**
+ * Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free
+ * port), plus the website from `webRoot` when given.
+ */
 export const serverLayer = (
-  config: { readonly apiPort: number; readonly mysql: MysqlOptions },
+  config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
 ) =>
-  HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
+  HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
+    Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
     Layer.provide(ApiLive(loadMigrations())),
     Layer.provide(authenticator),
     Layer.provide(dbLayer(config.mysql)),
@@ -31,6 +41,7 @@ if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
-    return yield* Layer.launch(serverLayer(config));
+    // Development serves the website from Vite; the image always contains the build (server/Dockerfile).
+    return yield* Layer.launch(serverLayer({ ...config, webRoot: existsSync(BUILT_WEBSITE) ? BUILT_WEBSITE : undefined }));
   }).pipe(NodeRuntime.runMain);
 }
