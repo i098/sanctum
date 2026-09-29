@@ -42,6 +42,13 @@ export const ActionGrant = Schema.Struct({
 });
 export type ActionGrant = typeof ActionGrant.Type;
 
+/**
+ * `reconciled`: the provider's own late answer settled an `unknown` action. `resolved_by_human`:
+ * a person recorded the outcome they checked; the receipt then carries their word, not the provider's.
+ */
+export const ActionReconciliation = Schema.Literal('none', 'pending', 'reconciled', 'resolved_by_human');
+export type ActionReconciliation = typeof ActionReconciliation.Type;
+
 export const ActionReceipt = Schema.Struct({
   action_id: ActionId,
   action_key: Schema.String,
@@ -49,10 +56,16 @@ export const ActionReceipt = Schema.Struct({
   state: ActionState,
   args_sha256: Sha256Hex,
   grant: Schema.NullOr(Schema.Struct({ id: ActionGrantId, version: Revision })),
-  /** Provider's own receipt/artifact reference, stored separately from model summaries. */
+  /**
+   * Provider's own receipt/artifact reference, stored separately from model summaries; when
+   * `reconciliation` is `resolved_by_human`, the reference the resolving person entered instead.
+   */
   provider_receipt: Schema.NullOr(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
   attempts: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-  reconciliation: Schema.Literal('none', 'pending', 'reconciled'),
+  reconciliation: ActionReconciliation,
+  /** The person who resolved an `unknown` action and when; both null unless `resolved_by_human`. */
+  resolved_by: Schema.NullOr(PrincipalId),
+  resolved_at: Schema.NullOr(UtcTimestamp),
   updated_at: UtcTimestamp,
 });
 export type ActionReceipt = typeof ActionReceipt.Type;

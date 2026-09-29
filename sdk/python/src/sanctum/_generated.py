@@ -492,7 +492,9 @@ class ActionReceipt(TypedDict):
     grant: ActionReceiptGrant | None
     provider_receipt: dict[str, Any] | None
     attempts: int
-    reconciliation: Literal["none", "pending", "reconciled"]
+    reconciliation: Literal["none", "pending", "reconciled", "resolved_by_human"]
+    resolved_by: str | None
+    resolved_at: str | None
     updated_at: str
 
 

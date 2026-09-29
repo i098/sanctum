@@ -16,11 +16,17 @@ import {
 import { Context, Effect, Either, JSONSchema, Layer, Option, Redacted, Schema } from 'effect';
 import { Authenticator } from '../src/auth.ts';
 import { engineeringDefaults } from '../src/config.ts';
+import { requestAction, revokeActionGrant } from '../src/actions.ts';
+import { createAgent } from '../src/agents.ts';
+import { resolveAccess } from '../src/auth.ts';
 import { dbLayer } from '../src/db.ts';
+import { executeAction } from '../src/executor.ts';
 import { executeIntegrationAction, getIntegrationAction, IntegrationFailure, searchIntegrationActions, uploadDriveFile } from '../src/integrations.ts';
 import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
 import { type ActionProp, makePipedreamClient, type PipedreamClient } from '../src/providers/pipedream.ts';
+import { addMember, bumpPermissionRevision, grantMeetingAccess } from '../src/store.ts';
+import { actionRow, queuedJob, seedCredential, seedMeeting } from './support/actions.ts';
 import { type FixtureAction, fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 import { createTestDatabase, type TestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -261,7 +267,6 @@ describe('integration configuration', () => {
         const failure = (effect: Effect.Effect<unknown, IntegrationFailure, SqlClient.SqlClient | PipedreamClient>) => Effect.map(Effect.flip(effect), error => error.message);
 
         expect(yield* failure(execute(owner!, { sheetId: 'sheet-b', col_b: 1 }))).toMatch(/configuration is stale/);
-        expect(yield* failure(execute({ ...owner!, permission_revision: 2 }, { sheetId: 'sheet-a', col_a: 'x' }))).toMatch(/configuration is stale/);
         expect(yield* failure(execute(owner!, { sheetId: 'sheet-a', col_a: 5 }))).toBe('Invalid arguments: col_a must be string');
         expect(yield* failure(execute(owner!, { sheetId: 'sheet-a' }))).toBe('Invalid arguments: col_a is required');
         expect(yield* failure(execute(owner!, { sheetId: 'sheet-a', col_a: 'x', extra: true }))).toBe('Invalid arguments: unknown field extra');
@@ -281,6 +286,51 @@ describe('integration configuration', () => {
 
         fake.actions.set(addRow.key, { ...addRow, version: '0.2.0' });
         expect(yield* failure(execute(owner!, { sheetId: 'sheet-a', col_a: 'x' }))).toMatch(/changed since it was inspected/);
+        expect(providerCalls(fake, 'runAction')).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect('keeps a queued action authorized across unrelated permission changes, and blocks it once its grant or grantee membership goes', () =>
+    scenario(baseCatalog, fake =>
+      Effect.gen(function*() {
+        const sql = yield* SqlClient.SqlClient;
+        const [owner, agent] = yield* seedWorkspace('Queued', ['owner', 'agent']);
+        yield* seedCredential(owner!, agent!);
+        const account = yield* connect(owner!, 'gmail');
+        const current = () => resolveAccess({ workspace_id: agent!.workspace_id, principal_id: agent!.principal.id });
+        // Requested exactly as an agent would: inspect, then request with the returned ref.
+        const queue = (idempotency_key: string) =>
+          Effect.gen(function*() {
+            const access = yield* current();
+            const { version, configuration_ref } = yield* getIntegrationAction(access, { action_key: sendEmail.key });
+            const queued = yield* requestAction(access, { action_key: sendEmail.key, version, configuration_ref, arguments: { to: ['a@example.com'], subject: 'Hi' }, meeting_id: null, idempotency_key });
+            return { id: queued.action_id, revision: access.permission_revision };
+          });
+        const run = (action_id: string) =>
+          Effect.flatMap(queuedJob(agent!.workspace_id, 'action.execute', action_id), executeAction).pipe(Effect.zipRight(actionRow(agent!.workspace_id, action_id as never)));
+
+        const firstGrant = yield* grant(owner!, agent!, account);
+        const unaffected = yield* queue('unrelated-changes');
+        const meeting = yield* seedMeeting(owner!.workspace_id);
+        const person = randomUUID() as never;
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${person}, 'human', 'New member', UTC_TIMESTAMP(6))`;
+        yield* addMember({ workspace_id: owner!.workspace_id, principal_id: person, role: 'member' });
+        yield* grantMeetingAccess({ workspace_id: owner!.workspace_id, meeting_id: meeting, principal_id: person, access: 'read', granted_by: owner!.principal.id });
+        yield* createAgent(owner!, { display_name: 'Other agent', scopes: ['context:read'], meetings: { kind: 'accessible' }, expires_at: null });
+        expect((yield* current()).permission_revision).toBeGreaterThan(unaffected.revision);
+        expect(yield* run(unaffected.id)).toMatchObject({ state: 'succeeded', attempts: 1 });
+        expect(providerCalls(fake, 'runAction')).toHaveLength(1);
+
+        const revoked = yield* queue('grant-revoked');
+        yield* revokeActionGrant(owner!, firstGrant as never);
+        expect(yield* run(revoked.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
+
+        yield* grant(owner!, agent!, account);
+        const removed = yield* queue('member-removed');
+        yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`;
+        yield* bumpPermissionRevision(agent!.workspace_id);
+        expect(yield* run(removed.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
       }),
     ),
@@ -307,7 +357,8 @@ describe('integration configuration', () => {
         expect(upstream[0]).toMatchObject({ external_user_id: `ext-${owner!.principal.id}`, configured_props: { slack: { authProvisionId: `apn_${account.slice(0, 8)}` } } });
 
         const stale = (access: AccessScope, field: string, options_cursor: string) => Effect.flip(getIntegrationAction(access, { action_key: postMessage.key, field, options_cursor }));
-        expect((yield* stale({ ...owner!, permission_revision: 5 }, 'channel', first!)).message).toMatch(/cursor is stale/);
+        // Unrelated permission changes leave a cursor valid; the caller's accounts are re-read on every page.
+        yield* getIntegrationAction({ ...owner!, permission_revision: owner!.permission_revision + 5 }, { action_key: postMessage.key, field: 'channel', options_cursor: first! });
         expect((yield* stale(owner!, 'text', first!)).message).toMatch(/cursor is stale/);
         expect((yield* stale(owner!, 'channel', 'not-a-cursor')).message).toMatch(/cursor is stale/);
         expect((yield* Effect.flip(getIntegrationAction(owner!, { action_key: postMessage.key, field: 'text' }))).message).toBe('text has no selectable options');

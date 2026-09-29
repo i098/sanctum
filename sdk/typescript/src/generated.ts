@@ -486,7 +486,9 @@ export type ActionReceipt = {
   readonly grant: ActionReceiptGrant | null;
   readonly provider_receipt: Readonly<Record<string, unknown>> | null;
   readonly attempts: number;
-  readonly reconciliation: "none" | "pending" | "reconciled";
+  readonly reconciliation: "none" | "pending" | "reconciled" | "resolved_by_human";
+  readonly resolved_by: string | null;
+  readonly resolved_at: string | null;
   readonly updated_at: string;
 };
 

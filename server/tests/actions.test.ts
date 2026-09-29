@@ -1,7 +1,7 @@
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { type AccessScope, type ActionId, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
-import { Effect, Fiber, TestClock } from 'effect';
+import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
+import { Effect, Fiber, Schema, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import { createActionGrant, getActionReceipt, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
@@ -47,6 +47,9 @@ const setup = (grant: { meeting_id?: MeetingId | null; expires_at?: string | nul
     });
     return { owner: owner!, member: member!, agent: agent!, account, grant: created };
   });
+
+/** A receipt as a client decodes it from the JSON response body. */
+const overWire = (receipt: ActionReceipt) => Schema.decodeUnknownSync(ActionReceipt)(JSON.parse(JSON.stringify(Schema.encodeSync(ActionReceipt)(receipt))));
 
 const execute = (access: AccessScope, action_id: ActionId) =>
   Effect.flatMap(queuedJob(access.workspace_id, 'action.execute', action_id), executeAction).pipe(Effect.provide(actionServices));
@@ -196,7 +199,15 @@ describe('action gateway', () => {
         expect(provider.sent).toHaveLength(1);
         expect((yield* Effect.flip(resolveAction(agent, queued.action_id, { outcome: 'succeeded', provider_receipt: null })))._tag).toBe('Forbidden');
         const resolved = yield* resolveAction(owner, queued.action_id, { outcome: 'succeeded', provider_receipt: { message_id: 'checked-in-gmail' } });
-        expect(resolved).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', provider_receipt: { message_id: 'checked-in-gmail' } });
+        // A person's word is signed and never labelled as the provider's own reconciliation.
+        expect(overWire(yield* getActionReceipt(owner, queued.action_id))).toEqual(resolved);
+        expect(resolved).toMatchObject({
+          state: 'succeeded',
+          reconciliation: 'resolved_by_human',
+          resolved_by: owner.principal.id,
+          resolved_at: expect.stringMatching(/Z$/),
+          provider_receipt: { message_id: 'checked-in-gmail' },
+        });
         expect((yield* Effect.flip(resolveAction(owner, queued.action_id, { outcome: 'failed', provider_receipt: null })))._tag).toBe('Forbidden');
       }),
       { migrated: true },
@@ -218,6 +229,7 @@ describe('action gateway', () => {
         let row = yield* actionRow(agent.workspace_id, queued.action_id);
         for (let tries = 0; row.state === 'unknown' && tries < 200; tries++) row = yield* Effect.zipRight(realDelay, actionRow(agent.workspace_id, queued.action_id));
         expect(row).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', attempts: 1 });
+        expect(overWire(yield* getActionReceipt(agent, queued.action_id))).toMatchObject({ reconciliation: 'reconciled', resolved_by: null, resolved_at: null, provider_receipt: { message_id: 'msg-1' } });
         expect(provider.sent).toHaveLength(1);
       }),
       { migrated: true },

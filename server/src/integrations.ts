@@ -94,7 +94,9 @@ const configure = (action: ActionComponent, account: Account | undefined, config
 
 /**
  * Account-bound props for one action. `ref` names the schema the caller saw: it changes with the
- * component version, the dynamic props, the account, and the caller's permission revision.
+ * component version, the dynamic props, the principal and the account. It ignores the workspace
+ * permission revision, which unrelated member, agent and meeting-share changes bump; execution
+ * re-checks authorization itself (account usability here, grant version and membership in the executor).
  */
 interface ResolvedSchema {
   readonly configured: Readonly<Record<string, unknown>>;
@@ -115,7 +117,7 @@ const resolveSchema = (
     const reload = account && action.configurable_props.some(prop => prop.reloadProps && configured[prop.name] !== undefined);
     const dynamic = reload ? yield* client.reloadProps({ id: action.key, version: action.version, external_user_id: account.external_user_id, configured_props: configured }) : null;
     const props = dynamic?.props ?? action.configurable_props;
-    const shape = [access.workspace_id, access.principal.id, access.permission_revision, action.key, account?.id, props.map(prop => [prop.name, prop.type, !prop.optional])];
+    const shape = [access.workspace_id, access.principal.id, action.key, account?.id, props.map(prop => [prop.name, prop.type, !prop.optional])];
     return { configured, props, dynamic_props_id: dynamic?.id, ref: `${action.version}:${sha256(JSON.stringify(shape)).slice(0, 32)}` };
   });
 

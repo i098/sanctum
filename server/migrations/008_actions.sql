@@ -60,7 +60,10 @@ CREATE TABLE actions (
   provider_idempotency_key VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NULL,
   provider_receipt JSON NULL,
   attempts INT UNSIGNED NOT NULL DEFAULT 0,
-  reconciliation ENUM('none', 'pending', 'reconciled') NOT NULL DEFAULT 'none',
+  -- 'reconciled': the provider's late answer settled it; 'resolved_by_human': a person did (resolved_by, resolved_at).
+  reconciliation ENUM('none', 'pending', 'reconciled', 'resolved_by_human') NOT NULL DEFAULT 'none',
+  resolved_by CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  resolved_at DATETIME(6) NULL,
   last_error JSON NULL,
   -- First submission to the provider; the per-workspace rate budget counts these.
   started_at DATETIME(6) NULL,
@@ -75,5 +78,7 @@ CREATE TABLE actions (
   CONSTRAINT actions_meeting FOREIGN KEY (workspace_id, meeting_id) REFERENCES meetings (workspace_id, id),
   CONSTRAINT actions_account FOREIGN KEY (workspace_id, account_id) REFERENCES integration_accounts (workspace_id, id),
   CONSTRAINT actions_grant FOREIGN KEY (workspace_id, grant_id) REFERENCES action_grants (workspace_id, id),
-  CONSTRAINT actions_grant_version CHECK ((grant_id IS NULL) = (grant_version IS NULL))
+  CONSTRAINT actions_resolver FOREIGN KEY (workspace_id, resolved_by) REFERENCES workspace_members (workspace_id, principal_id),
+  CONSTRAINT actions_grant_version CHECK ((grant_id IS NULL) = (grant_version IS NULL)),
+  CONSTRAINT actions_resolution CHECK ((resolved_by IS NULL) = (resolved_at IS NULL) AND (resolved_by IS NULL) = (reconciliation <> 'resolved_by_human'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -6794,6 +6794,8 @@
                     "provider_receipt",
                     "attempts",
                     "reconciliation",
+                    "resolved_by",
+                    "resolved_at",
                     "updated_at"
                   ],
                   "properties": {
@@ -6893,7 +6895,33 @@
                       "enum": [
                         "none",
                         "pending",
-                        "reconciled"
+                        "reconciled",
+                        "resolved_by_human"
+                      ]
+                    },
+                    "resolved_by": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a Universally Unique Identifier",
+                          "format": "uuid",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resolved_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     },
                     "updated_at": {
@@ -7045,6 +7073,8 @@
                           "provider_receipt",
                           "attempts",
                           "reconciliation",
+                          "resolved_by",
+                          "resolved_at",
                           "updated_at"
                         ],
                         "properties": {
@@ -7144,7 +7174,33 @@
                             "enum": [
                               "none",
                               "pending",
-                              "reconciled"
+                              "reconciled",
+                              "resolved_by_human"
+                            ]
+                          },
+                          "resolved_by": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "description": "a Universally Unique Identifier",
+                                "format": "uuid",
+                                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "resolved_at": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "updated_at": {
@@ -7284,6 +7340,8 @@
                     "provider_receipt",
                     "attempts",
                     "reconciliation",
+                    "resolved_by",
+                    "resolved_at",
                     "updated_at"
                   ],
                   "properties": {
@@ -7383,7 +7441,33 @@
                       "enum": [
                         "none",
                         "pending",
-                        "reconciled"
+                        "reconciled",
+                        "resolved_by_human"
+                      ]
+                    },
+                    "resolved_by": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a Universally Unique Identifier",
+                          "format": "uuid",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resolved_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     },
                     "updated_at": {

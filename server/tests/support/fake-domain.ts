@@ -400,6 +400,8 @@ const actionsGroup = ({ space, need, once }: Store) =>
                 provider_receipt: null,
                 attempts: 0,
                 reconciliation: 'none',
+                resolved_by: null,
+                resolved_at: null,
                 updated_at: now(),
               });
               space(access).actions.set(receipt.action_id, receipt);

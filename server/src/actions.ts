@@ -13,6 +13,7 @@ import {
   ActionGrantId,
   ActionId,
   type ActionReceipt,
+  ActionReconciliation,
   ActionState,
   type CreateActionGrantInput,
   CurrentAccess,
@@ -78,7 +79,9 @@ const ActionRow = Schema.Struct({
   provider_idempotency_key: Schema.NullOr(Schema.String),
   provider_receipt: Schema.NullOr(DbJson(JsonRecord)),
   attempts: DbSafeInt,
-  reconciliation: Schema.Literal('none', 'pending', 'reconciled'),
+  reconciliation: ActionReconciliation,
+  resolved_by: Schema.NullOr(PrincipalId),
+  resolved_at: Schema.NullOr(DbUtc),
   updated_at: DbUtc,
 });
 export type ActionRow = typeof ActionRow.Type;
@@ -121,10 +124,12 @@ const toReceipt = (row: ActionRow): ActionReceipt => ({
   provider_receipt: row.provider_receipt,
   attempts: row.attempts,
   reconciliation: row.reconciliation,
+  resolved_by: row.resolved_by,
+  resolved_at: row.resolved_at,
   updated_at: row.updated_at,
 });
 
-const ACTION_COLUMNS = 'id, workspace_id, meeting_id, requested_by, action_key, account_id, args, args_sha256, configuration_ref, version, grant_id, grant_version, state, provider_idempotency_key, provider_receipt, attempts, reconciliation, updated_at';
+const ACTION_COLUMNS = 'id, workspace_id, meeting_id, requested_by, action_key, account_id, args, args_sha256, configuration_ref, version, grant_id, grant_version, state, provider_idempotency_key, provider_receipt, attempts, reconciliation, resolved_by, resolved_at, updated_at';
 const GRANT_COLUMNS = 'g.id, g.owner_principal_id, g.grantee_principal_id, g.action_key, g.app_slug, g.account_id, g.meeting_id, g.restrictions, g.expires_at, g.revoked_at, g.version';
 
 /** Loads one action row; `lock` takes a row lock inside the caller's transaction. */
@@ -241,7 +246,7 @@ export const listMeetingActions = (access: AccessScope, meeting_id: MeetingId, p
 const requireHuman = (access: AccessScope, what: string) =>
   access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
 
-/** A person records the checked outcome of an `unknown` action; automatic replay never does. */
+/** A person records the checked outcome of an `unknown` action, signed with who and when; automatic replay never does. */
 export const resolveAction = (access: AccessScope, action_id: ActionId, input: ResolveActionInput) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
@@ -251,7 +256,7 @@ export const resolveAction = (access: AccessScope, action_id: ActionId, input: R
     if (row.state !== 'unknown') return yield* new Forbidden({ message: `Only unknown actions can be resolved; this one is ${row.state}` });
     yield* sql`
             UPDATE actions SET state = ${input.outcome}, provider_receipt = ${input.provider_receipt === null ? null : JSON.stringify(input.provider_receipt)},
-                reconciliation = 'reconciled', updated_at = UTC_TIMESTAMP(6)
+                reconciliation = 'resolved_by_human', resolved_by = ${access.principal.id}, resolved_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6)
             WHERE workspace_id = ${access.workspace_id} AND id = ${action_id} AND state = 'unknown'`;
     return toReceipt(Option.getOrThrow(yield* loadAction(access.workspace_id, action_id)));
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
