@@ -53,11 +53,16 @@ export type FrameError =
 
 const LITTLE_ENDIAN_HOST = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
+function headerRangeError(header: PcmFrameHeader, samples: Int16Array): string | null {
+  if (samples.length !== header.sample_count || samples.length === 0 || samples.length > MAX_FRAME_SAMPLES) return 'sample_count must equal samples.length within MAX_FRAME_SAMPLES';
+  if (!Number.isInteger(header.track) || header.track < 0 || header.track > 0xffff) return 'track must fit u16';
+  if (!Number.isInteger(header.sequence) || header.sequence < 0 || header.sequence > 0xffff_ffff) return 'sequence must fit u32';
+  return Number.isSafeInteger(header.sample_start) && header.sample_start >= 0 ? null : 'unsafe sample_start';
+}
+
 export function encodePcmFrame(header: PcmFrameHeader, samples: Int16Array): Uint8Array {
-  if (samples.length !== header.sample_count || samples.length === 0 || samples.length > MAX_FRAME_SAMPLES) {
-    throw new RangeError('sample_count must equal samples.length and be within MAX_FRAME_SAMPLES');
-  }
-  if (!Number.isSafeInteger(header.sample_start) || header.sample_start < 0) throw new RangeError('unsafe sample_start');
+  const problem = headerRangeError(header, samples);
+  if (problem !== null) throw new RangeError(problem);
   const bytes = new Uint8Array(FRAME_HEADER_BYTES + samples.length * 2);
   const view = new DataView(bytes.buffer);
   view.setUint8(0, MEDIA_PROTOCOL_VERSION);
@@ -66,7 +71,8 @@ export function encodePcmFrame(header: PcmFrameHeader, samples: Int16Array): Uin
   view.setUint32(4, header.sequence, true);
   view.setBigUint64(8, BigInt(header.sample_start), true);
   view.setUint32(16, header.sample_count, true);
-  for (let i = 0; i < samples.length; i++) view.setInt16(FRAME_HEADER_BYTES + i * 2, samples[i]!, true);
+  if (LITTLE_ENDIAN_HOST) bytes.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength), FRAME_HEADER_BYTES);
+  else for (let i = 0; i < samples.length; i++) view.setInt16(FRAME_HEADER_BYTES + i * 2, samples[i]!, true);
   return bytes;
 }
 

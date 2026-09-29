@@ -151,6 +151,8 @@ describe('PCM frames', () => {
   it('refuses to encode inconsistent headers', () => {
     expect(() => encodePcmFrame({ ...header, sample_count: 3 }, samples)).toThrow(RangeError);
     expect(() => encodePcmFrame({ ...header, sample_start: -1 }, samples)).toThrow(RangeError);
+    expect(() => encodePcmFrame({ ...header, track: 0x1_0000 }, samples)).toThrow(/track/);
+    expect(() => encodePcmFrame({ ...header, sequence: 2 ** 32 }, samples)).toThrow(/sequence/);
   });
 });
 
