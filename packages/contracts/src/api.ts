@@ -4,7 +4,8 @@
  */
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@effect/platform';
 import { Schema } from 'effect';
-import { SessionApi } from './auth.ts';
+import { Authenticated, SessionApi } from './auth.ts';
+import { ListenersApi } from './capture.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 
 /** Process health and dependency readiness without tenant content. */
@@ -16,6 +17,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(HealthApi)
   .add(SessionApi)
   // Slice groups: one `.add(XApi)` line each, in plan section 12 order.
+  .add(ListenersApi.middleware(Authenticated))
   .addError(Unauthenticated)
   .addError(Forbidden)
   .addError(NotFound)

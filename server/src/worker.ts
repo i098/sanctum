@@ -4,18 +4,20 @@
  * actions) that continue after browsers disconnect or the API restarts.
  */
 import { NodeRuntime } from '@effect/platform-node';
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer } from './db.ts';
 import { jobHandlers } from './job-handlers.ts';
 import { runWorker } from './jobs.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
+import { DeepgramLive } from './providers/deepgram.ts';
+import { R2ObjectStoreLive } from './providers/r2.ts';
 
 if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
     const run = Effect.zipRight(requireCurrentSchema(loadMigrations()), runWorker(jobHandlers));
-    return yield* Effect.provide(run, dbLayer(config.mysql));
+    return yield* Effect.provide(run, Layer.mergeAll(dbLayer(config.mysql), R2ObjectStoreLive, DeepgramLive));
   }).pipe(NodeRuntime.runMain);
 }

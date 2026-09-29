@@ -5,6 +5,9 @@
 import type { SqlClient } from '@effect/sql';
 import type { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import type { Effect } from 'effect';
+import { reconcileTranscript } from './media/reconcile.ts';
+import type { ObjectStore } from './object-store.ts';
+import type { SpeechToText } from './providers/deepgram.ts';
 
 export interface ClaimedJob {
   readonly id: JobId;
@@ -27,10 +30,11 @@ export type JobOutcome =
   | { readonly status: 'paused'; readonly resume_after_ms: number; readonly reason: string };
 
 /** Services every worker handler may use; a slice adds its provider tag here and its layer in worker.ts. */
-export type WorkerServices = SqlClient.SqlClient;
+export type WorkerServices = SqlClient.SqlClient | ObjectStore | SpeechToText;
 
 export type JobHandler = (job: ClaimedJob) => Effect.Effect<JobOutcome, JobFailure, WorkerServices>;
 
 export const jobHandlers: Partial<Record<JobKind, JobHandler>> = {
   // One line per slice, e.g. 'context.refresh': refreshContext,
+  'transcript.reconcile': reconcileTranscript,
 };
