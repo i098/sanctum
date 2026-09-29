@@ -34,9 +34,6 @@ export interface Llm {
 
 export class LlmClient extends Context.Tag('sanctum/LlmClient')<LlmClient, Llm>() {}
 
-type Roles = ServerConfig['modelRoles'];
-type Providers = { readonly [P in Roles[ModelRoleName]['provider']]?: ModelProvider | undefined };
-type Budget = { readonly [K in keyof typeof engineeringDefaults.modelRequest]: number };
 
 const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
   if (error instanceof Unavailable) return error;
@@ -46,7 +43,11 @@ const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
 };
 
 /** Builds the service from explicit role settings and the providers that have keys. */
-export function makeLlm(roles: Roles, providers: Providers, budget: Budget = engineeringDefaults.modelRequest): Llm {
+export function makeLlm(
+  roles: ServerConfig['modelRoles'],
+  providers: { readonly cerebras?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined },
+  budget: Record<keyof typeof engineeringDefaults.modelRequest, number> = engineeringDefaults.modelRequest,
+): Llm {
   const select = (role: ModelRoleName) => {
     const setting = roles[role];
     const provider = providers[setting.provider];
