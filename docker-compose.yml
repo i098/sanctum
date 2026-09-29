@@ -62,7 +62,7 @@ services:
   caddy:
     image: caddy:2.11.4-alpine
     environment:
-      SANCTUM_SITE_ADDRESS: ${SANCTUM_SITE_ADDRESS:-localhost}
+      SANCTUM_SITE_ADDRESS: # passed through when set; the Caddyfile defaults to localhost
     ports:
       - ${WEB_PORT:-3102}:443
     volumes:
