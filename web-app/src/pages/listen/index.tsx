@@ -45,11 +45,13 @@ const ARCHIVE: Record<ArchiveState, string> = {
   missing: 'recording missing',
 };
 
+const count = (chunks: number, label: string): string => (chunks > 0 ? ` · ${chunks} ${label}` : '');
+
 function health(snapshot: CaptureSnapshot): string {
   const archive = snapshot.archive ? ARCHIVE[snapshot.archive] : 'not recording';
-  const pending = snapshot.bufferedChunks > 0 ? ` · ${snapshot.bufferedChunks} chunks pending` : '';
-  const stranded = snapshot.strandedChunks > 0 ? ` · ${snapshot.strandedChunks} chunks of removed listeners kept on this device, not uploadable` : '';
-  const refused = snapshot.refusedChunks > 0 ? ` · ${snapshot.refusedChunks} chunks refused by the server kept on this device, not uploadable` : '';
+  const pending = count(snapshot.bufferedChunks, 'chunks pending');
+  const stranded = count(snapshot.strandedChunks, 'chunks of removed listeners kept on this device, not uploadable');
+  const refused = count(snapshot.refusedChunks, 'chunks refused by the server kept on this device, not uploadable');
   return `Silent · ${archive}${pending}${stranded}${refused}`;
 }
 

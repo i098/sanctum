@@ -38,6 +38,45 @@ interface LocalRecordingsProps {
   engine: CaptureView;
 }
 
+interface RecordingListProps {
+  recordings: readonly OrphanedRecording[] | null | undefined;
+  stranded: number;
+  id: string;
+  onExport: (recording: OrphanedRecording, part: number) => void;
+  onDiscard: (recording: OrphanedRecording) => void;
+}
+
+function RecordingList({ recordings, stranded, id, onExport, onDiscard }: RecordingListProps) {
+  return recordings === undefined ? null : recordings === null ? (
+    <p>{stranded} chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.</p>
+  ) : recordings.length === 0 ? (
+    <p>No recordings of removed listeners on this device.</p>
+  ) : (
+    <ul className="listen-items">
+      {recordings.map((recording, index) => (
+        <li key={`${recording.listenerId}/${recording.epochId}`}>
+          <p id={`${id}-${index}`}>{describe(recording)} · listener removed</p>
+          {recording.parts.flatMap((part, number) => part.gaps.map(gap => (
+            <p key={gap.at} className="listen-local-gap">
+              Gap{recording.parts.length === 1 ? '' : ` in part ${number + 1}`}: {clock(gap.missing, recording.sampleRate)} missing after {since(recording, gap.at)}, not filled in the export
+            </p>
+          )))}
+          <div className="listen-local-actions">
+            {recording.parts.map((part, number) => (
+              <button key={part.sampleStart} type="button" data-primary aria-describedby={`${id}-${index}`} onClick={() => onExport(recording, number)}>
+                {recording.parts.length === 1
+                  ? 'Export WAV'
+                  : `Export part ${number + 1} of ${recording.parts.length} · ${since(recording, part.sampleStart)}–${since(recording, part.sampleEnd)}`}
+              </button>
+            ))}
+            <button type="button" aria-describedby={`${id}-${index}`} onClick={() => onDiscard(recording)}>Discard</button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * Recordings orphaned by a removed listener, which can never be uploaded, listed only while no tab
  * of this browser captures. Export (WAV files built in the browser) is the primary action; discard
@@ -77,34 +116,7 @@ export function LocalRecordings({ engine }: LocalRecordingsProps) {
   return (
     <section className="listen-panel listen-local" aria-labelledby={`${id}-heading`}>
       <h3 id={`${id}-heading`} ref={heading} tabIndex={-1}>Recordings of removed listeners</h3>
-      {recordings === undefined ? null : recordings === null ? (
-        <p>{stranded} chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.</p>
-      ) : recordings.length === 0 ? (
-        <p>No recordings of removed listeners on this device.</p>
-      ) : (
-        <ul className="listen-items">
-          {recordings.map((recording, index) => (
-            <li key={`${recording.listenerId}/${recording.epochId}`}>
-              <p id={`${id}-${index}`}>{describe(recording)} · listener removed</p>
-              {recording.parts.flatMap((part, number) => part.gaps.map(gap => (
-                <p key={gap.at} className="listen-local-gap">
-                  Gap{recording.parts.length === 1 ? '' : ` in part ${number + 1}`}: {clock(gap.missing, recording.sampleRate)} missing after {since(recording, gap.at)}, not filled in the export
-                </p>
-              )))}
-              <div className="listen-local-actions">
-                {recording.parts.map((part, number) => (
-                  <button key={part.sampleStart} type="button" data-primary aria-describedby={`${id}-${index}`} onClick={() => exportWav(recording, number)}>
-                    {recording.parts.length === 1
-                      ? 'Export WAV'
-                      : `Export part ${number + 1} of ${recording.parts.length} · ${since(recording, part.sampleStart)}–${since(recording, part.sampleEnd)}`}
-                  </button>
-                ))}
-                <button type="button" aria-describedby={`${id}-${index}`} onClick={() => setConfirming(recording)}>Discard</button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <RecordingList recordings={recordings} stranded={stranded} id={id} onExport={exportWav} onDiscard={setConfirming} />
       {failure && <p role="alert" className="listen-local-gap">{failure}</p>}
       <Dialog title="Discard local recording?" open={confirming !== null} onClose={() => setConfirming(null)}>
         {confirming && (
