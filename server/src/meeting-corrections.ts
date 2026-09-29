@@ -157,6 +157,20 @@ const coalesce = (ranges: ReadonlyArray<SourceRange>) =>
  * ID (actions and context still reference it) but owns no ranges afterwards. Meetings whose access
  * differs are refused until an authorized person aligns it.
  */
+/** Merge preconditions on the locked rows; returns whether either meeting is still open. */
+const mergeable = (into: MeetingRow, folded: MeetingRow) =>
+  Effect.gen(function* () {
+    if ((yield* accessSignature(into)) !== (yield* accessSignature(folded))) {
+      return yield* new Forbidden({ message: 'Meetings have different access; align access explicitly before merging' });
+    }
+    const open = OPEN_STATES.includes(into.state) || OPEN_STATES.includes(folded.state);
+    const sameKey = into.capture_group_id === null ? folded.capture_group_id === null && into.listener_id === folded.listener_id : into.capture_group_id === folded.capture_group_id;
+    if (open && !sameKey) {
+      return yield* new RevisionConflict({ message: "Close the open meeting before merging it with another listener's meeting", current_revision: into.boundary_revision });
+    }
+    return open;
+  });
+
 export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -173,14 +187,7 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
         const locked = [yield* lockedAtRevision(access, first!.meeting_id, first!.expected_revision), yield* lockedAtRevision(access, second!.meeting_id, second!.expected_revision)];
         const into = locked.find(row => row.id === target.meeting_id)!;
         const folded = locked.find(row => row.id === from.meeting_id)!;
-        if ((yield* accessSignature(into)) !== (yield* accessSignature(folded))) {
-          return yield* new Forbidden({ message: 'Meetings have different access; align access explicitly before merging' });
-        }
-        const open = OPEN_STATES.includes(into.state) || OPEN_STATES.includes(folded.state);
-        const sameKey = into.capture_group_id === null ? folded.capture_group_id === null && into.listener_id === folded.listener_id : into.capture_group_id === folded.capture_group_id;
-        if (open && !sameKey) {
-          return yield* new RevisionConflict({ message: "Close the open meeting before merging it with another listener's meeting", current_revision: into.boundary_revision });
-        }
+        const open = yield* mergeable(into, folded);
         const ranges = [...(yield* currentRanges(access.workspace_id, into.id)), ...(yield* currentRanges(access.workspace_id, folded.id))];
         if (ranges.length === 0) {
           return yield* new RevisionConflict({ message: 'Neither meeting owns any source at this boundary revision', current_revision: into.boundary_revision });

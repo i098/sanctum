@@ -418,15 +418,17 @@ class CaptureController implements CaptureView {
     if (listener === null) return;
     this.startDrain();
     const buffer = await this.buffer?.catch(() => null);
-    const snapshot = this.getSnapshot();
     const payload = {
       lease_generation: listener.lease_generation,
-      state: snapshot.listener,
+      state: this.getSnapshot().listener,
       epoch_id: this.session?.epoch?.id ?? null,
       buffered_chunks: this.pending,
       storage_bytes_free: buffer?.freeBytes ?? null,
     };
-    const exit = await Effect.runPromiseExit(this.client.heartbeat({ path: { listener_id: listener.id }, payload }));
+    this.onHeartbeat(listener, await Effect.runPromiseExit(this.client.heartbeat({ path: { listener_id: listener.id }, payload })));
+  }
+
+  private onHeartbeat(listener: StoredListener, exit: Exit.Exit<{ readonly owner: boolean; readonly lease_generation: StoredListener['lease_generation'] }, { readonly _tag: string }>): void {
     if (Exit.isSuccess(exit)) {
       this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
       if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
@@ -440,19 +442,29 @@ class CaptureController implements CaptureView {
   private onOwnership(owner: boolean): void {
     if (owner === !this.leaseLost) return;
     this.leaseLost = !owner;
+    if (owner) this.regainLease();
+    else this.loseLease();
+    this.publish();
+  }
+
+  private loseLease(): void {
     const epoch = this.session?.epoch;
-    if (!owner && epoch) {
+    if (epoch) {
       epoch.live?.stop('close');
       epoch.live = null;
     }
-    if (owner && epoch && epoch.live === null) {
+    this.issue = 'lease_lost';
+  }
+
+  /** Drops the stream-less epoch so the next block opens a fresh one under the current generation. */
+  private regainLease(): void {
+    const epoch = this.session?.epoch;
+    if (epoch && epoch.live === null) {
       void epoch.assembler.close();
       this.session!.epoch = null;
       this.live = null;
     }
-    if (!owner) this.issue = 'lease_lost';
-    else if (this.issue === 'lease_lost') this.issue = null;
-    this.publish();
+    if (this.issue === 'lease_lost') this.issue = null;
   }
 
   private startDrain(): void {

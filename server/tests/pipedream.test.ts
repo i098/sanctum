@@ -14,18 +14,15 @@ import {
   Unauthenticated,
 } from '@sanctum/contracts';
 import { Context, Effect, Either, JSONSchema, Layer, Option, Redacted, Schema } from 'effect';
-import { Authenticator } from '../src/auth.ts';
+import { Authenticator, resolveAccess } from '../src/auth.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { requestAction, revokeActionGrant } from '../src/actions.ts';
-import { createAgent } from '../src/agents.ts';
-import { resolveAccess } from '../src/auth.ts';
 import { dbLayer } from '../src/db.ts';
 import { executeAction } from '../src/executor.ts';
 import { executeIntegrationAction, getIntegrationAction, IntegrationFailure, searchIntegrationActions, uploadDriveFile } from '../src/integrations.ts';
 import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
 import { type ActionProp, makePipedreamClient, type PipedreamClient } from '../src/providers/pipedream.ts';
-import { addMember, bumpPermissionRevision, grantMeetingAccess } from '../src/store.ts';
 import { actionRow, queuedJob, seedCredential, seedMeeting } from './support/actions.ts';
 import { type FixtureAction, fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 import { createTestDatabase, type TestDatabase } from './support/database.ts';
@@ -313,11 +310,13 @@ describe('integration configuration', () => {
         const firstGrant = yield* grant(owner!, agent!, account);
         const unaffected = yield* queue('unrelated-changes');
         const meeting = yield* seedMeeting(owner!.workspace_id);
-        const person = randomUUID() as never;
+        // A new member who is given one meeting: each change bumps the workspace permission revision.
+        const person = randomUUID();
+        const bump = sql`UPDATE workspaces SET permission_revision = permission_revision + 1 WHERE id = ${owner!.workspace_id}`;
         yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${person}, 'human', 'New member', UTC_TIMESTAMP(6))`;
-        yield* addMember({ workspace_id: owner!.workspace_id, principal_id: person, role: 'member' });
-        yield* grantMeetingAccess({ workspace_id: owner!.workspace_id, meeting_id: meeting, principal_id: person, access: 'read', granted_by: owner!.principal.id });
-        yield* createAgent(owner!, { display_name: 'Other agent', scopes: ['context:read'], meetings: { kind: 'accessible' }, expires_at: null });
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${owner!.workspace_id}, ${person}, 'member', UTC_TIMESTAMP(6))`.pipe(Effect.zipRight(bump));
+        yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+          VALUES (${owner!.workspace_id}, ${meeting}, ${person}, 'read', ${owner!.principal.id}, UTC_TIMESTAMP(6))`.pipe(Effect.zipRight(bump));
         expect((yield* current()).permission_revision).toBeGreaterThan(unaffected.revision);
         expect(yield* run(unaffected.id)).toMatchObject({ state: 'succeeded', attempts: 1 });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
@@ -329,7 +328,7 @@ describe('integration configuration', () => {
         yield* grant(owner!, agent!, account);
         const removed = yield* queue('member-removed');
         yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`;
-        yield* bumpPermissionRevision(agent!.workspace_id);
+        yield* sql`UPDATE workspaces SET permission_revision = permission_revision + 1 WHERE id = ${agent!.workspace_id}`;
         expect(yield* run(removed.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
       }),
