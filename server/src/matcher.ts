@@ -21,10 +21,10 @@ if (endianness() !== 'LE') throw new Error('profile embeddings are little-endian
 
 export type EmbeddingKind = 'profile' | 'needs' | 'offers';
 
-export class InvalidEmbedding extends Schema.TaggedError<InvalidEmbedding>()('InvalidEmbedding', { message: Schema.String }) {}
+class InvalidEmbedding extends Schema.TaggedError<InvalidEmbedding>()('InvalidEmbedding', { message: Schema.String }) {}
 
 /** Unit-length float32 copy; empty, oversized, non-finite and zero vectors are rejected. */
-export function normalizeEmbedding(values: ArrayLike<number>): Float32Array | InvalidEmbedding {
+function normalizeEmbedding(values: ArrayLike<number>): Float32Array | InvalidEmbedding {
   if (values.length === 0 || values.length > MAX_DIMENSION) return new InvalidEmbedding({ message: `dimension must be 1..${MAX_DIMENSION}, got ${values.length}` });
   let sum = 0;
   for (let i = 0; i < values.length; i++) sum += values[i]! * values[i]!;

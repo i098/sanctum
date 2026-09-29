@@ -149,22 +149,30 @@ Every point cites the transcript refs (S1, S2, ...) that support it. Leave out a
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
+/** Why a candidate's text, quote or time phrase is not supported by its cited lines, or null. */
+function unsupported(candidate: ModelCandidate, heard: string, known: ReadonlySet<string>): string | null {
+  const verbatim = (text: string) => fold(text) !== '' && heard.includes(fold(text));
+  const checks: ReadonlyArray<readonly [boolean, string]> = [
+    [fold(candidate.text) !== '' && !known.has(`${candidate.kind}:${fold(candidate.text)}`), 'empty or already in the context snapshot'],
+    [candidate.derivation === 'inferred' || candidate.quote !== null, 'spoken candidate without a quote'],
+    [candidate.quote === null || verbatim(candidate.quote), 'quote is not verbatim in the cited segments'],
+    [candidate.time === null || verbatim(candidate.time.phrase), 'time phrase is not in the cited segments'],
+  ];
+  return checks.find(([ok]) => !ok)?.[1] ?? null;
+}
+
 /** The grounded candidate, or why it was rejected. */
 function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, meeting: Meeting, known: ReadonlySet<string>): ExtractionCandidate | string {
   const cited = [...new Set(candidate.segments)].map(ref => byRef.get(ref));
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
-  const text = candidate.text.trim();
-  if (text === '' || known.has(`${candidate.kind}:${fold(text)}`)) return 'empty or already in the context snapshot';
-  const heard = fold(lines.map(line => line.segment.text).join(' '));
-  if (candidate.derivation === 'spoken' && candidate.quote === null) return 'spoken candidate without a quote';
-  if (candidate.quote !== null && (fold(candidate.quote) === '' || !heard.includes(fold(candidate.quote)))) return 'quote is not verbatim in the cited segments';
+  const reason = unsupported(candidate, fold(lines.map(line => line.segment.text).join(' ')), known);
+  if (reason !== null) return reason;
   const phrase = candidate.time && fold(candidate.time.phrase);
-  if (phrase !== null && (phrase === '' || !heard.includes(phrase))) return 'time phrase is not in the cited segments';
   const said = lines.find(line => phrase !== null && fold(line.segment.text).includes(phrase)) ?? lines[0]!;
   return {
     kind: candidate.kind,
-    text,
+    text: candidate.text.trim(),
     quote: candidate.quote,
     derivation: candidate.derivation,
     sources: lines.map(line => line.source),
