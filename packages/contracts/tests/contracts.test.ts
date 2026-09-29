@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { HttpApi, HttpApiSchema, OpenApi } from '@effect/platform';
 import { Either, JSONSchema, Schema } from 'effect';
 import * as Contracts from '../src/index.ts';
+import { HealthApi, SanctumApi } from '../src/api.ts';
 import { syntheticPcm } from '../src/fixtures.ts';
 
 const {
@@ -191,7 +192,7 @@ describe('synthetic PCM fixture', () => {
 
 describe('HTTP API contract', () => {
   it('exports OpenAPI for the registered API and the listener device group', () => {
-    const spec = OpenApi.fromApi(HttpApi.make('sanctum').add(Contracts.HealthApi).add(Contracts.SessionApi).add(Contracts.ListenersApi));
+    const spec = OpenApi.fromApi(HttpApi.make('sanctum').add(HealthApi).add(Contracts.SessionApi).add(Contracts.ListenersApi));
     expect(Object.keys(spec.paths).sort()).toEqual([
       '/api/v1/listeners',
       '/api/v1/listeners/{listener_id}/chunks/{chunk_id}',
@@ -201,7 +202,7 @@ describe('HTTP API contract', () => {
       '/readyz',
     ]);
     expect(spec.paths['/api/v1/listeners/{listener_id}/chunks/{chunk_id}']?.put?.operationId).toBe('listeners.putChunk');
-    expect(Object.keys(OpenApi.fromApi(Contracts.SanctumApi).paths)).toEqual([
+    expect(Object.keys(OpenApi.fromApi(SanctumApi).paths)).toEqual([
       '/healthz',
       '/readyz',
       '/api/v1/session',

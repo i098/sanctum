@@ -1,7 +1,8 @@
 /** `/healthz` (process up) and `/readyz` (database reachable and schema current). */
 import { HttpApiBuilder } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
-import { SanctumApi, Unavailable } from '@sanctum/contracts';
+import { Unavailable } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect } from 'effect';
 import type { Migration } from './migrate.ts';
 import { pendingMigrations } from './migrate.ts';

@@ -13,6 +13,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 - List every stand-in you created in your hand-off; integration keeps the real file and deletes the stand-in.
 - Signatures below are the contract; extend them compatibly, never rename them.
 - Run `npm run check:app` and the gates in [docs/CI.md](CI.md) before handing a slice back.
+- Report CI's strict Sentrux compare against main (quality, cycles, complex functions, coupling within 0.05); a new cycle or import depth is an integration bug.
 
 ## Shared foundation (integration owner)
 
@@ -20,7 +21,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | --- | --- | --- |
 | Wire schemas | [packages/contracts/src](../packages/contracts/src/index.ts) | Branded IDs, `UtcTimestamp`, `SourceRange`, errors, every seam type; JSON-representable only. |
 | Error envelope | [errors.ts](../packages/contracts/src/errors.ts) | `Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `RevisionConflict` 409, `HashConflict` 409, `Unavailable` 503. |
-| HTTP contract | [api.ts](../packages/contracts/src/api.ts) | `SanctumApi`; each slice defines an `HttpApiGroup` in its contracts area file. |
+| HTTP contract | [api.ts](../packages/contracts/src/api.ts) | `SanctumApi` from `@sanctum/contracts/api` only; the index never re-exports it, so registering a group never deepens modules that import the index. Each slice defines its `HttpApiGroup` in its contracts area file, importing only `common.ts`, `errors.ts` and `auth.ts`. |
 | Live media | [media.ts](../packages/contracts/src/media.ts) | Binary PCM frame layout, `encodePcmFrame`, `decodePcmFrame`, control messages. |
 | Listener device API | [capture.ts](../packages/contracts/src/capture.ts) | `ListenersApi` (register, heartbeat, `putChunk`), `LISTENER_STREAM_PATH`. |
 | Test audio | [fixtures.ts](../packages/contracts/src/fixtures.ts) | `syntheticPcm` from `@sanctum/contracts/fixtures`. |
@@ -29,7 +30,8 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
 | Object storage | [server/src/object-store.ts](../server/src/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`), `ObjectStoreError.ambiguous`. |
-| Jobs | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler`, `WorkerServices`, `jobHandlers`; `JobFailure` is in contracts. |
+| Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
+| Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `WorkerServices`, `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
 | Analyser levels | [levels.ts](../web-app/src/lib/capture/levels.ts) | `createAnalyserLevels(analyser, bandCount)` for the waveform. |
 | Server tests | [server/tests/support](../server/tests/support/database.ts) | `withDatabase`, `seedWorkspace`, `fixtureAccess`, `memoryObjectStore`; one MySQL 8.4 per run. |
@@ -49,6 +51,7 @@ Each entry lists owned files, then the exact exports siblings import. `R` is `Sq
 ### kernel (T03, T05, job ledger core from T11/T19)
 
 Owns `server/src/store.ts`, `server/src/auth.ts` (extends the foundation file), `server/src/agents.ts`, `server/src/cache.ts`, `server/src/jobs.ts` (replaces the stand-in), migrations `001_initial` and `004_jobs`, and the agent section of `packages/contracts/src/auth.ts` (kept beside `SessionApi` so no import chain deepens).
+Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed` (coalesced re-arm while running) to `004_jobs`.
 
 - `auth.ts`: `KernelAuthenticatorLive: Layer<Authenticator, never, R>` (sessions + hashed bearer credentials) is main.ts's default; the unconfigured authenticator is gone.
 - `auth.ts`: `resolveAccess(input: { workspace_id; principal_id }): Effect<AccessScope, Forbidden, R>` for workers and sockets.
@@ -58,7 +61,7 @@ Owns `server/src/store.ts`, `server/src/auth.ts` (extends the foundation file), 
 - `auth.ts`: `listVisibleMeetingIds(access): Effect<ReadonlyArray<MeetingId>, SqlError, R>`.
 - `jobs.ts`: `enqueueJob(input: EnqueueJob): Effect<JobId, SqlError, R>`, joining the caller's transaction.
 - `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number }`; an active row with the same key is re-armed.
-- `jobs.ts`: `runWorker(handlers: typeof jobHandlers): Effect<never, SqlError, WorkerServices>`.
+- `jobs.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`; requires exactly its handlers' services.
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
@@ -105,7 +108,7 @@ Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, the `int
 Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcripts.ts`, `server/src/media/{ingest,session}.ts`, `server/src/providers/{deepgram,r2}.ts`, migrations `002_capture` and `003_transcripts`, `media.ts` and `ListenersApi` in contracts.
 
 - Registers `ListenersApi` in contracts api.ts and its handlers in server api.ts; attaches the upgrade handler in main.ts.
-- `providers/r2.ts`: `R2ObjectStoreLive: Layer<ObjectStore, ConfigError>`.
+- `providers/r2.ts`: `R2ObjectStoreLive: Layer<ObjectStore, ConfigError>`; worker.ts provides it (an unconfigured stand-in until media lands).
 - `recordings.ts`: `listCommittedChunks(input: { workspace_id; source: SourceRange }): Effect<ReadonlyArray<RecordingChunkManifest & { object_key: string }>, SqlError, R>`.
 - `transcripts.ts`: `finalSegments(access, source: SourceRange): Effect<ReadonlyArray<TranscriptSegment>, SqlError, R>`.
 - `transcripts.ts`: `getSegments(access, ids: ReadonlyArray<TranscriptSegmentId>): Effect<ReadonlyArray<TranscriptSegment>, SqlError, R>` for source validation.
@@ -113,7 +116,7 @@ Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcri
 
 ### meetings (T12, T13, T14)
 
-Owns `server/src/meetings.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges` and `006_speakers`, `MeetingsApi` in contracts meetings.ts.
+Owns `server/src/meetings.ts`, `server/src/meeting-store.ts`, `server/src/meeting-corrections.ts`, `server/src/meetings-api.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges` and `006_speakers`, `MeetingsApi` in contracts meetings.ts.
 Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so media keeps `recordings.ts`.
 
 - `meetings.ts`: `onFinalSegments(event: { workspace_id; listener_id; capture_group_id: string | null; segments: ReadonlyArray<TranscriptSegment> }): Effect<void, SqlError, R>`.
@@ -121,7 +124,8 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 - `meetings.ts`: `getMeeting(access, meeting_id): Effect<Meeting, NotFound, R>` and `meetingRanges(access, meeting_id): Effect<ReadonlyArray<MeetingRange>, NotFound, R>`.
 - `playback.ts`: `issueRecordingAccess(access, meeting_id): Effect<RecordingAccess, NotFound | Forbidden | Unavailable, R | ObjectStore>`.
 - Handles job kinds `meeting.finalize`, `recording.assemble`, `speakers.refine`; boundary corrections call context's `appendContextEvent`.
-- `MeetingsApi` operations: `listMeetings`, `getMeeting`, `closeMeeting`, `splitMeeting`, `mergeMeetings`, `getTranscript`, `recordingAccess`.
+- `MeetingsApi` operations: `listMeetings`, `getMeeting`, `closeMeeting`, `splitMeeting`, `mergeMeetings`, `getTranscript`, `recordingAccess`, `mapSpeaker`.
+- Automatically detected meetings start restricted with no grants; kernel's `authorizeMeeting` has no owner/admin override, so an ownership assignment path is still open.
 
 ### context (T16)
 
@@ -165,7 +169,7 @@ Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of
 | `server/src/api.ts` | every slice with REST | One handler layer in the `ApiLive` list. |
 | `server/src/main.ts` | kernel, media, interfaces, serve | Authenticator swap; upgrade handler; `/mcp` mount; static assets. |
 | `server/src/worker.ts` | slices with provider layers | Provide the layer next to `dbLayer`. |
-| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; add provider tags to `WorkerServices`. |
+| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; add provider tags to `WorkerServices`. Handler modules import `job-types.ts`, never this file. |
 | `server/src/config.ts` | models, media, actions, pipedream | Own key inside `serverConfig`; defaults stay in `engineeringDefaults`. |
 | `server/src/media/session.ts` | media, meetings, actions | Media owns it; siblings expose functions it calls. |
 | `web-app/src/pages/listen/engine.ts` | capture, listen-ui, actions | Capture owns it; actions adds playback registration. |

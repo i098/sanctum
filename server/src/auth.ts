@@ -7,19 +7,17 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import { Cookies, HttpApiBuilder, HttpServerRequest } from '@effect/platform';
+import { Cookies, HttpServerRequest } from '@effect/platform';
 import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
 import {
   type AccessScope,
   AccessScopeName,
   Authenticated,
-  CurrentAccess,
   Forbidden,
   MeetingId,
   NotFound,
   PrincipalId,
   PrincipalKind,
-  SanctumApi,
   Unauthenticated,
   WorkspaceId,
   WorkspaceRole,
@@ -40,7 +38,6 @@ export const AuthenticatedLive = Layer.effect(
   Effect.map(Authenticator, authenticator => Effect.flatMap(HttpServerRequest.HttpServerRequest, authenticator.authenticate)),
 );
 
-export const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));
 
 const SESSION_COOKIE = 'sanctum_session';
 const CSRF_HEADER = 'x-csrf-token';

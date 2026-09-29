@@ -5,6 +5,7 @@
   "description": "Effect Schema wire contracts shared by the Sanctum server, website, SDKs and MCP",
   "exports": {
     ".": "./src/index.ts",
+    "./api": "./src/api.ts",
     "./fixtures": "./src/fixtures.ts"
   },
   "scripts": {

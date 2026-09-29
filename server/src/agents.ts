@@ -16,8 +16,8 @@ import {
   MeetingId,
   NotFound,
   PrincipalId,
-  SanctumApi,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, hashToken, newToken, requireScope } from './auth.ts';
 import { DbJson, DbUtc } from './db.ts';

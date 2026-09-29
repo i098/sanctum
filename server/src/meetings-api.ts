@@ -8,7 +8,6 @@ import {
   type MeetingId,
   ProviderConnectionId,
   RevisionConflict,
-  SanctumApi,
   type SpeakerTrack,
   SpeakerTrackId,
   type TranscriptPage,
@@ -17,6 +16,7 @@ import {
   TranscriptSegmentId,
   Unavailable,
 } from '@sanctum/contracts';
+import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
