@@ -273,6 +273,34 @@ describe('job ledger', () => {
     ),
   );
 
+  it.live('fails a hung handler at its ceiling retryably, interrupts it and frees its slot', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const owner = yield* seed;
+        const interrupted = yield* Ref.make(false);
+        const handlers: JobHandlers<SqlClient.SqlClient> = {
+          'context.refresh': (claimed: ClaimedJob) =>
+            claimed.work_key === 'hung'
+              ? Effect.never.pipe(Effect.onInterrupt(() => Ref.set(interrupted, true)), Effect.as({ status: 'succeeded' as const, result: null }))
+              : Effect.succeed({ status: 'succeeded' as const, result: null }),
+        };
+        const worker = yield* Effect.fork(runWorker(handlers, { leaseMs: 3_000, pollMs: 50, concurrency: 1, ceilingMs: 300 }));
+        // One attempt allowed, so the retryable failure is the terminal state instead of a race with the retry.
+        const hung = yield* job(owner.workspace_id, 'hung', {}, { max_attempts: 1 });
+        expect(yield* until(hung, current => current.status === 'failed')).toMatchObject({
+          attempts: 1,
+          last_error: { message: 'Handler exceeded its 300 ms ceiling', retryable: true },
+        });
+        expect(yield* Ref.get(interrupted)).toBe(true);
+        // The only slot is free again.
+        const after = yield* job(owner.workspace_id, 'after');
+        expect(yield* until(after, current => current.status === 'succeeded')).toMatchObject({ attempts: 1 });
+        yield* Fiber.interrupt(worker);
+      }),
+      migrated,
+    ),
+  );
+
   it.live('keeps renewing, claiming and sweeping through a database outage', () =>
     withDatabase(
       Effect.gen(function* () {

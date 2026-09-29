@@ -3,7 +3,7 @@
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
 import { Config, Effect, Redacted } from 'effect';
-import { Unavailable } from '@sanctum/contracts';
+import { type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
 export const engineeringDefaults = {
@@ -18,6 +18,15 @@ export const engineeringDefaults = {
   actionBudget: { perWindow: 30, windowMs: 60_000 },
   /** No provider answer within this after submission: record `unknown` now; a later answer still settles it. */
   actionSubmitTimeoutMs: 30_000,
+  /**
+   * Per-attempt handler ceiling; a hit fails the attempt retryably. Calibration inputs, not
+   * measured optima. `action.execute` stays above `actionSubmitTimeoutMs` so the executor's own
+   * ambiguous-outcome path answers first.
+   */
+  jobs: {
+    ceilingMs: 5 * 60_000,
+    ceilingByKind: { 'recording.assemble': 30 * 60_000, 'transcript.reconcile': 20 * 60_000 } as Partial<Record<JobKind, number>>,
+  },
   /** Requested speech: open window, quiet time that ends a direct-request turn, echo memory after playback. */
   speech: { windowMs: 30_000, endOfTurnMs: 700, echoTailMs: 1_500 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */

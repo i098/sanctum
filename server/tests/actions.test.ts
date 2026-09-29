@@ -1,11 +1,12 @@
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
-import { Effect, Fiber, Schema, TestClock } from 'effect';
+import { Effect, Fiber, Schedule, Schema, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import { createActionGrant, getActionReceipt, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
+import { runWorker } from '../src/job-runner.ts';
 import { planActions } from '../src/planner.ts';
 import { withDatabase } from './support/database.ts';
 import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
@@ -231,6 +232,32 @@ describe('action gateway', () => {
         expect(row).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', attempts: 1 });
         expect(overWire(yield* getActionReceipt(agent, queued.action_id))).toMatchObject({ reconciliation: 'reconciled', resolved_by: null, resolved_at: null, provider_receipt: { message_id: 'msg-1' } });
         expect(provider.sent).toHaveLength(1);
+      }),
+      { migrated: true },
+    ));
+
+  it.live('records unknown when the job ceiling cuts off a submission and never resubmits it', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { agent } = yield* setup();
+        provider.mode = 'hold';
+        const queued = yield* requestAction(agent, request());
+        const worker = yield* Effect.fork(
+          runWorker({ 'action.execute': executeAction }, { leaseMs: 3_000, pollMs: 50, concurrency: 1, ceilingMs: 300 }).pipe(Effect.provide(actionServices)),
+        );
+        const poll = <A>(check: Effect.Effect<A, unknown, SqlClient.SqlClient>, done: (value: A) => boolean) =>
+          check.pipe(Effect.filterOrFail(done, () => 'not yet'), Effect.retry(Schedule.spaced('50 millis')), Effect.timeout('10 seconds'));
+        const row = yield* poll(actionRow(agent.workspace_id, queued.action_id), current => current.state === 'unknown');
+        expect(row).toMatchObject({ state: 'unknown', reconciliation: 'pending', attempts: 1, last_error: { code: 'ambiguous' } });
+        // The ceiling failed the job retryably; its retry (after a 1 s backoff) finds the row settled and submits nothing.
+        const jobRow = sql<{ status: string; attempts: number }>`SELECT status, attempts FROM jobs WHERE kind = 'action.execute' AND work_key = ${queued.action_id}`;
+        expect(yield* poll(jobRow, ([current]) => current?.status === 'succeeded')).toEqual([{ status: 'succeeded', attempts: 2 }]);
+        expect(provider.sent).toHaveLength(1);
+        yield* Fiber.interrupt(worker);
+        // The held answer still arrives late and reconciles the row.
+        provider.release!();
+        expect(yield* poll(actionRow(agent.workspace_id, queued.action_id), current => current.state !== 'unknown')).toMatchObject({ state: 'succeeded', reconciliation: 'reconciled', attempts: 1 });
       }),
       { migrated: true },
     ));

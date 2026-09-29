@@ -10,6 +10,7 @@ import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
 import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Cause, Effect, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
+import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
 import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
 import { later } from './jobs.ts';
@@ -129,9 +130,10 @@ export const sweepJobs = Effect.gen(function* () {
 
 /**
  * Re-checks the requester (the action handler does so itself to settle the action row), runs the
- * handler while renewing the lease, then completes the row.
+ * handler under its ceiling while renewing the lease, then completes the row. A ceiling hit
+ * interrupts the handler and fails the attempt (already counted at claim) retryably.
  */
-const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number) =>
+const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number, ceilingMs: number) =>
   Effect.gen(function* () {
     const { job } = lease;
     const requester = job.requested_by;
@@ -145,7 +147,11 @@ const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number) =>
       );
     if (refused !== null) return yield* completeJob(lease, { status: 'failed', error: refused });
     const renewals = Effect.repeat(Effect.orElseSucceed(renewLease(lease, leaseMs), () => true), { schedule: Schedule.spaced(leaseMs / 3), while: renewed => renewed });
-    const raced = yield* Effect.raceFirst(Effect.exit(handlers[job.kind]!(job)), Effect.as(renewals, 'lease lost' as const));
+    const handled = Effect.timeoutFail(handlers[job.kind]!(job), {
+      duration: ceilingMs,
+      onTimeout: () => new JobFailure({ message: `Handler exceeded its ${ceilingMs} ms ceiling`, retryable: true }),
+    });
+    const raced = yield* Effect.raceFirst(Effect.exit(handled), Effect.as(renewals, 'lease lost' as const));
     if (raced === 'lease lost') {
       yield* Effect.logWarning(`Job ${job.id} lost its lease; another worker owns it`);
       return false;
@@ -158,16 +164,21 @@ const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number) =>
 
 /**
  * Worker loop: `concurrency` claimers plus one sweeper. A worker without handlers idles instead
- * of claiming work that belongs to another deployment's handlers.
+ * of claiming work that belongs to another deployment's handlers. `ceilingMs` overrides every
+ * kind's configured ceiling.
  */
-export const runWorker = <R>(handlers: JobHandlers<R>, options: { readonly leaseMs?: number; readonly pollMs?: number; readonly concurrency?: number } = {}) => {
+export const runWorker = <R>(
+  handlers: JobHandlers<R>,
+  options: { readonly leaseMs?: number; readonly pollMs?: number; readonly concurrency?: number; readonly ceilingMs?: number } = {},
+) => {
   const { leaseMs = 60_000, pollMs = 1_000, concurrency = 4 } = options;
   const kinds = JobKind.literals.filter(kind => handlers[kind] !== undefined);
   if (kinds.length === 0) return Effect.logWarning('No job handlers registered').pipe(Effect.zipRight(Effect.never));
   const claimer = Effect.gen(function* () {
     const lease = yield* claimJob(kinds, leaseMs);
     if (Option.isNone(lease)) return yield* Effect.sleep(pollMs);
-    yield* runJob(handlers, lease.value, leaseMs);
+    const { kind } = lease.value.job;
+    yield* runJob(handlers, lease.value, leaseMs, options.ceilingMs ?? engineeringDefaults.jobs.ceilingByKind[kind] ?? engineeringDefaults.jobs.ceilingMs);
   }).pipe(
     Effect.catchAllCause(cause => Effect.zipRight(Effect.logError('Job claimer failed', cause), Effect.sleep(pollMs))),
     Effect.forever,

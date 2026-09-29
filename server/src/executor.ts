@@ -120,7 +120,8 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
 
 /**
  * Sends one attempt and records its answer from a daemon that outlives this handler. No answer
- * within the submit timeout records `unknown` now; the late answer still settles the row.
+ * within the submit timeout, or the job ceiling interrupting the wait, records `unknown` now; the
+ * late answer still settles the row.
  */
 const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof resolveAccess>>, attempt: number) =>
   Effect.gen(function* () {
@@ -139,7 +140,10 @@ const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof 
     if (Option.isSome(answered)) return;
     const timedOut = new IntegrationFailure({ message: 'No provider answer after submission', status: null, retryable: false, ambiguous: true });
     yield* recordOutcome(row, attempt, Either.left(timedOut));
-  });
+  }).pipe(Effect.onInterrupt(() => {
+    const stopped = new IntegrationFailure({ message: 'Job ceiling stopped the attempt after submission began', status: null, retryable: false, ambiguous: true });
+    return Effect.ignore(recordOutcome(row, attempt, Either.left(stopped)));
+  }));
 
 const ActionPayload = Schema.Struct({ action_id: ActionId });
 
