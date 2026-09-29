@@ -85,6 +85,7 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,listen.css,Dialog.tsx,Revi
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
 - `waveform.ts`: `drawWaveform(context, bands: Float32Array, state: ListenerState, reducedMotion: boolean)`; samples never enter React state.
 - Imports only `getCaptureEngine` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
+- Review tabs (T21 box 2) live in `ReviewPanels.tsx` and `review-data.ts`. They added three compatible API fields: `GET /meetings/{id}/actions` (`listMeetingActions` in `ActionsApi` and actions.ts), an optional `meeting_id` on `GET /context/changes`, and `pieces` plus `sample_rate` on `RecordingAccess` (playback.ts) to map a source sample to a playback offset.
 
 ### models (T04, T15)
 

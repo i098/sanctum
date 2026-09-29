@@ -38,7 +38,7 @@ describe('v1 OpenAPI contract', () => {
 
   it('pages every list with an opaque cursor and a bounded limit', () => {
     const lists = operations.filter(op => op.output.properties?.['next_cursor'] !== undefined);
-    expect(lists.map(op => op.id).sort()).toEqual(['agents.listAgents', 'context.getContextChanges', 'meetings.getTranscript', 'meetings.listMeetings']);
+    expect(lists.map(op => op.id).sort()).toEqual(['actions.listMeetingActions', 'agents.listAgents', 'context.getContextChanges', 'meetings.getTranscript', 'meetings.listMeetings']);
     for (const op of lists) expect(op.queryParams, op.id).toEqual(expect.arrayContaining(['cursor', 'limit']));
     expect(Schema.decodeUnknownEither(Contracts.PageLimit)(201)._tag).toBe('Left');
   });
