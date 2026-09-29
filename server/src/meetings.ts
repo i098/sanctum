@@ -289,7 +289,8 @@ export const onFinalSegments = (event: {
 
 /**
  * Media hook: a capture epoch ended. Closing or an interruption seals the open meeting at the capture end;
- * pauses leave it open. A meeting holding audio captured after the ended epoch (a late archive epoch) stays open.
+ * pauses leave it open. A meeting holding audio captured after the ended epoch stays open, and an
+ * archive-only epoch seals only a meeting holding its audio.
  */
 export const onCaptureEnded = (event: {
   readonly workspace_id: WorkspaceId;
@@ -315,14 +316,15 @@ export const onCaptureEnded = (event: {
         }
         const open = yield* findOpenRow(key);
         if (open._tag === 'None') return;
-        const later = yield* sql`
-          SELECT 1 FROM meeting_ranges r
-          JOIN capture_epochs e ON e.workspace_id = r.workspace_id AND e.id = r.epoch_id
-          JOIN capture_epochs ended ON ended.workspace_id = r.workspace_id AND ended.id = ${event.epoch_id}
-          WHERE r.workspace_id = ${event.workspace_id} AND r.meeting_id = ${open.value.id} AND r.boundary_revision = ${open.value.boundary_revision}
-            AND e.captured_at > ended.captured_at
-          LIMIT 1`;
-        if (later.length > 0) return;
+        const [ended] = yield* sql<{ later: number; unheld: number }>`
+          SELECT EXISTS(SELECT 1 FROM meeting_ranges r JOIN capture_epochs e ON e.workspace_id = r.workspace_id AND e.id = r.epoch_id
+                   WHERE r.workspace_id = ended.workspace_id AND r.meeting_id = ${open.value.id} AND r.boundary_revision = ${open.value.boundary_revision}
+                     AND e.captured_at > ended.captured_at) AS later,
+                 ended.archive_sample_end IS NOT NULL AND NOT EXISTS(SELECT 1 FROM meeting_ranges r
+                   WHERE r.workspace_id = ended.workspace_id AND r.meeting_id = ${open.value.id} AND r.boundary_revision = ${open.value.boundary_revision}
+                     AND r.epoch_id = ended.id) AS unheld
+          FROM capture_epochs ended WHERE ended.workspace_id = ${event.workspace_id} AND ended.id = ${event.epoch_id}`;
+        if (ended !== undefined && (Number(ended.later) === 1 || Number(ended.unheld) === 1)) return;
         const watermark = { epoch_id: event.epoch_id as SourceRange['epoch_id'], track: event.track, sample_end: event.sample_end };
         yield* sealMeeting(open.value, {
           watermark,

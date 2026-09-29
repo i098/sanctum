@@ -101,6 +101,32 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));
 
+  it.effect('leaves a paused meeting open when a later archive epoch holding none of its audio ends', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const access = yield* seedDevice('Room');
+      const listener = yield* registerListener(access, { name: 'Room', mode: 'room', capabilities: {} });
+      const { lease_generation } = yield* heartbeat(access, listener.id, { lease_generation: 0, state: 'starting', epoch_id: null, buffered_chunks: 0, storage_bytes_free: null });
+      const store = memoryObjectStore();
+      const speech = fakeSpeech();
+      const providers = Layer.merge(store.layer, speech.layer);
+      const archive = (captured_at: string, end_reason: 'pause' | 'interrupted', text: string | null) =>
+        Effect.gen(function* () {
+          const epoch_id = newEpochId();
+          const clock = { sample_rate: RATE, channels: 1, encoding: 'pcm_s16le', sample_start: 0, captured_at, timezone: 'America/Los_Angeles' } as const;
+          yield* startEpoch(access, { _tag: 'start', protocol_version: 1, listener_id: listener.id, epoch_id, track: 0, clock: clock as never, lease_generation, start_reason: 'start', archive_only: true, end_reason, sample_end: RATE });
+          speech.controls.batch = (samples, sample_rate) =>
+            Effect.succeed(text === null ? [] : [{ start_s: 0, end_s: samples.length / sample_rate, is_final: true, text, confidence: 0.9, speaker: '0' }]);
+          const upload = chunk({ listener_id: listener.id, epoch_id, sequence: 0, sample_start: 0, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }), captured_at });
+          yield* Effect.provide(putChunk(access, listener.id, upload.manifest.chunk_id, upload.manifest, upload.body), providers);
+          yield* Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: 0, sample_end: RATE } }), providers);
+        });
+      yield* archive('2026-09-26T17:00:00Z', 'pause', 'We will review the hiring budget today.');
+      yield* archive('2026-09-26T17:10:00Z', 'interrupted', null);
+      const states = yield* sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.id}`;
+      expect(states.map(row => row.state)).toEqual(['provisional']);
+    }));
+
   it.effect('batch-transcribes an upload that arrives before live ASR, and later live finals do not duplicate it', () =>
     Effect.gen(function* () {
       const { access, epoch_id, speech, reconcile } = yield* setup(1);
