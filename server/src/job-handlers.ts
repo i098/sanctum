@@ -34,9 +34,12 @@ export type JobOutcome =
 /** Services every worker handler may use; a slice adds its provider tag here and its layer in worker.ts. */
 export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient;
 
-export type JobHandler = (job: ClaimedJob) => Effect.Effect<JobOutcome, JobFailure, WorkerServices>;
+export type JobHandler<R = WorkerServices> = (job: ClaimedJob) => Effect.Effect<JobOutcome, JobFailure, R>;
 
-export const jobHandlers: Partial<Record<JobKind, JobHandler>> = {
+/** Handlers by kind; `runWorker` requires exactly the services its handlers use. */
+export type JobHandlers<R = WorkerServices> = Partial<Record<JobKind, JobHandler<R>>>;
+
+export const jobHandlers: JobHandlers = {
   // One line per slice, e.g. 'context.refresh': refreshContext,
   'meeting.finalize': finalizeMeeting,
   'recording.assemble': assembleRecording,

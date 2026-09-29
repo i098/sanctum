@@ -4,7 +4,7 @@ import { JobFailure, type JobKind, type PrincipalId, type WorkspaceId } from '@s
 import { Effect, Fiber, Option, Ref, Schedule } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { resolveAccess } from '../src/auth.ts';
-import type { ClaimedJob, jobHandlers } from '../src/job-handlers.ts';
+import type { ClaimedJob, JobHandlers } from '../src/job-handlers.ts';
 import { claimJob, completeJob, enqueueJob, type Lease, retryDeadlocks, runWorker, sweepJobs } from '../src/jobs.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -216,7 +216,7 @@ describe('job ledger', () => {
         const admin = yield* resolveAccess({ workspace_id: owner.workspace_id, principal_id: owner.principal.id });
         const agent = yield* createAgent(admin, { display_name: 'Bot', scopes: ['context:read'], meetings: { kind: 'accessible' }, expires_at: null });
         const runs = yield* Ref.make<ReadonlyArray<string>>([]);
-        const handlers: typeof jobHandlers = {
+        const handlers: JobHandlers<SqlClient.SqlClient> = {
           'context.refresh': (claimed: ClaimedJob) =>
             Effect.gen(function* () {
               yield* Ref.update(runs, list => [...list, claimed.work_key]);
@@ -250,7 +250,7 @@ describe('job ledger', () => {
         const sql = yield* SqlClient.SqlClient;
         const owner = yield* seed;
         const interrupted = yield* Ref.make(false);
-        const handlers: typeof jobHandlers = {
+        const handlers: JobHandlers<SqlClient.SqlClient> = {
           'context.refresh': () =>
             Effect.never.pipe(
               Effect.onInterrupt(() => Ref.set(interrupted, true)),

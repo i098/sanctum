@@ -11,12 +11,13 @@ import { jobHandlers } from './job-handlers.ts';
 import { runWorker } from './jobs.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
 import { PyannoteLive } from './providers/pyannote.ts';
+import { R2ObjectStoreLive } from './providers/r2.ts';
 
 if (import.meta.main) {
   Effect.gen(function* () {
     const config = yield* serverConfig;
     yield* requireActivation(config);
     const run = Effect.zipRight(requireCurrentSchema(loadMigrations()), runWorker(jobHandlers));
-    return yield* Effect.provide(run, [dbLayer(config.mysql), PyannoteLive]);
+    return yield* Effect.provide(run, [dbLayer(config.mysql), PyannoteLive, R2ObjectStoreLive]);
   }).pipe(NodeRuntime.runMain);
 }

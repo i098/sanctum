@@ -11,7 +11,7 @@ import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/c
 import { Cause, Effect, Either, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
-import type { ClaimedJob, JobOutcome, jobHandlers } from './job-handlers.ts';
+import type { ClaimedJob, JobHandlers, JobOutcome } from './job-handlers.ts';
 import { write } from './store.ts';
 
 export interface EnqueueJob {
@@ -163,10 +163,8 @@ export const sweepJobs = Effect.gen(function* () {
     WHERE status = 'running' AND lease_until <= UTC_TIMESTAMP(6)`);
 });
 
-type Handlers = typeof jobHandlers;
-
 /** Re-checks the requester, runs the handler while renewing the lease, then completes the row. */
-const runJob = (handlers: Handlers, lease: Lease, leaseMs: number) =>
+const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number) =>
   Effect.gen(function* () {
     const { job } = lease;
     const requester = job.requested_by;
@@ -190,7 +188,7 @@ const runJob = (handlers: Handlers, lease: Lease, leaseMs: number) =>
  * Worker loop: `concurrency` claimers plus one sweeper. A worker without handlers idles instead
  * of claiming work that belongs to another deployment's handlers.
  */
-export const runWorker = (handlers: Handlers, options: { readonly leaseMs?: number; readonly pollMs?: number; readonly concurrency?: number } = {}) => {
+export const runWorker = <R>(handlers: JobHandlers<R>, options: { readonly leaseMs?: number; readonly pollMs?: number; readonly concurrency?: number } = {}) => {
   const { leaseMs = 60_000, pollMs = 1_000, concurrency = 4 } = options;
   const kinds = JobKind.literals.filter(kind => handlers[kind] !== undefined);
   if (kinds.length === 0) return Effect.logWarning('No job handlers registered').pipe(Effect.zipRight(Effect.never));
