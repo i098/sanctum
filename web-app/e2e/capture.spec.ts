@@ -84,8 +84,7 @@ test('reports missing audio when site data is cleared during capture', async ({ 
   await expect.poll(async () => (await snapshot(page)).epochId).not.toBeNull();
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Storage.clearDataForOrigin', { origin: new URL(page.url()).origin, storageTypes: 'indexeddb' });
-  await expect.poll(async () => (await snapshot(page)).archive).toBe('missing');
-  expect(await snapshot(page)).toMatchObject({ listener: 'paused', issue: 'storage_unavailable' });
+  await expect.poll(async () => snapshot(page)).toMatchObject({ archive: 'missing', listener: 'paused', issue: 'storage_unavailable' });
 });
 
 test('refuses to capture when IndexedDB is unavailable', async ({ page }) => {
