@@ -169,8 +169,18 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
-  pendingCount(): Promise<number> {
-    return guarded(() => request(this.db.transaction(CHUNKS).objectStore(CHUNKS).count()));
+  /**
+   * Chunks still owed to `listenerId`, and stranded chunks sealed under any other listener id.
+   * `nextPending` never offers stranded chunks (the server no longer knows their listener), but
+   * their audio is kept, never deleted here.
+   */
+  countChunks(listenerId: string | null): Promise<{ pending: number; stranded: number }> {
+    return guarded(async () => {
+      const counts = { pending: 0, stranded: 0 };
+      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openKeyCursor();
+      await walk(cursor, (current) => void ((current.key as [string, string])[0] === listenerId ? counts.pending++ : counts.stranded++));
+      return counts;
+    });
   }
 
   /** Journals the receipt and deletes the local audio in one transaction. */

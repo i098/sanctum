@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markConflict' | 'acknowledge' | 'pendingCount' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markConflict' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
 >;
 
 export interface CaptureDeps {
@@ -109,6 +109,8 @@ class CaptureController implements CaptureView {
   private uploading = false;
   private claimed = false;
   private pending = 0;
+  /** Local chunks of a listener the server forgot: kept, but never uploadable as they are. */
+  private stranded = 0;
   private savedThroughMs: number | null = null;
   private wakeLock: 'unsupported' | 'released' | 'held';
   private sentinel: WakeLockSentinel | null = null;
@@ -196,7 +198,7 @@ class CaptureController implements CaptureView {
     try {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) this.interrupted = true;
-      this.pending = await buffer.pendingCount();
+      ({ pending: this.pending, stranded: this.stranded } = await buffer.countChunks(this.listener?.id ?? null));
       this.savedThroughMs = await buffer.savedThroughMs();
       this.claimed = this.interrupted || this.pending > 0;
     } catch {
@@ -431,6 +433,7 @@ class CaptureController implements CaptureView {
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
       this.saveListener(null); // the server no longer knows this listener; the next start registers again
+      void this.refreshPending(); // its chunks are now stranded: kept locally, no longer pending
     }
   }
 
@@ -480,7 +483,8 @@ class CaptureController implements CaptureView {
 
   private async refreshPending(): Promise<void> {
     const buffer = await this.buffer?.catch(() => null);
-    this.pending = (await buffer?.pendingCount().catch(() => null)) ?? this.pending;
+    const counts = await buffer?.countChunks(this.listener?.id ?? null).catch(() => null);
+    if (counts) ({ pending: this.pending, stranded: this.stranded } = counts);
     this.publish();
   }
 
@@ -508,6 +512,7 @@ class CaptureController implements CaptureView {
       issue: this.issue,
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
+      strandedChunks: this.stranded,
       savedThroughMs: this.savedThroughMs,
       wakeLock: this.wakeLock,
     });

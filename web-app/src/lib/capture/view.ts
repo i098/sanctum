@@ -23,6 +23,8 @@ export interface CaptureSnapshot {
   readonly issue: CaptureIssue | null;
   readonly epochId: string | null;
   readonly bufferedChunks: number;
+  /** Chunks kept on this device whose listener the server no longer knows; they cannot be uploaded. */
+  readonly strandedChunks: number;
   readonly savedThroughMs: number | null;
   readonly wakeLock: 'unsupported' | 'released' | 'held';
 }
@@ -49,6 +51,7 @@ export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
   issue: null,
   epochId: null,
   bufferedChunks: 0,
+  strandedChunks: 0,
   savedThroughMs: null,
   wakeLock: 'released',
 });

@@ -1,4 +1,4 @@
-import type { RecordingChunkManifest, RecordingChunkReceipt } from '@sanctum/contracts';
+import { NotFound, type RecordingChunkManifest, type RecordingChunkReceipt } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListenersClient } from '../src/lib/capture/client.ts';
@@ -7,6 +7,8 @@ import type { LiveOptions, LiveStream, StopReason } from '../src/lib/capture/liv
 import { sealChunk, StorageError, type PartRecord, type SealedChunk } from '../src/lib/capture/recorder.ts';
 
 const LISTENER_ID = '5f0d6f0e-8c1b-4b8e-a4f3-2d9c7a1e4b01';
+/** Registered after the server forgot LISTENER_ID. */
+const NEXT_LISTENER_ID = '9a4e2b1c-3d5f-4e6a-8b7c-0d1e2f3a4b5c';
 const RATE = 48_000;
 const BLOCK = 2_400;
 
@@ -52,8 +54,8 @@ class MemoryBuffer implements CaptureBuffer {
     this.chunks.set(chunk.manifest.chunk_id, chunk);
   }
   readonly conflicts = new Set<string>();
-  async nextPending() {
-    return [...this.chunks.values()].find((chunk) => !this.conflicts.has(chunk.manifest.chunk_id)) ?? null;
+  async nextPending(listenerId: string) {
+    return [...this.chunks.values()].find((chunk) => chunk.manifest.listener_id === listenerId && !this.conflicts.has(chunk.manifest.chunk_id)) ?? null;
   }
   async markConflict(chunkId: string) {
     this.conflicts.add(chunkId);
@@ -61,8 +63,9 @@ class MemoryBuffer implements CaptureBuffer {
   async acknowledge(manifest: RecordingChunkManifest) {
     this.chunks.delete(manifest.chunk_id);
   }
-  async pendingCount() {
-    return this.chunks.size;
+  async countChunks(listenerId: string | null) {
+    const pending = [...this.chunks.values()].filter((chunk) => chunk.manifest.listener_id === listenerId).length;
+    return { pending, stranded: this.chunks.size - pending };
   }
   async savedThroughMs() {
     return null;
@@ -101,21 +104,27 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const calls = { register: 0, heartbeat: [] as unknown[], put: [] as RecordingChunkManifest[] };
   let owner = true;
   let generation = 1;
+  /** The server forgot LISTENER_ID: its heartbeat and uploads fail NotFound, and registration issues a new id. */
+  let forgotten = false;
+  const unknown = () => Effect.fail(new NotFound({ message: 'listener not found' }));
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const receipt = (manifest: RecordingChunkManifest) =>
     ({ chunk_id: manifest.chunk_id, object_key: 'k', sha256: manifest.sha256, byte_length: manifest.byte_length, committed_at: '2026-09-29T09:00:00Z' }) as RecordingChunkReceipt;
   const client = {
     registerListener: () => {
       calls.register++;
-      return Effect.succeed({ id: LISTENER_ID, lease_generation: options.unclaimed ? 0 : 1 });
+      return Effect.succeed({ id: forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: options.unclaimed ? 0 : 1 });
     },
-    heartbeat: (request: { payload: unknown }) => {
+    heartbeat: (request: { path: { listener_id: string }; payload: unknown }) => {
       calls.heartbeat.push(request.payload);
+      if (forgotten && request.path.listener_id === LISTENER_ID) return unknown();
       return Effect.succeed({ lease_generation: generation, lease_expires_at: '2026-09-29T09:00:45Z', owner });
     },
     putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => {
-      calls.put.push(request.headers['x-sanctum-manifest']);
-      return Effect.succeed(receipt(request.headers['x-sanctum-manifest']));
+      const manifest = request.headers['x-sanctum-manifest'];
+      if (forgotten && manifest.listener_id === LISTENER_ID) return unknown();
+      calls.put.push(manifest);
+      return Effect.succeed(receipt(manifest));
     },
   } as unknown as ListenersClient;
   const deps: CaptureDeps = {
@@ -169,6 +178,9 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     setOwner: (value: boolean) => {
       if (!value && owner) generation++;
       owner = value;
+    },
+    forget: () => {
+      forgotten = true;
     },
   };
 }
@@ -305,6 +317,45 @@ describe('capture lifecycle', () => {
     const reloaded = harness({ buffer, stored: true });
     await vi.waitFor(() => expect(reloaded.calls.put).toEqual([recovered.manifest]));
     await vi.waitFor(() => expect(reloaded.snapshot()).toMatchObject({ listener: 'stopped', archive: 'interrupted', bufferedChunks: 0 }));
+  });
+
+  it('keeps chunks of a forgotten listener as stranded local audio, not pending uploads', async () => {
+    const buffer = new MemoryBuffer();
+    const old = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(old);
+    const h = harness({ buffer, stored: true });
+    h.forget();
+    await settle();
+    expect(h.snapshot()).toMatchObject({ archive: 'buffered_locally', bufferedChunks: 1, strandedChunks: 0 });
+
+    await vi.advanceTimersByTimeAsync(15_000); // the heartbeat learns the server no longer knows the listener
+    expect(h.storage.has('sanctum.listener')).toBe(false);
+    expect(h.snapshot()).toMatchObject({ archive: null, bufferedChunks: 0, strandedChunks: 1 });
+
+    await h.engine.start();
+    h.feed(1.2);
+    await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.listener_id)).toEqual([NEXT_LISTENER_ID]));
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ bufferedChunks: 0, strandedChunks: 1 }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.calls.heartbeat.at(-1)).toMatchObject({ buffered_chunks: 0 });
+    expect(h.buffer.chunks.get(old.manifest.chunk_id)).toBe(old); // never deleted
+  });
+
+  it('reports chunks left by an earlier listener on load without claiming them as pending', async () => {
+    const buffer = new MemoryBuffer();
+    const old = await sealChunk(
+      { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+      new Int16Array(RATE),
+    );
+    await buffer.sealChunk(old);
+    const h = harness({ buffer });
+    await settle();
+    expect(h.snapshot()).toMatchObject({ listener: 'stopped', archive: null, bufferedChunks: 0, strandedChunks: 1 });
+    expect(h.calls.put).toEqual([]);
+    expect(buffer.chunks.has(old.manifest.chunk_id)).toBe(true);
   });
 
   it('starts a new epoch after a sleep gap instead of stretching the sample clock', async () => {

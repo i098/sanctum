@@ -15,8 +15,11 @@ export function getCaptureEngine(): CaptureView {
   if (engine === null) {
     const created = createCaptureController({ onSpeech: message => (playback ??= createPlayback(new AudioContext())).handle(message) });
     // Pause, reconnect or any stop ends local playback at once; a reconnect never resumes a reply.
+    // 'degraded' (muted track, server-reported degradation, lost lease) does not cut a requested
+    // reply: barge-in and newer generations still cancel it inside playback.
     created.subscribe(() => {
-      if (created.getSnapshot().listener !== 'listening') playback?.stop();
+      const { listener } = created.getSnapshot();
+      if (listener !== 'listening' && listener !== 'degraded') playback?.stop();
     });
     engine = created;
   }
