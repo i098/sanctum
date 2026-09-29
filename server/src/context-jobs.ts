@@ -26,7 +26,7 @@ import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { resolveTime } from './context-time.ts';
 import { lockMeeting, meetingItems, type NewItem, writeItem } from './context.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
-import type { ExtractionInput } from './extraction.ts';
+import { adjacentRuns, type ExtractionInput } from './extraction.ts';
 import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
@@ -59,10 +59,11 @@ const words = (text: string) => ` ${text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
  * cited text. A "spoken" claim without a quote is kept as an inference. Relative time is
  * re-resolved against the first cited utterance in the meeting timezone.
  */
-function grounded(candidate: ExtractionCandidate, batch: ReadonlyMap<string, SegmentRow>, meeting: Meeting, actor: PrincipalId): ReadonlyArray<NewItem> {
+function grounded(candidate: ExtractionCandidate, batch: ReadonlyMap<string, SegmentRow & { readonly index: number }>, meeting: Meeting, actor: PrincipalId): ReadonlyArray<NewItem> {
  const segments = candidate.sources.flatMap(source => batch.get(source.segment_id) ?? []);
  if (segments.length !== candidate.sources.length) return [];
- if (candidate.quote !== null && !words(segments.map(segment => segment.text).join(' ')).includes(words(candidate.quote))) return [];
+ const quote = candidate.quote === null ? null : words(candidate.quote);
+ if (quote !== null && !adjacentRuns(segments).some(run => words(run).includes(quote))) return [];
  const event_at = segments.map(segment => segment.event_at).sort()[0]!;
  return [{
   id: ContextItemId.make(randomUUID()),
@@ -111,7 +112,7 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
   const candidates = yield* extract({ meeting, segments: batch.map(toSegment), snapshot: items, epochs }).pipe(
    Effect.mapError(error => new JobFailure({ message: error.message, retryable: error.retryable })),
   );
-  const byId = new Map(batch.map(segment => [segment.id as string, segment]));
+  const byId = new Map(batch.map((segment, index) => [segment.id as string, { ...segment, index }]));
   const accepted = candidates.flatMap(candidate => grounded(candidate, byId, meeting, target.actor));
   const ids = batch.map(segment => segment.id);
   const added = yield* sql.withTransaction(

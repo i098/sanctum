@@ -76,7 +76,7 @@ const snapshot = [
 ];
 
 const candidate = (fields: Record<string, unknown>) => ({ quote: null, derivation: 'spoken', time: null, ...fields });
-/** Recorded-shape model answer: four grounded spoken facts, one inference and five that must be rejected. */
+/** Recorded-shape model answer: five grounded spoken facts, one inference and six that must be rejected. */
 const modelAnswer = JSON.stringify({
   candidates: [
     candidate({ kind: 'decision', text: 'Keep pilot access limited to the current test group.', quote: 'keep pilot access limited to the current test group', segments: ['S1'] }),
@@ -89,6 +89,8 @@ const modelAnswer = JSON.stringify({
     candidate({ kind: 'commitment', text: 'Maria sends notes.', segments: ['S2'] }),
     candidate({ kind: 'decision', text: 'Use MySQL for storage', quote: 'Okay', segments: ['S1'] }),
     candidate({ kind: 'commitment', text: 'Maria sends notes by Friday.', quote: 'Maria will send the rollout notes', segments: ['S2'], time: { phrase: 'by Friday', local: '2026-11-06', ambiguous: false } }),
+    candidate({ kind: 'project_fact', text: 'Maria sends rollout notes to the test group.', quote: 'the current test group. Maria will send the rollout notes', segments: ['S2', 'S1'] }),
+    candidate({ kind: 'decision', text: 'The test group ships the beta.', quote: "the current test group. Let's ship the beta", segments: ['S1', 'S3'] }),
   ],
 });
 
@@ -120,6 +122,14 @@ const labeled = [
     time: { phrase: '1:30 tomorrow morning', normalized: null, anchor: '2026-11-01T00:05:10.000Z', timezone: 'America/Los_Angeles', ambiguous: true },
   },
   { kind: 'project_fact', text: 'The beta has a restricted test group.', quote: null, derivation: 'inferred', sources: [source(s1!, 0, 3_000), source(s3!, 300_000, 305_000)], time: null },
+  {
+    kind: 'project_fact',
+    text: 'Maria sends rollout notes to the test group.',
+    quote: 'the current test group. Maria will send the rollout notes',
+    derivation: 'spoken',
+    sources: [source(s2!, 5_000, 10_000), source(s1!, 0, 3_000)],
+    time: null,
+  },
 ];
 
 describe('extractCandidates', () => {

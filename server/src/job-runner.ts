@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
 import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
-import { Cause, Effect, Either, Exit, Option, Schedule, Schema } from 'effect';
+import { Cause, Effect, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
 import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
@@ -127,16 +127,24 @@ export const sweepJobs = Effect.gen(function* () {
     WHERE status = 'running' AND lease_until <= UTC_TIMESTAMP(6)`);
 });
 
-/** Re-checks the requester, runs the handler while renewing the lease, then completes the row. */
+/**
+ * Re-checks the requester (the action handler does so itself to settle the action row), runs the
+ * handler while renewing the lease, then completes the row.
+ */
 const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number) =>
   Effect.gen(function* () {
     const { job } = lease;
     const requester = job.requested_by;
-    const authorized = requester === null || Either.isRight(yield* Effect.either(resolveAccess({ workspace_id: job.workspace_id, principal_id: requester })));
-    if (!authorized) {
-      return yield* completeJob(lease, { status: 'failed', error: new JobFailure({ message: 'Requester is no longer authorized', retryable: false }) });
-    }
-    const renewals = Effect.repeat(renewLease(lease, leaseMs), { schedule: Schedule.spaced(leaseMs / 3), while: renewed => renewed });
+    const refused = requester === null || job.kind === 'action.execute'
+      ? null
+      : yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: requester }).pipe(
+        Effect.as(null),
+        Effect.catchAll(error => Effect.succeed(error._tag === 'Forbidden'
+          ? new JobFailure({ message: 'Requester is no longer authorized', retryable: false })
+          : new JobFailure({ message: error.message, retryable: true }))),
+      );
+    if (refused !== null) return yield* completeJob(lease, { status: 'failed', error: refused });
+    const renewals = Effect.repeat(Effect.orElseSucceed(renewLease(lease, leaseMs), () => true), { schedule: Schedule.spaced(leaseMs / 3), while: renewed => renewed });
     const raced = yield* Effect.raceFirst(Effect.exit(handlers[job.kind]!(job)), Effect.as(renewals, 'lease lost' as const));
     if (raced === 'lease lost') {
       yield* Effect.logWarning(`Job ${job.id} lost its lease; another worker owns it`);
@@ -160,8 +168,11 @@ export const runWorker = <R>(handlers: JobHandlers<R>, options: { readonly lease
     const lease = yield* claimJob(kinds, leaseMs);
     if (Option.isNone(lease)) return yield* Effect.sleep(pollMs);
     yield* runJob(handlers, lease.value, leaseMs);
-  }).pipe(Effect.forever);
-  const sweeper = Effect.repeat(sweepJobs, Schedule.spaced(pollMs));
+  }).pipe(
+    Effect.catchAllCause(cause => Effect.zipRight(Effect.logError('Job claimer failed', cause), Effect.sleep(pollMs))),
+    Effect.forever,
+  );
+  const sweeper = Effect.repeat(Effect.catchAllCause(sweepJobs, cause => Effect.logError('Job sweeper failed', cause)), Schedule.spaced(pollMs));
   return Effect.all([sweeper, ...Array.from({ length: concurrency }, () => claimer)], { concurrency: 'unbounded', discard: true }).pipe(
     Effect.zipRight(Effect.never),
   );

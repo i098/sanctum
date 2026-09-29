@@ -185,4 +185,37 @@ describe('worker recovery', () => {
         expect(provider.sent).toHaveLength(1);
       }).pipe(Effect.provide(dbLayer(db.mysql)));
     }).pipe(Effect.scoped));
+
+  it.live('cancels a queued action whose requester lost access before a worker ran it', () =>
+    Effect.gen(function* () {
+      const db = yield* database;
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { agent } = yield* seed;
+        const { action_id } = yield* send(agent, 'revoked');
+        yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${agent.principal.id}`;
+        yield* worker;
+        expect(yield* whenState(agent, action_id, 'cancelled')).toMatchObject({ attempts: 0, last_error: { code: 'forbidden' } });
+        expect(provider.sent).toHaveLength(0);
+      }).pipe(Effect.provide(dbLayer(db.mysql)));
+    }).pipe(Effect.scoped));
+
+  it.live('records the answer of a submission whose worker lost its lease meanwhile', () =>
+    Effect.gen(function* () {
+      const db = yield* database;
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { agent } = yield* seed;
+        provider.mode = 'hold';
+        const { action_id } = yield* send(agent, 'taken-over');
+        yield* Effect.fork(runWorker({ 'action.execute': executeAction }, { leaseMs: 300, pollMs: 50 }).pipe(Effect.provide(actionServices)));
+        yield* whenState(agent, action_id, 'running');
+        yield* sql`UPDATE jobs SET lease_token = 'another-worker', lease_generation = lease_generation + 1 WHERE kind = 'action.execute' AND work_key = ${action_id}`;
+        // The next renewal stops the handler; after the lease expires, the reclaimed job marks the action unknown.
+        yield* whenState(agent, action_id, 'unknown');
+        provider.release!();
+        expect(yield* whenState(agent, action_id, 'succeeded')).toMatchObject({ reconciliation: 'reconciled', attempts: 1 });
+        expect(provider.sent).toHaveLength(1);
+      }).pipe(Effect.provide(dbLayer(db.mysql)));
+    }).pipe(Effect.scoped));
 });

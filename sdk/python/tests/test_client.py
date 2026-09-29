@@ -94,6 +94,13 @@ class Transport(unittest.TestCase):
             with self.assertRaises(httpx.ConnectError):
                 client.health.healthz({})
 
+    def test_non_json_proxy_error_raises_sanctum_error(self) -> None:
+        transport = httpx.MockTransport(lambda _: httpx.Response(502, text="<html>Bad Gateway</html>"))
+        with Client("https://sanctum.test", transport=transport, max_attempts=1) as client:
+            with self.assertRaises(SanctumError) as raised:
+                client.health.healthz({})
+        self.assertEqual((raised.exception.status, raised.exception.code, raised.exception.body), (502, "http_error", {}))
+
     def test_pages_follow_cursor_until_null_or_empty(self) -> None:
         first, last = {"meetings": [1, 2], "next_cursor": "o2"}, {"meetings": [3], "next_cursor": None}
         self.assertEqual(self.drain([first, last]), ([1, 2, 3], [None, "o2"]))

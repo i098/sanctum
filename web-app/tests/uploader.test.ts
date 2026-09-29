@@ -74,8 +74,14 @@ class MemoryPending implements PendingStore {
   readonly chunks = new Map<string, SealedChunk>();
   readonly journal: RecordingChunkReceipt[] = [];
 
-  async nextPending(listenerId: string, skip: ReadonlySet<string>): Promise<SealedChunk | null> {
-    return [...this.chunks.values()].find(({ manifest }) => manifest.listener_id === listenerId && !skip.has(manifest.chunk_id)) ?? null;
+  readonly conflicts = new Set<string>();
+
+  async nextPending(listenerId: string): Promise<SealedChunk | null> {
+    return [...this.chunks.values()].find(({ manifest }) => manifest.listener_id === listenerId && !this.conflicts.has(manifest.chunk_id)) ?? null;
+  }
+
+  async markConflict(chunkId: string): Promise<void> {
+    this.conflicts.add(chunkId);
   }
 
   async acknowledge(manifest: RecordingChunkManifest, receipt: RecordingChunkReceipt): Promise<void> {
@@ -192,6 +198,11 @@ describe('chunk uploader', () => {
     expect(Exit.isSuccess(await run())).toBe(true);
     expect(events).toEqual(['uploading 0', 'conflict 0', 'uploading 1', 'saved 1']);
     expect([...store.chunks.keys()]).toEqual([first!.manifest.chunk_id]);
+
+    const again = drain(store, baseUrl);
+    expect(Exit.isSuccess(await again.run())).toBe(true);
+    expect(again.events).toEqual([]);
+    expect(server.requests).toHaveLength(2);
   });
 
   it('never deletes local audio for a receipt that does not match the manifest', async () => {

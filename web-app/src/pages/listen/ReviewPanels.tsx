@@ -5,7 +5,7 @@ import { type Loadable, playbackOffset, type Review } from './review-data.ts';
 export const TABS = ['Notes', 'Transcript', 'Recording', 'Memory', 'Context', 'Activity'] as const;
 export type Tab = (typeof TABS)[number];
 
-/** A requested jump into the recording; a fresh object each time, so the same offset can be replayed. */
+/** A requested jump into the recording; a fresh object each time, so the same offset can be replayed, and consumed once applied so a remount never plays. */
 export interface Seek {
   readonly seconds: number;
 }
@@ -16,6 +16,7 @@ export interface Navigation {
   readonly seek: Seek | null;
   readonly onSource: (segment_id: string) => void;
   readonly onPlay: (seconds: number) => void;
+  readonly onSeeked: () => void;
 }
 
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
@@ -107,7 +108,7 @@ function TranscriptPanel({ segments, recording, navigation: { focus, onPlay } }:
   );
 }
 
-function RecordingPanel({ recording, seek }: { recording: RecordingAccess; seek: Seek | null }) {
+function RecordingPanel({ recording, seek, onSeeked }: { recording: RecordingAccess; seek: Seek | null; onSeeked: () => void }) {
   const audio = useRef<HTMLAudioElement>(null);
   useEffect(() => {
     const element = audio.current;
@@ -116,7 +117,8 @@ function RecordingPanel({ recording, seek }: { recording: RecordingAccess; seek:
     element.focus();
     // Explicit playback the user just asked for; a load failure is reported by the element's error state.
     void element.play().catch(() => undefined);
-  }, [seek]);
+    onSeeked();
+  }, [seek, onSeeked]);
   const gaps = recording.gaps.length;
   return (
     <div className="listen-recording">
@@ -204,7 +206,7 @@ const PANELS: Record<Tab, (review: Review, navigation: Navigation) => ReactNode>
   Notes: (review, { onSource }) => show('Notes', review.notes, notes => <NotesPanel notes={notes} onSource={onSource} />),
   Transcript: (review, navigation) =>
     show('Transcript', review.transcript, segments => <TranscriptPanel segments={segments} recording={review.recording} navigation={navigation} />),
-  Recording: (review, { seek }) => show('Recording', review.recording, recording => <RecordingPanel recording={recording} seek={seek} />),
+  Recording: (review, { seek, onSeeked }) => show('Recording', review.recording, recording => <RecordingPanel recording={recording} seek={seek} onSeeked={onSeeked} />),
   Memory: (review, { onSource }) =>
     show('Memory', review.context, snapshot => (
       <Items items={snapshot.items.filter(item => item.state === 'committed')} empty="No committed memory yet." onSource={onSource} />

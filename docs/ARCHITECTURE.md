@@ -56,7 +56,6 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 
 - `auth.ts`: `KernelAuthenticatorLive: Layer<Authenticator, never, R>` (sessions + hashed bearer credentials) is main.ts's default; the unconfigured authenticator is gone.
 - `auth.ts`: `resolveAccess(input: { workspace_id; principal_id }): Effect<AccessScope, Forbidden, R>` for workers and sockets.
-- `auth.ts`: `authenticateUpgrade(request: IncomingMessage): Effect<AccessScope, Unauthenticated | Forbidden, R>` with the Origin allowlist.
 - `auth.ts`: `requireScope(access, scope: AccessScopeName): Effect<void, Forbidden>`.
 - `auth.ts`: `authorizeMeeting(access, meeting_id, need: 'read' | 'write'): Effect<void, NotFound, R>`.
 - `auth.ts`: `listVisibleMeetingIds(access): Effect<ReadonlyArray<MeetingId>, SqlError, R>`.

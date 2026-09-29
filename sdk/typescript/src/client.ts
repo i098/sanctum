@@ -61,8 +61,11 @@ export type SanctumClient = Facade & {
 async function send(doFetch: typeof fetch, url: URL, init: RequestInit): Promise<unknown> {
   const response = await doFetch(url, init);
   const text = await response.text();
-  const body: unknown = text === '' ? null : JSON.parse(text);
-  if (response.ok) return body;
+  if (response.ok) return text === '' ? null : JSON.parse(text);
+  let body: unknown = null;
+  try {
+    body = JSON.parse(text);
+  } catch {}
   throw new SanctumError(response.status, typeof body === 'object' && body !== null ? { ...body } : {});
 }
 

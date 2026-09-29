@@ -28,6 +28,17 @@ describe('relative time resolution', () => {
     expect(at('2027-03-13T18:00:00Z', 'tomorrow at 3:30am')).toBe('2027-03-14T10:30:00.000Z');
   });
 
+  it('keeps day-only phrases at local midnight but ambiguous for exact scheduling', () => {
+    const saturday = UtcTimestamp.make('2026-09-26T17:00:00Z');
+    const ambiguous = (phrase: string) => resolveTime(phrase, saturday, LA).ambiguous;
+    expect(resolveTime('tomorrow', saturday, LA)).toEqual({ phrase: 'tomorrow', normalized: '2026-09-27T07:00:00.000Z', anchor: saturday, timezone: LA, ambiguous: true });
+    expect(ambiguous('on Friday')).toBe(true);
+    expect(ambiguous('in two weeks')).toBe(true);
+    expect(ambiguous('tomorrow at 9am')).toBe(false);
+    expect(ambiguous('October 3rd at noon')).toBe(false);
+    expect(ambiguous('in 2 hours')).toBe(false);
+  });
+
   it('resolves weekdays, spans and calendar dates and refuses ambiguous ones', () => {
     const saturday = '2026-09-26T17:00:00Z';
     expect(at(saturday, 'on Friday')).toBe('2026-10-02T07:00:00.000Z');

@@ -6,7 +6,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect, Either, Fiber, Option, Schema } from 'effect';
+import { Effect, Either, Fiber, Option, Schedule, Schema } from 'effect';
 import { type ActionRow, loadAction, requestAction } from './actions.ts';
 import { requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
@@ -70,7 +70,8 @@ const startAttempt = (job: Job, action_id: ActionId) =>
     if (!(yield* grantStillValid(row))) return yield* settle('cancelled', { code: 'forbidden', message: 'Grant revoked, expired, changed or its account disconnected before execution' });
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: row.requested_by }).pipe(
       Effect.tap(scope => requireScope(scope, 'actions:request')),
-      Effect.option,
+      Effect.map(Option.some),
+      Effect.catchTag('Forbidden', () => Effect.succeedNone),
     );
     if (Option.isNone(access)) return yield* settle('cancelled', { code: 'forbidden', message: 'Requester no longer has action access' });
     const pause = yield* budgetPause(job);
@@ -119,8 +120,8 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
   });
 
 /**
- * Sends one attempt and records its answer. No answer within the submit timeout records
- * `unknown` now; the submission keeps running in a daemon so its late answer still settles the row.
+ * Sends one attempt and records its answer from a daemon that outlives this handler. No answer
+ * within the submit timeout records `unknown` now; the late answer still settles the row.
  */
 const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof resolveAccess>>, attempt: number) =>
   Effect.gen(function* () {
@@ -134,12 +135,11 @@ const submit = (row: ActionRow, access: Effect.Effect.Success<ReturnType<typeof 
         arguments: row.args,
         provider_idempotency_key: row.provider_idempotency_key,
       }),
-    ));
-    const answered = yield* Effect.option(Effect.timeout(Fiber.join(sending), engineeringDefaults.actionSubmitTimeoutMs));
-    if (Option.isSome(answered)) return yield* recordOutcome(row, attempt, answered.value);
+    ).pipe(Effect.flatMap(outcome => Effect.retry(recordOutcome(row, attempt, outcome), { schedule: Schedule.exponential('100 millis'), times: 5 }))));
+    const answered = yield* Effect.timeoutOption(Fiber.join(sending), engineeringDefaults.actionSubmitTimeoutMs);
+    if (Option.isSome(answered)) return;
     const timedOut = new IntegrationFailure({ message: 'No provider answer after submission', status: null, retryable: false, ambiguous: true });
     yield* recordOutcome(row, attempt, Either.left(timedOut));
-    yield* Effect.forkDaemon(Effect.flatMap(Fiber.join(sending), late => recordOutcome(row, attempt, late)));
   });
 
 const ActionPayload = Schema.Struct({ action_id: ActionId });

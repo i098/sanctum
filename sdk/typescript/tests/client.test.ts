@@ -75,6 +75,11 @@ describe('TypeScript SDK transport', () => {
     expect(calls).toBe(2);
   });
 
+  it('turns a non-JSON proxy error into SanctumError with its status', async () => {
+    const client = createClient({ baseUrl: 'https://sanctum.test', maxAttempts: 1, fetch: async () => new Response('<html>Bad Gateway</html>', { status: 502 }) });
+    await expect(client.health.healthz({})).rejects.toMatchObject({ name: 'SanctumError', status: 502, code: 'http_error', body: {} });
+  });
+
   it('aborts an in-flight request without retrying', async () => {
     let calls = 0;
     const client = createClient({

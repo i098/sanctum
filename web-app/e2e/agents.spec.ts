@@ -70,6 +70,6 @@ test('shows a refused create as an error and keeps the list unchanged', async ({
   const dialog = page.getByRole('dialog', { name: 'Agents' });
   await dialog.getByLabel('Agent name').fill('Denied');
   await dialog.getByRole('button', { name: 'Create agent' }).click();
-  await expect(dialog.getByRole('alert')).toHaveText('Requires workspace:admin');
+  await expect(dialog.getByRole('alert')).toHaveText('Requires workspace:admin; nothing was changed.');
   await expect(dialog.getByText('No agents yet.')).toBeVisible();
 });

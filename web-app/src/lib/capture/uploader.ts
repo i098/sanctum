@@ -11,7 +11,8 @@ import type { SealedChunk } from './recorder.ts';
 import type { ListenersClient } from './client.ts';
 
 export interface PendingStore {
-  nextPending(listenerId: string, skip: ReadonlySet<string>): Promise<SealedChunk | null>;
+  nextPending(listenerId: string): Promise<SealedChunk | null>;
+  markConflict(chunkId: string): Promise<void>;
   acknowledge(manifest: RecordingChunkManifest, receipt: RecordingChunkReceipt): Promise<void>;
 }
 
@@ -77,10 +78,9 @@ export function drainPending(
   options: UploaderOptions = {},
 ): Effect.Effect<void, DrainStop> {
   const { timeout = '60 seconds', retry = defaultRetry } = options;
-  const skip = new Set<string>();
   return Effect.gen(function* () {
     for (; ;) {
-      const chunk = yield* storage(() => store.nextPending(listenerId, skip));
+      const chunk = yield* storage(() => store.nextPending(listenerId));
       if (chunk === null) return;
       events.onUploading(chunk.manifest);
       const receipt = yield* putChunk(client, chunk, timeout).pipe(
@@ -88,7 +88,7 @@ export function drainPending(
         Effect.catchTag('Conflict', () => Effect.succeed(null)),
       );
       if (receipt === null) {
-        skip.add(chunk.manifest.chunk_id);
+        yield* storage(() => store.markConflict(chunk.manifest.chunk_id));
         events.onConflict(chunk.manifest);
         continue;
       }

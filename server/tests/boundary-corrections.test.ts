@@ -20,7 +20,7 @@ const twoMeetings = Effect.gen(function* () {
   yield* hear(listener, epoch, 95, 100, 'thanks everyone, see you next time');
   yield* hear(listener, epoch, 100 + 6 * MIN, 160 + 6 * MIN, "good morning everyone, let's get started with the design review");
   const [first, second] = (yield* meetingsOf(listener.workspace_id)).map(row => MeetingId.make(row.id));
-  return { owner: owner!, member: member!, listener, epoch, first: first!, second: second! };
+  return { owner: owner!, member: member!, device: device!, listener, epoch, first: first!, second: second! };
 });
 
 const totalSamples = (ranges: ReadonlyArray<{ sample_start: number; sample_end: number }>) => ranges.reduce((sum, range) => sum + range.sample_end - range.sample_start, 0);
@@ -128,6 +128,44 @@ describe('split and merge', () => {
         expect(yield* Effect.flip(splitMeeting(readOnly, first, { expected_revision: 2, at: { epoch_id: (yield* rangesOf(first))[0]!.epoch_id as never, sample: 10 } }))).toMatchObject({ _tag: 'Forbidden' });
         const [otherTeam] = yield* seedWorkspace('Other', ['owner']);
         expect(yield* Effect.flip(getMeeting(otherTeam!, first))).toMatchObject({ _tag: 'NotFound' });
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('an open meeting merges only within its own listener and stays the one new speech extends', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, device, listener, epoch, first, second } = yield* twoMeetings;
+        const other = yield* seedListener(device);
+        yield* hear(other, yield* seedEpoch(other), 0, 30, 'the second room is reviewing the roadmap');
+        const elsewhere = MeetingId.make((yield* meetingsOf(listener.workspace_id)).find(row => row.id !== first && row.id !== second)!.id);
+        for (const [target, source] of [[first, elsewhere], [elsewhere, first]] as const) {
+          const refused = yield* Effect.flip(mergeMeetings(owner, { target: { meeting_id: target, expected_revision: 1 }, source: { meeting_id: source, expected_revision: 1 } }));
+          expect(refused).toMatchObject({ _tag: 'RevisionConflict', current_revision: 1 });
+        }
+        expect(yield* getMeeting(owner, elsewhere)).toMatchObject({ state: 'provisional', boundary_revision: 1 });
+        expect(yield* getMeeting(owner, first)).toMatchObject({ state: 'closing', boundary_revision: 1 });
+        const merged = yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
+        expect(merged).toMatchObject({ id: first, state: 'active', ended_at: null, boundary_revision: 2 });
+        yield* hear(listener, epoch, 161 + 6 * MIN, 170 + 6 * MIN, 'next slide shows the mobile layout');
+        expect((yield* rangesOf(first)).at(-1)!.sample_end).toBe((170 + 6 * MIN) * RATE);
+        expect(yield* meetingsOf(listener.workspace_id)).toHaveLength(3);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('merging two meetings that own no source is refused', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, epoch, first, second } = yield* twoMeetings;
+        yield* closeMeeting(owner, second);
+        yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
+        const { later } = yield* splitMeeting(owner, first, { expected_revision: 2, at: { epoch_id: epoch, sample: (100 + 6 * MIN) * RATE } });
+        yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 3 }, source: { meeting_id: later.id, expected_revision: 1 } });
+        const refused = yield* Effect.flip(mergeMeetings(owner, { target: { meeting_id: second, expected_revision: 2 }, source: { meeting_id: later.id, expected_revision: 2 } }));
+        expect(refused).toMatchObject({ _tag: 'RevisionConflict', current_revision: 2 });
       }),
       { migrated: true },
     ),

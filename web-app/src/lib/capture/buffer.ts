@@ -19,6 +19,7 @@ export const DEFAULT_CAP_BYTES = 2 ** 34;
 
 interface ChunkRecord extends SealedChunk {
   readonly chunk_id: string;
+  readonly conflict?: true;
 }
 
 interface ReceiptRecord {
@@ -145,15 +146,26 @@ export class RecoveryBuffer implements ChunkStore {
     });
   }
 
-  /** Oldest unacknowledged chunk of `listenerId` that is not in `skip`. */
-  nextPending(listenerId: string, skip: ReadonlySet<string>): Promise<SealedChunk | null> {
+  /** Oldest unacknowledged chunk of `listenerId` that the server has not refused as a hash conflict. */
+  nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {
       const range = IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
       const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(range);
       return walk(cursor, (current) => {
         const record = current.value as ChunkRecord;
-        return skip.has(record.chunk_id) ? undefined : { manifest: record.manifest, wav: record.wav };
+        return record.conflict ? undefined : { manifest: record.manifest, wav: record.wav };
       });
+    });
+  }
+
+  /** Keeps a chunk the server holds with other bytes, but never offers it for upload again. */
+  markConflict(chunkId: string): Promise<void> {
+    return guarded(async () => {
+      const tx = this.db.transaction(CHUNKS, 'readwrite');
+      const chunks = tx.objectStore(CHUNKS);
+      const record = (await request(chunks.get(chunkId))) as ChunkRecord | undefined;
+      if (record !== undefined) chunks.put({ ...record, conflict: true } satisfies ChunkRecord);
+      await complete(tx);
     });
   }
 

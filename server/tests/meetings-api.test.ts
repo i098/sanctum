@@ -63,6 +63,10 @@ describe('MeetingsApi over HTTP', () => {
       expect(transcript).toMatchObject({ status: 200, body: { boundary_revision: 1, segments: [{ text: 'first topic is the launch date' }] } });
       const rest = yield* call(base, 'owner', 'GET', `/meetings/${meeting}/transcript?limit=1&cursor=${transcript.body.next_cursor}`);
       expect(rest.body).toMatchObject({ segments: [{ text: 'second topic is the hiring plan' }], next_cursor: null });
+      for (const cursor of ['not-json', '[1,-1]', '[1,0.5]', '[1,9007199254740993]', '[-1,0]']) {
+        const bad = yield* call(base, 'owner', 'GET', `/meetings/${meeting}/transcript?cursor=${Buffer.from(cursor).toString('base64url')}`);
+        expect(bad).toMatchObject({ status: 404 });
+      }
 
       expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/close`)).body).toMatchObject({ state: 'closing' });
       const split = yield* call(base, 'owner', 'POST', `/meetings/${meeting}/split`, { expected_revision: 1, at: { epoch_id: epoch, sample: 30 * RATE } });

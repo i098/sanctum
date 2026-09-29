@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t sanctum:local .
 # API: default command. Worker: `node server/dist/worker.js`. Migrations run only when an
 # operator invokes `node server/dist/migrate.js`; the API and worker never apply DDL.
-# The shared contracts package stays TypeScript and runs through Node's type stripping.
+# The shared contracts and SDK packages stay TypeScript and run through Node's type stripping.
 
 FROM node:24.19.0-bookworm-slim AS build
 WORKDIR /app
@@ -16,6 +16,7 @@ RUN npm ci --no-audit --no-fund
 COPY packages/contracts packages/contracts
 COPY server server
 COPY web-app web-app
+COPY sdk/typescript/src sdk/typescript/src
 RUN npm run build --workspace web-app && npm run build --workspace server
 
 FROM node:24.19.0-bookworm-slim
@@ -24,8 +25,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json packages/contracts/
 COPY server/package.json server/
+COPY web-app/package.json web-app/
+COPY sdk/typescript/package.json sdk/typescript/
 RUN npm ci --omit=dev --workspace server --no-audit --no-fund && npm cache clean --force
 COPY packages/contracts/src packages/contracts/src
+COPY sdk/typescript/src sdk/typescript/src
 COPY server/migrations server/migrations
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/web-app/dist web-app/dist

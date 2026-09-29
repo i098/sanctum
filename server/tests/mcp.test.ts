@@ -7,10 +7,10 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import type { AccessScope } from '@sanctum/contracts';
 import { createClient } from '@sanctum/sdk';
-import { Effect, Option } from 'effect';
+import { Effect, Option, TestClock } from 'effect';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.ts';
-import { MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
+import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
@@ -179,6 +179,27 @@ describe('MCP over Streamable HTTP', () => {
 
       const { transport } = yield* connect(url, aliceToken);
       expect(transport.protocolVersion).toBe(LATEST_PROTOCOL_VERSION);
+    }),
+  );
+
+  it.scoped('closes sessions left idle when a host re-initializes without DELETE', () =>
+    Effect.gen(function* () {
+      const { url, db } = yield* serveFake(configured);
+      const [member] = yield* Effect.provide(seedWorkspace('Idle', ['member']), db);
+      const token = yield* Effect.promise(async () => sign(await Effect.runPromise(Effect.provide(identify(member!), db)), 'context:read'));
+      const open = Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION)).then(r => r.headers.get('mcp-session-id')!));
+      const list = (session: string) =>
+        Effect.promise(() =>
+          post(url, token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, { 'mcp-session-id': session, 'mcp-protocol-version': LATEST_PROTOCOL_VERSION }).then(r => r.status),
+        );
+      const first = yield* open;
+      expect(yield* list(first)).toBe(200);
+      yield* TestClock.adjust(`${MCP_SESSION_IDLE_MS - 1} millis`);
+      expect(yield* list(first)).toBe(200);
+      yield* TestClock.adjust(`${MCP_SESSION_IDLE_MS + 1} millis`);
+      const second = yield* open;
+      expect(yield* list(first)).toBe(404);
+      expect(yield* list(second)).toBe(200);
     }),
   );
 

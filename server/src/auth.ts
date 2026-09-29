@@ -6,8 +6,7 @@
  * are opened only for an already verified identity or enrolled device.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
-import { Cookies, HttpServerRequest } from '@effect/platform';
+import { HttpServerRequest } from '@effect/platform';
 import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
 import {
   type AccessScope,
@@ -22,7 +21,7 @@ import {
   WorkspaceId,
   WorkspaceRole,
 } from '@sanctum/contracts';
-import { Config, Context, Effect, Layer, Option, Schema } from 'effect';
+import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { DbJson, DbSafeInt } from './db.ts';
 
 export class Authenticator extends Context.Tag('sanctum/Authenticator')<
@@ -134,20 +133,6 @@ export const KernelAuthenticatorLive = Layer.effect(
       authenticate(request).pipe(Effect.catchTag('SqlError', Effect.die), Effect.provideService(SqlClient.SqlClient, sql)),
   })),
 );
-
-/**
- * WebSocket upgrades carry only the same-origin session cookie (every session role holds
- * `capture:ingest`); the Origin must be listed in `SANCTUM_ALLOWED_ORIGINS` (comma-separated, none by default).
- */
-export const authenticateUpgrade = (request: IncomingMessage) =>
-  Effect.gen(function* () {
-    const allowed: ReadonlyArray<string> = yield* Config.array(Config.string(), 'SANCTUM_ALLOWED_ORIGINS').pipe(Config.withDefault([]), Effect.orDie);
-    const origin = request.headers.origin;
-    if (!origin || !allowed.includes(origin)) return yield* new Forbidden({ message: 'Origin is not allowed' });
-    const session = Cookies.parseHeader(request.headers.cookie ?? '')[SESSION_COOKIE];
-    if (!session) return yield* new Unauthenticated({ message: 'No session' });
-    return yield* sessionAccess(session, null);
-  }).pipe(Effect.catchTag('SqlError', Effect.die));
 
 /**
  * Access of a member acting outside a request (workers, open sockets). Agents keep the union of

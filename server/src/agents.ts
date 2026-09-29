@@ -66,7 +66,9 @@ export const createAgent = (access: AccessScope, input: CreateAgent) =>
     yield* requireScope(access, 'workspace:admin');
     const excess = input.scopes.filter(scope => !access.scopes.includes(scope));
     if (excess.length > 0) return yield* new Forbidden({ message: `Cannot grant scopes the creator lacks: ${excess.join(', ')}` });
-    if (input.meetings.kind === 'allowlist') yield* Effect.forEach(input.meetings.meeting_ids, id => authorizeMeeting(access, id, 'read'));
+    if (input.meetings.kind === 'accessible' && access.meetings.kind === 'allowlist') return yield* new Forbidden({ message: 'Cannot grant meetings the creator lacks' });
+    const need = input.scopes.some(scope => scope === 'context:write' || scope === 'actions:request') ? 'write' : 'read';
+    if (input.meetings.kind === 'allowlist') yield* Effect.forEach(input.meetings.meeting_ids, id => authorizeMeeting(access, id, need));
     const sql = yield* SqlClient.SqlClient;
     const agent_id = PrincipalId.make(crypto.randomUUID());
     const id = AgentCredentialId.make(crypto.randomUUID());

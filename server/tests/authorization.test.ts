@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
@@ -7,7 +6,7 @@ import { type AccessScope, Authenticated, type MeetingId, type WorkspaceId } fro
 import { SanctumApi } from '@sanctum/contracts/api';
 import { ConfigProvider, Context, Effect, Layer, Option } from 'effect';
 import { createAgent } from '../src/agents.ts';
-import { authenticateUpgrade, authorizeMeeting, identityPrincipal, listVisibleMeetingIds, openSession, resolveAccess } from '../src/auth.ts';
+import { authorizeMeeting, identityPrincipal, listVisibleMeetingIds, openSession, resolveAccess } from '../src/auth.ts';
 import { scopedCacheKey } from '../src/cache.ts';
 import { dbLayer } from '../src/db.ts';
 import { serverLayer } from '../src/main.ts';
@@ -15,6 +14,7 @@ import { loadMigrations, migrate } from '../src/migrate.ts';
 import { grantMeetingAccess } from '../src/store.ts';
 import { createTestDatabase, withDatabase } from './support/database.ts';
 import { fixtureAccess, seedWorkspace } from './support/fixtures.ts';
+import { upgradeStatus } from './support/media.ts';
 
 /** Real HTTP server with the kernel authenticator plus direct SQL on the same disposable database. */
 const withServer = <A, E>(use: (base: string) => Effect.Effect<A, E, SqlClient.SqlClient>) =>
@@ -186,6 +186,16 @@ describe('authorization boundary', () => {
         yield* grantMeetingAccess({ workspace_id: owner!.workspace_id, meeting_id: restricted, principal_id: owner!.principal.id, access: 'owner', granted_by: owner!.principal.id });
         const scoped = yield* createAgent(admin, allowlist([restricted]));
         expect(scoped.credential.meetings).toEqual({ kind: 'allowlist', meeting_ids: [restricted] });
+        const readable = yield* meeting(owner!.workspace_id, 'restricted');
+        yield* grantMeetingAccess({ workspace_id: owner!.workspace_id, meeting_id: readable, principal_id: owner!.principal.id, access: 'read', granted_by: owner!.principal.id });
+        yield* createAgent(admin, allowlist([readable]));
+        for (const scope of ['context:write', 'actions:request'] as const) {
+          expect(yield* tagOf(createAgent(admin, { ...allowlist([readable]), scopes: [scope] }))).toBe('NotFound');
+        }
+        const narrowAdmin = yield* createAgent(admin, { ...allowlist([restricted]), scopes: ['workspace:admin', 'context:read'] });
+        const narrow = yield* resolveAccess({ workspace_id: owner!.workspace_id, principal_id: narrowAdmin.agent.id });
+        expect(yield* tagOf(createAgent(narrow, researcher))).toBe('Forbidden');
+        expect((yield* createAgent(narrow, allowlist([restricted]))).credential.meetings).toEqual({ kind: 'allowlist', meeting_ids: [restricted] });
       }),
       { migrated: true },
     ),
@@ -224,25 +234,23 @@ describe('authorization boundary', () => {
     ),
   );
 
-  it.effect('accepts WebSocket upgrades only from allowed origins with an ingest session', () =>
-    withDatabase(
+  it.scoped('accepts WebSocket upgrades with a session from its own host, allowed origins or non-browser clients', () =>
+    withServer(base =>
       Effect.gen(function* () {
         const [device] = yield* seedWorkspace('Room', ['device']);
-        const session = yield* openSession({ workspace_id: device!.workspace_id, principal_id: device!.principal.id });
-        const upgrade = (headers: Record<string, string>) => authenticateUpgrade({ headers } as unknown as IncomingMessage);
-        const allowed = ConfigProvider.fromMap(new Map([['SANCTUM_ALLOWED_ORIGINS', 'https://sanctum.test,https://room.sanctum.test']]));
-        const cookie = `theme=dark; sanctum_session=${session.token}`;
+        const headers = yield* sessionHeaders(device!);
+        const listener = yield* call(`${base}/api/v1/listeners`, { method: 'POST', headers, body: { name: 'Room', mode: 'room', capabilities: {} } });
+        expect(listener.status).toBe(201);
+        const upgrade = (extra: Record<string, string>) => upgradeStatus(new URL(base).host, `/api/v1/listeners/${listener.body.id}/stream`, extra);
+        const cookie = `theme=dark; ${headers.cookie}`;
 
-        expect(yield* tagOf(upgrade({ origin: 'https://sanctum.test', cookie }))).toBe('Forbidden');
-        const configured = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.withConfigProvider(effect, allowed);
-        expect(yield* configured(tagOf(upgrade({ cookie })))).toBe('Forbidden');
-        expect(yield* configured(tagOf(upgrade({ origin: 'https://evil.test', cookie })))).toBe('Forbidden');
-        expect(yield* configured(tagOf(upgrade({ origin: 'https://sanctum.test' })))).toBe('Unauthenticated');
-        const access = yield* configured(upgrade({ origin: 'https://room.sanctum.test', cookie }));
-        expect(access).toMatchObject({ workspace_id: device!.workspace_id, role: 'device', scopes: ['capture:ingest'] });
+        expect(yield* upgrade({ origin: 'https://evil.test', cookie })).toBe(403);
+        expect(yield* upgrade({ origin: 'https://room.sanctum.test' })).toBe(401);
+        expect(yield* upgrade({ origin: 'https://room.sanctum.test', cookie })).toBe(101);
+        expect(yield* upgrade({ origin: base, cookie })).toBe(101);
+        expect(yield* upgrade({ cookie })).toBe(101);
       }),
-      { migrated: true },
-    ),
+    ).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_ALLOWED_ORIGINS', 'https://room.sanctum.test']])))),
   );
 
   it.effect('maps only exact verified identities to principals, never emails or action accounts', () =>

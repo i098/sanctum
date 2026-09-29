@@ -51,8 +51,12 @@ class MemoryBuffer implements CaptureBuffer {
   async sealChunk(chunk: SealedChunk) {
     this.chunks.set(chunk.manifest.chunk_id, chunk);
   }
-  async nextPending(_: string, skip: ReadonlySet<string>) {
-    return [...this.chunks.values()].find((chunk) => !skip.has(chunk.manifest.chunk_id)) ?? null;
+  readonly conflicts = new Set<string>();
+  async nextPending() {
+    return [...this.chunks.values()].find((chunk) => !this.conflicts.has(chunk.manifest.chunk_id)) ?? null;
+  }
+  async markConflict(chunkId: string) {
+    this.conflicts.add(chunkId);
   }
   async acknowledge(manifest: RecordingChunkManifest) {
     this.chunks.delete(manifest.chunk_id);
@@ -348,6 +352,39 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost' });
     expect(h.lives[0]!.stopped).toBe('close');
     expect(h.calls.heartbeat[0]).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
+  });
+
+  it('reopens the live stream in a new epoch when ownership comes back', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.setOwner(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    h.setOwner(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.snapshot()).toMatchObject({ listener: 'starting', issue: null });
+    h.feed(0.1);
+    expect(h.lives).toHaveLength(2);
+    expect(h.lives[1]!.options.start.epoch_id).not.toBe(h.lives[0]!.options.start.epoch_id);
+    h.accept();
+    await settle();
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', epochId: h.lives[1]!.options.start.epoch_id });
+  });
+
+  it('honours a pause pressed while the microphone prompt is open', async () => {
+    let grant: (stream: MediaStream) => void = () => { };
+    const track = new FakeTrack();
+    const h = harness({ getUserMedia: () => new Promise<MediaStream>((resolve) => (grant = resolve)) });
+    const starting = h.engine.start();
+    await settle();
+    expect(h.snapshot().listener).toBe('starting');
+    await h.engine.pause();
+    grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+    await starting;
+    expect(h.snapshot()).toMatchObject({ listener: 'paused', permission: 'granted' });
+    expect(track.readyState).toBe('ended');
+    expect(h.lives).toHaveLength(0);
   });
 
   it('refuses a second capture in the same browser', async () => {

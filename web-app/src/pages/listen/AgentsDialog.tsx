@@ -14,8 +14,6 @@ const GRANTABLE: ReadonlyArray<{ scope: Scope; label: string }> = [
   { scope: 'actions:request', label: 'Request actions' },
 ];
 
-const describe = (error: unknown) => (error instanceof SanctumError ? error.message : 'Network unavailable; nothing was changed.');
-
 export function AgentsDialog({ client, open, onClose }: { client: SanctumClient; open: boolean; onClose: () => void }) {
   const [agents, setAgents] = useState<ReadonlyArray<AgentWithCredential> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,28 +21,36 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(
-    (signal?: AbortSignal) =>
-      client.agents.listAgents({}, signal ? { signal } : {}).then(
-        page => (setAgents(page.items), setError(null)),
-        (failure: unknown) => signal?.aborted || setError(describe(failure)),
-      ),
+    async (signal?: AbortSignal) => {
+      const page = await client.agents.listAgents({}, signal ? { signal } : {});
+      setAgents(page.items);
+      setError(null);
+    },
     [client],
   );
   useEffect(() => {
     // The plain token is shown once: closing the dialog forgets it.
     if (!open) return setIssued(null);
     const controller = new AbortController();
-    void refresh(controller.signal);
+    refresh(controller.signal).catch((failure: unknown) => controller.signal.aborted || setError(failure instanceof SanctumError ? failure.message : 'Network unavailable.'));
     return () => controller.abort();
   }, [open, refresh]);
 
   const run = async (change: () => Promise<void>) => {
     setBusy(true);
     try {
-      await change();
-      await refresh();
-    } catch (failure) {
-      setError(describe(failure));
+      try {
+        await change();
+      } catch (failure) {
+        return setError(
+          failure instanceof SanctumError && failure.status < 500
+            ? `${failure.message}; nothing was changed.`
+            : 'The change could not be confirmed; reopen Agents to check before retrying.',
+        );
+      }
+      await refresh().catch((failure: unknown) =>
+        setError(`The change was made, but the list could not be refreshed: ${failure instanceof SanctumError ? failure.message : 'network unavailable'}.`),
+      );
     } finally {
       setBusy(false);
     }

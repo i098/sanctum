@@ -70,6 +70,8 @@ const NotesOutput = Schema.Struct({
 
 interface Line {
   readonly ref: string;
+  /** Position among the meeting's final segments in time order; consecutive positions are adjacent speech. */
+  readonly index: number;
   readonly segment: TranscriptSegment;
   /** UTC epoch milliseconds of the segment start. */
   readonly at: number;
@@ -113,7 +115,7 @@ const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' 
 function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
   const anchors = new Map(input.epochs?.map(anchor => [anchor.epoch_id, anchor]));
   const started = Date.parse(input.meeting.started_at);
-  const placed: Array<Omit<Line, 'ref'>> = [];
+  const placed: Array<Omit<Line, 'ref' | 'index'>> = [];
   for (const segment of input.segments) {
     if (segment.status !== 'final') continue;
     const anchor = anchors.get(segment.source.epoch_id);
@@ -123,7 +125,7 @@ function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
     if (at < started) continue;
     placed.push({ segment, at, source: { segment_id: segment.id, start_ms: Math.round(at - started), end_ms: Math.round(utc(segment.source.sample_end) - started) } });
   }
-  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => ({ ...line, ref: `S${i + 1}` })));
+  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => ({ ...line, ref: `S${i + 1}`, index: i })));
 }
 
 function transcriptBlock(lines: ReadonlyArray<Line>, meeting: Meeting): string {
@@ -149,14 +151,24 @@ Every point cites the transcript refs (S1, S2, ...) that support it. Leave out a
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
+/** Joined text of each run of transcript-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
+export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; readonly text: string }>): string[] {
+  const texts: string[] = [];
+  [...cited].sort((a, b) => a.index - b.index).forEach((line, i, sorted) => {
+    if (i > 0 && line.index === sorted[i - 1]!.index + 1) texts[texts.length - 1] += ` ${line.text}`;
+    else texts.push(line.text);
+  });
+  return texts;
+}
+
 /** Why a candidate's text, quote or time phrase is not supported by its cited lines, or null. */
-function unsupported(candidate: ModelCandidate, heard: string, known: ReadonlySet<string>): string | null {
-  const verbatim = (text: string) => fold(text) !== '' && heard.includes(fold(text));
+function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, known: ReadonlySet<string>): string | null {
+  const verbatim = (text: string) => fold(text) !== '' && heard.some(run => run.includes(fold(text)));
   const checks: ReadonlyArray<readonly [boolean, string]> = [
     [fold(candidate.text) !== '' && !known.has(`${candidate.kind}:${fold(candidate.text)}`), 'empty or already in the context snapshot'],
     [candidate.derivation === 'inferred' || candidate.quote !== null, 'spoken candidate without a quote'],
-    [candidate.quote === null || verbatim(candidate.quote), 'quote is not verbatim in the cited segments'],
-    [candidate.time === null || verbatim(candidate.time.phrase), 'time phrase is not in the cited segments'],
+    [candidate.quote === null || verbatim(candidate.quote), 'quote is not verbatim in adjacent cited segments'],
+    [candidate.time === null || verbatim(candidate.time.phrase), 'time phrase is not in adjacent cited segments'],
   ];
   return checks.find(([ok]) => !ok)?.[1] ?? null;
 }
@@ -166,7 +178,7 @@ function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, mee
   const cited = [...new Set(candidate.segments)].map(ref => byRef.get(ref));
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
-  const reason = unsupported(candidate, fold(lines.map(line => line.segment.text).join(' ')), known);
+  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))).map(fold), known);
   if (reason !== null) return reason;
   const phrase = candidate.time && fold(candidate.time.phrase);
   const said = lines.find(line => phrase !== null && fold(line.segment.text).includes(phrase)) ?? lines[0]!;

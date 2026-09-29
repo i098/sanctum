@@ -176,8 +176,15 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
         if ((yield* accessSignature(into)) !== (yield* accessSignature(folded))) {
           return yield* new Forbidden({ message: 'Meetings have different access; align access explicitly before merging' });
         }
-        const ranges = [...(yield* currentRanges(access.workspace_id, into.id)), ...(yield* currentRanges(access.workspace_id, folded.id))];
         const open = OPEN_STATES.includes(into.state) || OPEN_STATES.includes(folded.state);
+        const sameKey = into.capture_group_id === null ? folded.capture_group_id === null && into.listener_id === folded.listener_id : into.capture_group_id === folded.capture_group_id;
+        if (open && !sameKey) {
+          return yield* new RevisionConflict({ message: "Close the open meeting before merging it with another listener's meeting", current_revision: into.boundary_revision });
+        }
+        const ranges = [...(yield* currentRanges(access.workspace_id, into.id)), ...(yield* currentRanges(access.workspace_id, folded.id))];
+        if (ranges.length === 0) {
+          return yield* new RevisionConflict({ message: 'Neither meeting owns any source at this boundary revision', current_revision: into.boundary_revision });
+        }
         const ended = open ? null : dbTime(Math.max(...ranges.map(range => range.end_ms)));
         const revision = into.boundary_revision + 1;
         yield* sql`UPDATE meetings SET boundary_revision = ${revision}, state = ${open ? 'active' : 'closing'}, ended_at = ${ended},

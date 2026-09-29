@@ -1,8 +1,9 @@
 /**
  * Accelerated capture replay (plan section 18): feeds a synthetic 24-hour trace of final
  * transcript windows through the live path's `publishFinalWindow` against a disposable MySQL
- * database, then checks meeting boundaries, one owner per segment and bounded memory. It proves
- * behavior over a day of source time in seconds of wall time; it is not a 24-hour uptime soak.
+ * database, then checks meeting boundaries and one owner per segment. RSS growth is reported,
+ * not gated. It proves behavior over a day of source time in seconds of wall time; it is not a
+ * 24-hour uptime soak.
  *
  * Usage: node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated [--mysql-url mysql://...]
  */

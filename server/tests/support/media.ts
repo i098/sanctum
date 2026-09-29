@@ -54,6 +54,8 @@ interface FakeStream {
   received: number;
   backlog: number;
   finished: boolean;
+  /** The connection's scope closed (socket and keep-alive released). */
+  released: boolean;
   readonly emit: (result: AsrResult) => void;
   /** The provider drops the connection unexpectedly. */
   readonly drop: () => void;
@@ -83,10 +85,12 @@ export function fakeSpeech() {
           received: 0,
           backlog: 0,
           finished: false,
+          released: false,
           emit: result => void mailbox.unsafeOffer(result),
           drop: () => void mailbox.unsafeDone(Exit.fail(new Unavailable({ message: 'fake provider dropped', retryable: true }))),
         };
         streams.push(stream);
+        yield* Effect.addFinalizer(() => Effect.sync(() => (stream.released = true)));
         return {
           send: samples => {
             stream.received += samples.length;

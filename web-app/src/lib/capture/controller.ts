@@ -29,7 +29,7 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'acknowledge' | 'pendingCount' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
+  'appendPart' | 'sealChunk' | 'nextPending' | 'markConflict' | 'acknowledge' | 'pendingCount' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost'
 >;
 
 export interface CaptureDeps {
@@ -97,6 +97,8 @@ class CaptureController implements CaptureView {
   private readonly heartbeat: ReturnType<typeof setInterval>;
 
   private phase: Phase = 'stopped';
+  /** A pause or halt requested while the microphone was still being opened. */
+  private cancelStart: 'paused' | 'stopped' | null = null;
   private permission: PermissionState = 'unknown';
   private issue: CaptureIssue | null = null;
   private live: LiveStatus | null = null;
@@ -144,10 +146,18 @@ class CaptureController implements CaptureView {
       return this.publish();
     }
     const before = this.permission;
-    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null });
+    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, cancelStart: null });
     this.publish();
     try {
-      this.session = await this.openSession();
+      const session = await this.openSession();
+      if (this.cancelStart !== null) {
+        await session.recorder.close().catch(() => { });
+        session.stream.getTracks().forEach((track) => track.stop());
+        await session.releaseLock();
+        Object.assign(this, { phase: this.cancelStart, permission: 'granted' });
+        return this.publish();
+      }
+      this.session = session;
       Object.assign(this, { phase: 'capturing', permission: 'granted', claimed: true, interrupted: false, missing: false, muted: false });
       void this.requestWakeLock();
     } catch (error) {
@@ -310,6 +320,7 @@ class CaptureController implements CaptureView {
 
   private async stopSession(reason: StopReason, phase: 'paused' | 'stopped'): Promise<void> {
     const session = this.session;
+    if (session === null && this.phase === 'starting') this.cancelStart = phase;
     if (session === null || session.stopping) return;
     session.stopping = true;
     session.epoch?.live?.stop(reason);
@@ -425,6 +436,11 @@ class CaptureController implements CaptureView {
     if (!owner && epoch) {
       epoch.live?.stop('close');
       epoch.live = null;
+    }
+    if (owner && epoch && epoch.live === null) {
+      void epoch.assembler.close();
+      this.session!.epoch = null;
+      this.live = null;
     }
     if (!owner) this.issue = 'lease_lost';
     else if (this.issue === 'lease_lost') this.issue = null;

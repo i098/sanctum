@@ -1,7 +1,7 @@
 import { SqlClient, SqlError } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { JobFailure, type JobKind, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect, Fiber, Option, Ref, Schedule } from 'effect';
+import { Deferred, Effect, Fiber, Option, Ref, Schedule } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { resolveAccess } from '../src/auth.ts';
 import type { ClaimedJob, JobHandlers } from '../src/job-types.ts';
@@ -268,6 +268,33 @@ describe('job ledger', () => {
         yield* Fiber.interrupt(worker);
         const [lease] = yield* sql<{ status: string; lease_token: string }>`SELECT status, lease_token FROM jobs WHERE id = ${id}`;
         expect(lease).toEqual({ status: 'running', lease_token: 'another-worker' });
+      }),
+      migrated,
+    ),
+  );
+
+  it.live('keeps renewing, claiming and sweeping through a database outage', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const owner = yield* seed;
+        const release = yield* Deferred.make<void>();
+        const handlers: JobHandlers<SqlClient.SqlClient> = {
+          'context.refresh': (claimed: ClaimedJob) =>
+            Effect.as(claimed.work_key === 'held' ? Deferred.await(release) : Effect.void, { status: 'succeeded' as const, result: null }),
+        };
+        const worker = yield* Effect.fork(runWorker(handlers, { leaseMs: 3_000, pollMs: 200, concurrency: 2 }));
+        const held = yield* job(owner.workspace_id, 'held');
+        yield* until(held, current => current.status === 'running');
+        // Renewals (every second), claims and sweeps fail while the table is gone.
+        yield* sql`RENAME TABLE jobs TO jobs_offline`;
+        yield* Effect.sleep('1500 millis');
+        yield* sql`RENAME TABLE jobs_offline TO jobs`;
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* until(held, current => current.status === 'succeeded')).toMatchObject({ attempts: 1 });
+        const after = yield* job(owner.workspace_id, 'after');
+        yield* until(after, current => current.status === 'succeeded');
+        yield* Fiber.interrupt(worker);
       }),
       migrated,
     ),

@@ -151,7 +151,7 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
         derivation: 'spoken',
         author: { type: 'system', id: owner!.principal.id },
         event_at: '2026-09-30T06:59:50Z',
-        time: { phrase: 'tomorrow', normalized: '2026-09-30T07:00:00.000Z', anchor: '2026-09-30T06:59:50Z', timezone: 'America/Los_Angeles', ambiguous: false },
+        time: { phrase: 'tomorrow', normalized: '2026-09-30T07:00:00.000Z', anchor: '2026-09-30T06:59:50Z', timezone: 'America/Los_Angeles', ambiguous: true },
         sources: [{ segment_id: said, start_ms: 0, end_ms: 5000 }],
       });
       expect(question).toMatchObject({ derivation: 'inferred', time: null, text: 'Who reviews the plan?' });
@@ -161,6 +161,22 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       const sql = yield* SqlClient.SqlClient;
       const [text] = yield* sql<{ text: string }>`SELECT text FROM transcript_segments WHERE id = ${said}`;
       expect(text).toEqual({ text: 'I will send the pilot plan tomorrow.' });
+    }));
+
+  it.effect('accepts quotes spanning adjacent segments but not stitched across a gap', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Stitch', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      const first = yield* seedSegment(meeting, 0, 3, 'We keep the pilot small.');
+      const second = yield* seedSegment(meeting, 3, 6, 'Finance joins in March.');
+      const third = yield* seedSegment(meeting, 6, 9, 'Nobody cancels anything.');
+      const cite = (...ids: string[]) => ids.map(id => ({ segment_id: TranscriptSegmentId.make(id), start_ms: 0, end_ms: 0 }));
+      const fake = yield* fakeExtractor(() => [
+        candidate(first, { kind: 'project_fact', text: 'Small pilot, finance joins', quote: 'the pilot small. Finance joins', time: null, sources: cite(second, first) }),
+        candidate(first, { kind: 'decision', text: 'Pilot cancelled', quote: 'the pilot small. Nobody cancels', time: null, sources: cite(first, third) }),
+      ]);
+      expect(yield* refreshContext(fake.extract)(job(meeting, owner!.principal.id))).toEqual({ status: 'succeeded', result: { processed: 3, added: 1, rejected: 1, backlog: false } });
+      expect((yield* getContextSnapshot(owner!, meeting.meeting_id)).items.map(item => item.text)).toEqual(['Small pilot, finance joins']);
     }));
 
   it.effect('keeps sources and reports provider failures without fake success', () =>

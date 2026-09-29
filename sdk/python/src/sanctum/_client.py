@@ -43,9 +43,12 @@ def _request(operation: str, input: Mapping[str, Any]) -> tuple[Operation, str, 
 
 
 def _parse(response: httpx.Response) -> Any:
-    body = response.json() if response.content else None
     if response.is_success:
-        return body
+        return response.json() if response.content else None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
     raise SanctumError(response.status_code, body if isinstance(body, dict) else {})
 
 

@@ -226,9 +226,17 @@ const challenge = (auth: McpAuthorization, error: Unauthenticated | Forbidden) =
     },
   });
 
+/**
+ * Sessions exist so `notifications/cancelled` reaches the server running the request; hosts often
+ * re-initialize without DELETE, so a session idle this long with nothing in flight is closed.
+ */
+export const MCP_SESSION_IDLE_MS = 30 * 60_000;
+
 interface Session {
   readonly transport: WebStandardStreamableHTTPServerTransport;
   readonly principal: string;
+  seen: number;
+  active: number;
 }
 
 /** Mounts `/mcp` and its protected-resource metadata on the API router. */
@@ -263,11 +271,22 @@ export const McpLive = HttpApiBuilder.Router.use(router =>
     });
     yield* router.get('/.well-known/oauth-protected-resource/mcp', Effect.succeed(metadata));
 
+    const clock = yield* Effect.clock;
+    const sweep = () => {
+      const now = clock.unsafeCurrentTimeMillis();
+      for (const [id, session] of sessions) {
+        if (session.active === 0 && now - session.seen > MCP_SESSION_IDLE_MS) {
+          sessions.delete(id);
+          void session.transport.close();
+        }
+      }
+    };
+
     const open = (principal: string) => {
       const transport: WebStandardStreamableHTTPServerTransport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: randomUUID,
         enableJsonResponse: true,
-        onsessioninitialized: id => void sessions.set(id, { transport, principal }),
+        onsessioninitialized: id => void sessions.set(id, { transport, principal, seen: clock.unsafeCurrentTimeMillis(), active: 0 }),
         onsessionclosed: id => void sessions.delete(id),
       });
       return mcpServer(routes, dispatch).connect(transport).then(() => transport);
@@ -278,15 +297,23 @@ export const McpLive = HttpApiBuilder.Router.use(router =>
         if (request.method === 'GET') return HttpServerResponse.empty({ status: 405, headers: { allow: 'POST, DELETE' } });
         const access = yield* authorize(auth, request);
         const principal = `${access.workspace_id}/${access.principal.id}`;
+        sweep();
         const id = request.headers['mcp-session-id'];
         const session = id === undefined ? undefined : sessions.get(id);
         if (id !== undefined && session?.principal !== principal) {
           return HttpServerResponse.unsafeJson({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }, { status: 404 });
         }
-        return yield* HttpApp.fromWebHandler(async web => {
-          const transport = session?.transport ?? (await open(principal));
-          return transport.handleRequest(web, { authInfo: { token: '', clientId: principal, scopes: [...access.scopes], extra: { access } } });
-        });
+        const authInfo = { token: '', clientId: principal, scopes: [...access.scopes], extra: { access } };
+        if (session === undefined) return yield* HttpApp.fromWebHandler(async web => (await open(principal)).handleRequest(web, { authInfo }));
+        session.active++;
+        return yield* HttpApp.fromWebHandler(web => session.transport.handleRequest(web, { authInfo })).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              session.active--;
+              session.seen = clock.unsafeCurrentTimeMillis();
+            }),
+          ),
+        );
       }).pipe(Effect.catchTags({ Unauthenticated: error => Effect.succeed(challenge(auth, error)), Forbidden: error => Effect.succeed(challenge(auth, error)) }));
 
     yield* router.all(

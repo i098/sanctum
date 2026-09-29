@@ -41,6 +41,7 @@ export function ReviewDialog({ client, open, onClose }: { client: SanctumClient;
       setSeek({ seconds });
       setSelected(TABS.indexOf('Recording'));
     },
+    onSeeked: () => setSeek(null),
   };
   const tab = TABS[selected]!;
   return (

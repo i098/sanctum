@@ -128,6 +128,13 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
 
       reopened!.drop();
       expect(yield* socket.take('degraded')).toMatchObject({ reason: 'provider_unavailable' });
+      const sql = yield* SqlClient.SqlClient;
+      const closed = yield* eventually(
+        sql<{ close_reason: string | null }>`SELECT close_reason FROM provider_connections WHERE epoch_id = ${epoch_id} AND purpose = 'asr'`,
+        rows => rows[0]?.close_reason != null,
+      );
+      expect(closed).toEqual([{ close_reason: 'provider_error' }]);
+      expect(reopened!.released).toBe(true);
     }),
   );
 

@@ -166,19 +166,24 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         const connection_id = ProviderConnectionId.make(randomUUID());
         yield* sql`
           INSERT INTO provider_connections (id, workspace_id, epoch_id, track, purpose, provider, model, anchor_sample, sample_rate, opened_at)
-          VALUES (${connection_id}, ${workspace_id}, ${epoch_id}, ${track}, 'asr', ${stt.provider}, ${stt.model}, ${anchor}, ${rate}, UTC_TIMESTAMP(6))`;
+          VALUES (${connection_id}, ${workspace_id}, ${epoch_id}, ${track}, 'asr', ${stt.provider}, ${stt.model}, ${anchor}, ${rate}, UTC_TIMESTAMP(6))`.pipe(
+          Effect.onError(cause => Scope.close(scope, Exit.failCause(cause))),
+        );
         const current: Lane = { connection_id, anchor, next_sample: anchor, stream: opened.right, scope, consumer: null };
+        lane = current;
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(result => relayResult({ access, listener, start, send }, stt, current, result)),
           Effect.catchAll(error =>
             Effect.gen(function* () {
-              if (lane === current) lane = null;
+              if (lane === current) {
+                lane = null;
+                yield* Effect.forkDaemon(closeLane(current, 'provider_error'));
+              }
               yield* providerUnavailable(current.next_sample, error.message);
             }),
           ),
           Effect.forkIn(scope),
         );
-        lane = current;
       });
 
     const feed = (frame: PcmFrame) =>

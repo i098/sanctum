@@ -97,24 +97,26 @@ function splitClock(text: string): { readonly rest: string; readonly clock: Cloc
  return { rest, clock: NAMED_CLOCKS[word!] ?? clockOf(Number(hour), Number(minute ?? 0), meridiem) };
 }
 
-function normalize(phrase: string, anchor: number, zone: string): number | null {
+/** The resolved instant; `timed` when the phrase fixes a time of day, not just a day. */
+function normalize(phrase: string, anchor: number, zone: string): { readonly ms: number; readonly timed: boolean } | null {
  const text = phrase.toLowerCase().replace(/[.,!?]+$/, '').replace(/\s+/g, ' ').trim();
  const { rest, clock } = splitClock(text);
  if (clock === undefined) return null;
  const meaning = dateMeaning(rest.replace(/^(on|by) /, ''), dayOf(wallOf(zone, anchor)), anchor);
  if (meaning === null) return null;
- if ('instant' in meaning) return clock === null ? meaning.instant : null;
- return toUtc(zone, meaning.day, clock ?? { h: 0, min: 0 });
+ if ('instant' in meaning) return clock === null ? { ms: meaning.instant, timed: true } : null;
+ const ms = toUtc(zone, meaning.day, clock ?? { h: 0, min: 0 });
+ return ms === null ? null : { ms, timed: clock !== null };
 }
 
-/** Resolves `phrase` said at `anchor` in `timezone`; day-only phrases normalize to that local midnight. */
+/** Resolves `phrase` said at `anchor` in `timezone`; day-only phrases normalize to that local midnight but stay ambiguous for exact scheduling. */
 export function resolveTime(phrase: string, anchor: UtcTimestamp, timezone: IanaTimeZone): typeof TimeExpression.Type {
- const normalized = normalize(phrase, Date.parse(anchor), timezone);
+ const resolved = normalize(phrase, Date.parse(anchor), timezone);
  return {
   phrase,
-  normalized: normalized === null ? null : UtcTimestamp.make(new Date(normalized).toISOString()),
+  normalized: resolved === null ? null : UtcTimestamp.make(new Date(resolved.ms).toISOString()),
   anchor,
   timezone,
-  ambiguous: normalized === null,
+  ambiguous: resolved === null || !resolved.timed,
  };
 }

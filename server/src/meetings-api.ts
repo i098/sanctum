@@ -6,6 +6,7 @@ import {
   CaptureEpochId,
   CurrentAccess,
   type MeetingId,
+  NotFound,
   ProviderConnectionId,
   RevisionConflict,
   type SpeakerTrack,
@@ -64,7 +65,7 @@ const attributeSegments = (segments: ReadonlyArray<TranscriptSegment>, tracks: R
     return best !== undefined && best.share >= 0.5 && (second?.share ?? 0) < 0.3 ? { ...segment, speaker_track_id: best.id } : segment;
   });
 
-const TranscriptCursor = Schema.parseJson(Schema.Tuple(Schema.Number, Schema.Number));
+const TranscriptCursor = Schema.parseJson(Schema.Tuple(Schema.NonNegativeInt, Schema.NonNegativeInt));
 
 /** Latest final revision of each segment starting inside the meeting's current ranges, in source order, with its speakers. */
 export const getTranscript = (access: AccessScope, meeting_id: MeetingId, params: TranscriptParams) =>
@@ -74,7 +75,9 @@ export const getTranscript = (access: AccessScope, meeting_id: MeetingId, params
     yield* authorizeMeeting(access, meeting_id, 'read');
     const meeting = yield* selectMeeting(access.workspace_id, meeting_id);
     const revision = Option.getOrThrow(meeting).boundary_revision;
-    const [cursorRevision, offset] = params.cursor === undefined ? [revision, 0] : yield* Schema.decode(TranscriptCursor)(Buffer.from(params.cursor, 'base64url').toString());
+    const [cursorRevision, offset] = params.cursor === undefined ? [revision, 0] : yield* Schema.decode(TranscriptCursor)(Buffer.from(params.cursor, 'base64url').toString()).pipe(
+      Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })),
+    );
     if (cursorRevision !== revision) return yield* new RevisionConflict({ message: 'Meeting boundaries changed since this cursor was issued', current_revision: revision });
     const ranges = yield* currentRanges(access.workspace_id, meeting_id);
     // ponytail: every page re-reads the whole meeting's segments; switch to a keyset over (range, sample_start) when transcripts reach tens of thousands of segments.
