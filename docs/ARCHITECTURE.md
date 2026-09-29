@@ -89,7 +89,8 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,listen.css,Dialog.tsx,Revi
 Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{cerebras,anthropic}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
 
 - `llm.ts`: `LlmClient` tag, `LlmLive: Layer<LlmClient, ConfigError>`, `fixtureLlm(responses)` for tests; missing keys fail with `Unavailable`.
-- `extraction.ts`: `extractCandidates(input: { meeting: Meeting; segments: ReadonlyArray<TranscriptSegment>; snapshot: ReadonlyArray<ContextItem> }): Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient>`.
+- `extraction.ts`: `extractCandidates(input: { meeting: Meeting; segments: ReadonlyArray<TranscriptSegment>; snapshot: ReadonlyArray<ContextItem>; epochs?: ReadonlyArray<EpochAnchor> }): Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient>`; fails `Unavailable` when a segment's epoch has no anchor (pass `capture_epochs` anchors).
+- `extraction.ts`: `summarizeMeeting(input: Omit<ExtractionInput, 'snapshot'>): Effect<MeetingNotes, Unavailable, LlmClient>`, the one canonical summary for notes, email sections and exports.
 - `planner.ts`: `planActions(access, input: { meeting_id; request: string }): Effect<ReadonlyArray<RequestActionInput>, Unavailable, LlmClient>`.
 - `planner.ts`: `respondToRequest(input: { request: string; context: ContextSnapshot }): Stream<string, Unavailable, LlmClient>` for requested speech.
 - `matcher.ts`: `rankMatches(access, query: { profile_id; kind: 'needs' | 'offers'; top_k: number }): Effect<ReadonlyArray<{ profile_id: ProfileId; score: number }>, NotFound, R>`.
