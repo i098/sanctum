@@ -6,6 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { monitorEventLoopDelay, performance, PerformanceObserver } from 'node:perf_hooks';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 interface Manifest { reference_hardware: { name: string | null } }
 const manifest: Manifest = JSON.parse(readFileSync(new URL('./workload.json', import.meta.url), 'utf8'));
@@ -28,35 +29,52 @@ export interface Sample {
   readonly gcMs: number;
   readonly loopP99Ms: number;
   readonly peak: { rss: number; heap: number; external: number };
+  /** RSS about once per second of wall time, for long-run memory bounds. */
+  readonly rssSeries: number[];
 }
 
-/** Runs `op` for i = 0..count-1 sequentially and measures each call plus process resources. */
-export async function sample(count: number, op: (i: number) => unknown): Promise<Sample> {
+/**
+ * Runs `op` for i = 0..count-1 sequentially and measures each call plus process resources.
+ * With `rate` > 0 (open loop), operation i is due at i/rate seconds: a late operation's latency
+ * counts from its due time, so a stall cannot hide tail latency, and the loop sleeps only when
+ * at least 1 ms ahead. benchmarks/rust/src/measure.rs implements the same schedule.
+ */
+export async function sample(count: number, op: (i: number) => unknown, rate = 0): Promise<Sample> {
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let gcMs = 0;
   const gc = new PerformanceObserver(list => list.getEntries().forEach(entry => (gcMs += entry.duration)));
   gc.observe({ entryTypes: ['gc'] });
   const peak = { rss: 0, heap: 0, external: 0 };
   const latencies: number[] = [];
+  const rssSeries: number[] = [];
+  let nextSeries = 0;
   loop.enable();
   const cpu = process.cpuUsage();
   const started = performance.now();
   for (let i = 0; i < count; i++) {
-    const begin = performance.now();
+    const due = rate > 0 ? started + (i * 1000) / rate : performance.now();
+    const ahead = due - performance.now();
+    if (ahead >= 1) await sleep(ahead);
+    const begin = Math.min(due, performance.now());
     await op(i);
-    latencies.push(performance.now() - begin);
+    const end = performance.now();
+    latencies.push(end - begin);
     if (i % 64 === 0) {
       const memory = process.memoryUsage();
       peak.rss = Math.max(peak.rss, memory.rss);
       peak.heap = Math.max(peak.heap, memory.heapUsed);
       peak.external = Math.max(peak.external, memory.external + memory.arrayBuffers);
     }
+    if (end - started >= nextSeries) {
+      rssSeries.push(process.memoryUsage.rss());
+      nextSeries = end - started + 1000;
+    }
   }
   const wallMs = performance.now() - started;
   const used = process.cpuUsage(cpu);
   loop.disable();
   gc.disconnect();
-  return { latencies, wallMs, cpuMs: (used.user + used.system) / 1000, gcMs, loopP99Ms: loop.percentile(99) / 1e6, peak };
+  return { latencies, wallMs, cpuMs: (used.user + used.system) / 1000, gcMs, loopP99Ms: loop.percentile(99) / 1e6, peak, rssSeries };
 }
 
 const percentile = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)] ?? 0;
@@ -71,6 +89,8 @@ export interface RecordInput {
   readonly git_sha: string;
   readonly started_at: string;
   readonly concurrency: number;
+  /** Offered operations per second of an open-loop run; 0 for sequential closed-loop runs. */
+  readonly rate?: number;
   readonly errors: number;
   readonly checked: number;
   readonly dropped_samples: number;
@@ -94,7 +114,7 @@ export interface BenchmarkRecord {
   readonly parameters: Record<string, unknown>;
 }
 
-/** Builds a record; `verified` stays false (no controlled host or matched Rust run). */
+/** Builds a record; `verified` stays false (no controlled benchmark host). */
 export function toRecord(input: RecordInput): BenchmarkRecord {
   const { sample: run } = input;
   const sorted = [...run.latencies].sort((a, b) => a - b);
@@ -107,7 +127,7 @@ export function toRecord(input: RecordInput): BenchmarkRecord {
     host: manifest.reference_hardware.name,
     phase: input.phase,
     repetitions: run.latencies.length,
-    offered_load: { per_second: 0, concurrency: input.concurrency },
+    offered_load: { per_second: input.rate ?? 0, concurrency: input.concurrency },
     metrics: {
       throughput: run.latencies.length / (run.wallMs / 1000),
       latency_p50: percentile(sorted, 50),
@@ -124,6 +144,6 @@ export function toRecord(input: RecordInput): BenchmarkRecord {
     },
     correctness: { errors: input.errors, dropped_samples: input.dropped_samples },
     verified: false,
-    parameters: input.parameters,
+    parameters: run.rssSeries.length > 1 ? { ...input.parameters, rss_series_bytes: run.rssSeries } : input.parameters,
   };
 }

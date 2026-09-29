@@ -1,0 +1,18 @@
+[package]
+name = "sanctum-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Benchmark-only Rust reference for benchmarks/workload.json; never an application dependency."
+
+[dependencies]
+libc = "0.2"
+mysql = { version = "28.0.3", default-features = false, features = ["default-rust"] }
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
