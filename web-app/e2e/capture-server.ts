@@ -65,7 +65,10 @@ export async function fakeServer(page: Page, failUploads = false): Promise<FakeS
 const INERT_ENGINE = `
 import { createCaptureStore } from '/src/lib/capture/view.ts';
 const idle = async () => {};
-const engine = { ...createCaptureStore().view, levels: { bandCount: 33, read: bands => (bands.fill(0), 0) }, start: idle, pause: idle, resume: idle };
+const engine = {
+  ...createCaptureStore().view, levels: { bandCount: 33, read: bands => (bands.fill(0), 0) }, start: idle, pause: idle, resume: idle,
+  orphanedRecordings: async () => [], exportRecording: async () => null, discardRecording: idle,
+};
 export const getCaptureEngine = () => engine;
 `;
 

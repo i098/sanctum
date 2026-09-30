@@ -10,10 +10,11 @@ import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type LiveOptions, type LiveStatus, type LiveStream, type RejectReason, type StopReason } from './live.ts';
-import { acquireMicrophone, captureIssue, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
+import { assembleWav } from './orphans.ts';
+import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
-import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type PermissionState } from './view.ts';
+import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
 
 /** Browser-side engineering defaults (plan 02); tests shorten them. */
 export interface CaptureTiming {
@@ -29,7 +30,8 @@ const LISTENER_KEY = 'sanctum.listener';
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
-  'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close' | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd'
+  | 'appendPart' | 'sealChunk' | 'nextPending' | 'markRefused' | 'acknowledge' | 'countChunks' | 'savedThroughMs' | 'recoverOrphans' | 'persist' | 'close'
+  | 'freeBytes' | 'onLost' | 'saveEpoch' | 'endEpoch' | 'epochStart' | 'epochSampleEnd' | 'orphanedRecordings' | 'recordingSegments' | 'discardRecording'
 >;
 
 export interface CaptureDeps {
@@ -46,6 +48,8 @@ export interface CaptureDeps {
   readonly uploader?: UploaderOptions;
   /** Receives requested-speech messages from the live socket (the page wires browser playback here). */
   readonly onSpeech?: LiveOptions['onSpeech'];
+  /** Most samples per exported WAV file of a local recording (defaults to the WAV size limit; tests shorten it). */
+  readonly wavMaxSamples?: number;
 }
 
 const StoredListener = Schema.Struct({ id: ListenerId, lease_generation: LeaseGeneration });
@@ -111,8 +115,10 @@ class CaptureController implements CaptureView {
   private uploading = false;
   private claimed = false;
   private pending = 0;
-  /** Local chunks that can no longer be uploaded (listener forgotten or chunk refused): kept, never pending. */
+  /** Local chunks of removed listeners: kept, never pending, listed for export or discard once no tab captures. */
   private stranded = 0;
+  /** Local chunks of this device's listeners that the server refused: kept, never pending. */
+  private refused = 0;
   private savedThroughMs: number | null = null;
   private wakeLock: 'unsupported' | 'released' | 'held';
   private sentinel: WakeLockSentinel | null = null;
@@ -130,7 +136,7 @@ class CaptureController implements CaptureView {
     this.client = deps.client ?? makeListenersClient();
     this.timing = { ...DEFAULT_TIMING, ...deps.timing };
     this.wakeLock = this.nav.wakeLock === undefined ? 'unsupported' : 'released';
-    this.listener = Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
+    this.listener = this.storedListener();
     this.listen(this.win, 'pagehide', () => this.endPage());
     this.listen(this.doc, 'freeze', () => this.endPage());
     this.listen(this.doc, 'visibilitychange', () => this.onVisible());
@@ -179,6 +185,30 @@ class CaptureController implements CaptureView {
 
   readonly resume = (): Promise<void> => this.start();
 
+  async orphanedRecordings(): Promise<readonly OrphanedRecording[] | null> {
+    const buffer = await this.openBuffer();
+    await this.refreshPending();
+    if (this.session !== null || (await captureLockHeld(this.nav.locks))) return null;
+    return buffer.orphanedRecordings(this.uploadable(), this.deps.wavMaxSamples);
+  }
+
+  async exportRecording({ listenerId, epochId, sampleRate }: OrphanedRecording, part: number): Promise<WavPart | null> {
+    const wav = assembleWav(await (await this.openBuffer()).recordingSegments(listenerId, epochId), sampleRate, part, this.deps.wavMaxSamples);
+    if (wav === null) await this.refreshPending();
+    return wav;
+  }
+
+  async discardRecording({ listenerId, epochId }: OrphanedRecording): Promise<void> {
+    const release = this.session === null ? await holdCaptureLock(this.nav.locks).catch(() => null) : null;
+    if (release === null) throw new Error('capture is running; stop it before discarding');
+    try {
+      await (await this.openBuffer()).discardRecording(listenerId, epochId, this.uploadable());
+    } finally {
+      await release();
+    }
+    await this.refreshPending();
+  }
+
   dispose(): void {
     clearInterval(this.heartbeat);
     this.unlisten.forEach((remove) => remove());
@@ -200,14 +230,14 @@ class CaptureController implements CaptureView {
     try {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) this.interrupted = true;
-      ({ pending: this.pending, stranded: this.stranded } = await buffer.countChunks(this.listener?.id ?? null));
       this.savedThroughMs = await buffer.savedThroughMs();
-      this.claimed = this.interrupted || this.pending > 0;
     } catch {
       // Storage problems surface as issues when capture starts.
     } finally {
       await release();
     }
+    await this.refreshPending();
+    this.claimed = this.interrupted || this.pending > 0;
     this.publish();
     this.startDrain();
   }
@@ -256,6 +286,7 @@ class CaptureController implements CaptureView {
   }
 
   private async ensureListener(buffer: CaptureBuffer): Promise<StoredListener> {
+    this.listener ??= this.storedListener();
     if (this.listener !== null) return this.listener;
     const capabilities = {
       audio_worklet: typeof AudioWorkletNode !== 'undefined',
@@ -268,10 +299,13 @@ class CaptureController implements CaptureView {
     return this.listener!;
   }
 
-  private saveListener(listener: StoredListener | null): void {
+  private saveListener(listener: StoredListener): void {
     this.listener = listener;
-    if (listener === null) this.storage.removeItem(LISTENER_KEY);
-    else this.storage.setItem(LISTENER_KEY, JSON.stringify(listener));
+    this.storage.setItem(LISTENER_KEY, JSON.stringify(listener));
+  }
+
+  private storedListener(): StoredListener | null {
+    return Option.getOrNull(decodeStored(this.storage.getItem(LISTENER_KEY)));
   }
 
   private onBlock(sampleStart: number, samples: Int16Array): void {
@@ -441,7 +475,7 @@ class CaptureController implements CaptureView {
 
   private async beat(): Promise<void> {
     const listener = this.listener;
-    if (listener === null) return;
+    if (listener === null) return this.refreshPending();
     this.startDrain();
     const buffer = await this.buffer?.catch(() => null);
     const payload = {
@@ -461,8 +495,10 @@ class CaptureController implements CaptureView {
       if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
       this.onOwnership(exit.value.owner);
     } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
-      this.saveListener(null); // the server no longer knows this listener; the next start registers again
-      void this.refreshPending(); // its chunks are now stranded: kept locally, no longer pending
+      this.listener = null; // the server no longer knows this listener; the next start registers again
+      if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
+      if (this.session?.listener.id === listener.id) this.halt('listener_removed', false);
+      void this.refreshPending(); // its chunks are now removed-listener audio: kept locally, no longer pending
     }
   }
 
@@ -507,6 +543,7 @@ class CaptureController implements CaptureView {
    * server decides whether that generation held the lease when the epoch was captured.
    */
   private unknownEpoch(epochId: string): Effect.Effect<'wait' | 'registered' | 'refused'> {
+    void this.beat();
     if (this.session?.epoch?.id === epochId) return Effect.succeed('wait');
     return Effect.promise(async () => {
       const buffer = await this.buffer?.catch(() => null);
@@ -562,10 +599,19 @@ class CaptureController implements CaptureView {
     });
   }
 
+  /** Listeners whose chunks this device can upload now: the one every tab shares and this tab's own. */
+  private uploadable(): string[] {
+    return [this.storedListener()?.id, this.listener?.id].filter((id) => id !== undefined);
+  }
+
+  /** Counts every local chunk in exactly one category, from the same listeners the list uses. */
+  private async count(buffer: CaptureBuffer): Promise<void> {
+    ({ pending: this.pending, refused: this.refused, stranded: this.stranded } = await buffer.countChunks(this.uploadable()));
+  }
+
   private async refreshPending(): Promise<void> {
     const buffer = await this.buffer?.catch(() => null);
-    const counts = await buffer?.countChunks(this.listener?.id ?? null).catch(() => null);
-    if (counts) ({ pending: this.pending, stranded: this.stranded } = counts);
+    if (buffer) await this.count(buffer).catch(() => { });
     this.publish();
   }
 
@@ -594,6 +640,7 @@ class CaptureController implements CaptureView {
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,
+      refusedChunks: this.refused,
       savedThroughMs: this.savedThroughMs,
       wakeLock: this.wakeLock,
     });

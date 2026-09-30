@@ -266,6 +266,21 @@
   text-decoration: underline;
 }
 
+.listen-local-actions {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 4px;
+}
+
+.listen-dialog button[data-primary] {
+  color: #e7ecf3;
+  box-shadow: inset 0 0 0 1px #3d7dff;
+}
+
+.listen-local-gap {
+  color: #f2a23b;
+}
+
 .listen-recording audio {
   width: 100%;
   color-scheme: dark;
