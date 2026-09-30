@@ -13,8 +13,9 @@ interface DialogProps {
  */
 function wrapFocus(event: KeyboardEvent<HTMLDialogElement>): void {
   if (event.key !== 'Tab') return;
+  // Controls of a nested dialog are left out, so its own Tab never matches an edge here.
   const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]')]
-    .filter(element => element.tabIndex >= 0 && !element.matches(':disabled'));
+    .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.closest('dialog') === event.currentTarget);
   const [first, last] = [focusable[0], focusable.at(-1)];
   const [edge, wrapTo] = event.shiftKey ? [first, last] : [last, first];
   if (document.activeElement !== edge) return;
@@ -36,7 +37,7 @@ export function Dialog({ title, open, onClose, children }: DialogProps) {
     else dialog.close();
   }, [open]);
   return (
-    <dialog ref={ref} className="listen-dialog" aria-labelledby={titleId} onClose={onClose} onKeyDown={wrapFocus}>
+    <dialog ref={ref} className="listen-dialog" aria-labelledby={titleId} onClose={event => event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
       <header className="listen-dialog-header">
         <h2 id={titleId}>{title}</h2>
         <button type="button" onClick={onClose}>Close</button>
