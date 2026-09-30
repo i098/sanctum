@@ -6,7 +6,9 @@
  * surfaces through `onLost` rather than being hidden.
  */
 import type { RecordingChunkManifest, RecordingChunkReceipt, StartMessage } from '@sanctum/contracts';
-import { sealChunk, StorageError, type ChunkStore, type PartRecord, type SealedChunk } from './recorder.ts';
+import { groupRecordings, type RecordingSegment } from './orphans.ts';
+import { sealChunk, StorageError, WAV_HEADER_BYTES, type ChunkStore, type PartRecord, type SealedChunk } from './recorder.ts';
+import type { OrphanedRecording } from './view.ts';
 
 const DB_NAME = 'sanctum-capture';
 const PARTS = 'parts';
@@ -73,6 +75,9 @@ function upgrade(db: IDBDatabase, oldVersion: number, tx: IDBTransaction): void 
   if (oldVersion < 2) tx.objectStore(CHUNKS).createIndex('refused', 'refused');
   if (oldVersion < 3) db.createObjectStore(EPOCHS, { keyPath: 'epoch_id' });
 }
+
+/** Every key of one listener in the `listener` index ([listener_id, captured_at]). */
+const listenerRange = (listenerId: string) => IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
 
 /** Walks a cursor until `visit` returns a value (resolved) or the cursor ends (null). */
 function walk<C extends IDBCursor, T>(cursor: IDBRequest<C | null>, visit: (current: C) => T | undefined): Promise<T | null> {
@@ -195,8 +200,7 @@ export class RecoveryBuffer implements ChunkStore {
   /** Oldest unacknowledged chunk of `listenerId` that the server has not refused. */
   nextPending(listenerId: string): Promise<SealedChunk | null> {
     return guarded(() => {
-      const range = IDBKeyRange.bound([listenerId, ''], [listenerId, '\uffff']);
-      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(range);
+      const cursor = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(listenerRange(listenerId));
       return walk(cursor, (current) => {
         const record = current.value as ChunkRecord;
         return record.refused !== undefined ? undefined : { manifest: record.manifest, wav: record.wav };
@@ -216,17 +220,67 @@ export class RecoveryBuffer implements ChunkStore {
   }
 
   /**
-   * Chunks still owed to `listenerId`, and stranded chunks that can no longer be uploaded: sealed
-   * under any other listener id (the server no longer knows it) or refused by the server. Their
-   * audio is kept, never deleted here.
+   * Chunks on this device by what can still happen to them: `pending` uploads of the `uploadable`
+   * listeners, `refused` chunks of those listeners the server will not take, and `stranded` chunks
+   * of every other (removed) listener. Audio is kept, never deleted here.
    */
-  countChunks(listenerId: string | null): Promise<{ pending: number; stranded: number }> {
+  countChunks(uploadable: readonly string[]): Promise<{ pending: number; refused: number; stranded: number }> {
     return guarded(async () => {
-      const counts = { pending: 0, stranded: 0 };
+      const counts = { pending: 0, refused: 0, stranded: 0 };
       const chunks = this.db.transaction(CHUNKS).objectStore(CHUNKS);
-      await walk(chunks.index('listener').openKeyCursor(), (current) => void ((current.key as [string, string])[0] === listenerId ? counts.pending++ : counts.stranded++));
-      if (listenerId !== null) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.stranded++));
+      await walk(chunks.index('listener').openKeyCursor(), (current) => {
+        void (uploadable.includes((current.key as [string, string])[0]) ? counts.pending++ : counts.stranded++);
+      });
+      for (const listenerId of new Set(uploadable)) await walk(chunks.index('refused').openKeyCursor(IDBKeyRange.only(listenerId)), () => void (counts.pending--, counts.refused++));
       return counts;
+    });
+  }
+
+  /** Recordings of listeners outside `uploadable`; uploadable audio is never read, orphaned audio is visited, not kept. */
+  orphanedRecordings(uploadable: readonly string[], maxSamples?: number): Promise<OrphanedRecording[]> {
+    return guarded(async () => {
+      const index = this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener');
+      const listeners = new Set<string>();
+      await walk(index.openKeyCursor(), (current) => void listeners.add((current.key as [string, string])[0]));
+      const manifests: RecordingChunkManifest[] = [];
+      for (const listenerId of listeners) {
+        if (uploadable.includes(listenerId)) continue;
+        await walk(index.openCursor(listenerRange(listenerId)), (current) => void manifests.push((current.value as ChunkRecord).manifest));
+      }
+      return groupRecordings(manifests, maxSamples);
+    });
+  }
+
+  /** One recording's samples (listener and capture epoch) for a local export; other epochs are visited, not kept. */
+  recordingSegments(listenerId: string, epochId: string): Promise<RecordingSegment[]> {
+    return guarded(async () => {
+      const segments: RecordingSegment[] = [];
+      await walk(this.db.transaction(CHUNKS).objectStore(CHUNKS).index('listener').openCursor(listenerRange(listenerId)), (current) => {
+        const { manifest, wav } = current.value as ChunkRecord;
+        if (manifest.epoch_id === epochId) segments.push({ sampleStart: manifest.sample_start, sampleCount: manifest.sample_count, data: new Blob([wav.subarray(WAV_HEADER_BYTES) as Uint8Array<ArrayBuffer>]) });
+      });
+      return segments;
+    });
+  }
+
+  /**
+   * Deletes one orphaned recording's chunks and its saved start, only on a person's explicit
+   * request. Chunks of `uploadable` listeners and journaled receipts are never touched.
+   */
+  discardRecording(listenerId: string, epochId: string, uploadable: readonly string[]): Promise<void> {
+    return guarded(async () => {
+      if (uploadable.includes(listenerId)) return;
+      const tx = this.db.transaction([CHUNKS, EPOCHS], 'readwrite');
+      let freed = 0;
+      await walk(tx.objectStore(CHUNKS).index('listener').openCursor(listenerRange(listenerId)), (current) => {
+        const { manifest } = current.value as ChunkRecord;
+        if (manifest.epoch_id !== epochId) return;
+        current.delete();
+        freed += manifest.byte_length;
+      });
+      if (freed > 0) tx.objectStore(EPOCHS).delete(epochId);
+      await complete(tx);
+      this.bytes -= freed;
     });
   }
 

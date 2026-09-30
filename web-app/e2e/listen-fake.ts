@@ -30,6 +30,9 @@ const engine = {
   },
   async pause() { fake.calls.push('pause'); store.update({ listener: 'paused' }); },
   async resume() { fake.calls.push('resume'); store.update({ listener: 'listening' }); },
+  async orphanedRecordings() { return []; },
+  async exportRecording() { return null; },
+  async discardRecording() {},
 };
 export function getCaptureEngine() { return engine; }
 `;
