@@ -9,6 +9,8 @@ import type { CaptureIssue, PermissionState } from './view.ts';
 /** Another tab of this browser holds the capture lock. */
 class CaptureLockHeld extends Error { }
 
+const CAPTURE_LOCK = 'sanctum-capture';
+
 /** Raw mono speech: browser echo cancellation on, no gain or noise processing on the archive. */
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   channelCount: 1,
@@ -67,7 +69,7 @@ export async function holdCaptureLock(locks: LockManager | undefined): Promise<(
   const held = new Promise<void>((resolve) => (unlock = resolve));
   let freed: Promise<unknown> | undefined;
   const granted = await new Promise<boolean>((resolve) => {
-    freed = locks.request('sanctum-capture', { ifAvailable: true }, (lock) => {
+    freed = locks.request(CAPTURE_LOCK, { ifAvailable: true }, (lock) => {
       resolve(lock !== null);
       return lock === null ? undefined : held;
     });
@@ -77,4 +79,10 @@ export async function holdCaptureLock(locks: LockManager | undefined): Promise<(
     unlock();
     await freed;
   };
+}
+
+/** Whether any tab of this browser, this one included, holds the capture lock; false where Web Locks are missing. */
+export async function captureLockHeld(locks: LockManager | undefined): Promise<boolean> {
+  const snapshot = await locks?.query().catch(() => null);
+  return snapshot?.held?.some((lock) => lock.name === CAPTURE_LOCK) ?? false;
 }

@@ -70,7 +70,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 
 ### capture (T06, T07, browser half of T09)
 
-Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet,buffer,uploader}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
+Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet,buffer,uploader,orphans}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
 
 - `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle.
 - `controller.ts`: `createCaptureController(deps): CaptureView & { dispose(): void }`, publishing through `createCaptureStore`.
