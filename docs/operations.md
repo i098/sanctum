@@ -43,7 +43,7 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 ## Cloudflare
 
 The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL on Aiven over verified TLS (database `sanctum`), recordings in the private R2 bucket `sanctum-recordings`.
-It serves `https://sanctum.42nights.dev` (a Workers custom domain declared in `wrangler.jsonc`, attached on deploy) and `https://sanctum.jerry-2c0.workers.dev`.
+It serves only `https://sanctum.42nights.dev` (a Workers custom domain declared in `wrangler.jsonc`, attached on deploy); `workers_dev` is off.
 
 - **Routing**: the Worker answers `/__login/<LOGIN_TOKEN>` itself and sends every other request, including the listener WebSocket, to the API container. No sign-in issuer is selected, so that link sets the pre-seeded owner session (`sanctum_session`, HttpOnly) and `sanctum_csrf`; anyone without it reaches the app with no session.
 - **Job worker**: has no port and is never stopped for inactivity; a cron every five minutes starts it again after a crash or rollout. State lives in MySQL and R2; container disk is disposable.
