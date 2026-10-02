@@ -7,7 +7,8 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   "routes": [{ "pattern": "sanctum.42nights.dev", "custom_domain": true }],
-  "observability": { "enabled": true },
+  // Invocation logs would store the request URL, and /__login/<LOGIN_TOKEN> is a secret.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // Restarts the job worker after a crash or rollout; a running worker is left alone.
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
