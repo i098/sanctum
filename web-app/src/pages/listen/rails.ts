@@ -5,7 +5,8 @@
  * kiosk's GSAP durations and eases, and is skipped under reduced motion.
  */
 import { type ActionReceipt, pages, type SanctumClient, type TranscriptSegment } from '@sanctum/sdk';
-import { subscribeTranscript } from './engine.ts';
+
+type SubscribeTranscript = (listener: (segment: TranscriptSegment) => void) => () => void;
 
 /** GSAP eases as CSS cubic-béziers: power1.out (GSAP's default), power2.out, power3.out. */
 const POWER1_OUT = 'cubic-bezier(0.25, 0.46, 0.45, 0.94)';
@@ -60,7 +61,7 @@ function trimLines(lines: HTMLElement): void {
  * Appends every final live transcript line to `lines`, newest at the bottom. A band that narrows
  * (on phones the feed shares it) trims at once instead of cutting a line. Returns the cleanup.
  */
-export function startTranscriptRail(lines: HTMLElement): () => void {
+export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: SubscribeTranscript): () => void {
   const resized = new ResizeObserver(() => trimLines(lines));
   resized.observe(lines);
   const unsubscribe = subscribeTranscript(segment => {
@@ -151,23 +152,26 @@ export function startActionFeed(feed: HTMLElement, client: SanctumClient): () =>
   const resized = new ResizeObserver(hideCut);
   resized.observe(feed);
 
-  const clearRows = (): void => {
+  /** Rows belong to the meeting they were polled from: any other meeting, or none, clears them. */
+  const claim = (meetingId: string | undefined): void => {
+    if (meetingId === owner) return;
     rows.forEach(row => collapse(row, 400));
     rows.clear();
+    owner = meetingId;
+  };
+  const latestActions = async (meetingId: string): Promise<ReadonlyArray<ActionReceipt>> => {
+    let latest: ReadonlyArray<ActionReceipt> = [];
+    for await (const page of pages(client, 'actions.listMeetingActions', { meeting_id: meetingId, limit: 200 }, options)) {
+      latest = [...latest, ...page.actions].slice(-FEED_MAX);
+    }
+    return latest;
   };
   const poll = async (): Promise<void> => {
     const { meetings } = await client.meetings.listMeetings({ limit: 1 }, options);
     const meeting = meetings.find(({ state }) => state !== 'closed' && state !== 'interrupted');
-    if (meeting?.id !== owner) {
-      clearRows();
-      owner = meeting?.id;
-    }
+    claim(meeting?.id);
     if (meeting === undefined) return;
-    let latest: ReadonlyArray<ActionReceipt> = [];
-    for await (const page of pages(client, 'actions.listMeetingActions', { meeting_id: meeting.id, limit: 200 }, options)) {
-      latest = [...latest, ...page.actions].slice(-FEED_MAX);
-    }
-    latest.forEach(upsert);
+    (await latestActions(meeting.id)).forEach(upsert);
     settle();
   };
   const tick = (): void => {

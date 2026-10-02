@@ -2,7 +2,7 @@ import { createClient } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
-import { getCaptureEngine } from './engine.ts';
+import { getCaptureEngine, subscribeTranscript } from './engine.ts';
 import { startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
@@ -127,7 +127,7 @@ function Footer({ engine, snapshot, onOpen, onFailure }: FooterProps) {
 function Rails({ live }: { live: boolean }) {
   const lines = useRef<HTMLDivElement>(null);
   const feed = useRef<HTMLDivElement>(null);
-  useEffect(() => startTranscriptRail(lines.current!), []);
+  useEffect(() => startTranscriptRail(lines.current!, subscribeTranscript), []);
   useEffect(() => startActionFeed(feed.current!, client), []);
   return (
     <div className="listen-rails">

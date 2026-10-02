@@ -71,13 +71,8 @@ declare global {
  */
 export async function openListening(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    let state = 1;
-    Math.random = () => {
-      state = (state + 0x6d2b79f5) | 0;
-      let t = Math.imul(state ^ (state >>> 15), 1 | state);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+    let state = 42;
+    Math.random = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
   });
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
