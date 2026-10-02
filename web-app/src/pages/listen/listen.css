@@ -1,5 +1,12 @@
 /* Fullscreen listening view (docs/DESIGN.md). Offsets are measured from the 1280 × 720 reference. */
 .listen {
+  /*
+   * Below the reference baseline (y = 316 of 720), room for the deepest underside plus its glow:
+   * 183 px measured at full-scale input with a 760 px line, rounded up to 220 px; it scales with
+   * narrower lines. Status and rails start here so ink never runs under text.
+   */
+  --stage-floor: calc(100% * 316 / 720 + min(220px, 92vw * 220 / 760));
+
   position: fixed;
   inset: 0;
   background: #0a0c10;
@@ -12,15 +19,12 @@
   margin: 0;
 }
 
-/* The kiosk's 760 × 300 stage, centred on the reference baseline (y = 316 of 720). */
+/* Covers the viewport so loud needles and their glow are never cut; waveform.ts places the line. */
 .listen-wave {
   position: absolute;
-  top: calc(100% * 316 / 720);
-  left: 50%;
-  display: block;
-  width: min(760px, 92vw);
-  height: auto;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .listen-header,
@@ -64,8 +68,7 @@
 
 .listen-status {
   position: absolute;
-  /* The reference height, or just under the stage on screens shorter than 700 px. */
-  top: max(65.3%, calc(100% * 316 / 720 + min(150px, 92vw * 150 / 760) + 4px));
+  top: var(--stage-floor);
   left: 0;
   right: 0;
   display: flex;
@@ -150,13 +153,13 @@
 
 /*
  * Side live updates, ported from the earlier kiosk's .tlog/.feed rules: the room's transcript on
- * the left, agent work on the right, bottom-anchored in the band between the waveform and the
+ * the left, agent work on the right, bottom-anchored in the band beside the status and above the
  * footer so neither ever covers the line or the status. Aging is a colour step, never an opacity
  * fade below the muted tier.
  */
 .listen-rails {
   position: absolute;
-  top: calc(100% * 316 / 720 + min(150px, 92vw * 150 / 760) + 24px);
+  top: var(--stage-floor);
   left: 32px;
   right: 32px;
   bottom: 68px;
@@ -485,12 +488,8 @@
     white-space: nowrap;
   }
 
-  .listen-status {
-    top: calc(100% * 316 / 720 + 92vw * 150 / 760 + 24px);
-  }
-
   .listen-rails {
-    top: calc(100% * 316 / 720 + 92vw * 150 / 760 + 112px);
+    top: calc(var(--stage-floor) + 88px);
     bottom: 96px;
     flex-direction: column;
     align-items: stretch;

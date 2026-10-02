@@ -83,6 +83,8 @@ export interface WaveProfile {
   right: number;
   /** Separate column runs rising above half the tallest column: the needles standing out of the ink. */
   needles: number;
+  /** Page y of the highest ink in each page-x CSS column; the baseline where a column has none. */
+  tops: number[];
 }
 
 /** Scans the waveform canvas for pale wave ink (not the darker glow). */
@@ -113,6 +115,7 @@ export function waveProfile(page: Page): Promise<WaveProfile> {
       left: box.left + onLine[0]! / ratio,
       right: box.left + onLine.at(-1)! / ratio,
       needles: above.filter((columnHeight, x) => tall(columnHeight) && !tall(above[x - 1])).length,
+      tops: Array.from({ length: Math.round(width / ratio) }, (_, column) => box.top + (baseline - above[Math.round(column * ratio)]!) / ratio),
     };
   });
 }

@@ -12,13 +12,14 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - Header begins about 32 px from each horizontal edge and 28 px from the top.
 - Upper left: small Sanctum wordmark, then a compact local time/date block.
 - Upper right: current meeting title and a quiet participant/duration line.
-- The waveform stage is the kiosk's 760 × 300 canvas, at most 92% of the viewport width, centered horizontally with its baseline around y=316 in the reference composition.
+- The waveform is the kiosk's 760 px line (at most 92% of the viewport width), centered horizontally with its baseline around y=316 in the reference composition; narrower lines scale every size with it, as the kiosk's canvas did.
+- Its canvas covers the viewport, so loud needles and their glow keep their full shape instead of being cut flat at the kiosk's 300 px stage edges.
 - The stage remains mostly empty around narrow spikes.
-- Below the waveform: small lowercase `listening` status and one quiet helper line, kept clear of the stage on short screens.
+- Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text.
 - Footer sits approximately 24–32 px from the bottom and sides.
 - Lower left: a tiny state dot and brief capture/context health text.
 - Lower right: Pause, Review, Agents, Fullscreen, Settings.
-- Side live updates sit in the band between the waveform and the footer: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
+- Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 
 Keep proportions responsive rather than treating these measurements as absolute at every resolution.
@@ -69,7 +70,7 @@ The glow is a canvas shadow in the state colour that grows with the overall leve
 
 ## Side live updates
 
-Both rails are bottom-anchored in the band between the waveform and the footer and show whole lines only; whatever the band cannot fit is dropped or hidden, never cut mid-line.
+Both rails are bottom-anchored in the band from the status down to the footer and show whole lines only; whatever the band cannot fit is dropped or hidden, never cut mid-line.
 
 - Transcript rail (left, under a `LISTENING` eyebrow): final live transcript segments from the listener stream, prefixed `S0:`-style when the speaker is known; partial segments never appear. Newest at the bottom, sliding up 6 px over 0.2 s; at most ten lines, the oldest collapsing over 0.3 s. The three newest lines use secondary text, older ones the muted colour, never dimmer. The eyebrow dot pulses lime only while listening.
 - Agent-work feed (right, under an `AGENT WORK` eyebrow): the newest open meeting's action receipts, at most five, each with its action key, an icon and a truthful state label. New rows slide in from 24 px right over 0.5 s, the oldest beyond five collapses over 0.4 s, rows older than the newest two rest at 40%, and a row turning done flashes its lime edge. Receipts are polled every 5 s until a pushed action event exists.

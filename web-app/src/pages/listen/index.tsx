@@ -156,7 +156,7 @@ export function ListenPage() {
 
   return (
     <main aria-label="Sanctum" className="listen">
-      <canvas ref={canvas} className="listen-wave" width={760} height={300} aria-hidden="true" />
+      <canvas ref={canvas} className="listen-wave" aria-hidden="true" />
       <header className="listen-header">
         <div className="listen-brand">
           <span className="listen-wordmark">✦ SANCTUM</span>

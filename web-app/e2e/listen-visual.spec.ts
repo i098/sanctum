@@ -74,10 +74,14 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap, live 
   expect(Math.abs(wave.baseline - 640 * (316 / 720))).toBeLessThanOrEqual(3);
   expect(Math.abs(wave.right - wave.left - 760)).toBeLessThanOrEqual(4);
 
-  const header = (await page.locator('.listen-header').boundingBox())!;
+  // Loud needles keep their full height: the kiosk's 300 px stage cut them flat at 150 px.
+  expect(wave.rise).toBeGreaterThan(150);
   const status = (await page.locator('.listen-status').boundingBox())!;
   const footer = (await page.locator('.listen-footer').boundingBox())!;
-  expect(header.y + header.height).toBeLessThan(wave.baseline - wave.rise);
+  for (const item of [page.locator('.listen-brand'), page.locator('.listen-meeting')]) {
+    const { x, y, width, height } = (await item.boundingBox())!;
+    expect(y + height).toBeLessThan(Math.min(...wave.tops.slice(Math.floor(x), Math.ceil(x + width))));
+  }
   expect(status.y).toBeGreaterThan(wave.baseline + wave.fall);
   expect(status.y + status.height).toBeLessThan(footer.y);
   const helper = (await page.locator('.listen-helper').boundingBox())!;

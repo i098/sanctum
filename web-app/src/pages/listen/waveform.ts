@@ -33,9 +33,15 @@ const LOOK: Record<ListenerState, Look> = {
   degraded: LISTENING,
 };
 
-/** Canvas size in CSS px: a wide stage with the status below. */
+/**
+ * The kiosk's stage in CSS px: a 760 px line (at most 92vw) with needles up to 118 px tall per unit.
+ * Its canvas was 300 px tall and cut loud needles and their glow flat; here the canvas covers the
+ * viewport so they keep their full shape. Narrower lines scale every size, as the kiosk's canvas did.
+ */
 const WIDTH = 760;
-const HEIGHT = 300;
+const RISE = 118;
+/** Baseline height as a fraction of the viewport, from the 1280 × 720 reference (y = 316). */
+const BASELINE = 316 / 720;
 const SLOTS = 33;
 /** State changes tween over 0.9 s with GSAP's power3.out (quartic ease-out). */
 const TWEEN_MS = 900;
@@ -126,22 +132,36 @@ function traceContours(slots: ReadonlyArray<Slot>, current: Float32Array, top: F
   }
 }
 
-/** One closed ink shape around the baseline, glowing in the state colour. */
-function fillShape(context: CanvasRenderingContext2D, top: Float32Array, bottom: Float32Array, look: Look, level: number, rise: number): void {
+/** Sizes the canvas to its box in device pixels (capped at 2×, like the kiosk); returns that ratio. */
+function fitToDisplay(canvas: HTMLCanvasElement): number {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.round(canvas.clientWidth * ratio);
+  const height = Math.round(canvas.clientHeight * ratio);
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  return ratio;
+}
+
+/** One closed ink shape around the baseline, glowing in the state colour; `amplitude` is 1 or the reduced-motion scale. */
+function fillShape(context: CanvasRenderingContext2D, top: Float32Array, bottom: Float32Array, look: Look, level: number, amplitude: number): void {
+  const ratio = fitToDisplay(context.canvas);
   const { width, height } = context.canvas;
-  const ratio = height / HEIGHT;
-  const middle = height / 2;
-  const base = 1.1 * ratio;
-  const step = width / (top.length - 1);
+  const line = Math.min(WIDTH * ratio, width * 0.92);
+  const scale = line / WIDTH;
+  const left = (width - line) / 2;
+  const middle = height * BASELINE;
+  const base = 1.1 * scale;
+  const rise = RISE * scale * amplitude;
+  const step = line / (top.length - 1);
   const mix = (white: number, accent: number): number => Math.round(white * 0.62 + accent * 0.38);
   context.clearRect(0, 0, width, height);
   context.shadowColor = `rgba(${look.r},${look.g},${look.b},${0.55 * look.glow * (1 + level)})`;
-  context.shadowBlur = (14 + level * 26) * ratio;
+  context.shadowBlur = (14 + level * 26) * scale;
   context.fillStyle = `rgba(${mix(235, look.r)},${mix(240, look.g)},${mix(245, look.b)},0.92)`;
   context.beginPath();
-  context.moveTo(0, middle - base);
-  top.forEach((h, i) => context.lineTo(i * step, middle - base - h * rise));
-  for (let i = bottom.length - 1; i >= 0; i--) context.lineTo(i * step, middle + base + bottom[i]! * rise);
+  context.moveTo(left, middle - base);
+  top.forEach((h, i) => context.lineTo(left + i * step, middle - base - h * rise));
+  for (let i = bottom.length - 1; i >= 0; i--) context.lineTo(left + i * step, middle + base + bottom[i]! * rise);
   context.closePath();
   context.fill();
 }
@@ -153,10 +173,7 @@ function fillShape(context: CanvasRenderingContext2D, top: Float32Array, bottom:
 export function startWaveform(canvas: HTMLCanvasElement, levels: LevelSource, listener: () => ListenerState): () => void {
   const context = canvas.getContext('2d');
   if (!context) return () => {};
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = WIDTH * ratio;
-  canvas.height = HEIGHT * ratio;
-  // Contour samples every 2 device px across the line.
+  // Contour samples every 2 px of the 760 px line.
   const top = new Float32Array(WIDTH / 2 + 1);
   const bottom = new Float32Array(WIDTH / 2 + 1);
   const slots = createSlots();
@@ -198,7 +215,7 @@ export function startWaveform(canvas: HTMLCanvasElement, levels: LevelSource, li
     levelTarget *= 0.92;
     followSlots(slots, current, bands, look, t, level);
     traceContours(slots, current, top, bottom);
-    fillShape(context, top, bottom, look, level, 118 * ratio * (reduced.matches ? REDUCED_SCALE : 1));
+    fillShape(context, top, bottom, look, level, reduced.matches ? REDUCED_SCALE : 1);
   };
   const onVisibility = (): void => {
     cancelAnimationFrame(frame);
