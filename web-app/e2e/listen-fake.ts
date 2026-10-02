@@ -64,8 +64,21 @@ declare global {
   }
 }
 
-/** Opens the listening page on the fake engine and starts listening in silence. */
+/**
+ * Opens the listening page on the fake engine and starts listening in silence.
+ * The waveform lays out its slots with Math.random once per mount, so the page gets a fixed PRNG:
+ * the pixel-measuring specs then see the same layout every run instead of a random one.
+ */
 export async function openListening(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let state = 1;
+    Math.random = () => {
+      state = (state + 0x6d2b79f5) | 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  });
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
   await page.goto('/');
