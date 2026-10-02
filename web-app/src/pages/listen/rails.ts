@@ -18,16 +18,16 @@ const TRANSCRIPT_FRESH = 3;
 const FEED_MAX = 5;
 const POLL_MS = 5_000;
 
-function animate(element: Element, keyframes: Keyframe[], duration: number, easing: string): Animation {
+function animate(element: Element, keyframes: Keyframe[], duration: number, easing: string, fill: FillMode = 'backwards'): Animation {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  return element.animate(keyframes, { duration: reduced ? 0 : duration, easing, fill: 'forwards' });
+  return element.animate(keyframes, { duration: reduced ? 0 : duration, easing, fill });
 }
 
 /** Fades `element` out while its height and top margin shrink to 0, then removes it. */
 function collapse(element: HTMLElement, duration: number): void {
   const { opacity, height, marginTop } = getComputedStyle(element);
   const remove = (): void => element.remove();
-  animate(element, [{ opacity, height, marginTop }, { opacity: 0, height: '0px', marginTop: '0px' }], duration, POWER1_OUT).finished.then(remove, remove);
+  animate(element, [{ opacity, height, marginTop }, { opacity: 0, height: '0px', marginTop: '0px' }], duration, POWER1_OUT, 'forwards').finished.then(remove, remove);
 }
 
 /** Items of a bottom-anchored `container` whose top is cut off by its upper edge. */
@@ -111,6 +111,7 @@ function fillRow(row: HTMLElement, action: ActionReceipt): void {
  */
 export function startActionFeed(feed: HTMLElement, client: SanctumClient): () => void {
   const rows = new Map<string, HTMLElement>();
+  let owner: string | undefined;
   const controller = new AbortController();
   const options = { signal: controller.signal };
   let busy = false;
@@ -143,16 +144,24 @@ export function startActionFeed(feed: HTMLElement, client: SanctumClient): () =>
     const shown = [...rows.values()];
     shown.forEach((row, index) => {
       row.hidden = false;
-      if (index < shown.length - 2) row.style.opacity = '0.4';
+      row.style.opacity = index < shown.length - 2 ? '0.4' : '';
     });
     hideCut();
   };
   const resized = new ResizeObserver(hideCut);
   resized.observe(feed);
 
+  const clearRows = (): void => {
+    rows.forEach(row => collapse(row, 400));
+    rows.clear();
+  };
   const poll = async (): Promise<void> => {
     const { meetings } = await client.meetings.listMeetings({ limit: 1 }, options);
     const meeting = meetings.find(({ state }) => state !== 'closed' && state !== 'interrupted');
+    if (meeting?.id !== owner) {
+      clearRows();
+      owner = meeting?.id;
+    }
     if (meeting === undefined) return;
     let latest: ReadonlyArray<ActionReceipt> = [];
     for await (const page of pages(client, 'actions.listMeetingActions', { meeting_id: meeting.id, limit: 200 }, options)) {
