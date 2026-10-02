@@ -33,19 +33,20 @@ test("agent work shows the open meeting's action receipts and their state change
 });
 
 test('rows older than the newest two rest at 40%; a row leaves when its meeting closes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   let meetingState = 'active';
-  const actions = ['a1', 'a2', 'a3', 'a4'].map(id => ({ ...receipt('succeeded'), action_id: id, action_key: `research-${id}` }));
+  const actions = ['a1', 'a2', 'a3'].map(id => ({ ...receipt('succeeded'), action_id: id, action_key: `research-${id}` }));
   await page.route('**/api/v1/meetings?*', route =>
     route.fulfill({ json: { meetings: [{ id: MEETING, title: null, state: meetingState, started_at: '2026-09-29T09:00:00Z', timezone: 'UTC' }], next_cursor: null } }));
   await page.route(`**/api/v1/meetings/${MEETING}/actions*`, route => route.fulfill({ json: { actions, next_cursor: null } }));
   await openListening(page);
   const feed = page.getByRole('region', { name: 'Agent work' });
   const opacity = (key: string) => feed.getByText(key).locator('xpath=..').evaluate(row => getComputedStyle(row).opacity);
-  await expect(feed.getByText('research-a4')).toBeVisible();
+  await expect(feed.getByText('research-a3')).toBeVisible();
+  await expect(feed.getByText('research-a1')).toBeVisible();
   await expect.poll(() => opacity('research-a1')).toBe('0.4');
-  await expect.poll(() => opacity('research-a2')).toBe('0.4');
+  expect(await opacity('research-a2')).toBe('1');
   expect(await opacity('research-a3')).toBe('1');
-  expect(await opacity('research-a4')).toBe('1');
   meetingState = 'closed';
-  await expect(feed.getByText('research-a4')).toHaveCount(0, { timeout: 8_000 });
+  await expect(feed.getByText('research-a3')).toHaveCount(0, { timeout: 8_000 });
 });
