@@ -17,11 +17,14 @@ export interface MysqlOptions {
   readonly password: Redacted.Redacted;
   readonly maxConnections: number;
   readonly queueLimit: number;
+  /** PEM CA certificate; when set, TLS is required and verified, including the server host name. */
+  readonly caCert?: string | undefined;
 }
 
 /**
  * Pool options: DATETIME(6) and BIGINT/DECIMAL arrive as strings (no millisecond Date or
- * rounded Number), connection waits are bounded by `queueLimit`.
+ * rounded Number), connection waits are bounded by `queueLimit`; without `caCert` the
+ * connection is unencrypted (local and test servers).
  */
 const mysqlLayer = (mysql: MysqlOptions) =>
   MysqlClient.layer({
@@ -42,6 +45,7 @@ const mysqlLayer = (mysql: MysqlOptions) =>
       queueLimit: mysql.queueLimit,
       connectTimeout: 10_000,
       enableKeepAlive: true,
+      ...(mysql.caCert === undefined ? {} : { ssl: { ca: mysql.caCert, verifyIdentity: true } }),
     },
   });
 

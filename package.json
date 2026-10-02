@@ -39,6 +39,7 @@
     "packages/contracts",
     "server",
     "web-app",
-    "sdk/typescript"
+    "sdk/typescript",
+    "deploy/cloudflare"
   ]
 }

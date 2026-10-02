@@ -1,11 +1,11 @@
 # Operations
 
 How to run, check and recover Sanctum.
-Nothing here authorizes a deployment, a production migration, paid services or live recording; those need their own approval (see [DECISIONS.md](DECISIONS.md)).
+Nothing here authorizes a new deployment, a production migration, paid services or live recording; those need their own approval (see [DECISIONS.md](DECISIONS.md)).
 
 ## Processes
 
-One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml)):
+One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
 - `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade and the built website, all on one port behind Caddy.
 - `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions).
@@ -20,7 +20,7 @@ Secrets come from the environment only; none are committed.
 | Group | Variables |
 | --- | --- |
 | Core | `SANCTUM_ENV`, `SANCTUM_SELECTED_DECISIONS`, `API_PORT`, `SANCTUM_ALLOWED_ORIGINS` |
-| MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE` |
+| MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
 | Recordings (R2) | `R2_ENDPOINT`, `R2_BUCKET`, `R2_PREFIX`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_TIMEOUT_MS` |
 | Speech | `DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `DEEPGRAM_URL`, `DEEPGRAM_BATCH_TIMEOUT_MS`, `PYANNOTE_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` |
 | Models | `CEREBRAS_API_KEY`, `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER`, `<ROLE>_MODEL` for voice, extraction, planner, research |
@@ -39,6 +39,21 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d mysql
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose run --rm api node server/dist/migrate.js
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 ```
+
+## Cloudflare
+
+The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL on Aiven over verified TLS (database `sanctum`), recordings in the private R2 bucket `sanctum-recordings`.
+It serves `https://sanctum.42nights.dev` (a Workers custom domain declared in `wrangler.jsonc`, attached on deploy) and `https://sanctum.jerry-2c0.workers.dev`.
+
+- **Routing**: the Worker answers `/__login/<LOGIN_TOKEN>` itself and sends every other request, including the listener WebSocket, to the API container. No sign-in issuer is selected, so that link sets the pre-seeded owner session (`sanctum_session`, HttpOnly) and `sanctum_csrf`; anyone without it reaches the app with no session.
+- **Job worker**: has no port and is never stopped for inactivity; a cron every five minutes starts it again after a crash or rollout. State lives in MySQL and R2; container disk is disposable.
+- **Mode**: `SANCTUM_ENV=development` (production refuses to start while decisions are open); no provider keys, so transcription, notes and voice report unavailable.
+- **Deploy** (Docker must be usable by the deploying user, or set `WRANGLER_DOCKER_BIN` to a wrapper): from `deploy/cloudflare`, `npx wrangler deploy`. Wrangler builds `server/Dockerfile`, pushes it to the account registry and rolls out both containers.
+- **Secrets** (`npx wrangler secret put NAME`, read from stdin): `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_CA_CERT` (the provider's project CA, PEM), `R2_ENDPOINT` (`https://<account>.r2.cloudflarestorage.com`), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (an account API token limited to the bucket: its ID and the SHA-256 of its value), `LOGIN_TOKEN`, `SESSION_TOKEN`, `CSRF_TOKEN`. Non-secret settings are `vars` in [wrangler.jsonc](../deploy/cloudflare/wrangler.jsonc).
+- **Migrate** before deploying a new schema, with the image's own entrypoint and the CA mounted read-only: `docker run --rm --env-file <(...) -v "$CA:/ca.pem:ro" <image> sh -c 'MYSQL_CA_CERT="$(cat /ca.pem)" exec node server/dist/migrate.js'`, where the env file holds the same `MYSQL_*` values. The job worker refuses to start while migrations are pending.
+- **Owner session**: one workspace, one human principal with an `owner` membership and one `browser_sessions` row whose `id_hash` and `csrf_hash` are the SHA-256 of `SESSION_TOKEN` and `CSRF_TOKEN` (expiring after a year, like the cookies). Revoke it by setting `revoked_at`; rotate by inserting a new row and replacing the three token secrets.
+- **Logs**: `npx wrangler tail sanctum` for the Worker; container stdout and stderr appear in the dashboard under Workers & Pages → `sanctum` → Containers, and in Workers observability.
+- **Rollback**: check out the previous validated commit and `npx wrangler deploy` from it; that rebuilds its image and rolls both containers back with the Worker (`wrangler rollback` alone reverts only the Worker script, not the container image). Migrations are never reversed, so a previous image must support the current schema; MySQL and R2 data are untouched.
 
 ## Migrations
 

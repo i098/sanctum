@@ -2,7 +2,7 @@
  * Process configuration and the plan section 02 engineering defaults.
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
-import { Config, Effect, Redacted } from 'effect';
+import { Config, Effect, Option, Redacted } from 'effect';
 import { type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
@@ -87,6 +87,8 @@ export const serverConfig = Config.all({
     password: Config.redacted('MYSQL_PASSWORD').pipe(Config.withDefault(Redacted.make(''))),
     maxConnections: Config.integer('MYSQL_POOL_SIZE').pipe(Config.withDefault(10)),
     queueLimit: Config.integer('MYSQL_POOL_QUEUE').pipe(Config.withDefault(100)),
+    /** PEM CA certificate; when set, connections require TLS verified against it, host name included. */
+    caCert: Config.option(Config.string('MYSQL_CA_CERT')).pipe(Config.map(Option.getOrUndefined)),
   }),
   /** Requested speech output; without a key and voice, speech fails as unavailable instead of being faked. */
   cartesia: Config.all({

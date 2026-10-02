@@ -1,0 +1,32 @@
+// Deploy from this directory: `npx wrangler deploy` (docs/operations.md, "Cloudflare").
+// MySQL host/user/password/CA, R2 endpoint/keys and the login tokens are Worker secrets.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "sanctum",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "routes": [{ "pattern": "sanctum.42nights.dev", "custom_domain": true }],
+  "observability": { "enabled": true },
+  // Restarts the job worker after a crash or rollout; a running worker is left alone.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    // Production refuses to start until the open decisions in docs/DECISIONS.md are selected.
+    "SANCTUM_ENV": "development",
+    "MYSQL_DATABASE": "sanctum",
+    // API and worker pools together stay well under the managed server's connection limit.
+    "MYSQL_POOL_SIZE": "8",
+    "R2_BUCKET": "sanctum-recordings"
+  },
+  "containers": [
+    { "class_name": "SanctumApi", "image": "../../server/Dockerfile", "image_build_context": "../..", "instance_type": "basic", "max_instances": 1 },
+    { "class_name": "SanctumJobs", "image": "../../server/Dockerfile", "image_build_context": "../..", "instance_type": "basic", "max_instances": 1 }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "API", "class_name": "SanctumApi" },
+      { "name": "JOBS", "class_name": "SanctumJobs" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SanctumApi", "SanctumJobs"] }]
+}

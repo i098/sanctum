@@ -1,0 +1,17 @@
+{
+  "name": "@sanctum/cloudflare",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker and Containers deployment of the Sanctum image",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261002.1",
+    "wrangler": "4.147.0"
+  }
+}

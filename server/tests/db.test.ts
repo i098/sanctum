@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { rootCertificates } from 'node:tls';
 import { SqlClient, type SqlError, SqlSchema } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Exit, Schema } from 'effect';
-import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, ER_CHECK_CONSTRAINT_VIOLATED, ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno, verifyUtcSession } from '../src/db.ts';
-import { withDatabase } from './support/database.ts';
+import { Effect, Exit, Layer, Schema } from 'effect';
+import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, dbLayer, ER_CHECK_CONSTRAINT_VIOLATED, ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno, verifyUtcSession } from '../src/db.ts';
+import { createTestDatabase, withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const errnoOf = <A>(effect: Effect.Effect<A, SqlError.SqlError, SqlClient.SqlClient>) =>
@@ -57,6 +58,18 @@ describe('database boundary', () => {
         const exit = yield* Effect.exit(sql.withTransaction(Effect.zipRight(sql`SET time_zone = '+02:00'`, verifyUtcSession)));
         expect(Exit.isFailure(exit) && String(exit.cause)).toMatch(/must be UTC/);
       }),
+    ),
+  );
+
+  it.effect('with a CA configured, refuses a server it cannot verify instead of connecting in plain text', () =>
+    Effect.acquireUseRelease(
+      Effect.promise(createTestDatabase),
+      database => Effect.gen(function* () {
+        // Any public root CA: it did not issue the test server's self-signed certificate.
+        const error = yield* Effect.flip(Layer.build(dbLayer({ ...database.mysql, caCert: rootCertificates[0]! })).pipe(Effect.scoped));
+        expect(error._tag === 'SqlError' && String(error.cause)).toMatch(/certificate/i);
+      }),
+      database => Effect.promise(database.drop),
     ),
   );
 });

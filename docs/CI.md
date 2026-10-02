@@ -94,7 +94,7 @@ Extend `scripts/check-app.ts` with real Effect interruption/cleanup and later se
 Run deterministic performance smoke/correctness checks in normal CI; keep Rust comparisons and regression timing gates on a controlled benchmark host.
 Do not add permanently passing placeholders for missing components.
 The handoff validator deliberately permits new application directories; it still validates the planning and reference documents.
-Introduce application deployment only after a deployment target and its operational permissions are explicitly configured.
+Application deployment stays a manual operator step ([operations.md](operations.md#cloudflare)); CI never deploys it or receives its secrets.
 
 ## Cost and limits
 
