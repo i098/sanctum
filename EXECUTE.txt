@@ -1,9 +1,9 @@
 # Build Sanctum from this handoff
 
 Implement a new application in `undeemed/sanctum` using tasks/plan.md and tasks/todo.md.
-This repository intentionally contains no old application code.
+This repository intentionally contains no old application code, apart from one requested exception: the listening waveform and its side live updates are ported from the earlier kiosk (docs/DESIGN.md).
 Do not fetch or copy the old source as a shortcut.
-Recreate the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.
+Recreate the rest of the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.
 
 Deliver a website-first ambient listener for room computers and laptops.
 It remains silent until requested, automatically separates meetings, saves complete transcripts and private R2 recordings, builds time-aware selective memory, performs research and previously authorized Pipedream actions, and exposes shared context through TypeScript/Python SDKs and authenticated remote MCP.
@@ -754,13 +754,13 @@ An MCP protocol session is never a meeting, workspace, or identity boundary.
 
 ## 14. Fullscreen UI implementation
 
-Recreate the visual contract in `docs/DESIGN.md` independently.
+Recreate the visual contract in `docs/DESIGN.md` independently; the one exception, on explicit request, is the waveform and its side live updates (transcript rail and agent-work feed), ported from the earlier kiosk.
 The SVG/HTML files in `design/` are newly authored visual references, not application source or copied legacy components.
 The original approved appearance is a near-black full-viewport stage with a thin irregular blue-white waveform across the center.
 Preserve its sparse header, small status copy, subtle glow, quiet footer controls, and large empty areas.
-Do not replace it with a sidebar dashboard, rounded equalizer bars, card grid, large title, or speaking orb.
+Do not replace it with a sidebar dashboard, rounded equalizer bars, card grid, large title, or speaking orb; the quiet transcript and agent-work rails beside the status are part of the contract.
 
-Implement a new Canvas 2D renderer with irregular needle peaks, asymmetric lower contour, small broad bases, and smooth attack/decay.
+The Canvas 2D renderer draws irregular needle peaks, an asymmetric lower contour, small broad bases, and smooth attack/decay.
 Feed it real microphone levels; keep animation time independent from transcript/model latency.
 Suspend visual animation when hidden and respect reduced-motion preference without stopping capture.
 The preview waveform is illustrative; production must never simulate input or show fake healthy recording status.
@@ -1186,7 +1186,7 @@ Depends on: T10, T19.
 
 ## T21. Deliver fullscreen listening and review overlays
 
-- [x] Recreate the approved waveform independently; connect it to real capture state and analyser levels.
+- [x] Recreate the approved waveform (since replaced, on request, by a one-to-one port of the earlier kiosk's waveform and side live updates); connect it to real capture state and analyser levels.
 - [x] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
 - [x] Keep capture independent of overlay visibility; implement focus, keyboard, reduced-motion, and error behavior.
 

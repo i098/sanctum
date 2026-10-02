@@ -55,13 +55,13 @@ test('1280 × 720 matches the reference composition', async ({ page }, testInfo)
   expect(Math.abs(wave.baseline - 315)).toBeLessThanOrEqual(3);
   expect(Math.abs(wave.left - 260)).toBeLessThanOrEqual(4);
   expect(Math.abs(wave.right - 1020)).toBeLessThanOrEqual(4);
-  expect(wave.rise).toBeLessThan(150);
 });
 
-test('narrow laptop keeps the same hierarchy without scrolling or overlap', async ({ page }, testInfo) => {
+test('narrow laptop keeps the same hierarchy without scrolling or overlap, live updates included', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1024, height: 640 });
   await openListening(page);
   await page.evaluate(() => window.__capture.setGain(0.8));
+  await page.evaluate(() => { for (let n = 0; n < 12; n++) window.__capture.transcript(`line ${n}: what the room said, long enough to wrap across the rail`, '0'); });
   await page.waitForTimeout(400);
   await testInfo.attach('listening-1024x640', { body: await page.screenshot(), contentType: 'image/png' });
 
@@ -72,7 +72,7 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap', asyn
   expect(size).toEqual({ scrollWidth: 1024, scrollHeight: 640 });
   const wave = await waveProfile(page);
   expect(Math.abs(wave.baseline - 640 * (316 / 720))).toBeLessThanOrEqual(3);
-  expect(Math.abs(wave.right - wave.left - 1024 * (760 / 1280))).toBeLessThanOrEqual(4);
+  expect(Math.abs(wave.right - wave.left - 760)).toBeLessThanOrEqual(4);
 
   const header = (await page.locator('.listen-header').boundingBox())!;
   const status = (await page.locator('.listen-status').boundingBox())!;
@@ -80,6 +80,11 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap', asyn
   expect(header.y + header.height).toBeLessThan(wave.baseline - wave.rise);
   expect(status.y).toBeGreaterThan(wave.baseline + wave.fall);
   expect(status.y + status.height).toBeLessThan(footer.y);
+  const helper = (await page.locator('.listen-helper').boundingBox())!;
+  const transcript = (await page.getByRole('region', { name: 'Live transcript' }).boundingBox())!;
+  expect(transcript.y).toBeGreaterThan(wave.baseline + wave.fall);
+  expect(transcript.y + transcript.height).toBeLessThan(footer.y);
+  expect(transcript.x + transcript.width).toBeLessThan(helper.x);
   const controls = await page.getByRole('navigation', { name: 'Listening controls' }).getByRole('button').all();
   const rows = new Set(await Promise.all(controls.map(async control => (await control.boundingBox())!.y)));
   expect(controls).toHaveLength(5);

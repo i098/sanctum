@@ -1,109 +1,149 @@
 /**
- * Fullscreen waveform (docs/DESIGN.md "Waveform geometry" and "Motion").
+ * Fullscreen waveform: the earlier Sanctum kiosk's audio-reactive ink seismograph
+ * (42nights/sanctum web-app/src/pages/kiosk/engine.ts), ported one-to-one on explicit request.
+ * A thin baseline carries sharp needle spikes with soft ink-blot bases. Each of 33 slots owns a
+ * jittered x, a needle width, an asymmetric underside and one shuffled spectrum band, fixed per
+ * mount, so live voice lands as scattered bursts instead of a left-to-right equalizer.
  * Plain typed-array code driven by requestAnimationFrame; samples never enter React state.
  */
 import type { LevelSource, ListenerState } from '../../lib/capture/view.ts';
 
-const WAVE = '#b9c4f9';
-const GLOW = 'rgba(61, 125, 255, 0.55)';
-/** Geometry as fractions of the viewport, measured from the 1280 × 720 reference. */
-const SPAN = 760 / 1280;
-const BASELINE = 316 / 720;
-const MAX_RISE = 0.2;
-/** Band energy below this reads as room noise, so a quiet room stays a thin line. Calibration knob. */
-const NOISE_FLOOR = 0.3;
-const ATTACK_MS = 25;
-const RELEASE_MS = 420;
+/** Kiosk orb state: amplitude, breathing speed, glow strength and the accent the ink and glow take. */
+interface Look {
+  amp: number;
+  speed: number;
+  glow: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+/** The kiosk's `idle`, `connecting` and `listening` states. */
+const IDLE: Look = { amp: 6, speed: 0.4, glow: 0.42, r: 61, g: 125, b: 255 };
+const CONNECTING: Look = { amp: 9, speed: 1.8, glow: 0.55, r: 61, g: 125, b: 255 };
+const LISTENING: Look = { amp: 14, speed: 0.95, glow: 0.8, r: 34, g: 211, b: 197 };
+
+/** Only `listening` couples to the microphone; every other state breathes without reading levels. */
+const LOOK: Record<ListenerState, Look> = {
+  stopped: IDLE,
+  paused: IDLE,
+  starting: CONNECTING,
+  reconnecting: CONNECTING,
+  listening: LISTENING,
+  degraded: LISTENING,
+};
+
+/** Canvas size in CSS px: a wide stage with the status below. */
+const WIDTH = 760;
+const HEIGHT = 300;
+const SLOTS = 33;
+/** State changes tween over 0.9 s with GSAP's power3.out (quartic ease-out). */
+const TWEEN_MS = 900;
 const REDUCED_FRAME_MS = 250;
 const REDUCED_SCALE = 0.45;
 
-/** States with real microphone levels; every other state settles to a subdued line. */
-const LIVE: Record<ListenerState, boolean> = {
-  listening: true,
-  degraded: true,
-  stopped: false,
-  starting: false,
-  reconnecting: false,
-  paused: false,
-};
-
-/** Deterministic 0..1 value per region and salt, so the irregular shape is stable between frames. */
-function jitter(region: number, salt: number): number {
-  const x = Math.sin(region * 127.1 + salt * 311.7) * 43_758.5453;
-  return x - Math.floor(x);
+interface Slot {
+  /** Centre as a fraction of the line. */
+  readonly x: number;
+  /** Needle half-width as a fraction of the line. */
+  readonly w: number;
+  /** Underside ratio: never a pure mirror. */
+  readonly asym: number;
+  /** Idle-breathing phase. */
+  readonly ph: number;
+  /** A few slots carry the resting line (tall breathers); most stay quiet. */
+  readonly pop: number;
+  /** Edges stay quiet. */
+  readonly env: number;
+  readonly band: number;
 }
 
-/** Quick attack, slow release: moves `display` toward `target` for `elapsedMs` of wall time. */
-function followEnvelope(display: Float32Array, target: Float32Array, elapsedMs: number): void {
-  const attack = 1 - Math.exp(-elapsedMs / ATTACK_MS);
-  const release = 1 - Math.exp(-elapsedMs / RELEASE_MS);
-  for (let i = 0; i < display.length; i++) {
-    const from = display[i]!;
-    const to = target[i]!;
-    display[i] = from + (to - from) * (to > from ? attack : release);
+function createSlots(): Slot[] {
+  const bands = Array.from({ length: SLOTS }, (_, i) => i);
+  for (let i = SLOTS - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [bands[i], bands[j]] = [bands[j]!, bands[i]!];
+  }
+  return bands.map((band, k) => {
+    const x = (k + 0.5) / SLOTS + ((Math.random() - 0.5) * 0.6) / SLOTS;
+    return {
+      x,
+      w: 0.011 + Math.random() * 0.02,
+      asym: 0.45 + Math.random() * 0.55,
+      ph: Math.random() * Math.PI * 2,
+      pop: Math.random() < 0.16 ? 2.8 : Math.random() < 0.35 ? 1.2 : 0.45,
+      env: Math.sin(Math.PI * x) ** 0.8,
+      band,
+    };
+  });
+}
+
+/** Sharp ink needle (steep power falloff) plus the wide, shallow ink bleed at its base; 0 outside both. */
+function ink(distance: number, halfWidth: number): number {
+  const d = Math.min(1, distance / halfWidth);
+  const db = Math.min(1, distance / (halfWidth * 3.4));
+  return (1 - d) ** 3.4 + 0.16 * (1 - db) ** 1.6;
+}
+
+/** Moves `look` along the tween from `from` to `to`; `progress` is elapsed / duration. */
+function tween(look: Look, from: Look, to: Look, progress: number): void {
+  const eased = 1 - (1 - Math.min(1, progress)) ** 4;
+  for (const key of ['amp', 'speed', 'glow', 'r', 'g', 'b'] as const) look[key] = from[key] + (to[key] - from[key]) * eased;
+}
+
+/** Spectral RMS of the 0..1 bands: the kiosk's overall level. */
+function spectrumLevel(bands: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < bands.length; i++) sum += bands[i]! * bands[i]!;
+  return Math.sqrt(sum / bands.length);
+}
+
+/** Per-slot targets: idle breathing plus the slot's spectrum band; fast attack, slow decay. */
+function followSlots(slots: ReadonlyArray<Slot>, current: Float32Array, bands: Float32Array, look: Look, t: number, level: number): void {
+  const ampScale = (look.amp / 14) * (0.55 + level * 1.35);
+  slots.forEach((slot, k) => {
+    const wobble = slot.pop * (0.045 + 0.04 * Math.sin(t * look.speed * 1.7 + slot.ph) + 0.028 * Math.sin(t * look.speed * 0.6 + slot.ph * 2.3));
+    const goal = Math.min(1.2, Math.max(0.015, wobble) + (bands[slot.band] ?? 0) ** 2 * 1.3) * slot.env * ampScale;
+    const value = current[k]!;
+    current[k] = value + (goal - value) * (goal > value ? 0.5 : 0.12);
+  });
+}
+
+/** Contour heights above and below the baseline at every sample; the underside follows each slot's asymmetry. */
+function traceContours(slots: ReadonlyArray<Slot>, current: Float32Array, top: Float32Array, bottom: Float32Array): void {
+  for (let i = 0; i < top.length; i++) {
+    const u = i / (top.length - 1);
+    let above = 0;
+    let below = 0;
+    for (let k = 0; k < slots.length; k++) {
+      const slot = slots[k]!;
+      const h = current[k]! * ink(Math.abs(u - slot.x), slot.w);
+      above += h;
+      below += h * slot.asym;
+    }
+    top[i] = above;
+    bottom[i] = below;
   }
 }
 
-function traceNeedle(context: CanvasRenderingContext2D, x: number, y: number, base: number, rise: number, fall: number): void {
-  const shoulder = base * 0.4;
-  context.moveTo(x - base, y);
-  context.lineTo(x - shoulder, y - rise * 0.08);
-  context.lineTo(x, y - rise);
-  context.lineTo(x + shoulder, y - rise * 0.08);
-  context.lineTo(x + base, y);
-  context.lineTo(x + shoulder, y + fall * 0.08);
-  context.lineTo(x, y + fall);
-  context.lineTo(x - shoulder, y + fall * 0.08);
-  context.closePath();
-}
-
-/**
- * Adds the baseline and one irregular needle region per band to the current path.
- * Low, speech-heavy bands sit mid-screen and higher bands alternate outward, so energy gathers
- * away from the edges. The underside is a per-region fraction of the peak.
- */
-function traceRegions(context: CanvasRenderingContext2D, bands: Float32Array, width: number, height: number, gain: number): void {
-  const span = width * SPAN;
-  const left = (width - span) / 2;
-  const y = height * BASELINE;
-  const step = span / bands.length;
-  const center = Math.floor(bands.length / 2);
-  context.rect(left, y - 1, span, 2);
-  for (let i = 0; i < bands.length; i++) {
-    const offset = i - center;
-    const band = offset < 0 ? -2 * offset - 1 : 2 * offset;
-    const energy = Math.max(0, (bands[band]! - NOISE_FLOOR) / (1 - NOISE_FLOOR));
-    const edge = Math.sin((Math.PI * (i + 0.5)) / bands.length) ** 0.8;
-    const rise = gain * energy * edge * (0.7 + 0.3 * jitter(i, 1));
-    const x = left + (i + 0.5 + (jitter(i, 2) - 0.5) * 0.6) * step;
-    traceNeedle(context, x, y, step * (0.35 + 0.35 * jitter(i, 3)), rise, rise * (0.35 + 0.4 * jitter(i, 4)));
-  }
-}
-
-/** Draws one frame; states without live levels get a dimmer line and no glow. */
-export function drawWaveform(context: CanvasRenderingContext2D, bands: Float32Array, state: ListenerState, reducedMotion: boolean): void {
-  const scale = context.getTransform().a;
-  const width = context.canvas.width / scale;
-  const height = context.canvas.height / scale;
+/** One closed ink shape around the baseline, glowing in the state colour. */
+function fillShape(context: CanvasRenderingContext2D, top: Float32Array, bottom: Float32Array, look: Look, level: number, rise: number): void {
+  const { width, height } = context.canvas;
+  const ratio = height / HEIGHT;
+  const middle = height / 2;
+  const base = 1.1 * ratio;
+  const step = width / (top.length - 1);
+  const mix = (white: number, accent: number): number => Math.round(white * 0.62 + accent * 0.38);
   context.clearRect(0, 0, width, height);
+  context.shadowColor = `rgba(${look.r},${look.g},${look.b},${0.55 * look.glow * (1 + level)})`;
+  context.shadowBlur = (14 + level * 26) * ratio;
+  context.fillStyle = `rgba(${mix(235, look.r)},${mix(240, look.g)},${mix(245, look.b)},0.92)`;
   context.beginPath();
-  traceRegions(context, bands, width, height, height * MAX_RISE * (reducedMotion ? REDUCED_SCALE : 1));
-  const active = LIVE[state];
-  context.globalAlpha = active ? 1 : 0.45;
-  context.shadowColor = GLOW;
-  context.shadowBlur = active ? 12 : 0;
-  context.fillStyle = WAVE;
+  context.moveTo(0, middle - base);
+  top.forEach((h, i) => context.lineTo(i * step, middle - base - h * rise));
+  for (let i = bottom.length - 1; i >= 0; i--) context.lineTo(i * step, middle + base + bottom[i]! * rise);
+  context.closePath();
   context.fill();
-}
-
-function fitToDisplay(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D): void {
-  const ratio = window.devicePixelRatio || 1;
-  const width = Math.round(canvas.clientWidth * ratio);
-  const height = Math.round(canvas.clientHeight * ratio);
-  if (canvas.width === width && canvas.height === height) return;
-  canvas.width = width;
-  canvas.height = height;
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
 }
 
 /**
@@ -113,27 +153,57 @@ function fitToDisplay(canvas: HTMLCanvasElement, context: CanvasRenderingContext
 export function startWaveform(canvas: HTMLCanvasElement, levels: LevelSource, listener: () => ListenerState): () => void {
   const context = canvas.getContext('2d');
   if (!context) return () => {};
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = WIDTH * ratio;
+  canvas.height = HEIGHT * ratio;
+  // Contour samples every 2 device px across the line.
+  const top = new Float32Array(WIDTH / 2 + 1);
+  const bottom = new Float32Array(WIDTH / 2 + 1);
+  const slots = createSlots();
+  const current = new Float32Array(SLOTS);
+  const bands = new Float32Array(levels.bandCount);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const target = new Float32Array(levels.bandCount);
-  const display = new Float32Array(levels.bandCount);
+  const look: Look = { ...IDLE };
+  let from: Look = { ...IDLE };
+  let to = IDLE;
+  let tweenStart = 0;
+  let t = 0;
+  let level = 0;
+  let levelTarget = 0;
   let frame = 0;
-  let last = performance.now();
+  let last = 0;
 
+  const retarget = (now: number): void => {
+    const target = LOOK[listener()];
+    if (target === to) return;
+    from = { ...look };
+    to = target;
+    tweenStart = now;
+  };
+  /** Only the listening look reads the microphone; every other state hears silence. */
+  const hear = (): void => {
+    if (to !== LISTENING) return void bands.fill(0);
+    levels.read(bands);
+    levelTarget = Math.max(levelTarget, Math.min(1, spectrumLevel(bands) * 1.6));
+  };
   const draw = (now: number): void => {
     frame = requestAnimationFrame(draw);
     if (reduced.matches && now - last < REDUCED_FRAME_MS) return;
-    const state = listener();
-    if (LIVE[state]) levels.read(target);
-    else target.fill(0);
-    followEnvelope(display, target, now - last);
     last = now;
-    fitToDisplay(canvas, context);
-    drawWaveform(context, display, state, reduced.matches);
+    retarget(now);
+    tween(look, from, to, (now - tweenStart) / TWEEN_MS);
+    hear();
+    t += 0.016;
+    level += (levelTarget - level) * 0.18;
+    levelTarget *= 0.92;
+    followSlots(slots, current, bands, look, t, level);
+    traceContours(slots, current, top, bottom);
+    fillShape(context, top, bottom, look, level, 118 * ratio * (reduced.matches ? REDUCED_SCALE : 1));
   };
   const onVisibility = (): void => {
     cancelAnimationFrame(frame);
     if (document.visibilityState === 'hidden') return;
-    last = performance.now();
+    last = 0;
     frame = requestAnimationFrame(draw);
   };
 

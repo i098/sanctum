@@ -708,13 +708,13 @@ An MCP protocol session is never a meeting, workspace, or identity boundary.
 
 ## 14. Fullscreen UI implementation
 
-Recreate the visual contract in `docs/DESIGN.md` independently.
+Recreate the visual contract in `docs/DESIGN.md` independently; the one exception, on explicit request, is the waveform and its side live updates (transcript rail and agent-work feed), ported from the earlier kiosk.
 The SVG/HTML files in `design/` are newly authored visual references, not application source or copied legacy components.
 The original approved appearance is a near-black full-viewport stage with a thin irregular blue-white waveform across the center.
 Preserve its sparse header, small status copy, subtle glow, quiet footer controls, and large empty areas.
-Do not replace it with a sidebar dashboard, rounded equalizer bars, card grid, large title, or speaking orb.
+Do not replace it with a sidebar dashboard, rounded equalizer bars, card grid, large title, or speaking orb; the quiet transcript and agent-work rails beside the status are part of the contract.
 
-Implement a new Canvas 2D renderer with irregular needle peaks, asymmetric lower contour, small broad bases, and smooth attack/decay.
+The Canvas 2D renderer draws irregular needle peaks, an asymmetric lower contour, small broad bases, and smooth attack/decay.
 Feed it real microphone levels; keep animation time independent from transcript/model latency.
 Suspend visual animation when hidden and respect reduced-motion preference without stopping capture.
 The preview waveform is illustrative; production must never simulate input or show fake healthy recording status.

@@ -229,7 +229,7 @@ Depends on: T10, T19.
 
 ## T21. Deliver fullscreen listening and review overlays
 
-- [x] Recreate the approved waveform independently; connect it to real capture state and analyser levels.
+- [x] Recreate the approved waveform (since replaced, on request, by a one-to-one port of the earlier kiosk's waveform and side live updates); connect it to real capture state and analyser levels.
 - [x] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
 - [x] Keep capture independent of overlay visibility; implement focus, keyboard, reduced-motion, and error behavior.
 

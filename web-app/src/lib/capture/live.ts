@@ -11,6 +11,7 @@ import {
   type SpeechCancelMessage,
   type SpeechChunkMessage,
   StartMessage,
+  type TranscriptSegment,
 } from '@sanctum/contracts';
 import { Either, Schema } from 'effect';
 
@@ -28,6 +29,8 @@ export interface LiveOptions {
   onStatus(status: LiveStatus, reason?: RejectReason): void;
   /** Requested speech for this socket (`speech_chunk`/`speech_cancel`); only the playback module acts on it. */
   onSpeech?(message: SpeechChunkMessage | SpeechCancelMessage): void;
+  /** Live transcript segments for display; partial ones are never committed facts. */
+  onTranscript?(segment: TranscriptSegment): void;
   readonly WebSocket?: typeof WebSocket;
 }
 
@@ -47,13 +50,17 @@ export function streamUrl(listenerId: string, origin = globalThis.location.origi
   return new URL(LISTENER_STREAM_PATH.replace(':listener_id', listenerId), origin.replace(/^http/, 'ws')).href;
 }
 
-/** Requested-speech messages go to playback; everything else is socket control. */
-const speechMessage = (message: ServerControlMessage) =>
-  message._tag === 'speech_chunk' || message._tag === 'speech_cancel' ? message : null;
+const ignore = () => {};
 
-const ignoreSpeech = () => {};
+/** Requested speech goes to playback and transcript segments to display; false for socket control messages. */
+function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscript = ignore }: Pick<LiveOptions, 'onSpeech' | 'onTranscript'>): boolean {
+  if (message._tag === 'transcript') onTranscript(message.segment);
+  else if (message._tag === 'speech_chunk' || message._tag === 'speech_cancel') onSpeech(message);
+  else return false;
+  return true;
+}
 
-export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, WebSocket: Socket = WebSocket }: LiveOptions): LiveStream {
+export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
   let accepted = false;
   let stopped = false;
@@ -79,9 +86,7 @@ export function openLiveStream({ url, start, onStatus, onSpeech = ignoreSpeech, 
   const onMessage = (ws: WebSocket, data: unknown) => {
     const decoded = decodeServer(data);
     if (Either.isLeft(decoded)) return;
-    const speech = speechMessage(decoded.right);
-    if (speech) onSpeech(speech);
-    else onControl(ws, decoded.right);
+    if (!deliver(decoded.right, listeners)) onControl(ws, decoded.right);
   };
 
   const connect = () => {
