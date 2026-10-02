@@ -10,7 +10,18 @@ const FAKE_ENGINE = `
 import { createCaptureStore } from '/src/lib/capture/view.ts';
 import { createAnalyserLevels } from '/src/lib/capture/levels.ts';
 const store = createCaptureStore();
-const fake = { calls: [], reads: 0, gain: null, update: patch => store.update(patch), setGain: value => { fake.gain.gain.value = value; } };
+const transcriptListeners = new Set();
+let segments = 0;
+const fake = {
+  calls: [], reads: 0, gain: null,
+  update: patch => store.update(patch),
+  setGain: value => { fake.gain.gain.value = value; },
+  transcript: (text, speaker = null, status = 'final') => {
+    const at = segments++ * 48000;
+    const segment = { id: 'segment-' + segments, source: { epoch_id: 'epoch-1', track: 0, sample_start: at, sample_end: at + 48000 }, text, status, revision: 1, origin: 'live', provider: 'fake', model: 'fake', provider_connection_id: null, speaker_label: speaker, speaker_track_id: null, confidence: 0.9, created_at: new Date().toISOString() };
+    transcriptListeners.forEach(listener => listener(segment));
+  },
+};
 window.__capture = fake;
 let levels = null;
 const engine = {
@@ -35,6 +46,7 @@ const engine = {
   async discardRecording() {},
 };
 export function getCaptureEngine() { return engine; }
+export function subscribeTranscript(listener) { transcriptListeners.add(listener); return () => transcriptListeners.delete(listener); }
 `;
 
 interface FakeCapture {
@@ -42,6 +54,8 @@ interface FakeCapture {
   reads: number;
   update(patch: Partial<CaptureSnapshot>): void;
   setGain(value: number): void;
+  /** Delivers one live transcript segment, as the listener stream would. */
+  transcript(text: string, speaker?: string | null, status?: 'partial' | 'final'): void;
 }
 
 declare global {
@@ -50,8 +64,16 @@ declare global {
   }
 }
 
-/** Opens the listening page on the fake engine and starts listening in silence. */
+/**
+ * Opens the listening page on the fake engine and starts listening in silence.
+ * The waveform lays out its slots with Math.random once per mount, so the page gets a fixed PRNG:
+ * the pixel-measuring specs then see the same layout every run instead of a random one.
+ */
 export async function openListening(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let state = 42;
+    Math.random = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
+  });
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
   await page.goto('/');
@@ -63,53 +85,45 @@ export interface WaveProfile {
   /** CSS px above / below the baseline reached by wave-coloured pixels. */
   rise: number;
   fall: number;
+  /** Page CSS px. */
   baseline: number;
   left: number;
   right: number;
-  /** Separate columns runs rising more than 4 px: the visible needles. */
+  /** Separate column runs rising above half the tallest column: the needles standing out of the ink. */
   needles: number;
-  /** Most opaque wave pixel on the baseline row, 0..255. */
-  brightness: number;
+  /** Page y of the highest ink in each page-x CSS column; the baseline where a column has none. */
+  tops: number[];
 }
 
-/** Scans the waveform canvas for pale wave ink (not the darker blue glow). */
+/** Scans the waveform canvas for pale wave ink (not the darker glow). */
 export function waveProfile(page: Page): Promise<WaveProfile> {
   return page.evaluate(() => {
     const canvas = document.querySelector('canvas')!;
-    const ratio = canvas.width / canvas.clientWidth;
+    const box = canvas.getBoundingClientRect();
+    const ratio = canvas.width / box.width;
     const { data, width, height } = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
-    const ink = (x: number, y: number): number => {
-      const at = (y * width + x) * 4;
-      return (data[at] ?? 0) > 100 ? (data[at + 3] ?? 0) : 0;
-    };
-    const rows = Array.from({ length: height }, (_, y) => {
-      let count = 0;
-      for (let x = 0; x < width; x++) if (ink(x, y)) count++;
-      return count;
-    });
+    const ink = (x: number, y: number): boolean => (data[(y * width + x) * 4] ?? 0) > 100;
+    const columns = Array.from({ length: width }, (_, x) => x);
+    const rows = Array.from({ length: height }, (_, y) => columns.filter(x => ink(x, y)).length);
     const baseline = rows.indexOf(Math.max(...rows));
-    let left = width, right = 0, top = baseline, bottom = baseline, needles = 0, inNeedle = false, brightness = 0;
-    for (let x = 0; x < width; x++) {
-      brightness = Math.max(brightness, ink(x, baseline));
-      if (ink(x, baseline)) { left = Math.min(left, x); right = Math.max(right, x); }
-      let columnTop = baseline;
-      while (columnTop > 0 && ink(x, columnTop - 1)) columnTop--;
-      let columnBottom = baseline;
-      while (columnBottom < height - 1 && ink(x, columnBottom + 1)) columnBottom++;
-      top = Math.min(top, columnTop);
-      bottom = Math.max(bottom, columnBottom);
-      const tall = baseline - columnTop > 4 * ratio;
-      if (tall && !inNeedle) needles++;
-      inNeedle = tall;
-    }
+    /** Ink pixels running from the baseline in direction `dy` in column `x`, stopping at the canvas edge. */
+    const reach = (x: number, dy: number): number => {
+      let y = baseline;
+      while (y + dy >= 0 && y + dy < height && ink(x, y + dy)) y += dy;
+      return Math.abs(y - baseline);
+    };
+    const above = columns.map(x => reach(x, -1));
+    const rise = Math.max(...above);
+    const tall = (columnHeight = 0): boolean => columnHeight > rise / 2 && columnHeight > 4 * ratio;
+    const onLine = columns.filter(x => ink(x, baseline));
     return {
-      rise: (baseline - top) / ratio,
-      fall: (bottom - baseline) / ratio,
-      baseline: baseline / ratio,
-      left: left / ratio,
-      right: right / ratio,
-      needles,
-      brightness,
+      rise: rise / ratio,
+      fall: Math.max(...columns.map(x => reach(x, 1))) / ratio,
+      baseline: box.top + baseline / ratio,
+      left: box.left + onLine[0]! / ratio,
+      right: box.left + onLine.at(-1)! / ratio,
+      needles: above.filter((columnHeight, x) => tall(columnHeight) && !tall(above[x - 1])).length,
+      tops: Array.from({ length: Math.round(width / ratio) }, (_, column) => box.top + (baseline - above[Math.round(column * ratio)]!) / ratio),
     };
   });
 }

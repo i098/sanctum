@@ -1,9 +1,9 @@
 # Build Sanctum from this handoff
 
 Implement a new application in `undeemed/sanctum` using tasks/plan.md and tasks/todo.md.
-This repository intentionally contains no old application code.
+This repository intentionally contains no old application code, apart from one requested exception: the listening waveform and its side live updates are ported from the earlier kiosk (docs/DESIGN.md).
 Do not fetch or copy the old source as a shortcut.
-Recreate the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.
+Recreate the rest of the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.
 
 Deliver a website-first ambient listener for room computers and laptops.
 It remains silent until requested, automatically separates meetings, saves complete transcripts and private R2 recordings, builds time-aware selective memory, performs research and previously authorized Pipedream actions, and exposes shared context through TypeScript/Python SDKs and authenticated remote MCP.

@@ -2,7 +2,8 @@ import { createClient } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
-import { getCaptureEngine } from './engine.ts';
+import { getCaptureEngine, subscribeTranscript } from './engine.ts';
+import { startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import { startWaveform } from './waveform.ts';
@@ -122,7 +123,27 @@ function Footer({ engine, snapshot, onOpen, onFailure }: FooterProps) {
   );
 }
 
-/** Fullscreen listening view: waveform stage, sparse header, quiet footer controls, secondary overlays. */
+/** Side live updates: what the room said on the left, agent work on the right. */
+function Rails({ live }: { live: boolean }) {
+  const lines = useRef<HTMLDivElement>(null);
+  const feed = useRef<HTMLDivElement>(null);
+  useEffect(() => startTranscriptRail(lines.current!, subscribeTranscript), []);
+  useEffect(() => startActionFeed(feed.current!, client), []);
+  return (
+    <div className="listen-rails">
+      <section className="listen-tlog" aria-label="Live transcript" data-live={live}>
+        <p className="eyebrow"><i className="dot" />Listening</p>
+        <div ref={lines} className="tlines" />
+      </section>
+      <section className="listen-feed" aria-label="Agent work">
+        <p className="eyebrow"><i className="dot" />Agent work</p>
+        <div ref={feed} className="frows" />
+      </section>
+    </div>
+  );
+}
+
+/** Fullscreen listening view: waveform stage, sparse header, side live updates, quiet footer controls, secondary overlays. */
 export function ListenPage() {
   const engine = getCaptureEngine();
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
@@ -147,6 +168,7 @@ export function ListenPage() {
         <p className="listen-state">{snapshot.listener}</p>
         <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
       </section>
+      <Rails live={snapshot.listener === 'listening'} />
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />

@@ -72,18 +72,19 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 
 Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet,buffer,uploader,orphans}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
 
-- `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle.
+- `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle; `subscribeTranscript(listener)` fans out live transcript segments from the listener stream.
 - `controller.ts`: `createCaptureController(deps): CaptureView & { dispose(): void }`, publishing through `createCaptureStore`.
 - Client of `ListenersApi`, `LISTENER_STREAM_PATH`, `StartMessage`, `encodePcmFrame` and `RecordingChunkManifest`.
 - Hands group ownership to serve through the `HeartbeatReceipt.owner` flag only.
 
 ### listen-ui (T21 visual core)
 
-Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,listen.css,Dialog.tsx,ReviewDialog.tsx}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
+Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,listen.css,Dialog.tsx,ReviewDialog.tsx}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
 
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
-- `waveform.ts`: `drawWaveform(context, bands: Float32Array, state: ListenerState, reducedMotion: boolean)`; samples never enter React state.
-- Imports only `getCaptureEngine` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
+- `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.
+- `rails.ts`: `startTranscriptRail(lines)` and `startActionFeed(feed, client)`, the kiosk's side live updates.
+- Imports only `getCaptureEngine`, `subscribeTranscript` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
 - Review tabs (T21 box 2) live in `ReviewPanels.tsx` and `review-data.ts`. They added three compatible API fields: `GET /meetings/{id}/actions` (`listMeetingActions` in `ActionsApi` and actions.ts), an optional `meeting_id` on `GET /context/changes`, and `pieces` plus `sample_rate` on `RecordingAccess` (playback.ts) to map a source sample to a playback offset.
 
 ### models (T04, T15)

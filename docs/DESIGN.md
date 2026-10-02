@@ -2,8 +2,9 @@
 
 The user's final choice is a quiet, fullscreen, Jarvis-like listening surface.
 Preserve the recognizable fluctuating bar and overall composition almost 1:1.
-The original application source is intentionally absent.
-The SVG/HTML references here are independent illustrations made from the approved visual decisions.
+The original application source is otherwise absent.
+On explicit request, the waveform and the side live updates are ported one-to-one from the earlier Sanctum kiosk (42nights/sanctum `web-app/src/pages/kiosk`); nothing else from that source was copied.
+The SVG/HTML references here are illustrations made from the approved visual decisions.
 
 ## Composition at 1280 × 720
 
@@ -11,16 +12,19 @@ The SVG/HTML references here are independent illustrations made from the approve
 - Header begins about 32 px from each horizontal edge and 28 px from the top.
 - Upper left: small Sanctum wordmark, then a compact local time/date block.
 - Upper right: current meeting title and a quiet participant/duration line.
-- The waveform spans approximately 760 px, centered horizontally, with its baseline around y=316 in the reference composition.
-- Waveform drawing area is approximately 760 × 300; its area remains mostly empty around narrow spikes.
-- Below the waveform: small lowercase `listening` status and one quiet helper line.
+- The waveform is the kiosk's 760 px line (at most 92% of the viewport width), centered horizontally with its baseline around y=316 in the reference composition; narrower lines scale every size with it, as the kiosk's canvas did.
+- Its canvas covers the viewport, so loud needles and their glow keep their full shape instead of being cut flat at the kiosk's 300 px stage edges.
+- The stage remains mostly empty around narrow spikes.
+- Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text.
 - Footer sits approximately 24–32 px from the bottom and sides.
 - Lower left: a tiny state dot and brief capture/context health text.
 - Lower right: Pause, Review, Agents, Fullscreen, Settings.
-- No permanent sidebar, large heading, cards, transcript rail, or agent dialogue feed on the default screen.
+- Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
+- No permanent sidebar, large heading, or cards on the default screen.
 
 Keep proportions responsive rather than treating these measurements as absolute at every resolution.
 A smaller laptop should retain the same visual hierarchy and avoid scrolling on the main listening screen.
+On phones the status tucks under the waveform, the rails stack full width above a two-row footer, and an empty agent-work feed is hidden.
 
 ## Tokens
 
@@ -36,7 +40,9 @@ A smaller laptop should retain the same visual hierarchy and avoid scrolling on 
 | Blue accent | `#3d7dff` |
 | Cyan state accent | `#22d3c5` |
 | Amber warning | `#f2a23b` |
-| Waveform fill | Pale blue-white, approximately `#b9c4f9` |
+| Waveform ink | Pale white mixed 62/38 with the state accent: about `#a9c4f9` idle, `#9fe5e3` listening |
+| Live dot / done | Lime `#c6f24e` |
+| Failed | Red `#ff5d5d` |
 
 Use the system sans-serif stack for readable content and a system monospace stack for tiny state/navigation labels.
 Header labels are roughly 10–14 px; status below the waveform is roughly 12 px.
@@ -44,23 +50,30 @@ Muted information remains readable; do not use unreadably low opacity as the onl
 
 ## Waveform geometry
 
-Reimplement the drawing independently with Canvas 2D or another native rendering primitive.
-Use a thin continuous horizontal baseline with roughly 33 irregular regions capable of forming spikes.
-Peaks are sharp needles with small broad bases, not rounded vertical equalizer bars.
+Canvas 2D, ported from the kiosk's orb canvas: a thin continuous baseline carrying 33 slots.
+Each slot has a jittered position, a needle half-width, an underside ratio between 0.45 and 1, a breathing phase and one shuffled spectrum band, fixed per page load.
+Peaks are sharp needles (steep power falloff) with a wide, shallow ink-bleed base, drawn as one closed shape around the baseline; they are not rounded equalizer bars.
 The underside is asymmetric rather than a perfect mirror.
-Amplitude is concentrated away from the edges and the line has a stable visual identity between frames.
-A subtle blue glow surrounds pale ink; avoid bright neon gradients or a large halo.
+Amplitude fades toward the edges and the line keeps a stable visual identity between frames.
+The glow is a canvas shadow in the state colour that grows with the overall level; avoid bright neon gradients or a large halo.
 
 ## Motion
 
-- Listening reacts to actual microphone energy/spectrum, with restrained amplitude and no associated sound.
-- Use quick attack and slower release so speech peaks feel responsive without jitter.
-- Quiet input returns toward a thin line with very subtle movement; it does not imply audio is being saved successfully.
-- Paused input settles to a subdued line and changes the visible state.
+- Listening reacts to actual microphone spectrum and level, with no associated sound: each slot follows its band with fast attack and slow decay.
+- State looks follow the kiosk table: stopped and paused use its idle look, starting and reconnecting its connecting look, listening and degraded its listening look; changes tween over 0.9 s with a quartic ease-out.
+- Only listening states read the microphone; every other state breathes gently without reacting to audio, so the line never implies audio is being captured or saved.
+- Quiet input returns toward a thin, gently breathing line.
 - The requested speaking state may react to output audio, but background work never causes unsolicited sound.
-- Reduced-motion mode keeps state readable and limits decorative movement without affecting capture.
+- Reduced-motion mode draws about four frames a second at 45% amplitude, skips rail motion, and keeps state readable without affecting capture.
 - Stop drawing when the page is hidden; do not stop microphone capture solely because the canvas stops drawing.
 - Simulated animation in the design reference is not production behavior.
+
+## Side live updates
+
+Both rails are bottom-anchored in the band from the status down to the footer and show whole lines only; whatever the band cannot fit is dropped or hidden, never cut mid-line.
+
+- Transcript rail (left, under a `LISTENING` eyebrow): final live transcript segments from the listener stream, prefixed `S0:`-style when the speaker is known; partial segments never appear. Newest at the bottom, sliding up 6 px over 0.2 s; the band shows only whole lines that fit below the waveform, so short screens such as 1280×720 show fewer, never more than ten, and the oldest collapses over 0.3 s. The three newest lines use secondary text, older ones the muted colour, never dimmer. The eyebrow dot pulses lime only while listening.
+- Agent-work feed (right, under an `AGENT WORK` eyebrow): the newest open meeting's action receipts, each with its action key, an icon and a truthful state label. It keeps the latest five and shows only the whole rows that fit the band below the waveform, so short screens such as 1280×720 show fewer. New rows slide in from 24 px right over 0.5 s, the oldest beyond five collapses over 0.4 s, rows older than the newest two rest at 40%, and a row turning done flashes its lime edge. When the meeting closes, is interrupted or is replaced by another, every row collapses and the closed meeting is no longer polled. Receipts are polled every 5 s until a pushed action event exists.
 
 ## Secondary views
 
@@ -73,6 +86,6 @@ Keep controls keyboard-accessible, trap focus correctly in dialogs, and return f
 ## Acceptance
 
 Compare an implementation screenshot with `design/listener-reference.svg` at 1280 × 720.
-Check header/footer placement, waveform width and baseline, empty space, colors, typography scale, and absence of dashboard furniture.
+Check header/footer placement, waveform width and baseline, the rails' band, empty space, colors, typography scale, and absence of dashboard furniture.
 Check a real audio sample for sharp/asymmetric peaks, quick attack, slow release, and silence on all passive transitions.
 The reference is a layout/motion target, not an exact audio waveform to replay.

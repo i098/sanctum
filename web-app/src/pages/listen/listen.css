@@ -1,5 +1,12 @@
 /* Fullscreen listening view (docs/DESIGN.md). Offsets are measured from the 1280 × 720 reference. */
 .listen {
+  /*
+   * Below the reference baseline (y = 316 of 720), room for the deepest underside plus its glow:
+   * 183 px measured at full-scale input with a 760 px line, rounded up to 220 px; it scales with
+   * narrower lines. Status and rails start here so ink never runs under text.
+   */
+  --stage-floor: calc(100% * 316 / 720 + min(220px, 92vw * 220 / 760));
+
   position: fixed;
   inset: 0;
   background: #0a0c10;
@@ -12,6 +19,7 @@
   margin: 0;
 }
 
+/* Covers the viewport so loud needles and their glow are never cut; waveform.ts places the line. */
 .listen-wave {
   position: absolute;
   inset: 0;
@@ -60,7 +68,7 @@
 
 .listen-status {
   position: absolute;
-  top: 65.3%;
+  top: var(--stage-floor);
   left: 0;
   right: 0;
   display: flex;
@@ -141,6 +149,188 @@
 .listen button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/*
+ * Side live updates, ported from the earlier kiosk's .tlog/.feed rules: the room's transcript on
+ * the left, agent work on the right, bottom-anchored in the band beside the status and above the
+ * footer so neither ever covers the line or the status. Aging is a colour step, never an opacity
+ * fade below the muted tier.
+ */
+.listen-rails {
+  position: absolute;
+  top: var(--stage-floor);
+  left: 32px;
+  right: 32px;
+  bottom: 68px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+}
+
+.listen-tlog,
+.listen-feed {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.listen-tlog {
+  width: min(360px, calc(50% - 150px));
+  font-size: 12.5px;
+  pointer-events: none;
+}
+
+.listen-feed {
+  width: min(400px, calc(50% - 150px));
+  font-size: 13.5px;
+}
+
+.listen-rails .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.listen-feed .eyebrow {
+  justify-content: flex-end;
+}
+
+.listen-rails .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2c3545;
+  transition: background 0.4s;
+}
+
+.listen-tlog[data-live='true'] .dot {
+  background: #c6f24e;
+  box-shadow: 0 0 6px rgb(198 242 78 / 0.5);
+  animation: listen-pulse 1.6s ease-in-out infinite;
+}
+
+.listen-rails .tlines,
+.listen-rails .frows {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.listen-rails .tline {
+  margin-top: 7px;
+  line-height: 1.5;
+  color: #a7adb8;
+  overflow-wrap: anywhere;
+}
+
+/* Breathing room under the eyebrow. */
+.listen-rails .tline:first-child {
+  margin-top: 12px;
+}
+
+.listen-rails .tline.old {
+  color: #8b919c;
+}
+
+.listen-rails .frow {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-top: 8px;
+  padding: 14px 12px 14px 16px;
+  color: #c2ccdb;
+  line-height: 1.45;
+}
+
+.listen-rails .frow[hidden] {
+  display: none;
+}
+
+.listen-rails .fedge {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: #2c3545;
+}
+
+.listen-rails .frow.done .fedge {
+  background: #c6f24e;
+}
+
+.listen-rails .frow.failed .fedge {
+  background: #ff5d5d;
+}
+
+.listen-rails .fic {
+  flex: 0 0 16px;
+  align-self: center;
+}
+
+.listen-rails .fic svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.listen-rails .ftitle {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.listen-rails .fstat {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #8b919c;
+}
+
+.listen-rails .fstat.in_flight {
+  color: #f2a23b;
+  animation: listen-pulse 1.2s ease-in-out infinite;
+}
+
+.listen-rails .fstat.unknown {
+  color: #f2a23b;
+}
+
+.listen-rails .fstat.done {
+  color: #c6f24e;
+}
+
+.listen-rails .fstat.failed {
+  color: #ff5d5d;
+}
+
+@keyframes listen-pulse {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .listen-rails .dot,
+  .listen-rails .fstat {
+    animation: none;
+  }
 }
 
 .listen-dialog {
@@ -289,4 +479,55 @@
 .listen-recording p {
   margin: 8px 0 0;
   font-size: 12px;
+}
+
+/* Phones: status tucks under the line, the rails stack full width above a two-row footer. */
+@media (max-width: 640px) {
+  .listen-wordmark,
+  .listen-clock {
+    white-space: nowrap;
+  }
+
+  .listen-rails {
+    top: calc(var(--stage-floor) + 88px);
+    bottom: 96px;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-end;
+    gap: 16px;
+  }
+
+  .listen-tlog,
+  .listen-feed {
+    width: auto;
+  }
+
+  .listen-feed:has(.frows:empty) {
+    display: none;
+  }
+
+  .listen-feed .eyebrow {
+    justify-content: flex-start;
+  }
+
+  /* The feed keeps its newest row whole; the transcript takes the rest of the band. */
+  .listen-feed {
+    flex-shrink: 0;
+  }
+
+  .listen-feed .frow:not(:last-child) {
+    display: none;
+  }
+
+  .listen-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .listen-controls {
+    justify-content: space-between;
+    gap: 0;
+    margin: 0 -8px;
+  }
 }
