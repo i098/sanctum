@@ -2,7 +2,7 @@
 
 Evidence for the clean build of [tasks/plan.md](../tasks/plan.md) at the delivery branch head.
 Each state and acceptance row below says what was run, where the proof lives, and what remains unrun and why.
-Nothing here claims real-world model quality, delivered external side effects, deployment or uptime.
+Nothing here claims real-world model quality, delivered external side effects or uptime; the one deployment is described under Deployed.
 
 ## States
 
@@ -12,9 +12,9 @@ Nothing here claims real-world model quality, delivered external side effects, d
 | Locally tested | Yes | `npm run check:app`: workspace typechecks, 443 Vitest tests against MySQL 8.4, 36 Playwright specs in Chromium, benchmark manifest, benchmark correctness smoke, accelerated day replay. Python SDK: 7 unittest cases in an isolated venv. `npm run check` for the handoff. Rust benchmark reference: 9 `cargo test` cases and a matched `node scripts/benchmark-compare.ts --smoke` run. |
 | Model-evaluated | No (unrun) | No approved real meeting recordings or provider credentials were available; model and speaker behavior is tested only with fixture providers (`fixtureLlm`, fixture Deepgram/pyannote/Cartesia/Pipedream). |
 | Web-built | Yes | `npm run build -w web-app` (Vite) inside `check:app`; the API serves the build (`server/tests/capabilities.test.ts`, deep links and security headers). |
-| Migrated | Disposable databases only | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). No production or staging migration was run: not authorized. |
-| Deployed | No | No deployment target or authorization. `docker-compose.yml`, `server/Dockerfile` and `Caddyfile` exist; the compose HTTPS smoke was run only by the serve slice on its own branch. |
-| Live-verified | No | No live microphone session against real providers, no staging environment and no 24-hour soak. |
+| Migrated | Disposable databases and the Cloudflare deployment's database | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). The `sanctum` database on the Aiven MySQL 8.4 service (`sql_require_primary_key=1`) was migrated with the image's `node server/dist/migrate.js` over verified TLS; every migration applied unchanged. |
+| Deployed | Yes, development mode | Cloudflare, 42nights account ([operations.md](operations.md#cloudflare)): Worker `sanctum` at `https://sanctum.42nights.dev` (custom domain, the only hostname), Container applications `sanctum-sanctumapi` and `sanctum-sanctumjobs`, R2 bucket `sanctum-recordings`, `SANCTUM_ENV=development` with no provider keys. The deployed commit is recorded on the pull request that added the deployment. |
+| Live-verified | Deployment only | Through the Worker at `sanctum.42nights.dev`: the website loads, `/healthz` is ok and `/readyz` is ready (MySQL reachable over TLS, schema current), the secret login link sets the owner session and `/api/v1/meetings` then answers 200 (401 without it), Listen in Chromium with a fake microphone upgrades the listener WebSocket and uploads 30-second chunks to the private bucket, a presigned GET for an uploaded chunk returns the WAV (unsigned is refused), and the job worker keeps polling MySQL while the API container sleeps. No live microphone session against real providers, no meeting playback through Review (detected meetings start restricted), no staging environment and no 24-hour soak. |
 
 ## Acceptance (plan section 18)
 
@@ -45,7 +45,7 @@ Nothing here claims real-world model quality, delivered external side effects, d
 | Approved model/audio comparison | Needs approved real meeting recordings and provider credentials; neither is in scope. |
 | 24-hour staging soak | Needs a staging environment and 24 hours of wall-clock time; the accelerated replay covers one synthetic day of source time only. |
 | Rust/TypeScript parity | Needs a controlled benchmark host named in the manifest (T01); the matched harness and one uncontrolled-host run exist, and the steps a controlled run must take are in [benchmarks/README.md](../benchmarks/README.md). |
-| Production migration, deployment, package publication, recording activation | Each needs its own authorization (plan section 16, [DECISIONS.md](DECISIONS.md)). |
+| Production activation, package publication, recording activation | Each needs its own authorization (plan section 16, [DECISIONS.md](DECISIONS.md)); the Cloudflare deployment runs in development mode. |
 | Sign-in issuer, MCP authorization server, retention, outside-meeting speech | Open decisions; production activation refuses to start until they are selected. |
 
 ## Open implementation items

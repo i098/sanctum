@@ -44,6 +44,13 @@ This unassigned-speech buffer is different from the browser queue of recordings 
 An actual deployment also needs a timezone, identity configuration, MySQL/R2/provider credentials, approved audio fixtures, and an authorized hosting target.
 These secrets and production resources do not belong in this repository.
 
+## Deployment decision — 2026-10-02
+
+Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.
+MySQL is an Aiven MySQL 8.4 service reached only over TLS verified with its project CA; recordings stay in a private R2 bucket in the same account.
+Anyone may open the site; until a sign-in issuer is selected, a secret login link hands the browser a pre-seeded owner session, and visitors without it have no session.
+This does not select the sign-in issuer or any other open decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
+
 ## Runtime decision — 2026-09-28
 
 Accepted: all-TypeScript application with Effect, replacing the earlier mixed-language plan.

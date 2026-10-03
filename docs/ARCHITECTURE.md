@@ -8,7 +8,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 - `fm/sanctum-build-v1` is the integration branch; every slice branches from it and merges back into it.
 - A slice edits only files it owns below, plus one registration line in each hot file it is listed against.
 - Changes to another slice's files, tables or contracts go through the integration branch, never directly.
-- A slice may amend migration statements for its own tables until the pull request merges (nothing is deployed).
+- A slice may amend migration statements for its own tables until the pull request merges; merged migrations may already be applied to the deployed database ([operations.md](operations.md#cloudflare)), so they are never edited.
 - When a sibling is not merged yet, build a stand-in at exactly its path and export name, headed `// stand-in: replaced by the <sibling> slice at integration`, or use a test-side fake.
 - List every stand-in you created in your hand-off; integration keeps the real file and deletes the stand-in.
 - Signatures below are the contract; extend them compatibly, never rename them.
@@ -170,6 +170,10 @@ Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of
 
 - `capture-groups.ts`: `claimGroupLease(input: { workspace_id; capture_group_id; listener_id }): Effect<boolean, SqlError, R>`, called inside media's heartbeat, and `holdsGroupLease(workspace_id, listener): Effect<boolean, SqlError, R>`, required by live `start` and watermark writes.
 - Serves built web assets from main.ts behind the API routes.
+
+### deploy
+
+Owns `deploy/cloudflare/` (Worker, Container classes, secret login link, `wrangler.jsonc`) and the Cloudflare section of [operations.md](operations.md#cloudflare); runs the `server/Dockerfile` image unchanged.
 
 ## Hot files
 
