@@ -94,6 +94,9 @@ describe('job ledger', () => {
         expect(ids).not.toContain(later);
         expect(Option.isNone(yield* claimJob(KINDS, LEASE_MS))).toBe(true);
 
+        // A seconds-old table's persisted statistics can still say it is empty, making a full scan look
+        // cheaper than an index range inflated by not-yet-purged entries; plan against current statistics.
+        yield* sql`ANALYZE TABLE jobs`;
         const plan = yield* sql<{ key: string | null }>`EXPLAIN SELECT id FROM jobs
           WHERE status = 'pending' AND available_at <= UTC_TIMESTAMP(6) AND kind IN ('context.refresh')
           ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
