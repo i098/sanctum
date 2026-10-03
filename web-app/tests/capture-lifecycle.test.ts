@@ -714,10 +714,12 @@ describe('capture lifecycle', () => {
     h.feed(0.1);
     h.accept();
     h.setOwner(false);
+    const lossBeat = h.calls.heartbeat.length;
     await vi.advanceTimersByTimeAsync(15_000);
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'lease_lost', epochId: null });
     expect(h.lives[0]!.stopped).toBe('close');
-    expect(h.calls.heartbeat.at(-1)).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
+    // The beat that learned of the other owner; the sealed tail's refused upload may beat again, on real-time hashing.
+    expect(h.calls.heartbeat[lossBeat]).toMatchObject({ lease_generation: 1, state: 'listening', buffered_chunks: 0 });
   });
 
   it('keeps its own generation after losing the lease and cannot restart live capture while the winner holds it', async () => {
