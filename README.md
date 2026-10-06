@@ -6,7 +6,7 @@ An open-source TypeScript + Effect project for silent meeting capture, source-li
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status: implementation blueprint](https://img.shields.io/badge/status-implementation%20blueprint-22d3c5)](tasks/todo.md)
 
-[Read the blueprint](https://undeemed.github.io/sanctum/) · [Preview the interface](https://undeemed.github.io/sanctum/design/listener-reference.html) · [Build handoff](HANDOFF.md) · [Contribute](CONTRIBUTING.md)
+[Read the blueprint](https://i098.github.io/sanctum/) · [Preview the interface](https://i098.github.io/sanctum/design/listener-reference.html) · [Build handoff](HANDOFF.md) · [Contribute](CONTRIBUTING.md)
 
 **Status: pre-implementation.**
 This repository contains the product specification, architecture, 26-task build plan, independent visual references, and working documentation CI/CD.
@@ -84,14 +84,14 @@ The full selection is in [plan section 04](tasks/plan.md#04-chosen-technology-st
 Requires Node.js 24.12+; CI uses Node.js 24 LTS.
 
 ```bash
-git clone https://github.com/undeemed/sanctum.git
+git clone https://github.com/i098/sanctum.git
 cd sanctum
 npm ci
 npm run check
 npm run docs:build
 ```
 
-Open `_site/index.html` in a browser, or use the [published documentation](https://undeemed.github.io/sanctum/).
+Open `_site/index.html` in a browser, or use the [published documentation](https://i098.github.io/sanctum/).
 After source edits, run `npm run docs:render` before checking and committing generated files.
 These commands validate and assemble documentation, not the future meeting application.
 Markdown and visual references work offline; enhanced diagram and code rendering load CDN assets.
@@ -99,7 +99,7 @@ Markdown and visual references work offline; enhanced diagram and code rendering
 ## CI/CD
 
 Pull requests and pushes validate the handoff, relative links, SVG/JSON references, JavaScript syntax, and generated-file consistency.
-Successful pushes to `main` publish the documentation to [GitHub Pages](https://undeemed.github.io/sanctum/).
+Successful pushes to `main` publish the documentation to [GitHub Pages](https://i098.github.io/sanctum/).
 Fallow blocks new code findings; Sentrux blocks structural regressions against the committed floor and base revision.
 Conventional Commit headers and PR titles are checked with a 72-character limit.
 Publication waits for all checks.

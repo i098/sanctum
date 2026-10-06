@@ -203,8 +203,8 @@ export function buildSite(root: string) {
   mkdirSync(site);
   for (const name of [...FILES, ...DIRECTORIES]) cpSync(join(root, name), join(site, name), { recursive: true, filter: source => !IGNORED.has(source.split('/').at(-1)!) });
   writeFileSync(join(site, '.nojekyll'), '');
-  writeFileSync(join(site, 'robots.txt'), 'User-agent: *\nAllow: /\nSitemap: https://undeemed.github.io/sanctum/sitemap.xml\n');
-  writeFileSync(join(site, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://undeemed.github.io/sanctum/</loc></url><url><loc>https://undeemed.github.io/sanctum/design/listener-reference.html</loc></url></urlset>\n');
+  writeFileSync(join(site, 'robots.txt'), 'User-agent: *\nAllow: /\nSitemap: https://i098.github.io/sanctum/sitemap.xml\n');
+  writeFileSync(join(site, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://i098.github.io/sanctum/</loc></url><url><loc>https://i098.github.io/sanctum/design/listener-reference.html</loc></url></urlset>\n');
   console.log(`PASS: allowlisted site assembled (${files(site).length} files)`);
 }
 
