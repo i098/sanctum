@@ -93,4 +93,4 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 
 The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted) but not configured on any deployment yet.
 Saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
-Until they are selected, production activation is refused, no recording expires automatically.
+Until they are selected, production activation is refused and no recording expires automatically.
