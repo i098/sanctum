@@ -106,9 +106,7 @@ function MeetingLine() {
       shown = meeting_id;
       setMeeting(null);
       // A failed read shows no line rather than a false one; a stale read never replaces a newer meeting.
-      if (meeting_id !== null) client.meetings.getMeeting({ meeting_id }).then(read => read.id === shown && setMeeting(read), () => {
-        if (shown === meeting_id) shown = null;
-      });
+      if (meeting_id !== null) client.meetings.getMeeting({ meeting_id }).then(read => read.id === shown && setMeeting(read), () => { shown = shown === meeting_id ? null : shown; });
     });
   }, []);
   if (meeting === null) return null;
