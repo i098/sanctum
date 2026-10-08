@@ -315,7 +315,7 @@ describe('chunk uploader', () => {
     const store = await pendingWith(2);
     server.faults.push('unauthorized');
 
-    expect(await drain(store, baseUrl).run()).toEqual(Exit.fail('unauthorized'));
+    expect(await drain(store, baseUrl).run()).toEqual(Exit.fail('signed_out'));
     expect(store.chunks.size).toBe(2);
     expect(server.requests).toHaveLength(1);
   });

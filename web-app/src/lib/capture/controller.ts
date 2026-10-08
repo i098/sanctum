@@ -9,7 +9,7 @@ import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpoc
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
-import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type StopReason } from './live.ts';
+import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type RejectReason, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
@@ -64,6 +64,8 @@ type StoredListener = { -readonly [K in keyof typeof StoredListener.Type]: (type
 const decodeStored = Schema.decodeUnknownOption(Schema.parseJson(StoredListener));
 const decodeStart = Schema.decodeUnknownSync(StartMessage);
 const isSampleRate = Schema.is(SampleRate);
+const failureTag = (exit: Exit.Exit<unknown, { readonly _tag: string }>) => (Exit.isFailure(exit) ? Option.getOrNull(Cause.failureOption(exit.cause))?._tag : undefined);
+const rejectedIssue = (reason?: RejectReason): CaptureIssue => (reason === 'unauthorized' ? 'signed_out' : 'socket_unavailable');
 
 interface Epoch {
   readonly id: CaptureEpochId;
@@ -289,7 +291,8 @@ class CaptureController implements CaptureView {
   /** Registers when needed and claims the lease before any epoch opens, so the first `start` carries a live generation. */
   private async claimListener(buffer: CaptureBuffer, retry = true): Promise<StoredListener> {
     await this.ensureListener(buffer);
-    await this.beat();
+    const exit = await this.beat();
+    if (exit && failureTag(exit) === 'Unauthenticated') await Effect.runPromise(exit);
     return this.listener ?? (retry ? this.claimListener(buffer, false) : this.ensureListener(buffer));
   }
 
@@ -397,7 +400,7 @@ class CaptureController implements CaptureView {
       void epoch.assembler.close();
       this.session!.epoch = null;
       this.live = null;
-    } else if (status === 'rejected') this.issue = 'socket_unavailable';
+    } else if (status === 'rejected') this.issue = rejectedIssue(reason);
     this.publish();
   }
 
@@ -491,9 +494,9 @@ class CaptureController implements CaptureView {
     this.publish();
   }
 
-  private async beat(): Promise<void> {
+  private async beat() {
     const listener = this.listener;
-    if (listener === null) return this.refreshPending();
+    if (listener === null) return void (await this.refreshPending());
     this.startDrain();
     const buffer = await this.buffer?.catch(() => null);
     const payload = {
@@ -503,7 +506,9 @@ class CaptureController implements CaptureView {
       buffered_chunks: this.pending,
       storage_bytes_free: buffer?.freeBytes ?? null,
     };
-    this.onHeartbeat(listener, await Effect.runPromiseExit(this.client.heartbeat({ path: { listener_id: listener.id }, payload })));
+    const exit = await Effect.runPromiseExit(this.client.heartbeat({ path: { listener_id: listener.id }, payload }));
+    this.onHeartbeat(listener, exit);
+    return exit;
   }
 
   private onHeartbeat(listener: StoredListener, exit: Exit.Exit<{ readonly owner: boolean; readonly lease_generation: StoredListener['lease_generation'] }, { readonly _tag: string }>): void {
@@ -512,11 +517,14 @@ class CaptureController implements CaptureView {
       this.saveListener({ ...listener, lease_generation: exit.value.lease_generation });
       if (this.session?.listener.id === listener.id) this.session.listener = this.listener!;
       this.onOwnership(exit.value.owner);
-    } else if (Option.getOrNull(Cause.failureOption(exit.cause))?._tag === 'NotFound') {
-      this.listener = null; // the server no longer knows this listener; the next start registers again
-      if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
-      if (this.session?.listener.id === listener.id) this.halt('listener_removed', false);
-      void this.refreshPending(); // its chunks are now removed-listener audio: kept locally, no longer pending
+    } else {
+      const tag = failureTag(exit);
+      if (tag === 'NotFound') {
+        this.listener = null; // the server no longer knows this listener; the next start registers again
+        if (this.storedListener()?.id === listener.id) this.storage.removeItem(LISTENER_KEY);
+        if (this.session?.listener.id === listener.id) this.halt('listener_removed', false);
+        void this.refreshPending(); // its chunks are now removed-listener audio: kept locally, no longer pending
+      } else if (tag === 'Unauthenticated' && this.session !== null) this.halt('signed_out', false);
     }
   }
 
@@ -610,9 +618,10 @@ class CaptureController implements CaptureView {
       Effect.promise(() => this.buffer!).pipe(Effect.flatMap((buffer) => drainPending(buffer, this.client, listener.id, events, this.deps.uploader))),
     );
     this.drain = fiber;
-    fiber.addObserver(() => {
+    fiber.addObserver((exit) => {
       this.drain = null;
       this.uploading = false;
+      if (Exit.isFailure(exit) && Option.getOrNull(Cause.failureOption(exit.cause)) === 'signed_out') this.issue = 'signed_out';
       void this.refreshPending();
     });
   }

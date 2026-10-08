@@ -36,7 +36,7 @@ export interface UploaderOptions {
 }
 
 /** Why a drain stopped with audio still buffered. */
-export type DrainStop = 'unauthorized' | 'unavailable' | 'storage';
+export type DrainStop = 'signed_out' | 'unauthorized' | 'unavailable' | 'storage';
 
 class Retryable extends Data.TaggedError('Retryable')<{ readonly cause: unknown }> { }
 class Stop extends Data.TaggedError('Stop')<{ readonly reason: DrainStop }> { }
@@ -55,7 +55,7 @@ function putChunk(client: ListenersClient, { manifest, wav }: SealedChunk, timeo
       Effect.timeout(timeout),
       Effect.catchTags({
         HashConflict: () => new Conflict(),
-        Unauthenticated: () => new Stop({ reason: 'unauthorized' }),
+        Unauthenticated: () => new Stop({ reason: 'signed_out' }),
         Forbidden: () => new Stop({ reason: 'unauthorized' }),
         NotFound: () => new UnknownEpoch(),
         Unavailable: (error) => (error.retryable ? new Retryable({ cause: error }) : new Stop({ reason: 'unavailable' })),

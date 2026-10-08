@@ -1,4 +1,4 @@
-import { NotFound, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
+import { NotFound, Unauthenticated, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EpochEnd } from '../src/lib/capture/buffer.ts';
@@ -156,18 +156,19 @@ class FakeListenerServer {
 
   private readonly options: { unclaimed?: boolean; epochs?: string[] };
 
-  constructor(options: { unclaimed?: boolean; epochs?: string[] }) {
+  constructor(options: { unclaimed?: boolean; epochs?: string[]; signedOut?: boolean }) {
     this.options = options;
     this.generation = options.unclaimed ? 0 : 1;
     this.active = !options.unclaimed;
     this.claims = options.unclaimed ? [] : [{ generation: 1, at: 0 }];
     this.epochs = new Map((options.epochs ?? []).map((id) => [id, 1]));
+    if (options.signedOut) this.expire();
   }
 
   readonly client = {
     registerListener: () => {
       this.calls.register++;
-      return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
+        return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
     },
     heartbeat: (request: { path: { listener_id: string }; payload: { lease_generation: number } }) => this.heartbeat(request),
     putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => this.putChunk(request.headers['x-sanctum-manifest']),
@@ -238,9 +239,22 @@ class FakeListenerServer {
   readonly forget = () => {
     this.forgotten = true;
   };
+
+  /** The owner session ends: every later request is refused as unauthenticated. */
+  readonly expire = () => {
+    const refuse = () => Effect.fail(new Unauthenticated({ message: 'No credentials' }));
+    Object.assign(this.client, {
+      registerListener: () => {
+        this.calls.register++;
+        return refuse();
+      },
+      heartbeat: refuse,
+      putChunk: refuse,
+    });
+  };
 }
 
-function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[] } = {}) {
+function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[]; signedOut?: boolean } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
   const tracks: FakeTrack[] = [];
@@ -281,7 +295,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     for (let i = 0; i < (seconds * RATE) / BLOCK; i++, next += BLOCK) onBlock!(next, new Int16Array(BLOCK).fill(100));
   };
   const accept = () => lives.at(-1)!.options.onStatus('live');
-  const reject = () => lives.at(-1)!.options.onStatus('rejected', 'stale_generation');
+  const reject = (reason: 'stale_generation' | 'unauthorized' = 'stale_generation') => lives.at(-1)!.options.onStatus('rejected', reason);
   const snapshot = () => engine.getSnapshot();
   return {
     get track() {
@@ -305,6 +319,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     setOffline: server.setOffline,
     setGroupHeld: server.setGroupHeld,
     forget: server.forget,
+    expire: server.expire,
   };
 }
 
@@ -360,6 +375,55 @@ describe('capture lifecycle', () => {
       await h.engine.start();
       expect(h.snapshot().issue).toBe(issue); // the capture lock was released, so the retry reached the device again
     }
+  });
+
+  it('reports a missing session as signed out, not as a server connection failure', async () => {
+    const h = harness({ signedOut: true });
+    await h.engine.start();
+    expect(h.calls.register).toBe(1);
+    expect(h.snapshot()).toMatchObject({ listener: 'stopped', issue: 'signed_out', archive: null });
+  });
+
+  it('reports an expired session as signed out when the device already has a stored listener', async () => {
+    const getUserMedia = vi.fn();
+    const h = harness({ stored: true, signedOut: true, getUserMedia });
+    await h.engine.start();
+    expect(h.calls.register).toBe(0);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(h.snapshot()).toMatchObject({ listener: 'stopped', issue: 'signed_out', archive: null });
+    expect(h.lives).toHaveLength(0);
+  });
+
+  it('stops a running capture as signed out when the session expires', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.expire();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'signed_out' }));
+    expect(h.track.readyState).toBe('ended');
+  });
+
+  it('reports a live socket refused for a missing session as signed out', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.reject('unauthorized');
+    expect(h.snapshot().issue).toBe('signed_out');
+  });
+
+  it('reports buffered audio refused for a missing session as signed out', async () => {
+    const buffer = new MemoryBuffer();
+    await buffer.sealChunk(
+      await sealChunk(
+        { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+        new Int16Array(RATE),
+      ),
+    );
+    const h = harness({ buffer, stored: true, signedOut: true });
+    await vi.waitFor(() => expect(h.snapshot().issue).toBe('signed_out'));
+    expect(h.snapshot().bufferedChunks).toBe(1);
   });
 
   it('refuses insecure contexts before prompting', async () => {
