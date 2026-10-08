@@ -63,8 +63,12 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   let interim = '';
   /** Leading words of the current utterance a server segment already replaced. */
   let skip = 0;
-  const words = (text: string): string[] => text.trim().split(/\s+/).filter(Boolean);
-  const unseen = (text: string): string => words(text).slice(skip).join(' ');
+  /** `resultIndex` of the utterance `skip` belongs to. */
+  let utterance = 0;
+  const segmenter = new Intl.Segmenter(recognition.lang, { granularity: 'word' });
+  /** Words are counted per the language's own word boundaries, so text written without spaces (ja, zh) still counts. */
+  const wordEnds = (text: string): number[] => [...segmenter.segment(text)].filter(part => part.isWordLike).map(part => part.index + part.segment.length);
+  const unseen = (text: string): string => (skip === 0 ? text : text.slice(wordEnds(text)[skip - 1] ?? text.length)).trim();
 
   const stop = (): void => {
     recognition.onend = null;
@@ -74,6 +78,10 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   };
   recognition.onstart = () => onActive(true);
   recognition.onresult = event => {
+    if (event.resultIndex !== utterance) {
+      utterance = event.resultIndex;
+      skip = 0;
+    }
     interim = '';
     for (let index = event.resultIndex; index < event.results.length; index++) {
       const result = event.results[index]!;
@@ -92,6 +100,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   recognition.onend = () => {
     interim = '';
     skip = 0;
+    utterance = 0;
     rail.show('', false);
     try {
       recognition.start();
@@ -101,7 +110,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   };
   const unsubscribe = subscribeTranscript(segment => {
     if (segment.status !== 'final' || segment.text.trim() === '') return;
-    skip = words(interim).length;
+    skip = wordEnds(interim).length;
     rail.clear();
   });
   try {
