@@ -1,6 +1,6 @@
 import type { ActionState } from '@sanctum/contracts';
 import { expect, test } from '@playwright/test';
-import { openListening } from './listen-fake.ts';
+import { openListening, openMeeting } from './listen-fake.ts';
 
 const MEETING = '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f';
 const action = (action_id: string, state: ActionState, title = `Follow-up ${action_id}`) => ({ action_id, action_key: 'google_calendar-create-event', state, title });
@@ -47,4 +47,22 @@ test('rows older than the newest two rest at 40%; rows leave when the meeting cl
   expect(await opacity('Follow-up a3')).toBe('1');
   await page.evaluate(() => window.__capture.actions({ meeting_id: null, actions: [] }));
   await expect(feed.getByText('Follow-up a3')).toHaveCount(0);
+});
+
+test.describe('header', () => {
+  test.use({ timezoneId: 'UTC', locale: 'en-US' });
+
+  test('names the open meeting by title, else by start time, and claims nothing without one', async ({ page }) => {
+    await openListening(page);
+    const header = page.locator('.listen-header');
+    await expect(header).toContainText('SANCTUM');
+    await expect(header.locator('.listen-meeting')).toHaveCount(0);
+    await expect(header).not.toContainText('unavailable');
+    await openMeeting(page, MEETING, 'Product sync');
+    await expect(header.locator('.listen-meeting')).toHaveText('Product sync');
+    await openMeeting(page, '6a1d7e8f-9c2b-4d3a-8f4e-2b3c4d5e6f70', null);
+    await expect(header.locator('.listen-meeting')).toHaveText('Meeting since 10:02 AM');
+    await page.evaluate(() => window.__capture.actions({ meeting_id: null, actions: [] }));
+    await expect(header.locator('.listen-meeting')).toHaveCount(0);
+  });
 });
