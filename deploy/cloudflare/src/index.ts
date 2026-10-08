@@ -6,31 +6,16 @@
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import { type LoginSecrets, loginResponse } from './login.ts';
+import { type AppSettings, containerEnv } from './settings.ts';
 
-/** Settings the image reads (docs/operations.md); MySQL and R2 values are Worker secrets. */
-const APP_SETTINGS = [
-  'SANCTUM_ENV',
-  'MYSQL_HOST',
-  'MYSQL_PORT',
-  'MYSQL_DATABASE',
-  'MYSQL_USER',
-  'MYSQL_PASSWORD',
-  'MYSQL_CA_CERT',
-  'MYSQL_POOL_SIZE',
-  'R2_ENDPOINT',
-  'R2_BUCKET',
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-] as const;
-
-interface Env extends LoginSecrets, Partial<Record<(typeof APP_SETTINGS)[number], string>> {
+interface Env extends LoginSecrets, AppSettings {
   readonly API: DurableObjectNamespace<SanctumApi>;
   readonly JOBS: DurableObjectNamespace<SanctumJobs>;
 }
 
 /** Both processes run the same image with the same settings. */
 class SanctumContainer extends Container<Env> {
-  override envVars = Object.fromEntries(APP_SETTINGS.flatMap(name => (this.env[name] === undefined ? [] : [[name, this.env[name]]])));
+  override envVars = containerEnv(this.env);
 }
 
 /** `node server/dist/main.js` on its port; sleeps after the default idle period and starts on the next request. */
