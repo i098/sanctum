@@ -65,6 +65,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `jobs.ts` holds only `enqueueJob` and imports no application module, so enqueueing never deepens a caller's import chain.
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
+- `store.ts`: `workspaceForOrg(input: { issuer; org_id }): Effect<Option<WorkspaceId>, SqlError, R>` and `linkWorkspaceOrg(input: { workspace_id; issuer; org_id }): Effect<void, SqlError, R>` (idempotent; a clash with another link is a defect) over migration `012_workspace_orgs`.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
 - contracts: `AgentsApi` with `createAgent`, `listAgents`, `revokeCredential`.
 
