@@ -121,7 +121,7 @@ describe('respondToRequest', () => {
       const chunks = yield* Effect.provide(Stream.runCollect(respondToRequest({ request: 'Who gets pilot access?', context })), fixtureLlm([reply], requests));
       expect(Chunk.size(chunks)).toBeGreaterThan(1);
       expect(Chunk.join(chunks, '')).toBe(reply);
-      expect(requests[0]).toMatchObject({ model: 'qwen-3.8-27b', reasoning: 'none' });
+      expect(requests[0]).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' });
       expect(requests[0]!.prompt).toContain('- decision (committed): Pilot access stays with the test group.');
       expect(requests[0]!.prompt).not.toContain('open to everyone');
       expect(requests[0]!.json).toBeUndefined();
@@ -129,7 +129,7 @@ describe('respondToRequest', () => {
 
   it.effect('fails the stream when the voice model is unavailable', () =>
     Effect.gen(function* () {
-      const down = new Unavailable({ message: 'voice model: Cerebras HTTP 503', retryable: true });
+      const down = new Unavailable({ message: 'voice model: Workers AI HTTP 503', retryable: true });
       const failure = yield* Effect.flip(Effect.provide(Stream.runDrain(respondToRequest({ request: 'Anything?', context })), fixtureLlm([down, 'late text'])));
       expect(failure).toBe(down);
     }));

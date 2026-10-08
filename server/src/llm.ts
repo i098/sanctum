@@ -9,7 +9,7 @@ import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema,
 import { Unavailable } from '@sanctum/contracts';
 import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfig } from './config.ts';
 import { anthropic } from './providers/anthropic.ts';
-import { cerebras } from './providers/cerebras.ts';
+import { workersAi } from './providers/workers-ai.ts';
 import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult } from './providers/types.ts';
 
 /** Model output plus the model ID that produced it, recorded with generated artifacts. */
@@ -42,17 +42,20 @@ const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
   return new Unavailable({ message: `${role} model: ${error instanceof Error ? error.message : String(error)}`, retryable, ...retry });
 };
 
+/** Settings each provider needs, named in the `Unavailable` message when they are missing. */
+const providerSettings = { 'workers-ai': 'WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN', anthropic: 'ANTHROPIC_API_KEY' } as const;
+
 /** Builds the service from explicit role settings and the providers that have keys. */
 export function makeLlm(
   roles: ServerConfig['modelRoles'],
-  providers: { readonly cerebras?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined },
+  providers: { readonly 'workers-ai'?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined },
   budget: Record<keyof typeof engineeringDefaults.modelRequest, number> = engineeringDefaults.modelRequest,
 ): Llm {
   const select = (role: ModelRoleName) => {
     const setting = roles[role];
     const provider = providers[setting.provider];
     if (!provider) {
-      return Effect.fail(new Unavailable({ message: `${role} model provider ${setting.provider} is not configured (${setting.provider.toUpperCase()}_API_KEY)`, retryable: false }));
+      return Effect.fail(new Unavailable({ message: `${role} model provider ${setting.provider} is not configured (${providerSettings[setting.provider]})`, retryable: false }));
     }
     const base: ProviderRequest = { model: setting.model, reasoning: setting.reasoning, maxOutputTokens: budget.maxOutputTokens, system: '', prompt: '' };
     return Effect.succeed({ provider, base });
@@ -103,9 +106,9 @@ export function makeLlm(
 /** Production service from `serverConfig`; a provider without a key stays unconfigured. */
 export const LlmLive = Layer.effect(
   LlmClient,
-  Effect.map(serverConfig, ({ modelRoles, modelKeys }) =>
+  Effect.map(serverConfig, ({ modelRoles, modelKeys, workersAi: workersAiSettings }) =>
     makeLlm(modelRoles, {
-      cerebras: Option.getOrUndefined(Option.map(modelKeys.cerebras, key => cerebras({ apiKey: Redacted.value(key) }))),
+      'workers-ai': Option.getOrUndefined(Option.map(workersAiSettings, ({ baseUrl, apiToken }) => workersAi({ baseUrl, apiToken: Redacted.value(apiToken) }))),
       anthropic: Option.getOrUndefined(Option.map(modelKeys.anthropic, key => anthropic({ apiKey: Redacted.value(key) }))),
     }),
   ),
@@ -131,5 +134,5 @@ export function fixtureLlm(responses: ReadonlyArray<string | Unavailable>, reque
     },
     research: async request => ({ text: next(request), sources: [] }),
   };
-  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { cerebras: provider, anthropic: provider }));
+  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': provider, anthropic: provider }));
 }

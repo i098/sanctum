@@ -50,6 +50,14 @@ Accepted: when Sanctum detects a meeting, the principal of the capturing listene
 The meeting stays `restricted`; every other principal, including workspace owners and admins, still needs an explicit grant.
 Before this decision, nobody could read a detected meeting, so Review, the listening header and the agent-work feed stayed empty.
 
+## Text model provider decision — 2026-10-08
+
+Accepted: the voice and extraction roles (spoken replies, notes, memory and context) use Cloudflare Workers AI on the 42nights account, which Sanctum already runs on, so no new vendor account or card is needed.
+Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-compatible `/v1/chat/completions` endpoint: thinking off for voice, `reasoning_effort: low` for extraction.
+Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
+On the extraction, notes and voice test fixtures it kept every cited fact grounded and did not repeat the superseded decision in voice; `@cf/openai/gpt-oss-120b` was faster and cheaper but added an unsupported clause to a spoken reply.
+The Cerebras client is removed; Anthropic stays selectable with `<ROLE>_MODEL_PROVIDER=anthropic`, and planner and research stay on Anthropic.
+
 ## Deployment decision — 2026-10-02
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.
