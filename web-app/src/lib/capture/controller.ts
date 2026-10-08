@@ -62,6 +62,7 @@ const decodeStored = Schema.decodeUnknownOption(Schema.parseJson(StoredListener)
 const decodeStart = Schema.decodeUnknownSync(StartMessage);
 const isSampleRate = Schema.is(SampleRate);
 const failureTag = (exit: Exit.Exit<unknown, { readonly _tag: string }>) => (Exit.isFailure(exit) ? Option.getOrNull(Cause.failureOption(exit.cause))?._tag : undefined);
+const rejectedIssue = (reason?: RejectReason): CaptureIssue => (reason === 'unauthorized' ? 'signed_out' : 'socket_unavailable');
 
 interface Epoch {
   readonly id: CaptureEpochId;
@@ -393,7 +394,7 @@ class CaptureController implements CaptureView {
       void epoch.assembler.close();
       this.session!.epoch = null;
       this.live = null;
-    } else if (status === 'rejected') this.issue = reason === 'unauthorized' ? 'signed_out' : 'socket_unavailable';
+    } else if (status === 'rejected') this.issue = rejectedIssue(reason);
     this.publish();
   }
 
