@@ -33,30 +33,36 @@ function collapse(element: HTMLElement, duration: number): void {
   animate(element, [{ opacity, height, marginTop }, { opacity: 0, height: '0px', marginTop: '0px' }], duration, POWER1_OUT, 'forwards').finished.then(remove, remove);
 }
 
-/** Items of a bottom-anchored `container` whose top, or the spacing above it, is cut off by its upper edge. */
+/** Items of a bottom-anchored `container` whose top is cut off by its upper edge. */
 function cutOff(container: HTMLElement, items: ReadonlyArray<HTMLElement>): ReadonlyArray<HTMLElement> {
   const edge = container.getBoundingClientRect().top;
-  return items.filter(item => item.getBoundingClientRect().top - parseFloat(getComputedStyle(item).marginTop) < edge);
+  return items.filter(item => item.getBoundingClientRect().top < edge);
 }
 
 /** One rail line, sliding up into place. */
-function appendLine(lines: HTMLElement, text: string, className = 'tline'): void {
+function appendLine(lines: HTMLElement, text: string, className = 'tline'): HTMLElement {
   const line = document.createElement('div');
   line.className = className;
   line.textContent = text;
   lines.append(line);
   animate(line, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], 200, POWER2_OUT);
+  return line;
 }
 
-/** Past ten lines, or once the band is full, the oldest collapse away so no line ever shows half. */
+/**
+ * Past ten lines, or once the band is full, the oldest collapse away so no line ever shows half.
+ * The caption in progress stays: it fits itself (see `showCaption`) and only pushes older lines out.
+ */
 function trimLines(lines: HTMLElement): void {
   const current = [...lines.querySelectorAll<HTMLElement>('.tline:not(.bye)')];
-  const drop = Math.max(current.length - TRANSCRIPT_MAX, cutOff(lines, current).length);
-  for (const old of current.splice(0, drop)) {
+  const settled = current.filter(line => !line.classList.contains('interim'));
+  const drop = Math.max(current.length - TRANSCRIPT_MAX, cutOff(lines, settled).length);
+  for (const old of settled.slice(0, drop)) {
     old.classList.add('bye');
     collapse(old, 300);
   }
-  current.forEach((element, index) => element.classList.toggle('old', index < current.length - TRANSCRIPT_FRESH));
+  const kept = current.filter(line => !line.classList.contains('bye'));
+  kept.forEach((element, index) => element.classList.toggle('old', index < kept.length - TRANSCRIPT_FRESH));
 }
 
 /**
@@ -81,17 +87,31 @@ export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: Sub
 /**
  * Browser captions (display-only, see captions.ts) at the bottom of the rail, in its line style:
  * the utterance in progress updates its line word by word; a final one stays until a server
- * segment replaces it. Empty text removes the line in progress.
+ * segment replaces it. A line taller than the band shows only its tail, after an ellipsis.
+ * Empty text removes the line in progress.
  */
 export function showCaption(lines: HTMLElement, text: string, final: boolean): void {
   const line = lines.querySelector<HTMLElement>('.tline.interim:not(.bye)');
   if (text === '') return line?.remove();
-  if (line === null) appendLine(lines, text, `tline caption${final ? '' : ' interim'}`);
-  else {
-    line.textContent = text;
-    line.classList.toggle('interim', !final);
-  }
+  const shown = line ?? appendLine(lines, text, `tline caption${final ? '' : ' interim'}`);
+  shown.classList.toggle('interim', !final);
+  fitTail(lines, shown, text);
   trimLines(lines);
+}
+
+function fitTail(lines: HTMLElement, line: HTMLElement, text: string): void {
+  line.textContent = text;
+  if (line.offsetHeight <= lines.clientHeight) return;
+  const starts = [...new Intl.Segmenter(navigator.language, { granularity: 'word' }).segment(text)].filter(part => part.isWordLike).map(part => part.index);
+  let from = 1;
+  let to = starts.length - 1;
+  while (from < to) {
+    const middle = (from + to) >> 1;
+    line.textContent = `…${text.slice(starts[middle])}`;
+    if (line.offsetHeight <= lines.clientHeight) to = middle;
+    else from = middle + 1;
+  }
+  if (starts.length > 1) line.textContent = `…${text.slice(starts[from])}`;
 }
 
 export function clearCaptions(lines: HTMLElement): void {

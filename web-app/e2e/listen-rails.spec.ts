@@ -57,6 +57,23 @@ test('without browser recognition (as in Firefox) the rail shows only server seg
   await expect(page.getByText(NOTE)).toHaveCount(0);
 });
 
+test('a browser caption taller than the rail shows its tail after an ellipsis and stays one line', async ({ page }) => {
+  await openListening(page, { speech: true });
+  const rail = page.getByRole('region', { name: 'Live transcript' });
+  const words = Array.from({ length: 120 }, (_, index) => `word${index}`);
+  for (const count of [60, 90, 120]) await page.evaluate(text => window.__speech.say(text), words.slice(0, count).join(' '));
+  const caption = rail.locator('.tline.interim');
+  await expect(caption).toHaveCount(1);
+  await expect(caption).toHaveText(/^…word\d+ .*word119$/);
+  await expect(rail.locator('.tline:not(.bye)')).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      const [line, band] = await Promise.all([caption.boundingBox(), rail.locator('.tlines').boundingBox()]);
+      return line!.y >= band!.y - 1 && line!.y + line!.height <= band!.y + band!.height + 1;
+    })
+    .toBe(true);
+});
+
 test('a recognition error removes browser captions and their note', async ({ page }) => {
   await openListening(page, { speech: true });
   const rail = page.getByRole('region', { name: 'Live transcript' });
