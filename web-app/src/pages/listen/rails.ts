@@ -102,6 +102,7 @@ function fillRow(row: HTMLElement, action: FeedAction): void {
   row.dataset['state'] = action.state;
   row.innerHTML = `<span class="fedge"></span><span class="fic">${icon}</span><span class="ftitle"></span><span class="fstat ${tone}"></span>`;
   row.querySelector('.ftitle')!.textContent = action.title;
+  row.title = action.title;
   row.querySelector('.fstat')!.textContent = label;
 }
 
