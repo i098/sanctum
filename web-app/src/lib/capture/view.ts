@@ -14,7 +14,9 @@ export type CaptureIssue =
   | 'storage_unavailable'
   | 'socket_unavailable'
   | 'lease_lost'
-  | 'listener_removed';
+  | 'listener_removed'
+  | 'transcription_unavailable'
+  | 'transcription_behind';
 
 export interface CaptureSnapshot {
   readonly listener: ListenerState;

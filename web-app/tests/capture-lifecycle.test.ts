@@ -397,6 +397,17 @@ describe('capture lifecycle', () => {
     expect(h.lives[0]!.stopped).toBe('interrupted');
   });
 
+  it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.lives[0]!.options.onStatus('degraded', 'provider_unavailable');
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'transcription_unavailable', archive: 'capturing' });
+    h.lives[0]!.options.onStatus('reconnecting');
+    expect(h.snapshot()).toMatchObject({ listener: 'reconnecting', issue: null });
+  });
+
   it('keeps capturing while overlays subscribe and unsubscribe', async () => {
     const h = harness();
     await h.engine.start();

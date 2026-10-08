@@ -29,7 +29,8 @@ interface FakeServer {
   failUploads: boolean;
 }
 
-export async function fakeServer(page: Page, failUploads = false): Promise<FakeServer> {
+/** `degraded` makes the fake media server report live ASR trouble right after it accepts a stream, as production does without a Deepgram key. */
+export async function fakeServer(page: Page, failUploads = false, degraded?: 'provider_unavailable' | 'asr_backlog'): Promise<FakeServer> {
   const server: FakeServer = { uploads: [], starts: [], frames: 0, failUploads };
   await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route(/\/api\/v1\/listeners(\/|$)/, (route) => {
@@ -55,7 +56,9 @@ export async function fakeServer(page: Page, failUploads = false): Promise<FakeS
       if (typeof message !== 'string') return void server.frames++;
       const start = JSON.parse(message) as Record<string, unknown>;
       server.starts.push(start);
-      if (start['_tag'] === 'start') ws.send(JSON.stringify({ _tag: 'accepted', epoch_id: start['epoch_id'], resume_from_sample: 0, max_frame_bytes: 19_224 }));
+      if (start['_tag'] !== 'start') return;
+      ws.send(JSON.stringify({ _tag: 'accepted', epoch_id: start['epoch_id'], resume_from_sample: 0, max_frame_bytes: 19_224 }));
+      if (degraded) ws.send(JSON.stringify({ _tag: 'degraded', reason: degraded, from_sample: 0 }));
     });
   });
   return server;
