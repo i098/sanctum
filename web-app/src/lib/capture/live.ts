@@ -67,6 +67,9 @@ function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscrip
 /** An update for no meeting: the feed collapses every row. Sent when the stream ends for good. */
 const NO_FEED: ActionUpdateMessage = { _tag: 'action_update', meeting_id: null, actions: [] };
 
+/** The server message in a frame, or null when it is malformed or the stream already stopped (a late frame must not refill the feed). */
+const decodeOpen = (data: unknown, stopped: boolean): ServerControlMessage | null => (stopped ? null : Either.getOrNull(decodeServer(data)));
+
 export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
   let accepted = false;
@@ -76,13 +79,15 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   let serverDegraded = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
 
+  /** The stream is gone for good: the feed collapses until the next connect's snapshot. */
+  const clearFeed = () => deliver(NO_FEED, listeners);
   const onControl = (ws: WebSocket, message: ServerControlMessage) => {
     if (message._tag === 'accepted') {
       accepted = true;
       onStatus(serverDegraded ? 'degraded' : 'live');
     } else if (message._tag === 'rejected') {
       stopped = true;
-      listeners.onActions?.(NO_FEED);
+      clearFeed();
       ws.close(1000);
       onStatus('rejected', message.reason);
     } else if (message._tag === 'degraded') {
@@ -92,9 +97,8 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   };
 
   const onMessage = (ws: WebSocket, data: unknown) => {
-    const decoded = decodeServer(data);
-    if (stopped || Either.isLeft(decoded)) return;
-    if (!deliver(decoded.right, listeners)) onControl(ws, decoded.right);
+    const message = decodeOpen(data, stopped);
+    if (message !== null && !deliver(message, listeners)) onControl(ws, message);
   };
 
   const connect = () => {
@@ -132,7 +136,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
-      listeners.onActions?.(NO_FEED);
+      clearFeed();
     },
   };
 }
