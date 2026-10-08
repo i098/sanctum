@@ -2,7 +2,8 @@
 
 Evidence for the clean build of [tasks/plan.md](../tasks/plan.md) at the delivery branch head.
 Each state and acceptance row below says what was run, where the proof lives, and what remains unrun and why.
-Nothing here claims real-world model quality, delivered external side effects or uptime; the one deployment is described under Deployed.
+Nothing here claims delivered external side effects or uptime; the one deployment is described under Deployed.
+The only model-quality evidence is the small Workers AI smoke comparison under Workers AI text models; it is not a quality benchmark.
 
 ## States
 
@@ -10,7 +11,7 @@ Nothing here claims real-world model quality, delivered external side effects or
 | --- | --- | --- |
 | Implemented | Yes, with the open items below | T01–T25 on this branch; slice ownership and seams in [ARCHITECTURE.md](ARCHITECTURE.md). |
 | Locally tested | Yes | `npm run check:app`: workspace typechecks, 443 Vitest tests against MySQL 8.4, 36 Playwright specs in Chromium, benchmark manifest, benchmark correctness smoke, accelerated day replay. Python SDK: 7 unittest cases in an isolated venv. `npm run check` for the handoff. Rust benchmark reference: 9 `cargo test` cases and a matched `node scripts/benchmark-compare.ts --smoke` run. |
-| Model-evaluated | No (unrun) | No approved real meeting recordings or provider credentials were available; model and speaker behavior is tested only with fixture providers (`fixtureLlm`, fixture Deepgram/pyannote/Cartesia/Pipedream). |
+| Model-evaluated | Partial (smoke only) | Speech-to-text and speaker behavior are unrun: no approved real meeting recordings or provider credentials were available, so they are tested only with fixture providers (`fixtureLlm`, fixture Deepgram/pyannote/Cartesia/Pipedream). The Workers AI text roles had a live smoke comparison on synthetic fixtures; see Workers AI text models. |
 | Web-built | Yes | `npm run build -w web-app` (Vite) inside `check:app`; the API serves the build (`server/tests/capabilities.test.ts`, deep links and security headers). |
 | Migrated | Disposable databases and the Cloudflare deployment's database | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). The `sanctum` database on the Aiven MySQL 8.4 service (`sql_require_primary_key=1`) was migrated with the image's `node server/dist/migrate.js` over verified TLS; every migration applied unchanged. |
 | Deployed | Yes, development mode | Cloudflare, 42nights account ([operations.md](operations.md#cloudflare)): Worker `sanctum` at `https://sanctum.42nights.dev` (custom domain, the only hostname), Container applications `sanctum-sanctumapi` and `sanctum-sanctumjobs`, R2 bucket `sanctum-recordings`, `SANCTUM_ENV=development` with no provider keys. The deployed commit is recorded on the pull request that added the deployment. |
@@ -37,6 +38,39 @@ Nothing here claims real-world model quality, delivered external side effects or
 | Effect lifecycle | Pass, one gap | `jobs.test.ts` and `worker-recovery.test.ts` (lease loss interrupts handlers, killed workers recover, accepted work survives the API), `api-contract.test.ts` and `mcp.test.ts` (client abort cancels the server handler), `ingest.test.ts` (sockets). Pool exhaustion is not tested separately. |
 | SDK/MCP | Pass | `sdk/typescript/tests`, `sdk/python/tests` (both examples end to end against the fixture server), `server/tests/mcp.test.ts` (eleven tools, discovery, schema equality with REST, conflict, revoke, separate principals). |
 | Compatibility | Pass, one gap | Notes, exports, matching and meeting deep links: `server/tests/capabilities.test.ts`, `notes.test.ts`, `matching.test.ts`. Requested speech works for a principal with context access (`silence.test.ts`); a room device credential lacks `context:read`, so a request spoken at a device gets no reply yet. |
+
+## Workers AI text models
+
+Smoke comparison on 2026-10-08, separate from the Vitest suites, which only use canned `fixtureLlm` and local replay servers.
+Endpoint: Workers AI OpenAI-compatible `POST /client/v4/accounts/<account>/ai/v1/chat/completions` on the 42nights account.
+Calls went through `server/src/providers/workers-ai.ts` and the real `extractCandidates`, `summarizeMeeting` and `respondToRequest` code, one attempt per call.
+A throwaway script ran it; the script is not committed and the token is not recorded.
+Fixtures: the synthetic meeting, transcript and context snapshot of `server/tests/extraction.test.ts` (final segments S1–S4 and one partial line, America/Los_Angeles, on the 2026-11-01 DST day) and the `respondToRequest` context of `server/tests/planner.test.ts` (one committed and one superseded decision; request "Who gets pilot access?").
+
+| Model | Extraction | Notes | Voice | Calls |
+| --- | --- | --- | --- | --- |
+| `@cf/qwen/qwen3.8-27b` | 4 | 4 (2 before the notes prompt change, 2 after) | 2 | 10 |
+| `@cf/openai/gpt-oss-120b` | 2 | 3 (1 before, 2 after) | 1 | 6 |
+| `@cf/zai-org/glm-4.7-flash` | 2 | 1 (before) | 1 | 4 |
+| `@cf/google/gemma-4-26b-a4b-it` | 2 | 1 (before) | 1 | 4 |
+
+Total: 24 calls.
+
+- Extraction (4 labeled core facts per run: S1 decision, S2 commitment, S3 decision, S4 open question):
+  - qwen found 14 of 16 over 4 runs; both misses labeled S3 a commitment instead of a decision. It kept exactly 4 candidates per run, resolved "tomorrow at 10" to 2026-11-01T18:00Z and "by Monday" to 2026-11-02T08:00Z in every run, and never repeated the existing MySQL decision.
+  - gpt-oss found 8 of 8.
+  - glm found 7 of 8: grounding dropped one candidate whose time phrase was not in the cited line, and one run left "by Monday" unresolved.
+  - gemma found 7 of 8 and took 50–56 s per call.
+- Notes:
+  - Before the notes prompt change, models put point text instead of S-refs in segments, so grounding dropped every point (qwen 2 runs, gpt-oss 1 run). glm returned markdown that failed the `meeting_notes` schema. gemma timed out at 60 s.
+  - After the `NOTES_SYSTEM` change in `server/src/extraction.ts`, qwen (2 runs) and gpt-oss (2 runs) kept 4 of 4 points citing all 4 final segments, and never mentioned the partial "cancel" line.
+- Voice:
+  - No model mentioned the superseded "open to everyone" decision.
+  - qwen answered "Pilot access stays with the test group." both times; first text came after 2.5 s and 7.7 s.
+  - gpt-oss answered "The pilot access stays with the test group. No other groups receive it."; the second sentence is not in the context.
+  - glm was correct; first text came after 13 s.
+  - gemma answered "The test group gets pilot access." after 4 s.
+- Limits: one small synthetic fixture and 1–4 runs per model, with no repeated-trial statistics. This is a smoke-level comparison, not a quality benchmark. Real meeting audio and transcripts, repeated trials and the planner role were not evaluated.
 
 ## Unrun gates
 

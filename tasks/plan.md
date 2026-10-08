@@ -111,7 +111,7 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Retrieval | MySQL FULLTEXT + exact batched cosine ranking in TypeScript | Normalized float32 embeddings, scoped candidate batches, measured event-loop and memory budgets. |
 | Recording archive | Cloudflare R2 S3 API through `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner` | Private audio, manifests and scoped short-lived playback URLs. |
 | Background work | Node.js worker using Effect + MySQL job/lease table | Restart-safe accepted work, coalescing and fenced completion; no additional queue service. |
-| Fast LLM | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, through its OpenAI-compatible chat completions endpoint | Requested speech and structured notes/memory on the account Sanctum already runs on; checked against the existing fixtures, not a measured winner. |
+| Fast LLM | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, through its OpenAI-compatible chat completions endpoint | Requested speech and structured notes/memory on the account Sanctum already runs on; smoke-compared on synthetic fixtures (see `docs/release-evidence.md`), not a measured winner. |
 | Planner and research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations, wrapped at the provider boundary. |
 | Transcription | Deepgram Nova-3 streaming API | Server-side provider connection, verified PCM encoding, source alignment and batch gap recovery. |
 | Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades | Correctable speaker tracks; names require enrollment or user confirmation. |
@@ -476,7 +476,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | Role | Initial implementation choice | Gate |
 | --- | --- | --- |
 | Requested voice response | Workers AI `@cf/qwen/qwen3.8-27b` (OpenAI-compatible chat completions), thinking disabled, short streamed response. | Compare first audible response and tool fidelity against labeled behavior fixtures. |
-| Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning selected by evaluation. | Grounding, omissions, contradictions, names, and date resolution. |
+| Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning. | Grounding, omissions, contradictions, names, and date resolution. |
 | Planner | Explicit role setting; retain explicitly configured Claude provider until Qwen passes action-selection replay. | No unauthorized action or material regression in labeled fixtures. |
 | Research executor | Use Anthropic-hosted search with correct tool continuation handling initially. | A provider URL swap cannot replace hosted web search or `pause_turn`. |
 | Speech transcription | Deepgram initially, with explicit model/version. | Word timing and recall on actual room/laptop audio. |
