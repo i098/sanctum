@@ -29,6 +29,7 @@ Secrets come from the environment only; none are committed.
 | Integrations | `PIPEDREAM_API_URL`, `PIPEDREAM_ENVIRONMENT`, `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` |
 | Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_CLIENT_SECRET` (unset means a public client with PKCE), `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth` serves the self-hosted issuer at `/idp`), `BETTER_AUTH_SECRET` (at least 32 random bytes) |
 | Remote MCP | `SANCTUM_MCP_ISSUER`, `SANCTUM_MCP_JWKS_URL`, `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_DEFAULT_SCOPES` (comma list granted only to tokens that name no Sanctum scope, such as WorkOS DCR/CIMD clients; always narrowed by role and never `workspace:admin` or `capture:ingest`; empty by default; when set, metadata and challenges stop naming scopes) |
+| Sign-in (OIDC) | `SANCTUM_OIDC_ISSUER`, `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_REDIRECT_URI` (sign-in is enabled only when all three are set; a partial set does not fail startup and `/auth/login` answers `503`), `SANCTUM_OIDC_CLIENT_SECRET` (omit for a public client), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth`, reported by `GET /auth/config` only) |
 
 WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
 The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does not stop startup unless `identity_issuer` is listed, and sign-in then stays off.
@@ -71,7 +72,7 @@ Never edit an applied migration (its checksum is verified), and never roll back 
 
 ## Sign-in
 
-With the `SANCTUM_OIDC_*` group set, `/auth/login` signs a person in through any OIDC issuer (authorization code with `state`, `nonce` and PKCE), and `/auth/logout` revokes the browser session.
+With the `SANCTUM_OIDC_*` group set, `/auth/login` signs a person in through any OIDC issuer (authorization code with `state`, `nonce` and PKCE), and `POST /auth/logout` revokes the browser session. Without the group, `/auth/login` answers `503`.
 The verified issuer and subject select a principal through `principal_identities`; membership never comes from an email address.
 An unknown identity lands on `/?signin=not_member&issuer=…&subject=…`. On a fresh install, make that identity the first owner:
 
