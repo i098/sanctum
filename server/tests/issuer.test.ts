@@ -29,9 +29,12 @@ const serveIssuer = Effect.tap(serveFake(Option.some({ resource: RESOURCE, issue
   served.url = url;
 });
 
+/** Sends one request to the issuer; the tests pass either a real HTTP server or the issuer's handler. */
+type Send = (path: string, init?: RequestInit) => Promise<Response>;
+
 /** Registers a user and returns its subject plus the issuer session cookie a browser would hold. */
-async function signUp(url: string) {
-  const response = await fetch(`${url}/idp/sign-up/email`, {
+async function signUp(send: Send) {
+  const response = await send('/idp/sign-up/email', {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: ORIGIN },
     body: JSON.stringify({ name: 'Fixture Owner', email: `owner-${randomBytes(4).toString('hex')}@fixture.test`, password: 'correct horse battery staple' }),
@@ -42,7 +45,7 @@ async function signUp(url: string) {
   return { user: user.id, cookie };
 }
 
-async function authorize(url: string, cookie: string, client: string, params: Record<string, string>) {
+async function authorize(send: Send, cookie: string, client: string, params: Record<string, string>) {
   const verifier = randomBytes(32).toString('base64url');
   const query = new URLSearchParams({
     response_type: 'code',
@@ -53,25 +56,25 @@ async function authorize(url: string, cookie: string, client: string, params: Re
     code_challenge_method: 'S256',
     ...params,
   });
-  // Node's fetch always sends `sec-fetch-mode: cors`, so Better Auth answers with the redirect as JSON.
-  const started = await fetch(`${url}/idp/oauth2/authorize?${query}`, { headers: { cookie } });
+  // Browser-like (`sec-fetch-mode: cors`) requests make Better Auth answer with the redirect as JSON.
+  const started = await send(`/idp/oauth2/authorize?${query}`, { headers: { cookie } });
   const { url: consentPage } = (await started.json()) as { url: string };
   const consent = new URL(consentPage, ORIGIN);
   expect(`${consent.origin}${consent.pathname}`).toBe(`${ORIGIN}/consent`);
-  const accepted = await fetch(`${url}/idp/oauth2/consent`, {
+  const accepted = await send('/idp/oauth2/consent', {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: ORIGIN, cookie },
     body: JSON.stringify({ accept: true, oauth_query: consent.search.slice(1) }),
   });
   const { url: back } = (await accepted.json()) as { url: string };
   const code = new URL(back).searchParams.get('code')!;
-  const token = await fetch(`${url}/idp/oauth2/token`, {
+  const token = await send('/idp/oauth2/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: client, code_verifier: verifier, ...(params['resource'] ? { resource: params['resource'] } : {}) }),
   });
   expect(token.status).toBe(200);
-  return (await token.json()) as { access_token: string; id_token?: string };
+  return (await token.json()) as { access_token: string; id_token?: string; refresh_token?: string };
 }
 
 describe('embedded Better Auth issuer', () => {
@@ -104,16 +107,17 @@ describe('embedded Better Auth issuer', () => {
   it.scoped('gives a DCR client an MCP token Sanctum accepts, and an ID token with the same subject', () =>
     Effect.gen(function* () {
       const { url, db } = yield* serveIssuer;
-      const { user, cookie } = yield* Effect.promise(() => signUp(url));
+      const send: Send = (path, init) => fetch(`${url}${path}`, init);
+      const { user, cookie } = yield* Effect.promise(() => signUp(send));
       const registered = yield* Effect.promise(() =>
-        fetch(`${url}/idp/oauth2/register`, {
+        send('/idp/oauth2/register', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ client_name: 'Fixture MCP client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' }),
         }).then(r => r.json() as Promise<{ client_id: string }>),
       );
 
-      const mcp = yield* Effect.promise(() => authorize(url, cookie, registered.client_id, { scope: 'openid context:read context:write', resource: RESOURCE }));
+      const mcp = yield* Effect.promise(() => authorize(send, cookie, registered.client_id, { scope: 'openid context:read context:write', resource: RESOURCE }));
       // The resource's allowed scopes bound the access token; `openid` stays with the ID token.
       expect(decodeJwt(mcp.access_token)).toMatchObject({ iss: ISSUER, sub: user, scope: 'context:read context:write' });
 
@@ -133,9 +137,32 @@ describe('embedded Better Auth issuer', () => {
       expect(listed.isError).toBeFalsy();
       expect(listed.structuredContent).toMatchObject({ meetings: [] });
 
-      const login = yield* Effect.promise(() => authorize(url, cookie, registered.client_id, { scope: 'openid profile', nonce: 'fixture-nonce' }));
+      const login = yield* Effect.promise(() => authorize(send, cookie, registered.client_id, { scope: 'openid profile', nonce: 'fixture-nonce' }));
       const { payload } = yield* Effect.promise(() => jwtVerify(login.id_token!, keys, { issuer: ISSUER, audience: registered.client_id }));
       expect(payload).toMatchObject({ sub: user, nonce: 'fixture-nonce' });
+    }),
+  );
+
+  it.scoped('completes an authorization for a URL-style CIMD client id', () =>
+    Effect.gen(function* () {
+      const clientId = 'https://client.fixture.test/oauth/client-metadata.json';
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+      const document = { client_id: clientId, client_name: 'Fixture CIMD client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' };
+      const fetchMetadata = async () => new Response(JSON.stringify(document), { headers: { 'content-type': 'application/json' } });
+      const { auth, pool } = createIssuer({ issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) }, database.mysql, fetchMetadata);
+      yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
+      // A browser-like fetch: Better Auth answers a `cors` navigation with the redirect as JSON.
+      const send: Send = (path, init) => auth.handler(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...(init?.headers as Record<string, string>), 'sec-fetch-mode': 'cors' } }));
+
+      const { user, cookie } = yield* Effect.promise(() => signUp(send));
+      const token = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid offline_access context:read', resource: RESOURCE }));
+      expect(decodeJwt(token.access_token)).toMatchObject({ iss: ISSUER, sub: user, scope: 'context:read' });
+      expect(token.refresh_token).toBeDefined();
+      const stored = (table: string) => Effect.promise(() => pool.query(`SELECT clientId FROM ${table}`).then(([rows]) => rows));
+      for (const table of ['auth_oauth_consent', 'auth_oauth_access_token', 'auth_oauth_refresh_token']) {
+        expect(yield* stored(table), table).toEqual([{ clientId }]);
+      }
     }),
   );
 

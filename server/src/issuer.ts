@@ -7,7 +7,7 @@
  */
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
-import { oauthProvider } from '@better-auth/oauth-provider';
+import { type ClientMetadataResourceFetch, oauthProvider } from '@better-auth/oauth-provider';
 import { HttpApiBuilder, HttpApp } from '@effect/platform';
 import { NodeRuntime } from '@effect/platform-node';
 import { type BetterAuthPlugin, betterAuth } from 'better-auth';
@@ -46,8 +46,8 @@ const issuerSettings = Effect.gen(function* () {
   );
 });
 
-/** Shared by the server, `issuer:client` and the schema test so all three see the same tables. */
-export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions) => {
+/** Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it. */
+export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource) => {
   const pool = createPool({
     host: mysql.host,
     port: mysql.port,
@@ -93,7 +93,7 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions) => {
       jwt({ schema: { jwks: { modelName: 'auth_jwks' } } }),
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
       provider as typeof provider & BetterAuthPlugin,
-      cimd({ fetchClientMetadataResource }),
+      cimd({ fetchClientMetadataResource: fetchMetadata }),
     ],
   });
   return { auth, pool };
