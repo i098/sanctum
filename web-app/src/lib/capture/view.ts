@@ -13,6 +13,7 @@ export type CaptureIssue =
   | 'storage_full'
   | 'storage_unavailable'
   | 'socket_unavailable'
+  | 'signed_out'
   | 'lease_lost'
   | 'listener_removed';
 

@@ -33,6 +33,7 @@ const ISSUE: Record<CaptureIssue, string> = {
   storage_full: 'Device storage is full, so audio cannot be buffered.',
   storage_unavailable: 'Device storage is unavailable, so audio cannot be buffered.',
   socket_unavailable: 'The server connection is unavailable.',
+  signed_out: 'You are not signed in.',
   lease_lost: 'Another listener took over this room.',
   listener_removed: 'This device was removed, so listening stopped. Resume registers it again.',
 };

@@ -1,4 +1,4 @@
-import { NotFound, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
+import { NotFound, Unauthenticated, Unavailable, type RecordingChunkManifest, type RecordingChunkReceipt, type StartMessage } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EpochEnd } from '../src/lib/capture/buffer.ts';
@@ -154,9 +154,9 @@ class FakeListenerServer {
   private groupHeld = false;
   private readonly lease = { lease_expires_at: '2026-09-29T09:00:45Z' };
 
-  private readonly options: { unclaimed?: boolean; epochs?: string[] };
+  private readonly options: { unclaimed?: boolean; epochs?: string[]; signedOut?: boolean };
 
-  constructor(options: { unclaimed?: boolean; epochs?: string[] }) {
+  constructor(options: { unclaimed?: boolean; epochs?: string[]; signedOut?: boolean }) {
     this.options = options;
     this.generation = options.unclaimed ? 0 : 1;
     this.active = !options.unclaimed;
@@ -167,6 +167,7 @@ class FakeListenerServer {
   readonly client = {
     registerListener: () => {
       this.calls.register++;
+      if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
       return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
     },
     heartbeat: (request: { path: { listener_id: string }; payload: { lease_generation: number } }) => this.heartbeat(request),
@@ -240,7 +241,7 @@ class FakeListenerServer {
   };
 }
 
-function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[] } = {}) {
+function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[]; signedOut?: boolean } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
   const tracks: FakeTrack[] = [];
@@ -360,6 +361,13 @@ describe('capture lifecycle', () => {
       await h.engine.start();
       expect(h.snapshot().issue).toBe(issue); // the capture lock was released, so the retry reached the device again
     }
+  });
+
+  it('reports a missing session as signed out, not as a server connection failure', async () => {
+    const h = harness({ signedOut: true });
+    await h.engine.start();
+    expect(h.calls.register).toBe(1);
+    expect(h.snapshot()).toMatchObject({ listener: 'stopped', issue: 'signed_out', archive: null });
   });
 
   it('refuses insecure contexts before prompting', async () => {

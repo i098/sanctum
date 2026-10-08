@@ -27,6 +27,8 @@ const DEVICE_ISSUES: Record<string, CaptureIssue> = {
   NotSupportedError: 'unsupported_constraints',
   NotReadableError: 'hardware_error',
   AbortError: 'hardware_error',
+  /** `Effect.runPromise` rejects with a fiber failure named after the API error; a missing session is `Unauthenticated`. */
+  '(FiberFailure) Unauthenticated': 'signed_out',
 };
 
 export function captureIssue(error: unknown): CaptureIssue {
