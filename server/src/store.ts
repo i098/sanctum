@@ -49,7 +49,7 @@ export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effec
 /** Roles that take a seat; agents and devices never count against the limit. */
 const seatRoles: ReadonlyArray<WorkspaceRole> = ['owner', 'admin', 'member'];
 
-export class SeatLimitReached extends Data.TaggedError('SeatLimitReached')<{ readonly limit: number; readonly message: string }> {}
+class SeatLimitReached extends Data.TaggedError('SeatLimitReached')<{ readonly limit: number; readonly message: string }> {}
 
 const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSafeInt, held: DbSafeInt });
 
