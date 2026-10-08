@@ -21,6 +21,7 @@ import {
   Forbidden,
   HashConflict,
   IntegrationAccountId,
+  type ListenerId,
   MeetingId,
   NotFound,
   PrincipalId,
@@ -34,6 +35,7 @@ import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
 import { enqueueJob } from './jobs.ts';
+import { listenerMeeting } from './meeting-store.ts';
 
 type ActionRequest = typeof RequestActionInput.Type;
 type Args = Readonly<Record<string, unknown>>;
@@ -261,10 +263,16 @@ function actionTitle({ title, action_key }: { readonly title: string | null; rea
 
 const FeedRow = Schema.Struct({ id: ActionId, action_key: Schema.String, state: ActionState, title: Schema.NullOr(Schema.String) });
 
-/** Agent-work feed rows of one readable meeting: the newest `ACTION_FEED_ROWS` actions `visibleAction` would show, oldest first. */
-export const meetingFeed = (access: AccessScope, meeting_id: MeetingId) =>
+/**
+ * Agent-work feed of the listener's newest open meeting: the newest `ACTION_FEED_ROWS` actions
+ * `visibleAction` would show, oldest first. No open or readable meeting yields no meeting and no rows.
+ */
+export const listenerFeed = (access: AccessScope, listener_id: ListenerId) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
+    const open = yield* listenerMeeting(access.workspace_id, listener_id);
+    if (Option.isNone(open)) return { meeting_id: null, actions: [] };
+    const meeting_id = open.value;
     yield* authorizeMeeting(access, meeting_id, 'read');
     const rows = yield* SqlSchema.findAll({
       Request: Schema.Void,
@@ -273,8 +281,8 @@ export const meetingFeed = (access: AccessScope, meeting_id: MeetingId) =>
         sql`SELECT id, action_key, state, title FROM actions WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id}
             AND ${visibleTo(sql, access)} ORDER BY created_at DESC, id DESC LIMIT ${ACTION_FEED_ROWS}`,
     })(undefined);
-    return rows.toReversed().map(row => ({ action_id: row.id, action_key: row.action_key, state: row.state, title: actionTitle(row) }));
-  });
+    return { meeting_id, actions: rows.toReversed().map(row => ({ action_id: row.id, action_key: row.action_key, state: row.state, title: actionTitle(row) })) };
+  }).pipe(Effect.catchTag('NotFound', () => Effect.succeed({ meeting_id: null, actions: [] })));
 
 const requireHuman = (access: AccessScope, what: string) =>
   access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));

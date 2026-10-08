@@ -151,7 +151,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech
 - `speech-gate.ts`: `SpeechGate` tag with `openRequest({ listener_id; epoch_id; request_id; sample_end })`, `mayEmit(request_id, generation): boolean`, `cancel(listener_id, reason)`.
 - `playback.ts` (web): `createPlayback(context: AudioContext)` registered by engine.ts; drops chunks of cancelled generations.
 - Handles job kinds `action.execute`, `action.reconcile`, `research.run`.
-- `actions.ts`: `meetingFeed(access, meeting_id)` returns the agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
+- `actions.ts`: `listenerFeed(access, listener_id)` returns the listener's open meeting and its agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
 - Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from MySQL every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-reply.ts `SpeechRepliesLive`), so a process without them stays silent.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.

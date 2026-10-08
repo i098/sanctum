@@ -24,9 +24,8 @@ import {
   TranscriptSegment,
 } from '@sanctum/contracts';
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
-import { meetingFeed } from '../actions.ts';
+import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
-import { listenerMeeting } from '../meeting-store.ts';
 import { type AsrResult, type AsrStream, SpeechToText } from '../providers/deepgram.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/cartesia.ts';
@@ -252,15 +251,7 @@ const actionFeed = (access: AccessScope, listener_id: ListenerId, send: LiveSess
   let shown: MeetingId | null | undefined;
   let states = new Map<ActionId, string>();
   return Effect.gen(function* () {
-    const open = yield* listenerMeeting(access.workspace_id, listener_id);
-    const feed = Option.isNone(open)
-      ? null
-      : yield* meetingFeed(access, open.value).pipe(
-          Effect.map(actions => ({ meeting_id: open.value, actions })),
-          Effect.catchTag('NotFound', () => Effect.succeed(null)),
-        );
-    const meeting_id = feed?.meeting_id ?? null;
-    const actions = feed?.actions ?? [];
+    const { meeting_id, actions } = yield* listenerFeed(access, listener_id);
     const changed = meeting_id === shown ? actions.filter(action => states.get(action.action_id) !== action.state) : actions;
     states = new Map(actions.map(action => [action.action_id, action.state]));
     if (meeting_id === shown && changed.length === 0) return;

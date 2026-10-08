@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
+import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type ListenerId, type MeetingId, Unavailable } from '@sanctum/contracts';
 import { Effect, Fiber, Schedule, Schema, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
-import { createActionGrant, getActionReceipt, listMeetingActions, meetingFeed, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
+import { createActionGrant, getActionReceipt, listenerFeed, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
@@ -136,8 +137,15 @@ describe('action gateway', () => {
         expect(yield* Effect.flip(listMeetingActions(member, other, {}))).toMatchObject({ _tag: 'NotFound' });
         expect(yield* Effect.flip(listMeetingActions(agent, meeting_id, { cursor: 'bogus' }))).toMatchObject({ _tag: 'NotFound', message: 'Unknown cursor' });
         // Feed rows carry the stored title, or a label from the key; they follow the same visibility.
-        expect((yield* meetingFeed(owner, meeting_id)).map(action => action.title)).toEqual(['Gmail: send email', 'Email the notes to Maria', 'Gmail: send email']);
-        expect(yield* meetingFeed(member, meeting_id)).toEqual([]);
+        const sql = yield* SqlClient.SqlClient;
+        const listener_id = randomUUID() as ListenerId;
+        yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
+          VALUES (${listener_id}, ${owner.workspace_id}, ${owner.principal.id}, 'Room', 'room', '{}', UTC_TIMESTAMP(6))`;
+        yield* sql`UPDATE meetings SET listener_id = ${listener_id} WHERE id = ${meeting_id}`;
+        const feed = yield* listenerFeed(owner, listener_id);
+        expect(feed.meeting_id).toBe(meeting_id);
+        expect(feed.actions.map(action => action.title)).toEqual(['Gmail: send email', 'Email the notes to Maria', 'Gmail: send email']);
+        expect(yield* listenerFeed(member, listener_id)).toEqual({ meeting_id, actions: [] });
       }),
       { migrated: true },
     ));
