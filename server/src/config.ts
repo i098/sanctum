@@ -85,6 +85,8 @@ export const defaultSeatLimit: Config.Config<number | null> = Config.integer('SA
 
 export const serverConfig = Config.all({
   environment: Config.literal('development', 'test', 'production')('SANCTUM_ENV').pipe(Config.withDefault('development')),
+  /** Default seat limit; null is unlimited. Read here so a malformed value fails at startup. */
+  seatLimit: defaultSeatLimit,
   apiPort: port('API_PORT', 7102),
   mysql: Config.all({
     host: Config.string('MYSQL_HOST').pipe(Config.withDefault('127.0.0.1')),

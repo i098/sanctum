@@ -112,6 +112,7 @@ describe('store', () => {
         yield* Effect.forEach(people, principal_id => addMember({ workspace_id, principal_id, role: 'member' }));
         yield* sql`UPDATE workspaces SET seat_limit = 8 WHERE id = ${workspace_id}`;
         expect(yield* Effect.flip(addMember({ workspace_id, principal_id: yield* human(), role: 'member' }))).toMatchObject({ _tag: 'SeatLimitReached', limit: 8 });
+        expect(yield* errno(addMember({ workspace_id: randomUUID() as WorkspaceId, principal_id: yield* human(), role: 'member' }))).toBe(ER_NO_REFERENCED_ROW);
       }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))),
       migrated,
     ),

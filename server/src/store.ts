@@ -49,7 +49,7 @@ export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effec
 /** Roles that take a seat; agents and devices never count against the limit. */
 const seatRoles: ReadonlyArray<WorkspaceRole> = ['owner', 'admin', 'member'];
 
-class SeatLimitReached extends Data.TaggedError('SeatLimitReached')<{ readonly limit: number; readonly message: string }> {}
+export class SeatLimitReached extends Data.TaggedError('SeatLimitReached')<{ readonly limit: number; readonly message: string }> {}
 
 const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSafeInt, held: DbSafeInt });
 
@@ -67,6 +67,7 @@ const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId) =>
         (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
         (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
       FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE OF w`;
+    if (row === undefined) return;
     const seats = Schema.decodeUnknownSync(SeatRow)(row);
     const limit = seats.seat_limit ?? fallback;
     if (limit !== null && seats.held === 0 && seats.used >= limit) {
