@@ -11,6 +11,7 @@ import { Effect, Option, TestClock } from 'effect';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.ts';
 import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
+import { addMember, linkWorkspaceOrg } from '../src/store.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
@@ -20,8 +21,8 @@ const RESOURCE = 'https://sanctum.fixture.test/mcp';
 const { publicKey, privateKey } = await generateKeyPair('ES256');
 const keys = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: 'ES256' }] });
 
-const sign = (subject: string, scope: string, claims: { aud?: string; exp?: number; workspace_id?: string } = {}) =>
-  new SignJWT({ scope, ...(claims.workspace_id ? { workspace_id: claims.workspace_id } : {}) })
+const sign = (subject: string, scope: string, claims: { aud?: string; exp?: number; workspace_id?: string; org_id?: string } = {}) =>
+  new SignJWT({ scope, ...(claims.workspace_id ? { workspace_id: claims.workspace_id } : {}), ...(claims.org_id ? { org_id: claims.org_id } : {}) })
     .setProtectedHeader({ alg: 'ES256' })
     .setIssuer(ISSUER)
     .setSubject(subject)
@@ -234,6 +235,33 @@ describe('MCP over Streamable HTTP', () => {
       const second = yield* open;
       expect(yield* list(first)).toBe(404);
       expect(yield* list(second)).toBe(200);
+    }),
+  );
+
+  it.scoped('selects a multi-membership workspace by the org_id linked under the token issuer', () =>
+    Effect.gen(function* () {
+      const { url, db, domain } = yield* serveFake(configured);
+      const [owner] = yield* Effect.provide(seedWorkspace('Home', ['owner']), db);
+      const [teamOwner] = yield* Effect.provide(seedWorkspace('Team', ['owner']), db);
+      const team = { ...owner!, workspace_id: teamOwner!.workspace_id };
+      yield* Effect.provide(
+        Effect.all([
+          addMember({ workspace_id: team.workspace_id, principal_id: owner!.principal.id, role: 'member' }),
+          linkWorkspaceOrg({ workspace_id: team.workspace_id, issuer: ISSUER, org_id: 'org_team' }),
+          linkWorkspaceOrg({ workspace_id: team.workspace_id, issuer: ISSUER, org_id: 'org_team' }),
+          linkWorkspaceOrg({ workspace_id: owner!.workspace_id, issuer: 'https://other-issuer.fixture.test', org_id: 'org_home' }),
+        ]),
+        db,
+      );
+      const meeting = domain.addMeeting(team, 'Team sync');
+      const subject = yield* Effect.provide(identify(owner!), db);
+      const status = (claims: { org_id?: string }) =>
+        Effect.promise(async () => (await post(url, await sign(subject, 'context:read', claims), initialize(LATEST_PROTOCOL_VERSION))).status);
+      // Two memberships: no claim is ambiguous, an org linked only at another issuer is unknown here.
+      expect([yield* status({}), yield* status({ org_id: 'org_home' }), yield* status({ org_id: 'org_unknown' })]).toEqual([403, 403, 403]);
+      const { client } = yield* connect(url, yield* Effect.promise(() => sign(subject, 'context:read', { org_id: 'org_team' })));
+      const listed = yield* Effect.promise(() => client.callTool({ name: 'list_meetings', arguments: {} }));
+      expect(listed.structuredContent).toMatchObject({ meetings: [{ id: meeting.id }] });
     }),
   );
 

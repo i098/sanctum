@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { SqlClient, type SqlError } from '@effect/sql';
-import { Effect, Schema } from 'effect';
+import { Effect, Option, Schema } from 'effect';
 import {
   NotFound,
   ProfileId,
@@ -54,6 +54,27 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
         VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, UTC_TIMESTAMP(6)) AS new
         ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
     );
+  });
+
+/** The workspace linked to an issuer organization (`workspace_orgs`), if any. */
+export const workspaceForOrg = (input: { readonly issuer: string; readonly org_id: string }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{ workspace_id: WorkspaceId }>`SELECT workspace_id FROM workspace_orgs WHERE issuer = ${input.issuer} AND org_id = ${input.org_id}`;
+    return Option.fromNullable(row?.workspace_id);
+  });
+
+/** Idempotent link of a workspace to its issuer organization; a clash with another link is a defect. */
+export const linkWorkspaceOrg = (input: { readonly workspace_id: WorkspaceId; readonly issuer: string; readonly org_id: string }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at)
+      VALUES (${input.issuer}, ${input.org_id}, ${input.workspace_id}, UTC_TIMESTAMP(6))
+      ON DUPLICATE KEY UPDATE issuer = issuer`;
+    const linked = yield* workspaceForOrg(input);
+    if (Option.getOrUndefined(linked) !== input.workspace_id) {
+      return yield* Effect.dieMessage(`Organization ${input.org_id} or workspace ${input.workspace_id} is already linked differently at ${input.issuer}`);
+    }
   });
 
 /** Upsert: explicitly assigns a principal's access to one meeting of the same workspace. */

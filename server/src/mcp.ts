@@ -23,8 +23,9 @@ import {
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Config, Context, Effect, Either, JSONSchema, Layer, Option, ParseResult, Schema, SchemaAST } from 'effect';
 import { createClient, type OperationId, SanctumError } from '@sanctum/sdk';
-import { createRemoteJWKSet, type JWTVerifyGetKey, jwtVerify } from 'jose';
+import { createRemoteJWKSet, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from 'jose';
 import { Authenticator, resolveAccess } from './auth.ts';
+import { workspaceForOrg } from './store.ts';
 
 /** Tool name, v1 operation it runs, and the description agents see. Nothing else is exposed. */
 const TOOLS = [
@@ -198,6 +199,16 @@ const metadataUrl = (resource: string) => new URL(`/.well-known/oauth-protected-
 
 const Identity = Schema.Struct({ principal_id: PrincipalId, workspace_id: WorkspaceId });
 
+/** `workspace_id` names the workspace; otherwise `org_id` selects the one linked under the token issuer. */
+const selectedWorkspace = (issuer: string, payload: JWTPayload) =>
+  Effect.gen(function* () {
+    if (typeof payload['workspace_id'] === 'string') return payload['workspace_id'];
+    if (typeof payload['org_id'] !== 'string') return undefined;
+    const linked = yield* workspaceForOrg({ issuer, org_id: payload['org_id'] }).pipe(Effect.orDie);
+    if (Option.isNone(linked)) return yield* new Forbidden({ message: 'Token organization is not linked to a workspace' });
+    return linked.value;
+  });
+
 /** Verified token -> active membership -> access narrowed to the token's scopes, or to the defaults when it names none. */
 const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
@@ -216,7 +227,7 @@ const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServer
         JOIN workspace_members m ON m.principal_id = i.principal_id AND m.revoked_at IS NULL
         WHERE i.issuer = ${auth.issuer} AND i.subject = ${subject}`,
     })(payload.sub!).pipe(Effect.orDie);
-    const wanted = typeof payload['workspace_id'] === 'string' ? payload['workspace_id'] : undefined;
+    const wanted = yield* selectedWorkspace(auth.issuer, payload);
     const matches = identities.filter(identity => wanted === undefined || identity.workspace_id === wanted);
     if (matches.length !== 1) return yield* new Forbidden({ message: 'Token does not select exactly one workspace membership' });
     const access = yield* resolveAccess(matches[0]!);
