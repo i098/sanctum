@@ -111,6 +111,19 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
+  it.scoped('treats a silent chunk without segments as no results, and text without segments as a failure', () =>
+    Effect.gen(function* () {
+      let result: object = { text: '' };
+      const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ success: true, result })));
+      const stt = whisper(server.url);
+      expect(yield* stt.transcribe(16_000, new Int16Array(1))).toEqual([]);
+      result = { text: ' ', vtt: '', word_count: 0 };
+      expect(yield* stt.transcribe(16_000, new Int16Array(1))).toEqual([]);
+      result = { text: 'spoken' };
+      expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: false });
+    }),
+  );
+
   it.scopedLive('sends live audio in chunks cut at a quiet moment and emits one final per chunk in audio order', () =>
     Effect.gen(function* () {
       // The first chunk is answered only after the second; results must still follow the audio.
@@ -119,7 +132,7 @@ describe('Workers AI Whisper', () => {
       let answeredLater = false;
       const server = yield* localServer((_request, body, response) => {
         const { samples } = sentAudio(body);
-        const reply = () => response.end(JSON.stringify({ result: { segments: [{ start: 0.1, end: 0.5, text: `heard ${samples.length}` }] } }));
+        const reply = () => response.end(JSON.stringify({ result: { text: `heard ${samples.length}`, segments: [{ start: 0.1, end: 0.5, text: `heard ${samples.length}` }] } }));
         if (samples.length !== cut) {
           reply();
           answeredLater = true;

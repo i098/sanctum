@@ -46,7 +46,10 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 
 const WhisperResponse = Schema.Struct({
-  result: Schema.Struct({ segments: Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String })) }),
+  result: Schema.Struct({
+    text: Schema.String,
+    segments: Schema.optional(Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String }))),
+  }),
 });
 
 const unavailable = (message: string, retryable = true) => new Unavailable({ message: `Workers AI: ${message}`, retryable });
@@ -105,6 +108,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
       if (!response.ok) return yield* unavailable(`responded ${response.status}`, response.status === 429 || response.status >= 500);
       const body = yield* Effect.tryPromise(() => response.json()).pipe(Effect.mapError(() => unavailable('response was not JSON')));
       const { result } = yield* Schema.decodeUnknown(WhisperResponse)(body).pipe(Effect.mapError(() => unavailable('unexpected response shape', false)));
+      if (result.segments === undefined) return result.text.trim() === '' ? [] : yield* unavailable('response has text without segments', false);
       return result.segments.flatMap((segment): Array<AsrResult> => {
         const text = segment.text.trim();
         return text === '' ? [] : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
