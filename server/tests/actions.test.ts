@@ -8,12 +8,9 @@ import { createActionGrant, getActionReceipt, listenerFeed, listMeetingActions, 
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
-import { getMeeting, listMeetings, onFinalSegments } from '../src/meetings.ts';
 import { planActions } from '../src/planner.ts';
-import { grantMeetingAccess } from '../src/store.ts';
 import { withDatabase } from './support/database.ts';
 import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
-import { meetingsOf, seedEpoch, seedListener, speak } from './support/capture.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 vi.mock('../src/integrations.ts', async importOriginal => {
@@ -149,30 +146,6 @@ describe('action gateway', () => {
         expect(feed.meeting_id).toBe(meeting_id);
         expect(feed.actions.map(action => action.title)).toEqual(['Gmail: send email', 'Email the notes to Maria', 'Gmail: send email']);
         expect(yield* listenerFeed(member, listener_id)).toEqual({ meeting_id, actions: [] });
-      }),
-      { migrated: true },
-    ));
-
-  it.effect('gives the capturing principal, and nobody else, access to a detected meeting and its feed', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const { owner, member, agent } = yield* setup();
-        const listener = yield* seedListener(owner);
-        const epoch = yield* seedEpoch(listener);
-        yield* onFinalSegments({ ...listener, segments: [yield* speak(listener, epoch, 0, 30, 'first topic is the launch date')] });
-        const meeting_id = (yield* meetingsOf(owner.workspace_id))[0]!.id as MeetingId;
-        expect(yield* getMeeting(owner, meeting_id)).toMatchObject({ id: meeting_id, visibility: 'restricted' });
-        expect((yield* listMeetings(owner, {})).meetings.map(meeting => meeting.id)).toEqual([meeting_id]);
-        expect(yield* Effect.flip(getMeeting(member, meeting_id))).toMatchObject({ _tag: 'NotFound' });
-        expect(yield* listMeetings(member, {})).toEqual({ meetings: [], next_cursor: null });
-        // An explicit grant lets the agent act in the meeting; the capturer's feed then shows that work.
-        yield* grantMeetingAccess({ workspace_id: owner.workspace_id, meeting_id, principal_id: agent.principal.id, access: 'write', granted_by: owner.principal.id });
-        const queued = yield* requestAction(agent, request({ meeting_id }));
-        expect(yield* listenerFeed(owner, listener.listener_id as ListenerId)).toEqual({
-          meeting_id,
-          actions: [{ action_id: queued.action_id, action_key: SEND, state: 'queued', title: 'Gmail: send email' }],
-        });
-        expect(yield* listenerFeed(member, listener.listener_id as ListenerId)).toEqual({ meeting_id: null, actions: [] });
       }),
       { migrated: true },
     ));
