@@ -65,4 +65,27 @@ test.describe('header', () => {
     await page.evaluate(() => window.__capture.actions({ meeting_id: null, actions: [] }));
     await expect(header.locator('.listen-meeting')).toHaveCount(0);
   });
+
+  test('reads the meeting again after a failed read, and not after a successful one', async ({ page }) => {
+    await openListening(page);
+    const line = page.locator('.listen-header .listen-meeting');
+    let reads = 0;
+    page.on('request', request => void (new URL(request.url()).pathname === `/api/v1/meetings/${MEETING}` && reads++));
+    const update = () => page.evaluate(id => window.__capture.actions({ meeting_id: id, actions: [] }), MEETING);
+    // A 500 is final for the SDK: one request, then the read has failed.
+    await page.route(`**/api/v1/meetings/${MEETING}`, route => route.fulfill({ status: 500, json: { _tag: 'Internal', code: 'internal', message: 'Read failed', retryable: false } }), { times: 1 });
+    await update();
+    await expect.poll(() => reads).toBe(1);
+    // Later updates and reconnect snapshots for the same meeting keep arriving; one of them reads it again.
+    await openMeeting(page, MEETING, 'Product sync');
+    await expect(async () => {
+      await update();
+      await expect(line).toHaveText('Product sync', { timeout: 500 });
+    }).toPass();
+    // After a success, updates for the same meeting read nothing; the next meeting's read proves they arrived first.
+    await update();
+    await openMeeting(page, '6a1d7e8f-9c2b-4d3a-8f4e-2b3c4d5e6f70', null);
+    await expect(line).toHaveText('Meeting since 10:02 AM');
+    expect(reads).toBe(2);
+  });
 });
