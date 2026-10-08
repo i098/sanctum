@@ -2,8 +2,9 @@ import { createClient, type Meeting } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
+import { browserRecognition, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
-import { startActionFeed, startTranscriptRail } from './rails.ts';
+import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import { startWaveform } from './waveform.ts';
@@ -60,6 +61,8 @@ function statusMessage(snapshot: CaptureSnapshot, failure: string | null): { tex
   const problem = failure ?? (snapshot.issue && ISSUE[snapshot.issue]);
   return problem ? { text: problem, warning: true } : { text: HELPER[snapshot.listener], warning: false };
 }
+
+const CAPTURING: ReadonlyArray<ListenerState> = ['listening', 'degraded', 'reconnecting'];
 
 function toggle(engine: CaptureView, listener: ListenerState): { label: string; run: () => Promise<void> } {
   if (listener === 'paused') return { label: 'Resume', run: () => engine.resume() };
@@ -141,12 +144,25 @@ function Footer({ engine, snapshot, onOpen, onFailure }: FooterProps) {
   );
 }
 
+interface RailsProps {
+  live: boolean;
+  /** Capture runs (also while degraded or reconnecting), so browser captions run too. */
+  capturing: boolean;
+  onCaptions: (active: boolean) => void;
+}
+
 /** Side live updates: what the room said on the left, agent work on the right. */
-function Rails({ live }: { live: boolean }) {
+function Rails({ live, capturing, onCaptions }: RailsProps) {
   const lines = useRef<HTMLDivElement>(null);
   const feed = useRef<HTMLDivElement>(null);
   useEffect(() => startTranscriptRail(lines.current!, subscribeTranscript), []);
   useEffect(() => startActionFeed(feed.current!, subscribeActions), []);
+  useEffect(() => {
+    const Recognition = browserRecognition();
+    if (!capturing || Recognition === undefined) return;
+    const rail = { show: (text: string, final: boolean) => showCaption(lines.current!, text, final), clear: () => clearCaptions(lines.current!) };
+    return startCaptions(Recognition, subscribeTranscript, rail, onCaptions);
+  }, [capturing, onCaptions]);
   return (
     <div className="listen-rails">
       <section className="listen-tlog" aria-label="Live transcript" data-live={live}>
@@ -168,6 +184,7 @@ export function ListenPage() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [captions, setCaptions] = useState(false);
   useEffect(() => startWaveform(canvas.current!, engine.levels, () => engine.getSnapshot().listener), [engine]);
   const message = statusMessage(snapshot, failure);
   const close = (): void => setOverlay(null);
@@ -185,8 +202,9 @@ export function ListenPage() {
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
         <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
+        {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
       </section>
-      <Rails live={snapshot.listener === 'listening'} />
+      <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />

@@ -33,17 +33,17 @@ function collapse(element: HTMLElement, duration: number): void {
   animate(element, [{ opacity, height, marginTop }, { opacity: 0, height: '0px', marginTop: '0px' }], duration, POWER1_OUT, 'forwards').finished.then(remove, remove);
 }
 
-/** Items of a bottom-anchored `container` whose top is cut off by its upper edge. */
+/** Items of a bottom-anchored `container` whose top, or the spacing above it, is cut off by its upper edge. */
 function cutOff(container: HTMLElement, items: ReadonlyArray<HTMLElement>): ReadonlyArray<HTMLElement> {
   const edge = container.getBoundingClientRect().top;
-  return items.filter(item => item.getBoundingClientRect().top < edge);
+  return items.filter(item => item.getBoundingClientRect().top - parseFloat(getComputedStyle(item).marginTop) < edge);
 }
 
-/** One rail line, sliding up into place. Live ASR labels speakers 0, 1, …; the kiosk showed them as S0, S1. */
-function appendLine(lines: HTMLElement, segment: TranscriptSegment): void {
+/** One rail line, sliding up into place. */
+function appendLine(lines: HTMLElement, text: string, className = 'tline'): void {
   const line = document.createElement('div');
-  line.className = 'tline';
-  line.textContent = segment.speaker_label === null ? segment.text.trim() : `S${segment.speaker_label}: ${segment.text.trim()}`;
+  line.className = className;
+  line.textContent = text;
   lines.append(line);
   animate(line, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], 200, POWER2_OUT);
 }
@@ -68,13 +68,35 @@ export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: Sub
   resized.observe(lines);
   const unsubscribe = subscribeTranscript(segment => {
     if (segment.status !== 'final' || segment.text.trim() === '') return;
-    appendLine(lines, segment);
+    // Live ASR labels speakers 0, 1, …; the kiosk showed them as S0, S1.
+    appendLine(lines, segment.speaker_label === null ? segment.text.trim() : `S${segment.speaker_label}: ${segment.text.trim()}`);
     trimLines(lines);
   });
   return () => {
     resized.disconnect();
     unsubscribe();
   };
+}
+
+/**
+ * Browser captions (display-only, see captions.ts) at the bottom of the rail, in its line style:
+ * the utterance in progress updates its line word by word; a final one stays until a server
+ * segment replaces it. Empty text removes the line in progress.
+ */
+export function showCaption(lines: HTMLElement, text: string, final: boolean): void {
+  const line = lines.querySelector<HTMLElement>('.tline.interim:not(.bye)');
+  if (text === '') return line?.remove();
+  if (line === null) appendLine(lines, text, `tline caption${final ? '' : ' interim'}`);
+  else {
+    line.textContent = text;
+    line.classList.toggle('interim', !final);
+  }
+  trimLines(lines);
+}
+
+export function clearCaptions(lines: HTMLElement): void {
+  for (const caption of lines.querySelectorAll('.caption')) caption.remove();
+  trimLines(lines);
 }
 
 /** Row tone (the kiosk's status classes) and status label per action state. */

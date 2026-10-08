@@ -64,22 +64,77 @@ interface FakeCapture {
   actions(message: Omit<typeof ActionUpdateMessage.Encoded, '_tag'>): void;
 }
 
+/** Test-side stand-in for the browser's speech recognition (Web Speech API). */
+interface FakeSpeech {
+  /** Recognition sessions started so far. */
+  starts: number;
+  /** Delivers the words of the current utterance; a final result closes it. */
+  say(text: string, final?: boolean): void;
+  /** Ends the session as the browser does on its own, or with `error` as it does on failure. */
+  end(error?: string): void;
+}
+
 declare global {
   interface Window {
     __capture: FakeCapture;
+    __speech: FakeSpeech;
   }
+}
+
+interface Result {
+  isFinal: boolean;
+  0: { transcript: string };
+}
+
+/** Replaces the browser's recognition with `FakeSpeech`, or removes it (as in Firefox). Runs in the page. */
+function installSpeech(fake: boolean): void {
+  Reflect.deleteProperty(window, 'SpeechRecognition');
+  Reflect.deleteProperty(window, 'webkitSpeechRecognition');
+  if (!fake) return;
+  let current: { onstart: (() => void) | null; onresult: ((event: { resultIndex: number; results: Result[] }) => void) | null; onerror: ((event: { error: string }) => void) | null; onend: (() => void) | null } | null = null;
+  let results: Result[] = [];
+  class FakeRecognition {
+    onstart = null;
+    onresult = null;
+    onerror = null;
+    onend = null;
+    start(): void {
+      current = this;
+      results = [];
+      window.__speech.starts++;
+      queueMicrotask(() => current?.onstart?.());
+    }
+    abort(): void {
+      current = null;
+    }
+  }
+  window.__speech = {
+    starts: 0,
+    say(text, final = false) {
+      if (results.at(-1)?.isFinal === false) results.pop();
+      results.push({ isFinal: final, 0: { transcript: text } });
+      current?.onresult?.({ resultIndex: results.length - 1, results });
+    },
+    end(error) {
+      if (error !== undefined) current?.onerror?.({ error });
+      current?.onend?.();
+    },
+  };
+  Object.defineProperty(window, 'webkitSpeechRecognition', { value: FakeRecognition, configurable: true });
 }
 
 /**
  * Opens the listening page on the fake engine and starts listening in silence.
  * The waveform lays out its slots with Math.random once per mount, so the page gets a fixed PRNG:
  * the pixel-measuring specs then see the same layout every run instead of a random one.
+ * The browser has no speech recognition unless `speech` installs `FakeSpeech`.
  */
-export async function openListening(page: Page): Promise<void> {
+export async function openListening(page: Page, { speech = false } = {}): Promise<void> {
   await page.addInitScript(() => {
     let state = 42;
     Math.random = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
   });
+  await page.addInitScript(installSpeech, speech);
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
   await page.goto('/');
