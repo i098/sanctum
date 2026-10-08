@@ -52,8 +52,6 @@ export const engineeringDefaults = {
   modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
   /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
   pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
-  /** Free hosted tier: owner, admin and member seats per workspace when `workspaces.seat_limit` is NULL (docs/DECISIONS.md). */
-  seatLimit: 5,
 } as const;
 
 export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
@@ -78,18 +76,11 @@ const noDecisions: ReadonlyArray<OpenDecision> = [];
 
 const port = (name: string, fallback: number) => Config.port(name).pipe(Config.withDefault(fallback));
 
-/**
- * `SANCTUM_DEFAULT_SEAT_LIMIT`: a positive integer, or `none` for no limit; absent means
- * `engineeringDefaults.seatLimit`. A workspace's own `seat_limit` overrides it.
- */
-export const defaultSeatLimit: Config.Config<number | null> = Config.literal('none')('SANCTUM_DEFAULT_SEAT_LIMIT').pipe(
-  Config.map(() => null),
-  Config.orElse(() =>
-    Config.integer('SANCTUM_DEFAULT_SEAT_LIMIT').pipe(
-      Config.validate({ message: 'Expected a positive integer or none', validation: limit => limit > 0 }),
-      Config.withDefault(engineeringDefaults.seatLimit),
-    ),
-  ),
+/** `SANCTUM_DEFAULT_SEAT_LIMIT`: a positive integer; absent means no limit. A workspace's own `seat_limit` overrides it. */
+export const defaultSeatLimit: Config.Config<number | null> = Config.integer('SANCTUM_DEFAULT_SEAT_LIMIT').pipe(
+  Config.validate({ message: 'Expected a positive integer', validation: limit => limit > 0 }),
+  Config.option,
+  Config.map(Option.getOrNull),
 );
 
 export const serverConfig = Config.all({

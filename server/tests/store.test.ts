@@ -3,7 +3,6 @@ import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { PrincipalId, ProfileId, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
 import { ConfigProvider, Effect } from 'effect';
-import { engineeringDefaults } from '../src/config.ts';
 import { ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno } from '../src/db.ts';
 import { addMember, bumpPermissionRevision, createProfile, grantMeetingAccess, nextContextSeq, reviseProfile } from '../src/store.ts';
 import { withDatabase } from './support/database.ts';
@@ -103,13 +102,17 @@ describe('store', () => {
     ),
   );
 
-  it.effect('has no seat limit when the workspace limit is NULL and the default is none', () =>
+  it.effect('has no seat limit when the default is unset; a workspace limit still applies', () =>
     withDatabase(
       Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const [owner] = yield* seedWorkspace('Acme');
-        const people = yield* Effect.all(Array.from({ length: engineeringDefaults.seatLimit + 2 }, () => human()));
-        yield* Effect.forEach(people, principal_id => addMember({ workspace_id: owner!.workspace_id, principal_id, role: 'member' }));
-      }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_DEFAULT_SEAT_LIMIT', 'none']])))),
+        const workspace_id = owner!.workspace_id;
+        const people = yield* Effect.all(Array.from({ length: 7 }, () => human()));
+        yield* Effect.forEach(people, principal_id => addMember({ workspace_id, principal_id, role: 'member' }));
+        yield* sql`UPDATE workspaces SET seat_limit = 8 WHERE id = ${workspace_id}`;
+        expect(yield* Effect.flip(addMember({ workspace_id, principal_id: yield* human(), role: 'member' }))).toMatchObject({ _tag: 'SeatLimitReached', limit: 8 });
+      }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))),
       migrated,
     ),
   );

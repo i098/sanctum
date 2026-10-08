@@ -7,6 +7,10 @@ describe('container environment', () => {
     expect(containerEnv({ MYSQL_HOST: 'db' })).not.toHaveProperty('DEEPGRAM_API_KEY');
   });
 
+  it('forwards the hosted seat limit to the container', () => {
+    expect(containerEnv({ SANCTUM_DEFAULT_SEAT_LIMIT: '5' })).toEqual({ SANCTUM_DEFAULT_SEAT_LIMIT: '5' });
+  });
+
   it('keeps the login tokens in the Worker', () => {
     const worker = { LOGIN_TOKEN: 'link', SESSION_TOKEN: 'session', CSRF_TOKEN: 'csrf', MYSQL_HOST: 'db' };
     expect(containerEnv(worker)).toEqual({ MYSQL_HOST: 'db' });

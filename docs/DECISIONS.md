@@ -16,7 +16,7 @@
 - Use MySQL 8.4 LTS/InnoDB, not Postgres, for structured data.
 - Keep Pipedream's catalog server-side, with search/inspect/request gateways.
 - Expose one shared context model through website, SDKs, and MCP.
-- Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the default is 5 for the free hosted tier, a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it, and self-hosted operators set `SANCTUM_DEFAULT_SEAT_LIMIT` higher or to `none`.
+- Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
 
 ## Still open
 

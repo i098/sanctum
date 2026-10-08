@@ -20,7 +20,7 @@ Secrets come from the environment only; none are committed.
 | Group | Variables |
 | --- | --- |
 | Core | `SANCTUM_ENV`, `SANCTUM_SELECTED_DECISIONS`, `API_PORT`, `SANCTUM_ALLOWED_ORIGINS` |
-| Workspaces | `SANCTUM_DEFAULT_SEAT_LIMIT`: owner, admin and member seats per workspace; default `5`, a positive integer, or `none` for no limit. A workspace's own `workspaces.seat_limit` overrides it (operator SQL; NULL uses the default). A member beyond the limit is refused with `SeatLimitReached`; existing members stay. |
+| Workspaces | `SANCTUM_DEFAULT_SEAT_LIMIT`: owner, admin and member seats per workspace; a positive integer, unset for no limit (the hosted Worker sets `5` in `deploy/cloudflare/wrangler.jsonc`). A workspace's own `workspaces.seat_limit` overrides it (operator SQL; NULL uses the default). A malformed value fails at the first seat addition. A member beyond the limit is refused with `SeatLimitReached`; existing members stay. |
 | MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
 | Recordings (R2) | `R2_ENDPOINT`, `R2_BUCKET`, `R2_PREFIX`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_TIMEOUT_MS` |
 | Speech | `DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `DEEPGRAM_URL`, `DEEPGRAM_BATCH_TIMEOUT_MS`, `PYANNOTE_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` |
