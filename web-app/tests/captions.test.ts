@@ -1,5 +1,5 @@
 import type { TranscriptSegment } from '@sanctum/contracts';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startCaptions } from '../src/pages/listen/captions.ts';
 
 type Results = { isFinal: boolean; 0: { transcript: string } }[];
@@ -38,6 +38,10 @@ function setup(lang: string) {
   return { say, serverFinal, shown };
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('browser captions after a server segment', () => {
   it('keeps showing new text in a language written without spaces', () => {
     const { say, serverFinal, shown } = setup('ja-JP');
@@ -57,11 +61,19 @@ describe('browser captions after a server segment', () => {
     expect(shown.at(-1)).toBe('interim:going live');
   });
 
-  it('shows the whole next utterance after the browser finalises the replaced one', () => {
+  it('shows the whole next utterance when the result index advances past the replaced one', () => {
     const { say, serverFinal, shown } = setup('en-US');
     say(0, ['we keep the pilot', false]);
     serverFinal();
-    say(0, ['we keep the pilot', true], ['review it Friday', false]);
+    say(1, ['we keep the pilot', true], ['review it Friday', false]);
     expect(shown.at(-1)).toBe('interim:review it Friday');
+  });
+
+  it('keeps skipping replaced words when a final result and its next interim arrive in one event', () => {
+    const { say, serverFinal, shown } = setup('en-US');
+    say(0, ['we keep the pilot', true], ['review it Friday', false]);
+    serverFinal();
+    say(1, ['we keep the pilot', true], ['review it Friday soon', false]);
+    expect(shown.at(-1)).toBe('interim:soon');
   });
 });

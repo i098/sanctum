@@ -89,6 +89,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
       else {
         rail.show(unseen(result[0].transcript), true);
         skip = 0;
+        utterance = index + 1;
       }
     }
     rail.show(unseen(interim), false);
