@@ -9,7 +9,7 @@ import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpoc
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
-import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type StopReason } from './live.ts';
+import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type RejectReason, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
@@ -292,7 +292,7 @@ class CaptureController implements CaptureView {
   private async claimListener(buffer: CaptureBuffer, retry = true): Promise<StoredListener> {
     await this.ensureListener(buffer);
     const exit = await this.beat();
-    if (exit && Exit.isFailure(exit) && failureTag(exit) === 'Unauthenticated') await Effect.runPromise(Effect.failCause(exit.cause));
+    if (exit && failureTag(exit) === 'Unauthenticated') await Effect.runPromise(exit);
     return this.listener ?? (retry ? this.claimListener(buffer, false) : this.ensureListener(buffer));
   }
 

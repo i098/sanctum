@@ -154,7 +154,7 @@ class FakeListenerServer {
   private groupHeld = false;
   private readonly lease = { lease_expires_at: '2026-09-29T09:00:45Z' };
 
-  private readonly options: { unclaimed?: boolean; epochs?: string[]; signedOut?: boolean };
+  private readonly options: { unclaimed?: boolean; epochs?: string[] };
 
   constructor(options: { unclaimed?: boolean; epochs?: string[]; signedOut?: boolean }) {
     this.options = options;
@@ -162,13 +162,13 @@ class FakeListenerServer {
     this.active = !options.unclaimed;
     this.claims = options.unclaimed ? [] : [{ generation: 1, at: 0 }];
     this.epochs = new Map((options.epochs ?? []).map((id) => [id, 1]));
+    if (options.signedOut) this.expire();
   }
 
   readonly client = {
     registerListener: () => {
       this.calls.register++;
-      if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
-      return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
+        return Effect.succeed({ id: this.forgotten ? NEXT_LISTENER_ID : LISTENER_ID, lease_generation: this.options.unclaimed ? 0 : 1 });
     },
     heartbeat: (request: { path: { listener_id: string }; payload: { lease_generation: number } }) => this.heartbeat(request),
     putChunk: (request: { headers: { 'x-sanctum-manifest': RecordingChunkManifest } }) => this.putChunk(request.headers['x-sanctum-manifest']),
@@ -180,7 +180,6 @@ class FakeListenerServer {
 
   private heartbeat(request: { path: { listener_id: string }; payload: { lease_generation: number } }) {
     this.calls.heartbeat.push(request.payload);
-    if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
     if (this.offline) return Effect.fail(new Unavailable({ message: 'offline', retryable: true }));
     if (this.forgotten && request.path.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
     const held = request.payload.lease_generation;
@@ -191,7 +190,6 @@ class FakeListenerServer {
   }
 
   private putChunk(manifest: RecordingChunkManifest) {
-    if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
     if (this.forgotten && manifest.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
     const held = this.epochs.get(manifest.epoch_id);
     const end = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
@@ -242,8 +240,17 @@ class FakeListenerServer {
     this.forgotten = true;
   };
 
+  /** The owner session ends: every later request is refused as unauthenticated. */
   readonly expire = () => {
-    this.options.signedOut = true;
+    const refuse = () => Effect.fail(new Unauthenticated({ message: 'No credentials' }));
+    Object.assign(this.client, {
+      registerListener: () => {
+        this.calls.register++;
+        return refuse();
+      },
+      heartbeat: refuse,
+      putChunk: refuse,
+    });
   };
 }
 
