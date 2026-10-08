@@ -2,7 +2,7 @@
  * Process configuration and the plan section 02 engineering defaults.
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
-import { Config, Effect, Option, Redacted } from 'effect';
+import { Config, Effect, Option, Redacted, Schema } from 'effect';
 import { type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
@@ -77,8 +77,7 @@ const noDecisions: ReadonlyArray<OpenDecision> = [];
 const port = (name: string, fallback: number) => Config.port(name).pipe(Config.withDefault(fallback));
 
 /** `SANCTUM_DEFAULT_SEAT_LIMIT`: a positive integer; absent means no limit. A workspace's own `seat_limit` overrides it. */
-export const defaultSeatLimit: Config.Config<number | null> = Config.integer('SANCTUM_DEFAULT_SEAT_LIMIT').pipe(
-  Config.validate({ message: 'Expected a positive integer', validation: limit => limit > 0 }),
+export const defaultSeatLimit: Config.Config<number | null> = Schema.Config('SANCTUM_DEFAULT_SEAT_LIMIT', Schema.NumberFromString.pipe(Schema.int(), Schema.positive())).pipe(
   Config.option,
   Config.map(Option.getOrNull),
 );
