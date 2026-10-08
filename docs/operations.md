@@ -7,7 +7,7 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
-- `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade and the built website, all on one port behind Caddy.
+- `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade, the built website and, when [self-hosted sign-in](#self-hosted-sign-in) is on, the embedded issuer at `/idp`, all on one port behind Caddy.
 - `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions).
 
 Both refuse to start in `SANCTUM_ENV=production` until every decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
@@ -46,6 +46,26 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d mysql
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose run --rm api node server/dist/migrate.js
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 ```
+
+## Self-hosted sign-in
+
+`SANCTUM_EMBEDDED_ISSUER=better-auth` mounts Better Auth ([server/src/issuer.ts](../server/src/issuer.ts)) in the API process at `/idp`: the OIDC issuer for website sign-in and the OAuth authorization server for `/mcp`.
+It uses the existing MySQL through its own two-connection pool and the `auth_*` tables of migration `011_embedded_issuer`; run migrations first. Sanctum never runs Better Auth's own migrator.
+
+| Setting | Value |
+| --- | --- |
+| `SANCTUM_EMBEDDED_ISSUER` | `better-auth` |
+| `BETTER_AUTH_SECRET` | At least 32 random characters, for example `openssl rand -base64 32`. Signs issuer state and encrypts the stored signing keys, so keep it stable. |
+| `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_ISSUER` | `https://<host>/idp` (the API refuses to start when the embedded issuer path is not `/idp`) |
+| `SANCTUM_MCP_RESOURCE` | `https://<host>/mcp`, the audience of every MCP access token |
+| `SANCTUM_MCP_JWKS_URL` | `https://<host>/idp/jwks` (EdDSA keys) |
+
+- **Discovery**: `/idp/.well-known/openid-configuration` and `/.well-known/oauth-authorization-server/idp` advertise PKCE `S256`, dynamic client registration at `/idp/oauth2/register` and Client ID Metadata Documents.
+- **Pages**: Better Auth sends browsers to `/sign-in`, `/sign-up` and `/consent` on the website during an authorization request.
+- **Website client**: with the settings above plus `SANCTUM_OIDC_REDIRECT_URI=https://<host>/auth/callback`, run `npm run issuer:client -w server`. It registers a public client (PKCE, no consent screen) and prints the id for `SANCTUM_OIDC_CLIENT_ID`; leave `SANCTUM_OIDC_CLIENT_SECRET` unset. Each run registers another client.
+- **MCP clients** register themselves (open registration or a metadata document URL). A loopback redirect such as `http://127.0.0.1:<port>/callback` needs `application_type: native`. Access tokens carry only the Sanctum scopes the user approved for the `/mcp` resource.
+- **Access**: an issuer account alone grants nothing. Its `(issuer, subject)` pair must be linked to a principal with an active membership in `principal_identities`; membership never comes from the email address.
+- **Upgrades**: Better Auth versions are pinned. At startup it logs any difference between its expected schema and the database; an upgrade that needs more than new tables, indexes or columns is its own reviewed task.
 
 ## Cloudflare
 

@@ -188,7 +188,7 @@ export const McpAuthorizationFromEnv = Layer.effect(
   ),
 );
 
-const MCP_SCOPES: ReadonlyArray<AccessScopeName> = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
+export const MCP_SCOPES: ReadonlyArray<AccessScopeName> = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
 const metadataUrl = (resource: string) => new URL(`/.well-known/oauth-protected-resource${new URL(resource).pathname}`, resource).href;
 
 const Identity = Schema.Struct({ principal_id: PrincipalId, workspace_id: WorkspaceId });
