@@ -86,8 +86,8 @@ const sentAudio = (body: Buffer) => {
   return { rate: wav.readUInt32LE(24), samples: new Int16Array(wav.buffer.slice(wav.byteOffset + 44, wav.byteOffset + wav.byteLength)) };
 };
 
-const whisper = (url: string) =>
-  Effect.provide(SpeechToText, Layer.succeed(SpeechToText, whisperSpeechToText({ workersAi: Option.some({ baseUrl: url, apiToken: Redacted.make('wai-token') }), liveAsr: engineeringDefaults.liveAsr })));
+const whisper = (baseUrl: string) =>
+  whisperSpeechToText({ workersAi: Option.some({ baseUrl: `${baseUrl}/accounts/acct/ai`, apiToken: Redacted.make('wai-token') }), liveAsr: engineeringDefaults.liveAsr });
 
 describe('Workers AI Whisper', () => {
   it.scoped('transcribes a batch range, keeping segment times relative to its first sample', () =>
@@ -97,10 +97,10 @@ describe('Workers AI Whisper', () => {
         response.writeHead(status, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ success: true, result: { text: 'batch words', segments: [{ start: 0.25, end: 1, text: ' batch words ' }, { start: 1, end: 1.5, text: ' ' }] } }));
       });
-      const stt = yield* whisper(server.url);
+      const stt = whisper(server.url);
       expect(yield* stt.transcribe(16_000, new Int16Array([1, -1]))).toEqual([{ start_s: 0.25, end_s: 1, is_final: true, text: 'batch words', confidence: null, speaker: null }]);
       const request = server.requests[0]!;
-      expect(request.url).toBe('/run/@cf/openai/whisper-large-v3-turbo');
+      expect(request.url).toBe('/accounts/acct/ai/run/@cf/openai/whisper-large-v3-turbo');
       expect(request.headers.authorization).toBe('Bearer wai-token');
       expect(JSON.parse(request.body.toString())).toMatchObject({ vad_filter: true });
       expect(sentAudio(request.body)).toEqual({ rate: 16_000, samples: new Int16Array([1, -1]) });
@@ -127,7 +127,7 @@ describe('Workers AI Whisper', () => {
         } else if (answeredLater) reply();
         else held = reply;
       });
-      const stt = yield* whisper(server.url);
+      const stt = whisper(server.url);
       const stream = yield* stt.openStream(16_000);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       // 2.5 s of loud audio with a pause at 1.6-1.7 s, then 0.5 s more.
