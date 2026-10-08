@@ -124,7 +124,8 @@ test('exports a recording over the WAV size limit one part per click, with range
     body: `import { createCaptureController } from '/src/lib/capture/controller.ts';
 const engine = createCaptureController({ wavMaxSamples: ${2 * RATE} });
 export function getCaptureEngine() { return engine; }
-export function subscribeTranscript() { return () => {}; }`,
+export function subscribeTranscript() { return () => {}; }
+export function subscribeActions() { return () => {}; }`,
   }));
   await page.reload();
   await expect(page.getByText('4 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();

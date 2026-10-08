@@ -2,8 +2,8 @@
  * Versioned schema migrations for MySQL 8.4 (plan sections 07 and 16).
  *
  * MySQL DDL implicitly commits, so a migration file cannot be rolled back as a unit. Each
- * file is split into single-object steps (CREATE TABLE / CREATE INDEX, both atomic DDL in
- * MySQL 8.4) recorded one by one in a ledger under a named execution lock. After a crash
+ * file is split into single-object steps (CREATE TABLE / CREATE INDEX / ALTER TABLE ... ADD COLUMN,
+ * each atomic DDL in MySQL 8.4) recorded one by one in a ledger under a named execution lock. After a crash
  * between a step and its ledger row, the rerun inspects information_schema: an object that
  * exists for a migration this ledger already started is adopted, any other pre-existing
  * object stops the run. Applied steps and completed files are checksum-verified.
@@ -20,7 +20,10 @@ import { dbLayer } from './db.ts';
 
 export class MigrationError extends Data.TaggedError('MigrationError')<{ readonly message: string }> { }
 
-type SchemaObject = { readonly kind: 'table'; readonly table: string } | { readonly kind: 'index'; readonly table: string; readonly index: string };
+type SchemaObject =
+  | { readonly kind: 'table'; readonly table: string }
+  | { readonly kind: 'index'; readonly table: string; readonly index: string }
+  | { readonly kind: 'column'; readonly table: string; readonly column: string };
 
 export interface MigrationStep {
   readonly index: number;
@@ -40,13 +43,17 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 
 const TABLE = /^CREATE TABLE `?(\w+)`?/i;
 const INDEX = /^CREATE (?:UNIQUE |FULLTEXT )?INDEX `?(\w+)`? ON `?(\w+)`?/i;
+/** One column per statement, so the step stays a single inspectable object. */
+const COLUMN = /^ALTER TABLE `?(\w+)`? ADD COLUMN `?(\w+)`?[^,]*$/i;
 
 function schemaObject(statement: string, file: string): SchemaObject {
   const table = TABLE.exec(statement);
   if (table) return { kind: 'table', table: table[1]! };
   const index = INDEX.exec(statement);
   if (index) return { kind: 'index', index: index[1]!, table: index[2]! };
-  throw new MigrationError({ message: `${file}: only CREATE TABLE and CREATE INDEX steps can be inspected after a crash: ${statement.slice(0, 60)}` });
+  const column = COLUMN.exec(statement);
+  if (column) return { kind: 'column', table: column[1]!, column: column[2]! };
+  throw new MigrationError({ message: `${file}: only CREATE TABLE, CREATE INDEX and single ADD COLUMN steps can be inspected after a crash: ${statement.slice(0, 60)}` });
 }
 
 /** Parses `NNN_name.sql`: `--` comment lines are dropped and statements end with `;` at end of line. */
@@ -116,7 +123,9 @@ const objectExists = (object: SchemaObject) =>
     const [row] =
       object.kind === 'table'
         ? yield* sql<{ present: number }>`SELECT EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${object.table}) AS present`
-        : yield* sql<{ present: number }>`SELECT EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${object.table} AND INDEX_NAME = ${object.index}) AS present`;
+        : object.kind === 'index'
+          ? yield* sql<{ present: number }>`SELECT EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${object.table} AND INDEX_NAME = ${object.index}) AS present`
+          : yield* sql<{ present: number }>`SELECT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${object.table} AND COLUMN_NAME = ${object.column}) AS present`;
     return Number(row?.present) === 1;
   });
 
@@ -126,7 +135,7 @@ export interface MigrationReport {
 }
 
 const stepLabel = (migration: Migration, step: MigrationStep) =>
-  `${migration.version}.${step.index} ${step.object.kind === 'table' ? step.object.table : `${step.object.table}.${step.object.index}`}`;
+  `${migration.version}.${step.index} ${step.object.kind === 'table' ? step.object.table : `${step.object.table}.${step.object.kind === 'index' ? step.object.index : step.object.column}`}`;
 
 function runStep(migration: Migration, step: MigrationStep, resumed: boolean, recorded: Map<number, string>, report: { applied: string[]; adopted: string[] }) {
   return Effect.gen(function*() {

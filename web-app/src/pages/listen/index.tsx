@@ -2,7 +2,7 @@ import { createClient } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
-import { getCaptureEngine, subscribeTranscript } from './engine.ts';
+import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
@@ -128,7 +128,7 @@ function Rails({ live }: { live: boolean }) {
   const lines = useRef<HTMLDivElement>(null);
   const feed = useRef<HTMLDivElement>(null);
   useEffect(() => startTranscriptRail(lines.current!, subscribeTranscript), []);
-  useEffect(() => startActionFeed(feed.current!, client), []);
+  useEffect(() => startActionFeed(feed.current!, subscribeActions), []);
   return (
     <div className="listen-rails">
       <section className="listen-tlog" aria-label="Live transcript" data-live={live}>

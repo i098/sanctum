@@ -72,7 +72,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 
 Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet,buffer,uploader,orphans}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
 
-- `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle; `subscribeTranscript(listener)` fans out live transcript segments from the listener stream.
+- `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle; `subscribeTranscript(listener)` and `subscribeActions(listener)` fan out live transcript segments and `action_update` messages from the listener stream.
 - `controller.ts`: `createCaptureController(deps): CaptureView & { dispose(): void }`, publishing through `createCaptureStore`.
 - Client of `ListenersApi`, `LISTENER_STREAM_PATH`, `StartMessage`, `encodePcmFrame` and `RecordingChunkManifest`.
 - Hands group ownership to serve through the `HeartbeatReceipt.owner` flag only.
@@ -83,8 +83,8 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,listen.css,Dialog
 
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
 - `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.
-- `rails.ts`: `startTranscriptRail(lines)` and `startActionFeed(feed, client)`, the kiosk's side live updates.
-- Imports only `getCaptureEngine`, `subscribeTranscript` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
+- `rails.ts`: `startTranscriptRail(lines, subscribeTranscript)` and `startActionFeed(feed, subscribeActions)`, the kiosk's side live updates.
+- Imports only `getCaptureEngine`, `subscribeTranscript`, `subscribeActions` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
 - Review tabs (T21 box 2) live in `ReviewPanels.tsx` and `review-data.ts`. They added three compatible API fields: `GET /meetings/{id}/actions` (`listMeetingActions` in `ActionsApi` and actions.ts), an optional `meeting_id` on `GET /context/changes`, and `pieces` plus `sample_rate` on `RecordingAccess` (playback.ts) to map a source sample to a playback offset.
 
 ### models (T04, T15)
@@ -144,13 +144,15 @@ Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/contex
 
 ### actions (T18, T19 recovery, T20)
 
-Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/media/speech-reply.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
+Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/media/speech-reply.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
 
 - `actions.ts`: `requestAction(access, input: RequestActionInput): Effect<RequestActionOutput, Forbidden | NotFound | HashConflict, R>` (the third gateway).
 - `actions.ts`: `getActionReceipt(access, action_id): Effect<ActionReceipt, NotFound, R>`.
 - `speech-gate.ts`: `SpeechGate` tag with `openRequest({ listener_id; epoch_id; request_id; sample_end })`, `mayEmit(request_id, generation): boolean`, `cancel(listener_id, reason)`.
 - `playback.ts` (web): `createPlayback(context: AudioContext)` registered by engine.ts; drops chunks of cancelled generations.
 - Handles job kinds `action.execute`, `action.reconcile`, `research.run`.
+- `actions.ts`: `meetingFeed(access, meeting_id)` returns the agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
+- Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from MySQL every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-reply.ts `SpeechRepliesLive`), so a process without them stays silent.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.

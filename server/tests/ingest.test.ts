@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { beforeAll, expect, layer } from '@effect/vitest';
-import type { AccessScope, CaptureEpochId } from '@sanctum/contracts';
+import type { AccessScope, CaptureEpochId, MeetingId } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer } from 'effect';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
@@ -23,11 +24,13 @@ import {
 } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
 import { memoryObjectStore } from './support/object-store.ts';
+import { seedWorkspace } from './support/fixtures.ts';
 
 const RATE = 16_000;
 
 beforeAll(() => {
   liveLimits.providerRetryMs = 200;
+  liveLimits.actionFeedMs = 100;
 });
 
 /** Server with fake providers, a claimed listener and a started live session. */
@@ -170,6 +173,65 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const premature = yield* openSocket(host, listener_id, 'device');
       premature.send(pcmFrame(0, 0));
       expect(yield* premature.take('rejected')).toMatchObject({ reason: 'invalid_start' });
+    }),
+  );
+
+  it.scoped("streams the listener's meeting actions with readable titles: snapshot, changes from any process, snapshot again on reconnect", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const tokens = new Map<string, AccessScope>();
+      const host = yield* serveApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, fakeSpeech().layer));
+      const [owner] = yield* seedWorkspace('Feed room', ['owner']);
+      tokens.set('owner', { ...owner!, scopes: [...owner!.scopes, 'capture:ingest'] });
+      const { listener_id, lease_generation } = yield* claimListener(host, 'owner');
+      const meeting_id = randomUUID() as MeetingId;
+      yield* sql`INSERT INTO meetings (id, workspace_id, listener_id, state, visibility, timezone, started_at, processing, created_at, updated_at)
+        VALUES (${meeting_id}, ${owner!.workspace_id}, ${listener_id}, 'active', 'workspace', 'UTC', UTC_TIMESTAMP(6),
+          ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      const addAction = (id: string, action_key: string, title: string | null, age: number) =>
+        sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, title, created_at, updated_at)
+          VALUES (${id}, ${owner!.workspace_id}, ${meeting_id}, ${owner!.principal.id}, ${action_key}, ${id}, '{}', ${Buffer.alloc(32)}, '1', 'queued', ${title},
+            UTC_TIMESTAMP(6) - INTERVAL ${age} SECOND, UTC_TIMESTAMP(6))`;
+      const [first, second, third] = [randomUUID(), randomUUID(), randomUUID()];
+      yield* addAction(first, 'gmail-send-email', null, 30);
+      yield* addAction(second, 'google_calendar-create-event', 'Book the rollout review', 20);
+      const epoch_id = newEpochId();
+      const connect = Effect.gen(function* () {
+        const socket = yield* openSocket(host, listener_id, 'owner');
+        socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
+        yield* socket.take('accepted');
+        return socket;
+      });
+      const socket = yield* connect;
+      expect(yield* socket.take('action_update')).toEqual({
+        _tag: 'action_update',
+        meeting_id,
+        actions: [
+          { action_id: first, action_key: 'gmail-send-email', state: 'queued', title: 'Gmail: send email' },
+          { action_id: second, action_key: 'google_calendar-create-event', state: 'queued', title: 'Book the rollout review' },
+        ],
+      });
+
+      // The job worker changes states in its own process; the socket learns of it from the database.
+      yield* sql`UPDATE actions SET state = 'succeeded', updated_at = UTC_TIMESTAMP(6) WHERE id = ${second}`;
+      expect(yield* socket.take('action_update')).toEqual({
+        _tag: 'action_update',
+        meeting_id,
+        actions: [{ action_id: second, action_key: 'google_calendar-create-event', state: 'succeeded', title: 'Book the rollout review' }],
+      });
+
+      socket.close();
+      yield* socket.closed;
+      yield* addAction(third, 'slack-send-message', 'Post the latency numbers', 10);
+      const again = yield* connect;
+      expect((yield* again.take('action_update')).actions.map(action => [action.action_id, action.state, action.title])).toEqual([
+        [first, 'queued', 'Gmail: send email'],
+        [second, 'succeeded', 'Book the rollout review'],
+        [third, 'queued', 'Post the latency numbers'],
+      ]);
+
+      yield* sql`UPDATE meetings SET state = 'closed', ended_at = UTC_TIMESTAMP(6) WHERE id = ${meeting_id}`;
+      expect(yield* again.take('action_update')).toEqual({ _tag: 'action_update', meeting_id: null, actions: [] });
     }),
   );
 });

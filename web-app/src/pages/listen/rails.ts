@@ -4,9 +4,11 @@
  * request. Rows are plain DOM, like the waveform; motion uses the Web Animations API with the
  * kiosk's GSAP durations and eases, and is skipped under reduced motion.
  */
-import { type ActionReceipt, pages, type SanctumClient, type TranscriptSegment } from '@sanctum/sdk';
+import type { ActionState, ActionUpdateMessage, TranscriptSegment } from '@sanctum/contracts';
 
 type SubscribeTranscript = (listener: (segment: TranscriptSegment) => void) => () => void;
+type SubscribeActions = (listener: (message: ActionUpdateMessage) => void) => () => void;
+type FeedAction = ActionUpdateMessage['actions'][number];
 
 /** GSAP eases as CSS cubic-béziers: power1.out (GSAP's default), power2.out, power3.out. */
 const POWER1_OUT = 'cubic-bezier(0.25, 0.46, 0.45, 0.94)';
@@ -16,8 +18,8 @@ const POWER3_OUT = 'cubic-bezier(0.165, 0.84, 0.44, 1)';
 const TRANSCRIPT_MAX = 10;
 /** The newest lines keep the brighter tier; older ones step down to the muted colour, never dimmer. */
 const TRANSCRIPT_FRESH = 3;
+/** Same as contracts' `ACTION_FEED_ROWS`, which caps each `action_update`. */
 const FEED_MAX = 5;
-const POLL_MS = 5_000;
 
 function animate(element: Element, keyframes: Keyframe[], duration: number, easing: string, fill: FillMode = 'backwards'): Animation {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -75,8 +77,8 @@ export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: Sub
   };
 }
 
-/** Row tone (the kiosk's status classes) and status label per receipt state. */
-const STATUS: Record<ActionReceipt['state'], readonly [tone: string, label: string]> = {
+/** Row tone (the kiosk's status classes) and status label per action state. */
+const STATUS: Record<ActionState, readonly [tone: string, label: string]> = {
   proposed: ['proposed', '○ proposed'],
   awaiting_authorization: ['proposed', '○ awaiting permission'],
   queued: ['proposed', '○ queued'],
@@ -93,31 +95,28 @@ const EMAIL = `${SVG}<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m
 /** The kiosk's fallback icon for any other action. */
 const RESEARCH = `${SVG}<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
 
-function fillRow(row: HTMLElement, action: ActionReceipt): void {
+function fillRow(row: HTMLElement, action: FeedAction): void {
   const [tone, label] = STATUS[action.state];
   const icon = action.action_key.includes('calendar') ? CALENDAR : action.action_key.includes('mail') ? EMAIL : RESEARCH;
   row.className = `frow ${tone}`;
   row.dataset['state'] = action.state;
   row.innerHTML = `<span class="fedge"></span><span class="fic">${icon}</span><span class="ftitle"></span><span class="fstat ${tone}"></span>`;
-  row.querySelector('.ftitle')!.textContent = action.action_key;
+  row.querySelector('.ftitle')!.textContent = action.title;
   row.querySelector('.fstat')!.textContent = label;
 }
 
 /**
- * Polls the newest open meeting's action receipts and keeps its five latest as feed rows: new rows
- * slide in from the right, the oldest beyond five collapses away, rows past the newest two rest at
- * 40%, and a row turning done flashes its edge. Rows the band cannot fit whole stay hidden.
- * Failed polls keep the rows already shown.
- * ponytail: polls every 5 s because no server push carries action changes; a listener-stream event replaces it.
+ * Keeps the five latest actions of the listener's open meeting as feed rows, from the live
+ * socket's `action_update` messages: new rows slide in from the right, the oldest beyond five
+ * collapses away, rows past the newest two rest at 40%, and a row turning done flashes its edge.
+ * Rows the band cannot fit whole stay hidden. A dropped socket keeps the rows already shown until
+ * the reconnect's snapshot brings them up to date.
  */
-export function startActionFeed(feed: HTMLElement, client: SanctumClient): () => void {
+export function startActionFeed(feed: HTMLElement, subscribeActions: SubscribeActions): () => void {
   const rows = new Map<string, HTMLElement>();
-  let owner: string | undefined;
-  const controller = new AbortController();
-  const options = { signal: controller.signal };
-  let busy = false;
+  let owner: string | null | undefined;
 
-  const add = (action: ActionReceipt): void => {
+  const add = (action: FeedAction): void => {
     const row = document.createElement('div');
     fillRow(row, action);
     feed.append(row);
@@ -129,12 +128,12 @@ export function startActionFeed(feed: HTMLElement, client: SanctumClient): () =>
       collapse(old, 400);
     }
   };
-  const update = (row: HTMLElement, action: ActionReceipt): void => {
+  const update = (row: HTMLElement, action: FeedAction): void => {
     const wasDone = row.classList.contains('done');
     fillRow(row, action);
     if (action.state === 'succeeded' && !wasDone) animate(row.querySelector('.fedge')!, [{ transform: 'scaleY(0.15)' }, { transform: 'scaleY(1)' }], 500, POWER2_OUT);
   };
-  const upsert = (action: ActionReceipt): void => {
+  const upsert = (action: FeedAction): void => {
     const row = rows.get(action.action_id);
     if (row === undefined) add(action);
     else if (row.dataset['state'] !== action.state) update(row, action);
@@ -152,39 +151,20 @@ export function startActionFeed(feed: HTMLElement, client: SanctumClient): () =>
   const resized = new ResizeObserver(hideCut);
   resized.observe(feed);
 
-  /** Rows belong to the meeting they were polled from: any other meeting, or none, clears them. */
-  const claim = (meetingId: string | undefined): void => {
+  /** Rows belong to one meeting: an update for any other meeting, or for none, clears them. */
+  const claim = (meetingId: string | null): void => {
     if (meetingId === owner) return;
     rows.forEach(row => collapse(row, 400));
     rows.clear();
     owner = meetingId;
   };
-  const latestActions = async (meetingId: string): Promise<ReadonlyArray<ActionReceipt>> => {
-    let latest: ReadonlyArray<ActionReceipt> = [];
-    for await (const page of pages(client, 'actions.listMeetingActions', { meeting_id: meetingId, limit: 200 }, options)) {
-      latest = [...latest, ...page.actions].slice(-FEED_MAX);
-    }
-    return latest;
-  };
-  const poll = async (): Promise<void> => {
-    const { meetings } = await client.meetings.listMeetings({ limit: 1 }, options);
-    const meeting = meetings.find(({ state }) => state !== 'closed' && state !== 'interrupted');
-    claim(meeting?.id);
-    if (meeting === undefined) return;
-    (await latestActions(meeting.id)).forEach(upsert);
+  const unsubscribe = subscribeActions(({ meeting_id, actions }) => {
+    claim(meeting_id);
+    actions.forEach(upsert);
     settle();
-  };
-  const tick = (): void => {
-    if (busy || document.visibilityState === 'hidden') return;
-    busy = true;
-    poll().catch(() => {}).finally(() => (busy = false));
-  };
-
-  tick();
-  const timer = setInterval(tick, POLL_MS);
+  });
   return () => {
-    clearInterval(timer);
-    controller.abort();
+    unsubscribe();
     resized.disconnect();
   };
 }

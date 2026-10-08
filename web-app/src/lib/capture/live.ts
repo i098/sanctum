@@ -4,6 +4,7 @@
  * disconnected or over the `bufferedAmount` bound are recovered from uploaded chunks.
  */
 import {
+  type ActionUpdateMessage,
   encodePcmFrame,
   LISTENER_STREAM_PATH,
   type RejectedMessage,
@@ -31,6 +32,8 @@ export interface LiveOptions {
   onSpeech?(message: SpeechChunkMessage | SpeechCancelMessage): void;
   /** Live transcript segments for display; partial ones are never committed facts. */
   onTranscript?(segment: TranscriptSegment): void;
+  /** Agent-work feed rows of the listener's open meeting: a snapshot after each (re)connect, then changes. */
+  onActions?(message: ActionUpdateMessage): void;
   readonly WebSocket?: typeof WebSocket;
 }
 
@@ -52,10 +55,11 @@ export function streamUrl(listenerId: string, origin = globalThis.location.origi
 
 const ignore = () => {};
 
-/** Requested speech goes to playback and transcript segments to display; false for socket control messages. */
-function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscript = ignore }: Pick<LiveOptions, 'onSpeech' | 'onTranscript'>): boolean {
+/** Requested speech goes to playback, transcript segments and action updates to display; false for socket control messages. */
+function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscript = ignore, onActions = ignore }: Pick<LiveOptions, 'onSpeech' | 'onTranscript' | 'onActions'>): boolean {
   if (message._tag === 'transcript') onTranscript(message.segment);
   else if (message._tag === 'speech_chunk' || message._tag === 'speech_cancel') onSpeech(message);
+  else if (message._tag === 'action_update') onActions(message);
   else return false;
   return true;
 }

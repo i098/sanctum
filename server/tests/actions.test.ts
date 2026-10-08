@@ -3,7 +3,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type MeetingId, Unavailable } from '@sanctum/contracts';
 import { Effect, Fiber, Schedule, Schema, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
-import { createActionGrant, getActionReceipt, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
+import { createActionGrant, getActionReceipt, listMeetingActions, meetingFeed, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
@@ -125,7 +125,7 @@ describe('action gateway', () => {
         const meeting_id = yield* seedMeeting(agent.workspace_id, [agent, member, owner]);
         const other = yield* seedMeeting(agent.workspace_id, [agent]);
         const ids: Array<ActionId> = [];
-        for (const key of ['a', 'b', 'c']) ids.push((yield* requestAction(agent, request({ meeting_id, idempotency_key: key }))).action_id);
+        for (const key of ['a', 'b', 'c']) ids.push((yield* requestAction(agent, request({ meeting_id, idempotency_key: key, ...(key === 'b' ? { title: 'Email the notes to Maria' } : {}) }))).action_id);
         yield* requestAction(agent, request({ meeting_id: other, idempotency_key: 'elsewhere' }));
         const first = yield* listMeetingActions(agent, meeting_id, { limit: 2 });
         expect(first.actions.map(action => action.action_id)).toEqual(ids.slice(0, 2));
@@ -135,6 +135,9 @@ describe('action gateway', () => {
         expect(yield* listMeetingActions(member, meeting_id, {})).toEqual({ actions: [], next_cursor: null });
         expect(yield* Effect.flip(listMeetingActions(member, other, {}))).toMatchObject({ _tag: 'NotFound' });
         expect(yield* Effect.flip(listMeetingActions(agent, meeting_id, { cursor: 'bogus' }))).toMatchObject({ _tag: 'NotFound', message: 'Unknown cursor' });
+        // Feed rows carry the stored title, or a label from the key; they follow the same visibility.
+        expect((yield* meetingFeed(owner, meeting_id)).map(action => action.title)).toEqual(['Gmail: send email', 'Email the notes to Maria', 'Gmail: send email']);
+        expect(yield* meetingFeed(member, meeting_id)).toEqual([]);
       }),
       { migrated: true },
     ));
