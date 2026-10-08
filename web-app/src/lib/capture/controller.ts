@@ -9,7 +9,7 @@ import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpoc
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
-import { openLiveStream, streamUrl, type LiveOptions, type LiveStatus, type LiveStream, type RejectReason, type StopReason } from './live.ts';
+import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
@@ -27,6 +27,9 @@ export interface CaptureTiming {
 
 const DEFAULT_TIMING: CaptureTiming = { chunkSeconds: 30, commitSeconds: 2, heartbeatMs: 15_000, gapMs: 3_000 };
 const LISTENER_KEY = 'sanctum.listener';
+/** Server-reported live transcription trouble; audio still reaches the archive either way. */
+const TRANSCRIPTION_ISSUE: Record<DegradedReason, CaptureIssue> = { provider_unavailable: 'transcription_unavailable', asr_backlog: 'transcription_behind' };
+const transcriptionIssue = (...[status, reason]: LiveUpdate): CaptureIssue | null => (status === 'degraded' && reason ? TRANSCRIPTION_ISSUE[reason] : null);
 
 export type CaptureBuffer = Pick<
   RecoveryBuffer,
@@ -112,6 +115,7 @@ class CaptureController implements CaptureView {
   private permission: PermissionState = 'unknown';
   private issue: CaptureIssue | null = null;
   private live: LiveStatus | null = null;
+  private transcription: CaptureIssue | null = null;
   private muted = false;
   private leaseLost = false;
   private interrupted = false;
@@ -369,7 +373,7 @@ class CaptureController implements CaptureView {
     return (this.deps.openLive ?? openLiveStream)({
       url,
       start,
-      onStatus: (status, reason) => this.onLive(status, reason),
+      onStatus: (...update) => this.onLive(...update),
       ...(onSpeech ? { onSpeech } : {}),
       ...(onTranscript ? { onTranscript } : {}),
       ...(onActions ? { onActions } : {}),
@@ -380,8 +384,10 @@ class CaptureController implements CaptureView {
    * A `stale_generation` stops the live stream and asks the heartbeat whether the lease is still held;
    * `epoch_closed` drops an epoch a takeover ended so the next block opens a fresh one.
    */
-  private onLive(status: LiveStatus, reason?: RejectReason): void {
+  private onLive(...update: LiveUpdate): void {
+    const [status, reason] = update;
     this.live = status;
+    this.transcription = transcriptionIssue(...update);
     const epoch = this.session?.epoch;
     if (status === 'rejected' && reason === 'stale_generation') {
       this.issue = 'lease_lost';
@@ -572,7 +578,7 @@ class CaptureController implements CaptureView {
             const stream = (this.deps.openLive ?? openLiveStream)({
               url,
               start,
-              onStatus: (status) => {
+              onStatus: (...[status]) => {
                 if (status === 'connecting') return;
                 stream.stop('close');
                 resume(Effect.succeed(status === 'rejected' ? 'refused' : status === 'reconnecting' ? 'wait' : 'registered'));
@@ -644,11 +650,13 @@ class CaptureController implements CaptureView {
   }
 
   private publish(): void {
+    const listener = this.listenerState();
+    const transcription = listener === 'degraded' ? this.transcription : null;
     this.store.update({
-      listener: this.listenerState(),
+      listener,
       permission: this.permission,
       archive: this.archiveState(),
-      issue: this.issue,
+      issue: this.issue ?? transcription,
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,

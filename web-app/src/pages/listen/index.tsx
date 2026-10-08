@@ -35,6 +35,8 @@ const ISSUE: Record<CaptureIssue, string> = {
   socket_unavailable: 'The server connection is unavailable.',
   lease_lost: 'Another listener took over this room.',
   listener_removed: 'This device was removed, so listening stopped. Resume registers it again.',
+  transcription_unavailable: 'Live transcription is unavailable. Audio is still being saved.',
+  transcription_behind: 'Live transcription is behind. Audio is still being saved and is transcribed later.',
 };
 
 const ARCHIVE: Record<ArchiveState, string> = {

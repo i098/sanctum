@@ -5,6 +5,7 @@
  */
 import {
   type ActionUpdateMessage,
+  type DegradedMessage,
   encodePcmFrame,
   LISTENER_STREAM_PATH,
   type RejectedMessage,
@@ -17,6 +18,9 @@ import {
 import { Either, Schema } from 'effect';
 
 export type LiveStatus = 'connecting' | 'reconnecting' | 'live' | 'degraded' | 'rejected';
+export type DegradedReason = (typeof DegradedMessage.Type)['reason'];
+/** A status with its server reason: always for `rejected`, for `degraded` when the server reported it (`null`: local backpressure only). */
+export type LiveUpdate = [status: 'rejected', reason: RejectReason] | [status: 'degraded', reason?: DegradedReason | null] | [status: 'connecting' | 'reconnecting' | 'live'];
 export type StopReason = 'pause' | 'close' | 'device_change' | 'interrupted';
 
 /** About two seconds of 48 kHz PCM16 queued in the socket before live frames are dropped. */
@@ -26,8 +30,7 @@ const RETRY_MS = 2_000;
 export interface LiveOptions {
   readonly url: string;
   readonly start: StartMessage;
-  /** `reason` accompanies `rejected`. */
-  onStatus(status: LiveStatus, reason?: RejectReason): void;
+  onStatus(...update: LiveUpdate): void;
   /** Requested speech for this socket (`speech_chunk`/`speech_cancel`); only the playback module acts on it. */
   onSpeech?(message: SpeechChunkMessage | SpeechCancelMessage): void;
   /** Live transcript segments for display; partial ones are never committed facts. */
@@ -70,13 +73,16 @@ const NO_FEED: ActionUpdateMessage = { _tag: 'action_update', meeting_id: null, 
 /** The server message in a frame, or null when it is malformed or the stream already stopped (a late frame must not refill the feed). */
 const decodeOpen = (data: unknown, stopped: boolean): ServerControlMessage | null => (stopped ? null : Either.getOrNull(decodeServer(data)));
 
+/** The status of an accepted stream: degraded with the last reason the server sent, else live. */
+const resumed = (reason: DegradedReason | null): LiveUpdate => (reason === null ? ['live'] : ['degraded', reason]);
+
 export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
   let accepted = false;
   let stopped = false;
   let sequence = 0;
   let backedUp = false;
-  let serverDegraded = false;
+  let serverDegraded: DegradedReason | null = null;
   let retry: ReturnType<typeof setTimeout> | undefined;
 
   /** The stream is gone for good: the feed collapses until the next connect's snapshot. */
@@ -84,15 +90,15 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   const onControl = (ws: WebSocket, message: ServerControlMessage) => {
     if (message._tag === 'accepted') {
       accepted = true;
-      onStatus(serverDegraded ? 'degraded' : 'live');
+      onStatus(...resumed(serverDegraded));
     } else if (message._tag === 'rejected') {
       stopped = true;
       clearFeed();
       ws.close(1000);
       onStatus('rejected', message.reason);
     } else if (message._tag === 'degraded') {
-      serverDegraded = true;
-      onStatus('degraded');
+      serverDegraded = message.reason;
+      onStatus('degraded', message.reason);
     }
   };
 
@@ -122,11 +128,11 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
     send(sampleStart, samples) {
       if (socket === null || !accepted) return;
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
-        if (!backedUp) onStatus('degraded');
+        if (!backedUp) onStatus('degraded', serverDegraded);
         backedUp = true;
         return;
       }
-      if (backedUp && !serverDegraded) onStatus('live');
+      if (backedUp && serverDegraded === null) onStatus('live');
       backedUp = false;
       socket.send(encodePcmFrame({ track: start.track, sequence: sequence++, sample_start: sampleStart, sample_count: samples.length }, samples) as Uint8Array<ArrayBuffer>);
     },
