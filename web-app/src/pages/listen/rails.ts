@@ -18,7 +18,7 @@ const POWER3_OUT = 'cubic-bezier(0.165, 0.84, 0.44, 1)';
 const TRANSCRIPT_MAX = 10;
 /** The newest lines keep the brighter tier; older ones step down to the muted colour, never dimmer. */
 const TRANSCRIPT_FRESH = 3;
-/** Same as contracts' `ACTION_FEED_ROWS`, which caps each `action_update`; a value import would load Effect before the waveform mounts. */
+/** Same as contracts' `ACTION_FEED_ROWS`, which caps each `action_update`. */
 const FEED_MAX = 5;
 
 function animate(element: Element, keyframes: Keyframe[], duration: number, easing: string, fill: FillMode = 'backwards'): Animation {

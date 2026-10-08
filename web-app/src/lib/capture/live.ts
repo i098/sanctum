@@ -93,7 +93,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
 
   const onMessage = (ws: WebSocket, data: unknown) => {
     const decoded = decodeServer(data);
-    if (Either.isLeft(decoded)) return;
+    if (stopped || Either.isLeft(decoded)) return;
     if (!deliver(decoded.right, listeners)) onControl(ws, decoded.right);
   };
 
