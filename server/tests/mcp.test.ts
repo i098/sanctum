@@ -50,7 +50,7 @@ const connect = (url: string, token: string) =>
     ({ client }) => Effect.promise(() => client.close()),
   );
 
-const configured = Option.some({ resource: RESOURCE, issuer: ISSUER, keys });
+const configured = Option.some({ resource: RESOURCE, issuer: ISSUER, keys, defaultScopes: [] });
 const post = (url: string, token: string | null, body: unknown, headers: Record<string, string> = {}) =>
   fetch(`${url}/mcp`, {
     method: 'POST',
@@ -154,9 +154,43 @@ describe('MCP over Streamable HTTP', () => {
       for (const token of cases) {
         const response = yield* Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION)));
         statuses.push(response.status);
-        expect(response.headers.get('www-authenticate')).toContain(`resource_metadata="https://sanctum.fixture.test/.well-known/oauth-protected-resource/mcp"`);
+        const header = response.headers.get('www-authenticate');
+        expect(header).toContain(`resource_metadata="https://sanctum.fixture.test/.well-known/oauth-protected-resource/mcp"`);
+        if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read actions:request actions:execute"');
       }
       expect(statuses).toEqual([401, 401, 401, 403]);
+    }),
+  );
+
+  it.scoped('grants configured default scopes only to tokens that name no Sanctum scope', () =>
+    Effect.gen(function* () {
+      const { url, db, domain } = yield* serveFake(Option.some({ resource: RESOURCE, issuer: ISSUER, keys, defaultScopes: ['context:read', 'workspace:admin'] }));
+      const [owner, member] = yield* Effect.provide(seedWorkspace('Defaults', ['owner', 'member']), db);
+      const token = (access: AccessScope, scope: string, claims: { aud?: string } = {}) =>
+        Effect.flatMap(Effect.provide(identify(access), db), subject => Effect.promise(() => sign(subject, scope, claims)));
+      const metadata = yield* Effect.promise(() => fetch(`${url}/.well-known/oauth-protected-resource/mcp`).then(r => r.json()));
+      expect(metadata).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER], bearer_methods_supported: ['header'] });
+
+      const meeting = domain.addMeeting(owner!, 'Defaults review');
+      const add = { meeting_id: meeting.id, expected_revision: 0, kind: 'decision', text: 'Ship', sources: [{ artifact_id: randomUUID() }], idempotency_key: 'd-1' };
+      const reader = yield* connect(url, yield* token(member!, 'openid profile email offline_access'));
+      expect((yield* Effect.promise(() => reader.client.callTool({ name: 'get_context', arguments: { meeting_id: meeting.id } }))).isError).toBeFalsy();
+      const refused = yield* Effect.promise(() => reader.client.callTool({ name: 'add_context', arguments: add }));
+      expect(refused.isError).toBe(true);
+      expect(JSON.parse((refused.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ code: 'forbidden', required_scope: 'context:write' });
+
+      // Named Sanctum scopes replace the defaults instead of widening them.
+      const writer = yield* connect(url, yield* token(owner!, 'openid context:write'));
+      expect((yield* Effect.promise(() => writer.client.callTool({ name: 'add_context', arguments: add }))).isError).toBeFalsy();
+      const unread = yield* Effect.promise(() => writer.client.callTool({ name: 'get_context', arguments: { meeting_id: meeting.id } }));
+      expect(JSON.parse((unread.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ code: 'forbidden', required_scope: 'context:read' });
+
+      const send = (token: string | null) => Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION)));
+      const missing = yield* send(null);
+      expect(missing.status).toBe(401);
+      expect(missing.headers.get('www-authenticate')).not.toContain('scope=');
+      expect((yield* send(yield* Effect.promise(() => sign(`sub-${member!.principal.id}`, 'openid', { aud: 'https://other.test/mcp' })))).status).toBe(401);
+      expect((yield* send(yield* Effect.promise(() => sign('sub-unknown', 'openid')))).status).toBe(403);
     }),
   );
 

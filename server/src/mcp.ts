@@ -165,13 +165,18 @@ export interface McpAuthorization {
   readonly resource: string;
   readonly issuer: string;
   readonly keys: JWTVerifyGetKey;
+  /** Granted when a verified token names no Sanctum scope (WorkOS DCR/CIMD clients); empty grants nothing. */
+  readonly defaultScopes: ReadonlyArray<AccessScopeName>;
 }
 export class McpAuthorizationServer extends Context.Tag('sanctum/McpAuthorizationServer')<
   McpAuthorizationServer,
   Option.Option<McpAuthorization>
 >() {}
 
-/** `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_ISSUER` and `SANCTUM_MCP_JWKS_URL`, all required together. */
+/**
+ * `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_ISSUER` and `SANCTUM_MCP_JWKS_URL`, all required together;
+ * optional comma-separated `SANCTUM_MCP_DEFAULT_SCOPES`.
+ */
 export const McpAuthorizationFromEnv = Layer.effect(
   McpAuthorizationServer,
   Effect.map(
@@ -179,20 +184,21 @@ export const McpAuthorizationFromEnv = Layer.effect(
       Config.option(Config.url('SANCTUM_MCP_RESOURCE')),
       Config.option(Config.string('SANCTUM_MCP_ISSUER')),
       Config.option(Config.url('SANCTUM_MCP_JWKS_URL')),
+      Config.array(Config.literal(...AccessScopeName.literals)(), 'SANCTUM_MCP_DEFAULT_SCOPES').pipe(Config.withDefault([])),
     ]),
-    ([resource, issuer, jwks]) =>
+    ([resource, issuer, jwks, defaultScopes]) =>
       Option.all({ resource, issuer, jwks }).pipe(
-        Option.map(value => ({ resource: value.resource.href, issuer: value.issuer, keys: createRemoteJWKSet(value.jwks) })),
+        Option.map(value => ({ resource: value.resource.href, issuer: value.issuer, keys: createRemoteJWKSet(value.jwks), defaultScopes })),
       ),
   ),
 );
 
-const MCP_SCOPES = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
+const MCP_SCOPES: ReadonlyArray<AccessScopeName> = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
 const metadataUrl = (resource: string) => new URL(`/.well-known/oauth-protected-resource${new URL(resource).pathname}`, resource).href;
 
 const Identity = Schema.Struct({ principal_id: PrincipalId, workspace_id: WorkspaceId });
 
-/** Verified token -> active membership -> access narrowed to the token's granted scopes. */
+/** Verified token -> active membership -> access narrowed to the token's scopes, or to the defaults when it names none. */
 const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const token = /^Bearer (.+)$/.exec(request.headers['authorization'] ?? '')?.[1];
@@ -214,17 +220,22 @@ const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServer
     const matches = identities.filter(identity => wanted === undefined || identity.workspace_id === wanted);
     if (matches.length !== 1) return yield* new Forbidden({ message: 'Token does not select exactly one workspace membership' });
     const access = yield* resolveAccess(matches[0]!);
-    const granted = new Set(typeof payload['scope'] === 'string' ? payload['scope'].split(' ') : []);
-    return { ...access, scopes: access.scopes.filter(scope => granted.has(scope)) };
+    const named = (typeof payload['scope'] === 'string' ? payload['scope'].split(' ') : []).filter(Schema.is(AccessScopeName));
+    const granted = named.length > 0 ? named : auth.defaultScopes.filter(scope => MCP_SCOPES.includes(scope));
+    return { ...access, scopes: access.scopes.filter(scope => granted.includes(scope)) };
   });
 
-const challenge = (auth: McpAuthorization, error: Unauthenticated | Forbidden) =>
-  HttpServerResponse.unsafeJson(error, {
-    status: error._tag === 'Unauthenticated' ? 401 : 403,
+/** Names the MCP scopes only when tokens must carry them; with defaults the AS may refuse Sanctum scope names. */
+const challenge = (auth: McpAuthorization, error: Unauthenticated | Forbidden) => {
+  const unauthenticated = error._tag === 'Unauthenticated';
+  const scope = unauthenticated && auth.defaultScopes.length === 0 ? `, scope="${MCP_SCOPES.join(' ')}"` : '';
+  return HttpServerResponse.unsafeJson(error, {
+    status: unauthenticated ? 401 : 403,
     headers: {
-      'www-authenticate': `Bearer resource_metadata="${metadataUrl(auth.resource)}", error="${error._tag === 'Unauthenticated' ? 'invalid_token' : 'insufficient_scope'}"`,
+      'www-authenticate': `Bearer resource_metadata="${metadataUrl(auth.resource)}", error="${unauthenticated ? 'invalid_token' : 'insufficient_scope'}"${scope}`,
     },
   });
+};
 
 /**
  * Sessions exist so `notifications/cancelled` reaches the server running the request; hosts often
@@ -265,7 +276,7 @@ export const McpLive = HttpApiBuilder.Router.use(router =>
         HttpServerResponse.unsafeJson({
           resource: auth.resource,
           authorization_servers: [auth.issuer],
-          scopes_supported: MCP_SCOPES,
+          ...(auth.defaultScopes.length === 0 ? { scopes_supported: MCP_SCOPES } : {}),
           bearer_methods_supported: ['header'],
         }),
     });
