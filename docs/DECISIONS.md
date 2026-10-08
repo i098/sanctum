@@ -44,6 +44,12 @@ This unassigned-speech buffer is different from the browser queue of recordings 
 An actual deployment also needs a timezone, identity configuration, MySQL/R2/provider credentials, approved audio fixtures, and an authorized hosting target.
 These secrets and production resources do not belong in this repository.
 
+## Detected-meeting ownership decision — 2026-10-08
+
+Accepted: when Sanctum detects a meeting, the principal of the capturing listener gets `owner` access to it in the same transaction.
+The meeting stays `restricted`; every other principal, including workspace owners and admins, still needs an explicit grant.
+Before this decision, nobody could read a detected meeting, so Review, the listening header and the agent-work feed stayed empty.
+
 ## Deployment decision — 2026-10-02
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.

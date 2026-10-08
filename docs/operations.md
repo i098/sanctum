@@ -86,4 +86,4 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 ## Not yet selected
 
 The sign-in issuer, MCP authorization server, saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
-Until they are selected, production activation is refused, no recording expires automatically, and automatically detected meetings start restricted with no grants.
+Until they are selected, production activation is refused and no recording expires automatically.

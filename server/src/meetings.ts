@@ -195,6 +195,7 @@ const promoteIfEstablished = (open: OpenMeeting, decision: BoundaryDecision, end
     return { ...open, row: { ...open.row, state: 'active' as const } };
   });
 
+/** A detected meeting starts restricted; only the principal of the capturing listener gets `owner` access. */
 const createMeeting = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, decision: BoundaryDecision) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -203,6 +204,8 @@ const createMeeting = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSe
     yield* sql`INSERT INTO meetings (id, workspace_id, capture_group_id, listener_id, state, timezone, started_at, boundary_revision, visibility, processing, created_at, updated_at)
       VALUES (${id}, ${key.workspace_id}, ${key.capture_group_id}, ${key.listener_id}, 'provisional', ${epoch.timezone}, ${started}, 1, 'restricted',
         ${JSON.stringify(PENDING_PROCESSING)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+      SELECT workspace_id, ${id}, principal_id, 'owner', principal_id, UTC_TIMESTAMP(6) FROM listeners WHERE workspace_id = ${key.workspace_id} AND id = ${key.listener_id}`;
     const row = Schema.decodeUnknownSync(MeetingRow)({
       id, workspace_id: key.workspace_id, listener_id: key.listener_id, capture_group_id: key.capture_group_id, state: 'provisional', title: null,
       started_at: started, ended_at: null, timezone: epoch.timezone, boundary_revision: 1, visibility: 'restricted', processing: PENDING_PROCESSING,

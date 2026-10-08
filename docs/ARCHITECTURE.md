@@ -131,7 +131,7 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 - Handles job kinds `meeting.finalize`, `recording.assemble`, `speakers.refine`; boundary corrections call context's `appendContextEvent`.
 - `MeetingsApi` operations: `listMeetings`, `getMeeting`, `closeMeeting`, `splitMeeting`, `mergeMeetings`, `getTranscript`, `recordingAccess`, `mapSpeaker`, `getNotes`, `exportMeeting`.
 - Notes (integration-owned): `meeting.finalize` enqueues `notes.summarize` (`notes-job.ts`), which stores the models slice's canonical `summarizeMeeting` output on `meetings.notes` with `notes_revision` and `processing.notes`; corrections re-finalize and so regenerate notes. `notes.ts` serves `getNotes` and the Markdown `exportMeeting`; `meeting-evidence.ts` loads a meeting's final segments and epoch anchors for extraction and notes.
-- Automatically detected meetings start restricted with no grants; kernel's `authorizeMeeting` has no owner/admin override, so an ownership assignment path is still open.
+- Automatically detected meetings start restricted; `createMeeting` grants `owner` only to the capturing listener's principal ([DECISIONS.md](DECISIONS.md)), and kernel's `authorizeMeeting` has no role override.
 
 ### context (T16)
 
