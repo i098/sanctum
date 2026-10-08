@@ -180,6 +180,7 @@ class FakeListenerServer {
 
   private heartbeat(request: { path: { listener_id: string }; payload: { lease_generation: number } }) {
     this.calls.heartbeat.push(request.payload);
+    if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
     if (this.offline) return Effect.fail(new Unavailable({ message: 'offline', retryable: true }));
     if (this.forgotten && request.path.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
     const held = request.payload.lease_generation;
@@ -190,6 +191,7 @@ class FakeListenerServer {
   }
 
   private putChunk(manifest: RecordingChunkManifest) {
+    if (this.options.signedOut) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
     if (this.forgotten && manifest.listener_id === LISTENER_ID) return Effect.fail(new NotFound({ message: 'listener not found' }));
     const held = this.epochs.get(manifest.epoch_id);
     const end = Date.parse(manifest.captured_at) + (manifest.sample_count / manifest.sample_rate) * 1000;
@@ -239,6 +241,10 @@ class FakeListenerServer {
   readonly forget = () => {
     this.forgotten = true;
   };
+
+  readonly expire = () => {
+    this.options.signedOut = true;
+  };
 }
 
 function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[]; signedOut?: boolean } = {}) {
@@ -282,7 +288,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     for (let i = 0; i < (seconds * RATE) / BLOCK; i++, next += BLOCK) onBlock!(next, new Int16Array(BLOCK).fill(100));
   };
   const accept = () => lives.at(-1)!.options.onStatus('live');
-  const reject = () => lives.at(-1)!.options.onStatus('rejected', 'stale_generation');
+  const reject = (reason: 'stale_generation' | 'unauthorized' = 'stale_generation') => lives.at(-1)!.options.onStatus('rejected', reason);
   const snapshot = () => engine.getSnapshot();
   return {
     get track() {
@@ -306,6 +312,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     setOffline: server.setOffline,
     setGroupHeld: server.setGroupHeld,
     forget: server.forget,
+    expire: server.expire,
   };
 }
 
@@ -368,6 +375,48 @@ describe('capture lifecycle', () => {
     await h.engine.start();
     expect(h.calls.register).toBe(1);
     expect(h.snapshot()).toMatchObject({ listener: 'stopped', issue: 'signed_out', archive: null });
+  });
+
+  it('reports an expired session as signed out when the device already has a stored listener', async () => {
+    const getUserMedia = vi.fn();
+    const h = harness({ stored: true, signedOut: true, getUserMedia });
+    await h.engine.start();
+    expect(h.calls.register).toBe(0);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(h.snapshot()).toMatchObject({ listener: 'stopped', issue: 'signed_out', archive: null });
+    expect(h.lives).toHaveLength(0);
+  });
+
+  it('stops a running capture as signed out when the session expires', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.expire();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'signed_out' }));
+    expect(h.track.readyState).toBe('ended');
+  });
+
+  it('reports a live socket refused for a missing session as signed out', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.reject('unauthorized');
+    expect(h.snapshot().issue).toBe('signed_out');
+  });
+
+  it('reports buffered audio refused for a missing session as signed out', async () => {
+    const buffer = new MemoryBuffer();
+    await buffer.sealChunk(
+      await sealChunk(
+        { chunk_id: crypto.randomUUID(), listener_id: LISTENER_ID, epoch_id: crypto.randomUUID(), sequence: 0, sample_rate: RATE, chunk_start: 0, captured_at: '2026-09-29T08:59:00.000Z' },
+        new Int16Array(RATE),
+      ),
+    );
+    const h = harness({ buffer, stored: true, signedOut: true });
+    await vi.waitFor(() => expect(h.snapshot().issue).toBe('signed_out'));
+    expect(h.snapshot().bufferedChunks).toBe(1);
   });
 
   it('refuses insecure contexts before prompting', async () => {
