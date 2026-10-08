@@ -19,6 +19,7 @@ import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, SpeechSynthesizerLive, type SpeechToText } from './media/providers.ts';
 import { SpeechRepliesLive } from './media/speech-reply.ts';
 import { LlmLive } from './llm.ts';
+import { SignInFromEnv, type SignInSettings, SignInLive } from './signin.ts';
 import { loadMigrations } from './migrate.ts';
 import type { ObjectStore } from './providers/object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
@@ -33,22 +34,24 @@ const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.u
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
-  // Tests replace providers, the handler set or the MCP authorization server; production uses the defaults.
+  // Tests replace providers, the handler set, the MCP authorization server or the sign-in issuer; production uses the defaults.
   overrides: {
     readonly media?: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError>;
     readonly api?: Layer.Layer<HttpApi.Api, never, SqlClient.SqlClient | Authenticator>;
     readonly mcp?: Layer.Layer<McpAuthorizationServer>;
+    readonly signIn?: Layer.Layer<SignInSettings>;
   } = {},
 ) =>
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
-    Layer.provide([ListenerStreamLive, McpLive, OpenApiLive]),
+    Layer.provide([ListenerStreamLive, McpLive, SignInLive, OpenApiLive]),
     Layer.provide([SpeechSynthesizerLive, SpeechRepliesLive.pipe(Layer.provide(LlmLive))]),
     Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
     Layer.provide(overrides.media ?? MediaProvidersLive),
     Layer.provide(withMcpDelegation(authenticator)),
     Layer.provide(overrides.mcp ?? McpAuthorizationFromEnv),
+    Layer.provide(overrides.signIn ?? SignInFromEnv),
     Layer.provide(dbLayer(config.mysql)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),
   );

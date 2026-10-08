@@ -38,7 +38,7 @@ export const AuthenticatedLive = Layer.effect(
 );
 
 
-const SESSION_COOKIE = 'sanctum_session';
+export const SESSION_COOKIE = 'sanctum_session';
 const CSRF_HEADER = 'x-csrf-token';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -170,7 +170,7 @@ export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
 
 /**
  * Opens a browser session for an active human or device member, e.g. after the configured
- * login issuer (docs/DECISIONS.md) verified an identity or after device enrollment. Returns the only plain copies of
+ * login issuer (docs/DECISIONS.md) verified an identity (signin.ts) or after device enrollment. Returns the only plain copies of
  * the cookie and CSRF tokens; the opener sets them as `sanctum_session` (HttpOnly) and
  * `sanctum_csrf` (script-readable, SameSite=Strict), which the website echoes as `x-csrf-token`.
  */
@@ -197,6 +197,21 @@ export const identityPrincipal = (identity: { readonly issuer: string; readonly 
       sql`SELECT principal_id FROM principal_identities WHERE issuer = ${identity.issuer} AND subject = ${identity.subject}`,
     );
     return Option.map(row, value => value.principal_id);
+  });
+
+/** Ends one browser session by its cookie token; the next request with that cookie answers 401. */
+export const revokeSession = (token: string) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE browser_sessions SET revoked_at = UTC_TIMESTAMP(6) WHERE id_hash = ${hashToken(token)} AND revoked_at IS NULL`);
+
+/** Binds a verified issuer/subject pair to a principal; a pair already bound to another principal is refused, never moved. */
+export const linkIdentity = (input: { readonly issuer: string; readonly subject: string; readonly principal_id: PrincipalId }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at)
+      VALUES (${input.issuer}, ${input.subject}, ${input.principal_id}, UTC_TIMESTAMP(6)) AS new
+      ON DUPLICATE KEY UPDATE verified_at = IF(principal_identities.principal_id = new.principal_id, new.verified_at, principal_identities.verified_at)`;
+    const owner = yield* identityPrincipal(input);
+    if (Option.getOrNull(owner) !== input.principal_id) return yield* new Forbidden({ message: 'This sign-in is already linked to another principal' });
   });
 
 type MeetingAccessRow = { visibility: 'restricted' | 'workspace'; access: 'read' | 'write' | 'owner' | null };
