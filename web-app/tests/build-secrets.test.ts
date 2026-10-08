@@ -45,6 +45,7 @@ describe('production web build', () => {
     const html = files['/index.html'] ?? '';
     expect(html).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>/);
     expect(html).not.toMatch(/<style|\sstyle=/);
-    for (const [, url] of html.matchAll(/(?:src|href)="([^"]+)"/g)) expect(url).toMatch(/^\/assets\//);
+    // The tab icon is an inline SVG, which the CSP's `img-src data:` allows.
+    for (const [, url] of html.matchAll(/(?:src|href)="([^"]+)"/g)) expect(url).toMatch(/^(?:\/assets\/|data:image\/svg\+xml,)/);
   });
 });
