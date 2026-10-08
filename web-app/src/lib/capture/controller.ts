@@ -50,6 +50,8 @@ export interface CaptureDeps {
   readonly onSpeech?: LiveOptions['onSpeech'];
   /** Receives live transcript segments from the live socket (the page shows them in its transcript rail). */
   readonly onTranscript?: LiveOptions['onTranscript'];
+  /** Receives agent-work feed updates from the live socket (the page shows them in its agent-work feed). */
+  readonly onActions?: LiveOptions['onActions'];
   /** Most samples per exported WAV file of a local recording (defaults to the WAV size limit; tests shorten it). */
   readonly wavMaxSamples?: number;
 }
@@ -363,8 +365,15 @@ class CaptureController implements CaptureView {
 
   private connectLive(start: typeof StartMessage.Type): LiveStream {
     const url = (this.deps.streamUrl ?? streamUrl)(start.listener_id);
-    const { onSpeech, onTranscript } = this.deps;
-    return (this.deps.openLive ?? openLiveStream)({ url, start, onStatus: (status, reason) => this.onLive(status, reason), ...(onSpeech ? { onSpeech } : {}), ...(onTranscript ? { onTranscript } : {}) });
+    const { onSpeech, onTranscript, onActions } = this.deps;
+    return (this.deps.openLive ?? openLiveStream)({
+      url,
+      start,
+      onStatus: (status, reason) => this.onLive(status, reason),
+      ...(onSpeech ? { onSpeech } : {}),
+      ...(onTranscript ? { onTranscript } : {}),
+      ...(onActions ? { onActions } : {}),
+    });
   }
 
   /**

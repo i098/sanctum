@@ -29,10 +29,10 @@ describe('planActions', () => {
       const access = fixtureAccess();
       const answer = JSON.stringify({
         actions: [
-          { action_key: 'gmail-send-email', arguments: email },
-          { action_key: 'gmail-send-email', arguments: [...email, argument('bcc', 'x@example.com')] },
-          { action_key: 'gmail-send-email', arguments: [argument('to', ['maria@example.com']), argument('body', 'hi')] },
-          { action_key: 'gmail-send-email', arguments: [argument('to', 'a'), { name: 'subject', value_json: 'not json' }, argument('body', 'b')] },
+          { action_key: 'gmail-send-email', title: ' Email Maria the rollout notes ', arguments: email },
+          { action_key: 'gmail-send-email', title: 'Copy x', arguments: [...email, argument('bcc', 'x@example.com')] },
+          { action_key: 'gmail-send-email', title: 'No subject', arguments: [argument('to', ['maria@example.com']), argument('body', 'hi')] },
+          { action_key: 'gmail-send-email', title: 'Bad JSON', arguments: [argument('to', 'a'), { name: 'subject', value_json: 'not json' }, argument('body', 'b')] },
         ],
       });
       const requests: ProviderRequest[] = [];
@@ -46,6 +46,7 @@ describe('planActions', () => {
           arguments: { to: ['maria@example.com'], subject: 'Rollout notes', body: 'Notes attached.' },
           meeting_id,
           idempotency_key: expect.stringMatching(/^plan-[0-9a-f]{64}$/),
+          title: 'Email Maria the rollout notes',
         },
       ]);
       expect(requests[0]).toMatchObject({ model: 'claude-sonnet-5-5', json: { name: 'action_plan' } });
@@ -53,7 +54,8 @@ describe('planActions', () => {
       expect(schema.properties.actions.items.properties.action_key).toEqual({ type: 'string', enum: ['gmail-send-email'] });
       expect(requests[0]!.prompt).not.toContain('google_calendar-create-event');
 
-      const reordered = JSON.stringify({ actions: [{ action_key: 'gmail-send-email', arguments: [...email].reverse() }] });
+      // A reworded title is the same request: the key covers the action and its arguments only.
+      const reordered = JSON.stringify({ actions: [{ action_key: 'gmail-send-email', title: 'Send Maria the notes', arguments: [...email].reverse() }] });
       const again = yield* Effect.provide(planActions(access, { meeting_id, request, actions }), fixtureLlm([reordered]));
       expect(again[0]!.idempotency_key).toBe(planned[0]!.idempotency_key);
       const elsewhere = yield* Effect.provide(planActions(access, { meeting_id: MeetingId.make(randomUUID()), request, actions }), fixtureLlm([reordered]));
@@ -62,7 +64,7 @@ describe('planActions', () => {
 
   it.effect('rejects a plan naming an action that was not offered', () =>
     Effect.gen(function* () {
-      const answer = JSON.stringify({ actions: [{ action_key: 'slack-post-message', arguments: [] }] });
+      const answer = JSON.stringify({ actions: [{ action_key: 'slack-post-message', title: 'Post it', arguments: [] }] });
       const failure = yield* Effect.flip(Effect.provide(planActions(fixtureAccess(), { meeting_id, request: 'Post it', actions }), fixtureLlm([answer])));
       expect(failure).toMatchObject({ _tag: 'Unavailable', retryable: false, message: expect.stringMatching(/failed the action_plan schema/) });
     }));

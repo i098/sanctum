@@ -21,7 +21,7 @@ No package is published yet.
 - **Conflicts.** A stale `expected_revision` fails with `revision_conflict` and `body.current_revision`. Re-read, rebase your change, and write again with a new key; never overwrite blindly.
 - **Pagination.** Lists return `{ items, next_cursor }`. Pass `next_cursor` back as `cursor`; `pages()` does this until the cursor is null. Change cursors from `get_context`/`getContextChanges` are durable, so a consumer can resume from the last one it stored.
 - **Cancellation and timeouts.** TypeScript takes an `AbortSignal` per call; aborting stops the request and the server-side work. Python uses `timeout` (seconds, default 30) and task cancellation on `AsyncClient`.
-- **Actions.** `requestAction` only records the request; execution needs a stored grant. `waitForAction` polls the receipt until `succeeded`, `failed`, `cancelled` or `unknown` (submitted but unreconciled; do not resubmit).
+- **Actions.** `requestAction` only records the request; execution needs a stored grant. An optional `title` names the request for people; the listening view's agent-work feed shows it. `waitForAction` polls the receipt until `succeeded`, `failed`, `cancelled` or `unknown` (submitted but unreconciled; do not resubmit).
 - **Revocation.** A revoked credential fails its next call with `unauthenticated`.
 
 ## Examples

@@ -15,7 +15,7 @@ const tables = Effect.gen(function* () {
 
 describe('migration files', () => {
   it('are numbered, parsed into inspectable steps and create every plan section 07 table', () => {
-    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const created = migrations.flatMap(migration => migration.steps.map(step => step.object.table));
     expect(created).toEqual(
       expect.arrayContaining([
@@ -28,9 +28,10 @@ describe('migration files', () => {
 
   it('rejects names and statements the runner cannot inspect after a crash', () => {
     expect(() => parseMigration('1_bad.sql', 'CREATE TABLE a (id INT);')).toThrow(/Invalid migration file name/);
-    expect(() => parseMigration('010_alter.sql', 'ALTER TABLE a ADD COLUMN b INT;')).toThrow(/only CREATE TABLE and CREATE INDEX/);
-    const parsed = parseMigration('010_ok.sql', '-- comment\nCREATE TABLE a (id INT);\nCREATE UNIQUE INDEX a_id ON a (id);\n');
-    expect(parsed.steps.map(step => step.object)).toEqual([{ kind: 'table', table: 'a' }, { kind: 'index', table: 'a', index: 'a_id' }]);
+    expect(() => parseMigration('010_drop.sql', 'DROP TABLE a;')).toThrow(/can be inspected after a crash/);
+    expect(() => parseMigration('010_alter.sql', 'ALTER TABLE a ADD COLUMN b INT, ADD COLUMN c INT;')).toThrow(/single ADD COLUMN/);
+    const parsed = parseMigration('010_ok.sql', '-- comment\nCREATE TABLE a (id INT);\nCREATE UNIQUE INDEX a_id ON a (id);\nALTER TABLE a ADD COLUMN b VARCHAR(10) NULL;\n');
+    expect(parsed.steps.map(step => step.object)).toEqual([{ kind: 'table', table: 'a' }, { kind: 'index', table: 'a', index: 'a_id' }, { kind: 'column', table: 'a', column: 'b' }]);
   });
 });
 

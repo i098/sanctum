@@ -4,6 +4,7 @@
  * disconnected or over the `bufferedAmount` bound are recovered from uploaded chunks.
  */
 import {
+  type ActionUpdateMessage,
   encodePcmFrame,
   LISTENER_STREAM_PATH,
   type RejectedMessage,
@@ -31,6 +32,8 @@ export interface LiveOptions {
   onSpeech?(message: SpeechChunkMessage | SpeechCancelMessage): void;
   /** Live transcript segments for display; partial ones are never committed facts. */
   onTranscript?(segment: TranscriptSegment): void;
+  /** Agent-work feed rows of the listener's open meeting: a snapshot after each (re)connect, then changes. */
+  onActions?(message: ActionUpdateMessage): void;
   readonly WebSocket?: typeof WebSocket;
 }
 
@@ -52,13 +55,20 @@ export function streamUrl(listenerId: string, origin = globalThis.location.origi
 
 const ignore = () => {};
 
-/** Requested speech goes to playback and transcript segments to display; false for socket control messages. */
-function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscript = ignore }: Pick<LiveOptions, 'onSpeech' | 'onTranscript'>): boolean {
+/** Requested speech goes to playback, transcript segments and action updates to display; false for socket control messages. */
+function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscript = ignore, onActions = ignore }: Pick<LiveOptions, 'onSpeech' | 'onTranscript' | 'onActions'>): boolean {
   if (message._tag === 'transcript') onTranscript(message.segment);
   else if (message._tag === 'speech_chunk' || message._tag === 'speech_cancel') onSpeech(message);
+  else if (message._tag === 'action_update') onActions(message);
   else return false;
   return true;
 }
+
+/** An update for no meeting: the feed collapses every row. Sent when the stream ends for good. */
+const NO_FEED: ActionUpdateMessage = { _tag: 'action_update', meeting_id: null, actions: [] };
+
+/** The server message in a frame, or null when it is malformed or the stream already stopped (a late frame must not refill the feed). */
+const decodeOpen = (data: unknown, stopped: boolean): ServerControlMessage | null => (stopped ? null : Either.getOrNull(decodeServer(data)));
 
 export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
@@ -69,12 +79,15 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   let serverDegraded = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
 
+  /** The stream is gone for good: the feed collapses until the next connect's snapshot. */
+  const clearFeed = () => deliver(NO_FEED, listeners);
   const onControl = (ws: WebSocket, message: ServerControlMessage) => {
     if (message._tag === 'accepted') {
       accepted = true;
       onStatus(serverDegraded ? 'degraded' : 'live');
     } else if (message._tag === 'rejected') {
       stopped = true;
+      clearFeed();
       ws.close(1000);
       onStatus('rejected', message.reason);
     } else if (message._tag === 'degraded') {
@@ -84,9 +97,8 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
   };
 
   const onMessage = (ws: WebSocket, data: unknown) => {
-    const decoded = decodeServer(data);
-    if (Either.isLeft(decoded)) return;
-    if (!deliver(decoded.right, listeners)) onControl(ws, decoded.right);
+    const message = decodeOpen(data, stopped);
+    if (message !== null && !deliver(message, listeners)) onControl(ws, message);
   };
 
   const connect = () => {
@@ -124,6 +136,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
+      clearFeed();
     },
   };
 }

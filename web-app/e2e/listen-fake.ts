@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import type { ActionUpdateMessage } from '@sanctum/contracts';
 import type { CaptureSnapshot } from '../src/lib/capture/view.ts';
 
 /**
@@ -11,6 +12,7 @@ import { createCaptureStore } from '/src/lib/capture/view.ts';
 import { createAnalyserLevels } from '/src/lib/capture/levels.ts';
 const store = createCaptureStore();
 const transcriptListeners = new Set();
+const actionListeners = new Set();
 let segments = 0;
 const fake = {
   calls: [], reads: 0, gain: null,
@@ -21,6 +23,7 @@ const fake = {
     const segment = { id: 'segment-' + segments, source: { epoch_id: 'epoch-1', track: 0, sample_start: at, sample_end: at + 48000 }, text, status, revision: 1, origin: 'live', provider: 'fake', model: 'fake', provider_connection_id: null, speaker_label: speaker, speaker_track_id: null, confidence: 0.9, created_at: new Date().toISOString() };
     transcriptListeners.forEach(listener => listener(segment));
   },
+  actions: message => actionListeners.forEach(listener => listener({ _tag: 'action_update', ...message })),
 };
 window.__capture = fake;
 let levels = null;
@@ -47,6 +50,7 @@ const engine = {
 };
 export function getCaptureEngine() { return engine; }
 export function subscribeTranscript(listener) { transcriptListeners.add(listener); return () => transcriptListeners.delete(listener); }
+export function subscribeActions(listener) { actionListeners.add(listener); return () => actionListeners.delete(listener); }
 `;
 
 interface FakeCapture {
@@ -56,6 +60,8 @@ interface FakeCapture {
   setGain(value: number): void;
   /** Delivers one live transcript segment, as the listener stream would. */
   transcript(text: string, speaker?: string | null, status?: 'partial' | 'final'): void;
+  /** Delivers one `action_update`, as the listener stream would after a (re)connect or an action change. */
+  actions(message: Omit<typeof ActionUpdateMessage.Encoded, '_tag'>): void;
 }
 
 declare global {

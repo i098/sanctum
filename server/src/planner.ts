@@ -22,6 +22,7 @@ export interface PlanInput {
 const PLANNER_SYSTEM = `You fill in integration actions that a person directly asked for in a meeting.
 Propose only actions the request asks for, choosing from the offered actions; return an empty list when none fits.
 Give every argument as a field name and its value encoded as JSON text in value_json.
+Give every action a short title people in the meeting can read, such as "Email the notes to Maria".
 Use only recipients, accounts, links and values stated in the request; never invent them.`;
 
 const VOICE_SYSTEM = `You answer a direct spoken request from people in a meeting.
@@ -35,7 +36,7 @@ const canonicalJson = (value: unknown) =>
   );
 
 /** The action request, or why the proposal was rejected. */
-function toRequest(proposal: { readonly arguments: ReadonlyArray<{ readonly name: string; readonly value_json: string }> }, action: InspectedAction, access: AccessScope, meeting_id: MeetingId): ActionRequest | string {
+function toRequest(proposal: { readonly title: string; readonly arguments: ReadonlyArray<{ readonly name: string; readonly value_json: string }> }, action: InspectedAction, access: AccessScope, meeting_id: MeetingId): ActionRequest | string {
   const declared = new Set(action.fields.map(field => field.name));
   const args = new Map<string, unknown>();
   for (const { name, value_json } of proposal.arguments) {
@@ -51,7 +52,8 @@ function toRequest(proposal: { readonly arguments: ReadonlyArray<{ readonly name
   const argumentsRecord = Object.fromEntries(args);
   // The same action with the same arguments in the same meeting maps to one request, so a retried plan cannot act twice.
   const digest = createHash('sha256').update([access.workspace_id, meeting_id, action.action_key, action.version, canonicalJson(argumentsRecord)].join('\n')).digest('hex');
-  return { action_key: action.action_key, configuration_ref: action.configuration_ref, version: action.version, arguments: argumentsRecord, meeting_id, idempotency_key: `plan-${digest}` };
+  const title = proposal.title.trim().slice(0, 300);
+  return { action_key: action.action_key, configuration_ref: action.configuration_ref, version: action.version, arguments: argumentsRecord, meeting_id, idempotency_key: `plan-${digest}`, ...(title ? { title } : {}) };
 }
 
 /**
@@ -66,7 +68,7 @@ export const planActions = (access: AccessScope, input: PlanInput): Effect.Effec
     const keys = [...offered.keys()];
     if (keys.length === 0) return [];
     const output = Schema.Struct({
-      actions: Schema.Array(Schema.Struct({ action_key: Schema.Literal(...(keys as [string, ...string[]])), arguments: Schema.Array(Schema.Struct({ name: Schema.String, value_json: Schema.String })) })),
+      actions: Schema.Array(Schema.Struct({ action_key: Schema.Literal(...(keys as [string, ...string[]])), title: Schema.String, arguments: Schema.Array(Schema.Struct({ name: Schema.String, value_json: Schema.String })) })),
     });
     const catalog = [...offered.values()].map(action => ({ action_key: action.action_key, fields: action.fields.map(({ name, type, required, description }) => ({ name, type, required, description })) }));
     const llm = yield* LlmClient;

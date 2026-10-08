@@ -10,8 +10,10 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import {
   type AccessScope,
+  type ActionId,
   decodePcmFrame,
   type ListenerId,
+  type MeetingId,
   type PcmFrame,
   ProviderConnectionId,
   RejectedMessage,
@@ -21,7 +23,8 @@ import {
   type StopMessage,
   TranscriptSegment,
 } from '@sanctum/contracts';
-import { Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
+import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
+import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrResult, type AsrStream, SpeechToText } from '../providers/deepgram.ts';
 import { publishFinalWindow } from '../transcripts.ts';
@@ -37,6 +40,12 @@ export const liveLimits = {
   watermarkFlushMs: 1_000,
   /** Time the provider gets to flush final results when a connection closes. */
   finishTimeoutMs: 5_000,
+  /**
+   * Agent-work feed read interval. The job worker, a separate process, changes most action
+   * states and cannot reach this socket, so each socket re-reads the database: an action change
+   * reaches the listener within about this long.
+   */
+  actionFeedMs: 1_000,
 };
 
 /** Ends the session with a `rejected` message to the client. */
@@ -233,6 +242,24 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
     };
   });
 
+/**
+ * One read of this listener's agent-work feed, sending `action_update` only when it changed.
+ * The first read is the snapshot, so every connect and reconnect starts with the current rows.
+ * ponytail: three indexed reads per socket per `actionFeedMs`; one shared poller per process if sockets reach the hundreds.
+ */
+const actionFeed = (access: AccessScope, listener_id: ListenerId, send: LiveSessionInput['send']) => {
+  let shown: MeetingId | null | undefined;
+  let states = new Map<ActionId, string>();
+  return Effect.gen(function* () {
+    const { meeting_id, actions } = yield* listenerFeed(access, listener_id);
+    const changed = meeting_id === shown ? actions.filter(action => states.get(action.action_id) !== action.state) : actions;
+    states = new Map(actions.map(action => [action.action_id, action.state]));
+    if (meeting_id === shown && changed.length === 0) return;
+    shown = meeting_id;
+    yield* send({ _tag: 'action_update', meeting_id, actions: changed });
+  }).pipe(Effect.catchAllCause(cause => (Cause.isInterruptedOnly(cause) ? Effect.void : Effect.logWarning('Agent-work feed not read', cause))));
+};
+
 /** Opens the session in the current scope; closing that scope persists the watermark and flushes provider finals. */
 export const openLiveSession = ({ access, listener, start, resume_from_sample, send }: LiveSessionInput) =>
   Effect.gen(function* () {
@@ -265,6 +292,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       }),
     );
     yield* Effect.forkScoped(Effect.repeat(flush, Schedule.spaced(liveLimits.watermarkFlushMs)));
+    yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
 
     /** Validates one binary frame, advances the watermark, feeds live ASR and acknowledges live acceptance. */
     const frame = (bytes: Uint8Array) =>

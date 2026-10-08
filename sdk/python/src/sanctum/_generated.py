@@ -472,6 +472,7 @@ class RequestActionInput(TypedDict):
     arguments: dict[str, Any]
     meeting_id: str | None
     idempotency_key: str
+    title: NotRequired[str]
 
 
 class RequestActionOutput(TypedDict):

@@ -58,7 +58,7 @@ It serves only `https://sanctum.42nights.dev` (a Workers custom domain declared 
 ## Migrations
 
 Run migrations explicitly (`npm run migrate --workspace server`, or `server/dist/migrate.js` in the image); neither entrypoint applies DDL on startup.
-Each file is split into single-object steps recorded in `schema_migrations` and `schema_migration_steps` under a per-schema named lock.
+Each file is split into single-object steps (`CREATE TABLE`, `CREATE INDEX`, or `ALTER TABLE ... ADD COLUMN` for one column) recorded in `schema_migrations` and `schema_migration_steps` under a per-schema named lock.
 After an interruption, rerun the same command: finished steps are skipped, an object created before its ledger row is adopted, and an object created outside the ledger stops the run.
 Never edit an applied migration (its checksum is verified), and never roll back by dropping tables.
 

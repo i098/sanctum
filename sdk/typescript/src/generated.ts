@@ -466,6 +466,7 @@ export type RequestActionInput = {
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly meeting_id: string | null;
   readonly idempotency_key: string;
+  readonly title?: string;
 };
 
 export type RequestActionOutput = {

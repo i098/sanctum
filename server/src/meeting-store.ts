@@ -60,6 +60,17 @@ export const selectMeeting = (workspace_id: WorkspaceId, id: MeetingId, lock = f
 /** Wire view of a meeting the caller was already authorized for. */
 export const readMeeting = (workspace_id: WorkspaceId, id: MeetingId) => Effect.map(selectMeeting(workspace_id, id), row => toMeeting(Option.getOrThrow(row)));
 
+/** The newest open meeting this listener captures, if any (requested speech and the agent-work feed). */
+export const listenerMeeting = (workspace_id: WorkspaceId, listener_id: ListenerId) =>
+  Effect.flatMap(SqlClient.SqlClient, sql =>
+    SqlSchema.findOne({
+      Request: ListenerId,
+      Result: Schema.Struct({ id: MeetingId }),
+      execute: listener => sql`SELECT id FROM meetings WHERE workspace_id = ${workspace_id} AND listener_id = ${listener}
+        AND state IN ${sql.in(OPEN_STATES)} ORDER BY started_at DESC LIMIT 1`,
+    })(listener_id),
+  ).pipe(Effect.map(Option.map(row => row.id)));
+
 const EpochClock = Schema.Struct({
   id: CaptureEpochId,
   sample_start: DbSafeInt,

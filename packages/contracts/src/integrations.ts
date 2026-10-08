@@ -69,6 +69,7 @@ export const GetIntegrationActionOutput = Schema.Struct({
   complete: Schema.Boolean,
 });
 
+/** `title`: a short readable name for the request, shown in the listening view's agent-work feed. */
 export const RequestActionInput = Schema.Struct({
   action_key: ActionKey,
   configuration_ref: Schema.String,
@@ -76,6 +77,7 @@ export const RequestActionInput = Schema.Struct({
   arguments: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   meeting_id: Schema.NullOr(MeetingId),
   idempotency_key: IdempotencyKey,
+  title: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(300))),
 });
 
 export const RequestActionOutput = Schema.Struct({

@@ -48,4 +48,32 @@ describe('live stream', () => {
     socket.onmessage!({ data: JSON.stringify(cancel) });
     expect(speech).toEqual([chunk, cancel]);
   });
+
+  it('tells the agent-work feed to clear when the stream is stopped on purpose', () => {
+    const updates: unknown[] = [];
+    const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, onActions: message => updates.push(message), WebSocket: FakeSocket as never });
+    const socket = FakeSocket.last;
+    const meeting = '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f';
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'action_update', meeting_id: meeting, actions: [] }) });
+    socket.onclose!();
+    expect(updates).toEqual([{ _tag: 'action_update', meeting_id: meeting, actions: [] }]);
+    stream.stop('pause');
+    expect(updates.at(-1)).toEqual({ _tag: 'action_update', meeting_id: null, actions: [] });
+  });
+
+  it('clears the agent-work feed when the server rejects the stream for good', () => {
+    const updates: unknown[] = [];
+    openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, onActions: message => updates.push(message), WebSocket: FakeSocket as never });
+    FakeSocket.last.onmessage!({ data: JSON.stringify({ _tag: 'rejected', reason: 'stale_generation', message: 'taken over' }) });
+    expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
+  });
+
+  it('ignores server messages that arrive after the stream is stopped', () => {
+    const updates: unknown[] = [];
+    const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, onActions: message => updates.push(message), WebSocket: FakeSocket as never });
+    const socket = FakeSocket.last;
+    stream.stop('pause');
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'action_update', meeting_id: '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f', actions: [] }) });
+    expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
+  });
 });

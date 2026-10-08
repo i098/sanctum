@@ -18,8 +18,9 @@
  * checked by the server session against the accepted `start` message.
  */
 import { Schema } from 'effect';
+import { ActionState } from './actions.ts';
 import { EpochEndReason, EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
-import { CaptureEpochId, ListenerId, SampleIndex, SampleRate } from './common.ts';
+import { ActionId, CaptureEpochId, ListenerId, MeetingId, SampleIndex, SampleRate } from './common.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
 export const MEDIA_PROTOCOL_VERSION = 1;
@@ -201,6 +202,22 @@ export const SpeechCancelMessage = Schema.TaggedStruct('speech_cancel', {
 export type SpeechCancelMessage = typeof SpeechCancelMessage.Type;
 export type SpeechCancelReason = SpeechCancelMessage['reason'];
 
+/** Rows the agent-work feed shows; `action_update` carries at most this many of a meeting's newest actions. */
+export const ACTION_FEED_ROWS = 5;
+
+/**
+ * Agent-work feed for the open meeting this listener captures, readable by the socket's principal.
+ * Sent after `accepted` with that meeting's newest actions (the snapshot, oldest first), then
+ * whenever one of them changes state or a new one appears. A different `meeting_id` replaces every
+ * earlier row; `null` means the listener has no open meeting the principal can read. `title` is
+ * the request's stored title, or a label made from `action_key` when the request gave none.
+ */
+export const ActionUpdateMessage = Schema.TaggedStruct('action_update', {
+  meeting_id: Schema.NullOr(MeetingId),
+  actions: Schema.Array(Schema.Struct({ action_id: ActionId, action_key: Schema.String, state: ActionState, title: Schema.String })).pipe(Schema.maxItems(ACTION_FEED_ROWS)),
+});
+export type ActionUpdateMessage = typeof ActionUpdateMessage.Type;
+
 export const ServerControlMessage = Schema.Union(
   AcceptedMessage,
   RejectedMessage,
@@ -209,5 +226,6 @@ export const ServerControlMessage = Schema.Union(
   TranscriptMessage,
   SpeechChunkMessage,
   SpeechCancelMessage,
+  ActionUpdateMessage,
 );
 export type ServerControlMessage = typeof ServerControlMessage.Type;

@@ -6746,6 +6746,13 @@
                     "title": "maxLength(200)",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "a string at most 300 character(s) long",
+                    "title": "maxLength(300)",
+                    "minLength": 1,
+                    "maxLength": 300
                   }
                 },
                 "additionalProperties": false

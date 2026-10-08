@@ -285,10 +285,16 @@
   height: 16px;
 }
 
+/* Titles run up to 300 characters: two lines, then an ellipsis; the row's title attribute has the rest. */
 .listen-rails .ftitle {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 
 .listen-rails .fstat {

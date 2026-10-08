@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { HttpApiBuilder } from '@effect/platform';
 import { SqlClient, SqlSchema } from '@effect/sql';
 import {
+  ACTION_FEED_ROWS,
   type AccessScope,
   type ActionGrant,
   ActionGrantId,
@@ -20,6 +21,7 @@ import {
   Forbidden,
   HashConflict,
   IntegrationAccountId,
+  type ListenerId,
   MeetingId,
   NotFound,
   PrincipalId,
@@ -33,6 +35,7 @@ import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
 import { enqueueJob } from './jobs.ts';
+import { listenerMeeting } from './meeting-store.ts';
 
 type ActionRequest = typeof RequestActionInput.Type;
 type Args = Readonly<Record<string, unknown>>;
@@ -83,6 +86,7 @@ const ActionRow = Schema.Struct({
   resolved_by: Schema.NullOr(PrincipalId),
   resolved_at: Schema.NullOr(DbUtc),
   updated_at: DbUtc,
+  title: Schema.NullOr(Schema.String),
 });
 export type ActionRow = typeof ActionRow.Type;
 
@@ -129,7 +133,7 @@ const toReceipt = (row: ActionRow): ActionReceipt => ({
   updated_at: row.updated_at,
 });
 
-const ACTION_COLUMNS = 'id, workspace_id, meeting_id, requested_by, action_key, account_id, args, args_sha256, configuration_ref, version, grant_id, grant_version, state, provider_idempotency_key, provider_receipt, attempts, reconciliation, resolved_by, resolved_at, updated_at';
+const ACTION_COLUMNS = 'id, workspace_id, meeting_id, requested_by, action_key, account_id, args, args_sha256, configuration_ref, version, grant_id, grant_version, state, provider_idempotency_key, provider_receipt, attempts, reconciliation, resolved_by, resolved_at, updated_at, title';
 const GRANT_COLUMNS = 'g.id, g.owner_principal_id, g.grantee_principal_id, g.action_key, g.app_slug, g.account_id, g.meeting_id, g.restrictions, g.expires_at, g.revoked_at, g.version';
 
 /** Loads one action row; `lock` takes a row lock inside the caller's transaction. */
@@ -196,10 +200,10 @@ export const requestAction = (access: AccessScope, input: ActionRequest): Effect
         Effect.gen(function*() {
           yield* sql`
                         INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, account_id, idempotency_key, args, args_sha256, configuration_ref,
-                            version, grant_id, grant_version, state, provider_idempotency_key, created_at, updated_at)
+                            version, grant_id, grant_version, state, provider_idempotency_key, title, created_at, updated_at)
                         VALUES (${id}, ${access.workspace_id}, ${input.meeting_id}, ${access.principal.id}, ${input.action_key}, ${grant.account_id}, ${input.idempotency_key},
                             ${JSON.stringify(input.arguments)}, ${Buffer.from(sha256, 'hex')}, ${input.configuration_ref}, ${input.version}, ${grant.id}, ${grant.version},
-                            'queued', ${`sanctum:${id}`}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+                            'queued', ${`sanctum:${id}`}, ${input.title ?? null}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
           yield* enqueueJob({ workspace_id: access.workspace_id, kind: 'action.execute', work_key: id, payload: { action_id: id }, requested_by: access.principal.id });
         }),
       )
@@ -211,6 +215,10 @@ export const requestAction = (access: AccessScope, input: ActionRequest): Effect
     const raced = yield* findByIdempotencyKey(access, input.idempotency_key);
     return yield* replay(Option.getOrThrow(raced), sha256);
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
+
+/** Actions on a meeting this principal may see: its own requests, or every request for workspace owners/admins. */
+const visibleTo = (sql: SqlClient.SqlClient, access: AccessScope) =>
+  access.role === 'owner' || access.role === 'admin' ? sql`TRUE` : sql`requested_by = ${access.principal.id}`;
 
 /** Visible to the requester and workspace owners/admins; anything else is NotFound. */
 const visibleAction = (access: AccessScope, action_id: ActionId) =>
@@ -231,17 +239,50 @@ export const listMeetingActions = (access: AccessScope, meeting_id: MeetingId, p
     const offset = Number(page.cursor ?? 0);
     if (!Number.isSafeInteger(offset) || offset < 0) return yield* new NotFound({ message: 'Unknown cursor' });
     const limit = page.limit ?? 50;
-    const everyone = access.role === 'owner' || access.role === 'admin';
     const rows = yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: ActionRow,
       execute: () =>
         sql`SELECT ${sql.literal(ACTION_COLUMNS)} FROM actions WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id}
-            AND ${everyone ? sql`TRUE` : sql`requested_by = ${access.principal.id}`} ORDER BY created_at, id LIMIT ${limit + 1} OFFSET ${offset}`,
+            AND ${visibleTo(sql, access)} ORDER BY created_at, id LIMIT ${limit + 1} OFFSET ${offset}`,
     })(undefined);
     const next_cursor = rows.length > limit ? String(offset + limit) : null;
     return { actions: rows.slice(0, limit).map(toReceipt), next_cursor };
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
+
+/**
+ * The one place a feed row's title is chosen: the request's stored title, else a label made from
+ * its action key (`gmail-send-email` becomes `Gmail: send email`), never the raw key.
+ */
+function actionTitle({ title, action_key }: { readonly title: string | null; readonly action_key: string }): string {
+  if (title !== null) return title;
+  const [app = '', ...operation] = action_key.replaceAll('_', ' ').split('-');
+  const label = app.charAt(0).toUpperCase() + app.slice(1);
+  return operation.length === 0 ? label : `${label}: ${operation.join(' ')}`;
+}
+
+const FeedRow = Schema.Struct({ id: ActionId, action_key: Schema.String, state: ActionState, title: Schema.NullOr(Schema.String) });
+
+/**
+ * Agent-work feed of the listener's newest open meeting: the newest `ACTION_FEED_ROWS` actions
+ * `visibleAction` would show, oldest first. No open or readable meeting yields no meeting and no rows.
+ */
+export const listenerFeed = (access: AccessScope, listener_id: ListenerId) =>
+  Effect.gen(function*() {
+    const sql = yield* SqlClient.SqlClient;
+    const open = yield* listenerMeeting(access.workspace_id, listener_id);
+    if (Option.isNone(open)) return { meeting_id: null, actions: [] };
+    const meeting_id = open.value;
+    yield* authorizeMeeting(access, meeting_id, 'read');
+    const rows = yield* SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: FeedRow,
+      execute: () =>
+        sql`SELECT id, action_key, state, title FROM actions WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id}
+            AND ${visibleTo(sql, access)} ORDER BY created_at DESC, id DESC LIMIT ${ACTION_FEED_ROWS}`,
+    })(undefined);
+    return { meeting_id, actions: rows.toReversed().map(row => ({ action_id: row.id, action_key: row.action_key, state: row.state, title: actionTitle(row) })) };
+  }).pipe(Effect.catchTag('NotFound', () => Effect.succeed({ meeting_id: null, actions: [] })));
 
 const requireHuman = (access: AccessScope, what: string) =>
   access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
