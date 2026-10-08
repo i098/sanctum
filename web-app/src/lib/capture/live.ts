@@ -128,6 +128,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
+      listeners.onActions?.({ _tag: 'action_update', meeting_id: null, actions: [] });
     },
   };
 }
