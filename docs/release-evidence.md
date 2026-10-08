@@ -50,7 +50,6 @@ Nothing here claims real-world model quality, delivered external side effects or
 
 ## Open implementation items
 
-- Automatically detected meetings start `restricted` with no grants, so members cannot see them until access is granted; ownership assignment waits on the sign-in and outside-meeting decisions.
 - Spoken replies from a room device need a reply authority (for example the listener's human owner).
 - `research.run` needs a meeting and plans only over actions already inspected.
 

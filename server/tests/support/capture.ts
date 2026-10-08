@@ -126,8 +126,8 @@ export const hear = (...args: Parameters<typeof speak>) =>
   });
 
 /**
- * Meetings start restricted with no grants (kernel policy: no role override). Stands in for the
- * explicit assignment step by granting workspace owners and admins `owner` access to new meetings.
+ * A detected meeting grants `owner` only to the capturing listener's principal (here a device).
+ * Stands in for explicit grants by giving workspace owners and admins `owner` access as well.
  */
 const assignOwners = (workspace_id: WorkspaceId) =>
   Effect.gen(function* () {

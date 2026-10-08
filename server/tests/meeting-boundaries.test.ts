@@ -4,8 +4,8 @@ import { describe, expect, it } from '@effect/vitest';
 import { CaptureEpochId, MeetingId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { evaluateBoundary, LOW_CONFIDENCE } from '../src/boundaries.ts';
-import { closeMeeting, finalizeMeeting, getMeeting, meetingRanges, onCaptureEnded, onFinalSegments } from '../src/meetings.ts';
-import { claimed, hear, jobsOf, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener } from './support/capture.ts';
+import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments } from '../src/meetings.ts';
+import { claimed, hear, jobsOf, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -13,7 +13,7 @@ const setup = Effect.gen(function* () {
   const [owner, device] = yield* seedWorkspace('Boundaries', ['owner', 'device']);
   const listener = yield* seedListener(device!);
   const epoch = yield* seedEpoch(listener);
-  return { owner: owner!, listener, epoch };
+  return { owner: owner!, device: device!, listener, epoch };
 });
 
 const MIN = 60;
@@ -38,6 +38,21 @@ describe('boundary decisions', () => {
 });
 
 describe('automatic meeting lifecycle', () => {
+  it.effect('gives the capturing principal, and nobody else, access to a detected meeting', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, device, listener, epoch } = yield* setup;
+        yield* onFinalSegments({ ...listener, segments: [yield* speak(listener, epoch, 0, 30, 'first topic is the launch date')] });
+        const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        expect(yield* getMeeting(device, id)).toMatchObject({ id, visibility: 'restricted' });
+        expect((yield* listMeetings(device, {})).meetings.map(meeting => meeting.id)).toEqual([id]);
+        expect(yield* Effect.flip(getMeeting(owner, id))).toMatchObject({ _tag: 'NotFound' });
+        expect(yield* listMeetings(owner, {})).toEqual({ meetings: [], next_cursor: null });
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('keeps one meeting across pauses and promotes it once a conversation is established', () =>
     withDatabase(
       Effect.gen(function* () {
