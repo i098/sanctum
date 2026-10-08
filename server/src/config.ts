@@ -74,17 +74,6 @@ type ActivationDecision = (typeof activationDecisions)[number];
 
 const noDecisions: ReadonlyArray<ActivationDecision> = [];
 
-/** Human login with any standard OIDC issuer: WorkOS AuthKit hosted, embedded Better Auth self-hosted. */
-const signInConfig = Config.all({
-  /** Compared with the ID token `iss` exactly, so kept as written. */
-  issuer: Config.option(Config.string('SANCTUM_OIDC_ISSUER')),
-  clientId: Config.option(Config.string('SANCTUM_OIDC_CLIENT_ID')),
-  /** Unset means a public client, which must use PKCE. */
-  clientSecret: Config.option(Config.redacted('SANCTUM_OIDC_CLIENT_SECRET')),
-  redirectUri: Config.option(Config.url('SANCTUM_OIDC_REDIRECT_URI')),
-  scopes: Config.string('SANCTUM_OIDC_SCOPES').pipe(Config.withDefault('openid profile email')),
-});
-
 /** Delegated MCP tokens; the issuer is compared with the token `iss` exactly, so kept as written. */
 export const mcpAuthorizationConfig = Config.all({
   resource: Config.option(Config.url('SANCTUM_MCP_RESOURCE')),
@@ -127,7 +116,16 @@ export const serverConfig = Config.all({
   }),
   /** Decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...activationDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
-  signIn: signInConfig,
+  /** Human login with any standard OIDC issuer: WorkOS AuthKit hosted, embedded Better Auth self-hosted. */
+  signIn: Config.all({
+    /** Compared with the ID token `iss` exactly, so kept as written. */
+    issuer: Config.option(Config.string('SANCTUM_OIDC_ISSUER')),
+    clientId: Config.option(Config.string('SANCTUM_OIDC_CLIENT_ID')),
+    /** Unset means a public client, which must use PKCE. */
+    clientSecret: Config.option(Config.redacted('SANCTUM_OIDC_CLIENT_SECRET')),
+    redirectUri: Config.option(Config.url('SANCTUM_OIDC_REDIRECT_URI')),
+    scopes: Config.string('SANCTUM_OIDC_SCOPES').pipe(Config.withDefault('openid profile email')),
+  }),
   mcpAuthorization: mcpAuthorizationConfig,
   /** `better-auth` serves the OIDC issuer and MCP authorization server in-process at `/idp`. */
   embeddedIssuer: Config.option(Config.literal('better-auth')('SANCTUM_EMBEDDED_ISSUER')),
@@ -157,30 +155,28 @@ export const serverConfig = Config.all({
 });
 export type ServerConfig = Config.Config.Success<typeof serverConfig>;
 
-type ActivationConfig = Pick<ServerConfig, 'environment' | 'selectedDecisions' | 'signIn' | 'mcpAuthorization' | 'embeddedIssuer' | 'betterAuthSecret'>;
-
-/** Settings a listed decision needs before it counts as selected; the other decisions have none. */
-const requiredSettings = (config: ActivationConfig): Partial<Record<ActivationDecision, Record<string, Option.Option<unknown>>>> => ({
-  identity_issuer: {
-    SANCTUM_OIDC_ISSUER: config.signIn.issuer,
-    SANCTUM_OIDC_CLIENT_ID: config.signIn.clientId,
-    SANCTUM_OIDC_REDIRECT_URI: config.signIn.redirectUri,
-    ...(Option.isSome(config.embeddedIssuer) ? { BETTER_AUTH_SECRET: config.betterAuthSecret } : {}),
-  },
-  mcp_authorization_server: {
-    SANCTUM_MCP_RESOURCE: config.mcpAuthorization.resource,
-    SANCTUM_MCP_ISSUER: config.mcpAuthorization.issuer,
-    SANCTUM_MCP_JWKS_URL: config.mcpAuthorization.jwksUrl,
-  },
-});
-
 /**
  * A listed decision with missing settings is an operator error in every environment. Production
  * also refuses to start while any decision is unlisted; development and tests run with fixtures.
  * Selecting a decision is an operator action, never a code default.
  */
-export const requireActivation = (config: ActivationConfig) => {
-  const settings = requiredSettings(config);
+export const requireActivation = (
+  config: Pick<ServerConfig, 'environment' | 'selectedDecisions' | 'signIn' | 'mcpAuthorization' | 'embeddedIssuer' | 'betterAuthSecret'>,
+) => {
+  /** Settings a listed decision needs before it counts as selected; the other decisions have none. */
+  const settings: Partial<Record<ActivationDecision, Record<string, Option.Option<unknown>>>> = {
+    identity_issuer: {
+      SANCTUM_OIDC_ISSUER: config.signIn.issuer,
+      SANCTUM_OIDC_CLIENT_ID: config.signIn.clientId,
+      SANCTUM_OIDC_REDIRECT_URI: config.signIn.redirectUri,
+      ...(Option.isSome(config.embeddedIssuer) ? { BETTER_AUTH_SECRET: config.betterAuthSecret } : {}),
+    },
+    mcp_authorization_server: {
+      SANCTUM_MCP_RESOURCE: config.mcpAuthorization.resource,
+      SANCTUM_MCP_ISSUER: config.mcpAuthorization.issuer,
+      SANCTUM_MCP_JWKS_URL: config.mcpAuthorization.jwksUrl,
+    },
+  };
   const incomplete = config.selectedDecisions.flatMap(decision => {
     const unset = Object.entries(settings[decision] ?? {}).flatMap(([name, value]) => (Option.isNone(value) ? [name] : []));
     return unset.length === 0 ? [] : [`${decision} needs ${unset.join(', ')}`];
