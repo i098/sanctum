@@ -123,20 +123,39 @@ function installSpeech(fake: boolean): void {
   Object.defineProperty(window, 'webkitSpeechRecognition', { value: FakeRecognition, configurable: true });
 }
 
+/** What the fake server says about sign-in: `/auth/config` and `GET /api/v1/session`. */
+export interface FakeSignIn {
+  configured: boolean;
+  /** The session body, or `null` for a 401. */
+  access: object | null;
+}
+
+/** `FakeSignIn` is read on every request, so a spec may change it mid-test. */
+export type ListenOptions = Partial<FakeSignIn> & { speech?: boolean };
+
 /**
- * Opens the listening page on the fake engine and starts listening in silence.
+ * Serves the listening page on the fake engine. The sign-in fields are read on every request.
  * The waveform lays out its slots with Math.random once per mount, so the page gets a fixed PRNG:
  * the pixel-measuring specs then see the same layout every run instead of a random one.
  * The browser has no speech recognition unless `speech` installs `FakeSpeech`.
  */
-export async function openListening(page: Page, { speech = false } = {}): Promise<void> {
+export async function serveListening(page: Page, options: ListenOptions = {}): Promise<void> {
   await page.addInitScript(() => {
     let state = 42;
     Math.random = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
   });
-  await page.addInitScript(installSpeech, speech);
+  await page.addInitScript(installSpeech, options.speech ?? false);
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
+  await page.route('**/auth/config', route => route.fulfill({ json: { sign_in: options.configured ?? false, embedded_issuer: null } }));
+  await page.route('**/api/v1/session', route => route.fulfill(options.access
+    ? { json: options.access }
+    : { status: 401, json: { _tag: 'Unauthenticated', code: 'unauthenticated', message: 'No credentials' } }));
+}
+
+/** Opens the listening page on the fake engine and starts listening in silence. */
+export async function openListening(page: Page, options?: ListenOptions): Promise<void> {
+  await serveListening(page, options);
   await page.goto('/');
   await page.getByRole('button', { name: 'Listen' }).click();
   await page.getByText('listening', { exact: true }).waitFor();
