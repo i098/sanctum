@@ -60,4 +60,11 @@ describe('live stream', () => {
     stream.stop('pause');
     expect(updates.at(-1)).toEqual({ _tag: 'action_update', meeting_id: null, actions: [] });
   });
+
+  it('clears the agent-work feed when the server rejects the stream for good', () => {
+    const updates: unknown[] = [];
+    openLiveStream({ url: 'ws://test', start: start as never, onStatus: () => {}, onActions: message => updates.push(message), WebSocket: FakeSocket as never });
+    FakeSocket.last.onmessage!({ data: JSON.stringify({ _tag: 'rejected', reason: 'stale_generation', message: 'taken over' }) });
+    expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
+  });
 });

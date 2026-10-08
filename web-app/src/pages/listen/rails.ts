@@ -4,7 +4,7 @@
  * request. Rows are plain DOM, like the waveform; motion uses the Web Animations API with the
  * kiosk's GSAP durations and eases, and is skipped under reduced motion.
  */
-import { ACTION_FEED_ROWS, type ActionState, type ActionUpdateMessage, type TranscriptSegment } from '@sanctum/contracts';
+import type { ActionState, ActionUpdateMessage, TranscriptSegment } from '@sanctum/contracts';
 
 type SubscribeTranscript = (listener: (segment: TranscriptSegment) => void) => () => void;
 type SubscribeActions = (listener: (message: ActionUpdateMessage) => void) => () => void;
@@ -18,6 +18,8 @@ const POWER3_OUT = 'cubic-bezier(0.165, 0.84, 0.44, 1)';
 const TRANSCRIPT_MAX = 10;
 /** The newest lines keep the brighter tier; older ones step down to the muted colour, never dimmer. */
 const TRANSCRIPT_FRESH = 3;
+/** Same as contracts' `ACTION_FEED_ROWS`, which caps each `action_update`; a value import would load Effect before the waveform mounts. */
+const FEED_MAX = 5;
 
 function animate(element: Element, keyframes: Keyframe[], duration: number, easing: string, fill: FillMode = 'backwards'): Animation {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -109,7 +111,7 @@ function fillRow(row: HTMLElement, action: FeedAction): void {
  * listener's open meeting, from the live socket's `action_update` messages only (no polling). New
  * rows slide in from the right, the oldest beyond five collapses away, rows past the newest two
  * rest at 40%, and a row turning done flashes its edge. Rows the band cannot fit whole stay
- * hidden. A deliberate pause or stop sends an update for no meeting, which collapses every row; the
+ * hidden. A pause, a stop or a server rejection sends an update for no meeting, which collapses every row; the
  * resume's snapshot refills them, and before capture the feed stays empty. An unexpected drop keeps
  * the rows shown until the reconnect's snapshot brings them up to date.
  */
@@ -123,7 +125,7 @@ export function startActionFeed(feed: HTMLElement, subscribeActions: SubscribeAc
     feed.append(row);
     rows.set(action.action_id, row);
     animate(row, [{ opacity: 0, transform: 'translateX(24px)' }, { opacity: 1, transform: 'none' }], 500, POWER3_OUT);
-    while (rows.size > ACTION_FEED_ROWS) {
+    while (rows.size > FEED_MAX) {
       const [id, old] = rows.entries().next().value!;
       rows.delete(id);
       collapse(old, 400);

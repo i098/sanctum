@@ -23,7 +23,7 @@ import {
   type StopMessage,
   TranscriptSegment,
 } from '@sanctum/contracts';
-import { Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
+import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
 import { meetingFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { listenerMeeting } from '../meeting-store.ts';
@@ -266,7 +266,7 @@ const actionFeed = (access: AccessScope, listener_id: ListenerId, send: LiveSess
     if (meeting_id === shown && changed.length === 0) return;
     shown = meeting_id;
     yield* send({ _tag: 'action_update', meeting_id, actions: changed });
-  }).pipe(Effect.catchAll(error => Effect.logWarning('Agent-work feed not read', error)));
+  }).pipe(Effect.catchAllCause(cause => (Cause.isInterruptedOnly(cause) ? Effect.void : Effect.logWarning('Agent-work feed not read', cause))));
 };
 
 /** Opens the session in the current scope; closing that scope persists the watermark and flushes provider finals. */

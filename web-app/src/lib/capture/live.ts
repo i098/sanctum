@@ -64,6 +64,9 @@ function deliver(message: ServerControlMessage, { onSpeech = ignore, onTranscrip
   return true;
 }
 
+/** An update for no meeting: the feed collapses every row. Sent when the stream ends for good. */
+const NO_FEED: ActionUpdateMessage = { _tag: 'action_update', meeting_id: null, actions: [] };
+
 export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
   let accepted = false;
@@ -79,6 +82,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       onStatus(serverDegraded ? 'degraded' : 'live');
     } else if (message._tag === 'rejected') {
       stopped = true;
+      listeners.onActions?.(NO_FEED);
       ws.close(1000);
       onStatus('rejected', message.reason);
     } else if (message._tag === 'degraded') {
@@ -128,7 +132,7 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       if (socket?.readyState === Socket.OPEN) socket.send(JSON.stringify({ _tag: 'stop', reason }));
       socket?.close(1000);
       socket = null;
-      listeners.onActions?.({ _tag: 'action_update', meeting_id: null, actions: [] });
+      listeners.onActions?.(NO_FEED);
     },
   };
 }
