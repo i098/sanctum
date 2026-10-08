@@ -626,6 +626,17 @@ class RevokeCredentialInput(TypedDict):
     key_id: str
 
 
+class Workspace(TypedDict):
+    id: str
+    name: str
+    deleted_at: str | None
+    purge_after: str | None
+
+
+class DeleteWorkspace(TypedDict):
+    confirm_name: str
+
+
 # Each entry: input TypedDict -> output TypedDict, then the route.
 OPERATIONS: dict[str, Operation] = {
     # dict[str, Any] -> HealthzOutput
@@ -694,4 +705,10 @@ OPERATIONS: dict[str, Operation] = {
     "agents.listAgents": Operation("GET", "/api/v1/agents", (), ("cursor", "limit", ), False),
     # RevokeCredentialInput -> None
     "agents.revokeCredential": Operation("DELETE", "/api/v1/agents/{agent_id}/credentials/{key_id}", ("agent_id", "key_id", ), (), False),
+    # dict[str, Any] -> Workspace
+    "workspace.getWorkspace": Operation("GET", "/api/v1/workspace", (), (), False),
+    # DeleteWorkspace -> Workspace
+    "workspace.deleteWorkspace": Operation("DELETE", "/api/v1/workspace", (), (), True),
+    # dict[str, Any] -> Workspace
+    "workspace.restoreWorkspace": Operation("POST", "/api/v1/workspace/restore", (), (), False),
 }

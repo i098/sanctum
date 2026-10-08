@@ -1,8 +1,10 @@
+import type { SanctumClient } from '@sanctum/sdk';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
+import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -42,6 +44,7 @@ interface SettingsProps {
   signIn: SignInState;
   notice: SignInNotice | null;
   onSignInChange: () => void;
+  client: SanctumClient;
 }
 
 /** Self-serve: signs in again, and the server creates the workspace with this user as owner when it still finds no membership. */
@@ -128,7 +131,7 @@ function SignInRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInCh
 }
 
 /** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
-export function SettingsDialog({ open, onClose, permission, engine, signIn, notice, onSignInChange }: SettingsProps) {
+export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange }: SettingsProps) {
   const rows: ReadonlyArray<readonly [string, ReactNode]> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
     ['Workspace', WORKSPACE[signIn.status]],
@@ -149,6 +152,7 @@ export function SettingsDialog({ open, onClose, permission, engine, signIn, noti
         ))}
       </dl>
       <LocalRecordings engine={engine} />
+      <WorkspaceDeletion client={client} />
     </Dialog>
   );
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { type AccessScope, Authenticated, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
+import { type AccessScope, Authenticated, type MeetingId, type WorkspaceId, WorkspaceOwner } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { ConfigProvider, Effect, Option } from 'effect';
 import { createAgent } from '../src/agents.ts';
@@ -159,6 +159,54 @@ describe('authorization boundary', () => {
     ),
   );
 
+  it.scoped('deleting a workspace refuses all its access at once and undo restores it', () =>
+    withServer(base =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [owner, member] = yield* seedWorkspace('Acme Studio', ['owner', 'member']);
+        const [other] = yield* seedWorkspace('Acme Studio', ['owner']);
+        const ownerHeaders = yield* sessionHeaders(owner!);
+        const memberHeaders = yield* sessionHeaders(member!);
+        const otherHeaders = yield* sessionHeaders(other!);
+        const { token } = yield* createAgent(owner!, researcher);
+        const agentHeaders = { authorization: `Bearer ${token}` };
+        const workspace = `${base}/api/v1/workspace`;
+        const status = (headers: Record<string, string>) => Effect.map(call(`${base}/api/v1/session`, { headers }), response => response.status);
+
+        expect((yield* call(workspace, { method: 'DELETE', headers: memberHeaders, body: { confirm_name: 'Acme Studio' } })).status).toBe(403);
+        expect((yield* call(workspace, { method: 'DELETE', headers: { cookie: ownerHeaders.cookie }, body: { confirm_name: 'Acme Studio' } })).status).toBe(403);
+        expect((yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'acme studio' } })).status).toBe(403);
+        expect(yield* status(agentHeaders)).toBe(200);
+
+        const deleted = yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });
+        expect(deleted).toMatchObject({ status: 200, body: { id: owner!.workspace_id, name: 'Acme Studio', deleted_at: expect.any(String) } });
+        const grace = Date.parse(deleted.body.purge_after) - Date.parse(deleted.body.deleted_at);
+        expect(grace).toBe(7 * 24 * 60 * 60 * 1000);
+        for (const headers of [ownerHeaders, memberHeaders, agentHeaders]) expect(yield* status(headers)).toBe(401);
+        expect(yield* tagOf(resolveAccess({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
+        expect(yield* tagOf(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
+        expect(yield* status(otherHeaders)).toBe(200);
+        const [purge] = yield* sql<{ status: string }>`SELECT status FROM jobs WHERE workspace_id = ${owner!.workspace_id} AND kind = 'workspace.purge'`;
+        expect(purge?.status).toBe('pending');
+
+        // Only the owner still sees the pending deletion, and undo needs the CSRF token like every mutation.
+        expect((yield* call(workspace, { headers: ownerHeaders })).body).toEqual(deleted.body);
+        expect((yield* call(workspace, { headers: memberHeaders })).status).toBe(401);
+        expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: { cookie: ownerHeaders.cookie } })).status).toBe(403);
+        const restored = yield* call(`${workspace}/restore`, { method: 'POST', headers: ownerHeaders });
+        expect(restored).toMatchObject({ status: 200, body: { deleted_at: null, purge_after: null } });
+        for (const headers of [ownerHeaders, memberHeaders, agentHeaders]) expect(yield* status(headers)).toBe(200);
+        const [cancelled] = yield* sql<{ status: string }>`SELECT status FROM jobs WHERE workspace_id = ${owner!.workspace_id} AND kind = 'workspace.purge'`;
+        expect(cancelled?.status).toBe('cancelled');
+
+        // Once the grace period is over, the purge owns the workspace: not even the owner gets back in.
+        yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });
+        yield* sql`UPDATE workspaces SET purge_after = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${owner!.workspace_id}`;
+        expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: ownerHeaders })).status).toBe(401);
+      }),
+    ),
+  );
+
   it.effect('never lets an agent receive scopes or meetings its creator lacks', () =>
     withDatabase(
       Effect.gen(function* () {
@@ -271,7 +319,7 @@ describe('authorization boundary', () => {
   it('requires authentication on every API group except process health', () => {
     const groups = Object.values(SanctumApi.groups);
     expect(groups.map(group => group.identifier)).toContain('agents');
-    const open = groups.filter(group => ![...group.middlewares].includes(Authenticated as never)).map(group => group.identifier);
+    const open = groups.filter(group => ![...group.middlewares].some(middleware => middleware === (Authenticated as never) || middleware === (WorkspaceOwner as never))).map(group => group.identifier);
     expect(open).toEqual(['health']);
   });
 

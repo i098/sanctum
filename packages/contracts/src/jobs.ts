@@ -16,6 +16,7 @@ export const JobKind = Schema.Literal(
   'action.execute',
   'action.reconcile',
   'workos.sync',
+  'workspace.purge',
 );
 export type JobKind = typeof JobKind.Type;
 

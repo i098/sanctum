@@ -7,7 +7,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { HttpServerRequest } from '@effect/platform';
-import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
+import { SqlClient, SqlSchema, type SqlError, type Statement } from '@effect/sql';
 import {
   type AccessScope,
   AccessScopeName,
@@ -19,6 +19,7 @@ import {
   PrincipalKind,
   Unauthenticated,
   WorkspaceId,
+  WorkspaceOwner,
   WorkspaceRole,
 } from '@sanctum/contracts';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
@@ -77,23 +78,29 @@ const toAccess = (member: MemberRow, scopes: ReadonlyArray<AccessScopeName>, all
   permission_revision: member.permission_revision,
 });
 
-/** Active membership of an enabled principal, joined as `m`, `p` and `w`. */
-const activeMember = (sql: SqlClient.SqlClient) => sql`
+/** Active membership of an enabled principal, joined as `m`, `p` and `w`; a deleted workspace refuses every access at once by default. */
+const activeMember = (sql: SqlClient.SqlClient, workspace: Statement.Fragment = sql`w.deleted_at IS NULL`) => sql`
   JOIN workspace_members m ON m.workspace_id = x.workspace_id AND m.principal_id = x.principal_id AND m.revoked_at IS NULL
   JOIN principals p ON p.id = m.principal_id AND p.disabled_at IS NULL
-  JOIN workspaces w ON w.id = m.workspace_id`;
+  JOIN workspaces w ON w.id = m.workspace_id AND ${workspace}`;
 const memberColumns = (sql: SqlClient.SqlClient) => sql`m.workspace_id, m.principal_id, p.kind, p.display_name, m.role, w.permission_revision`;
 
 /** Row decoding failures are defects (schema drift), not caller errors. */
 const findOne = <A, I>(Result: Schema.Schema<A, I>, statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
   SqlSchema.findOne({ Request: Schema.Void, Result, execute: () => statement })(undefined).pipe(Effect.catchTag('ParseError', Effect.die));
 
-const sessionAccess = (token: string, csrfToken: string | null) =>
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Session cookie; mutations also need the CSRF header. `workspace` overrides the live-workspace condition. */
+const sessionAccess = (request: HttpServerRequest.HttpServerRequest, workspace?: (sql: SqlClient.SqlClient) => Statement.Fragment) =>
   Effect.gen(function* () {
+    const token = request.cookies[SESSION_COOKIE];
+    if (!token) return yield* new Unauthenticated({ message: 'No credentials' });
+    const csrfToken = SAFE_METHODS.has(request.method) ? null : (request.headers[CSRF_HEADER] ?? '');
     const sql = yield* SqlClient.SqlClient;
     const Row = Schema.Struct({ ...MemberRow.fields, csrf_hash: Schema.Uint8ArrayFromSelf });
     const idHash = hashToken(token);
-    const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.csrf_hash FROM browser_sessions x ${activeMember(sql)}
+    const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.csrf_hash FROM browser_sessions x ${activeMember(sql, workspace?.(sql))}
       WHERE x.id_hash = ${idHash} AND x.revoked_at IS NULL AND x.expires_at > UTC_TIMESTAMP(6) AND p.kind IN ('human', 'device')`);
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Session is not valid' });
     if (csrfToken !== null && !timingSafeEqual(hashToken(csrfToken), row.value.csrf_hash)) {
@@ -114,16 +121,29 @@ const credentialAccess = (token: string) =>
     return toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
   });
 
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-/** Bearer credentials first, then the session cookie; cookie mutations also need the CSRF header. */
+/** Bearer credentials first, then the session cookie. */
 const authenticate = (request: HttpServerRequest.HttpServerRequest) => {
   const bearer = /^Bearer (\S+)$/.exec(request.headers.authorization ?? '')?.[1];
-  if (bearer) return credentialAccess(bearer);
-  const session = request.cookies[SESSION_COOKIE];
-  if (!session) return Effect.fail(new Unauthenticated({ message: 'No credentials' }));
-  return sessionAccess(session, SAFE_METHODS.has(request.method) ? null : (request.headers[CSRF_HEADER] ?? ''));
+  return bearer ? credentialAccess(bearer) : sessionAccess(request);
 };
+
+/**
+ * `WorkspaceOwner` middleware: an owner's browser session. Only an owner's session still reaches a
+ * deleted workspace, until its purge is due, so the owner can undo; every other session stays refused.
+ * Agent credentials never hold the owner role.
+ */
+export const WorkspaceOwnerLive = Layer.effect(
+  WorkspaceOwner,
+  Effect.map(SqlClient.SqlClient, sql =>
+    Effect.flatMap(HttpServerRequest.HttpServerRequest, request =>
+      sessionAccess(request, sql => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`).pipe(
+        Effect.filterOrFail(access => access.role === 'owner', () => new Forbidden({ message: 'Only a workspace owner can manage the workspace' })),
+        Effect.catchTag('SqlError', Effect.die),
+        Effect.provideService(SqlClient.SqlClient, sql),
+      ),
+    ),
+  ),
+);
 
 /** Database failures during authentication are defects (HTTP 500), never a silent grant. */
 export const KernelAuthenticatorLive = Layer.effect(

@@ -26,7 +26,7 @@ import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { resolveTime } from './context-time.ts';
 import { lockMeeting, meetingItems, type NewItem, writeItem } from './context.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
-import { adjacentRuns, type ExtractionInput } from './extraction.ts';
+import { adjacentRuns, extractCandidates, type ExtractionInput } from './extraction.ts';
 import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
@@ -191,3 +191,7 @@ export const commitMemory = <R>(extract: Extractor<R>) =>
    return { status: 'succeeded' as const, result: { ...round, committed: yield* distill(target) } };
   }),
  );
+
+/** The registered handlers, bound to the models slice's extractor; tests bind the factories to a fake one. */
+export const refreshContextJob = refreshContext(extractCandidates);
+export const commitMemoryJob = commitMemory(extractCandidates);

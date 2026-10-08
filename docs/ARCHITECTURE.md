@@ -29,7 +29,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `mysqlErrno`. |
 | Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
-| Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
+| Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`, `list`, `delete`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
 | Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
 | Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `WorkerServices`, `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
@@ -191,6 +191,13 @@ Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS s
 
 - `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
 - `WorkosOrganizations` tag (`WorkosOrganizationsFromEnv`), provided by main.ts and worker.ts.
+
+### workspace deletion (plan 10.1 option A)
+
+Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceApi` and the `WorkspaceOwner` middleware in contracts `workspace.ts`, `web-app/src/pages/listen/WorkspaceDeletion.tsx`.
+
+- `auth.ts` joins only live workspaces, so a deleted workspace refuses every session, credential and `resolveAccess` at once; `WorkspaceOwnerLive` alone still admits the owner's session until `purge_after`.
+- Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first.
 
 ## Hot files
 

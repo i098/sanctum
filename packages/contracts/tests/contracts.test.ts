@@ -236,6 +236,8 @@ describe('HTTP API contract', () => {
       '/api/v1/profiles/{profile_id}/matches',
       '/api/v1/agents',
       '/api/v1/agents/{agent_id}/credentials/{key_id}',
+      '/api/v1/workspace',
+      '/api/v1/workspace/restore',
     ]);
     expect(OpenApi.fromApi(SanctumApi).paths['/api/v1/integrations/actions']?.get?.operationId).toBe('integrations.searchIntegrationActions');
   });

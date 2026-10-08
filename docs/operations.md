@@ -8,7 +8,7 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
 - `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade, the built website and, when [self-hosted sign-in](#self-hosted-sign-in) is on, the embedded issuer at `/idp`, all on one port behind Caddy.
-- `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions, WorkOS organization sync).
+- `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions, WorkOS organization sync, workspace purge).
 
 Both refuse to start in `SANCTUM_ENV=production` until every decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
 In every environment, both refuse to start when a listed decision lacks its settings, and the error names each missing variable: `identity_issuer` needs `SANCTUM_OIDC_ISSUER`, `SANCTUM_OIDC_CLIENT_ID` and `SANCTUM_OIDC_REDIRECT_URI` (plus `BETTER_AUTH_SECRET` with the embedded issuer); `mcp_authorization_server` needs the three `SANCTUM_MCP_*` URLs.
@@ -20,7 +20,7 @@ Secrets come from the environment only; none are committed.
 
 | Group | Variables |
 | --- | --- |
-| Core | `SANCTUM_ENV`, `SANCTUM_SELECTED_DECISIONS`, `API_PORT`, `SANCTUM_ALLOWED_ORIGINS` |
+| Core | `SANCTUM_ENV`, `SANCTUM_SELECTED_DECISIONS`, `API_PORT`, `SANCTUM_ALLOWED_ORIGINS`, `SANCTUM_WORKSPACE_PURGE_GRACE_DAYS` (days from a workspace deletion to its purge, default 7, at least 1) |
 | Workspaces | `SANCTUM_DEFAULT_SEAT_LIMIT`: owner, admin and member seats per workspace; a positive integer, unset for no limit (the hosted Worker sets `5` in `deploy/cloudflare/wrangler.jsonc`). A workspace's own `workspaces.seat_limit` overrides it (operator SQL; NULL uses the default). A malformed value stops startup. A member beyond the limit is refused with `SeatLimitReached`; existing members stay. |
 | Organizations (hosted) | `WORKOS_API_KEY` (server-only WorkOS API key; with `SANCTUM_OIDC_ISSUER` set to the AuthKit issuer, it turns on [WorkOS organization sync](#workos-organizations)), `SANCTUM_SELF_SERVE_WORKSPACES` (`true` lets a signed-in person with no membership create a workspace; default `false`; needs `WORKOS_API_KEY`) |
 | MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
@@ -143,10 +143,12 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 - **Browser killed or offline without a stop**: once the listener's lease lapses, the worker sweeper ends its open epoch as `interrupted` and seals the meeting; a device that returns after that starts a new epoch, so the stored gap stays visible.
 - **R2 write succeeded but the manifest did not**: the retried upload finds the object with `head` and completes the manifest; a conflicting hash is rejected.
 - **Provider outage**: live ranges are marked degraded and recovered by `transcript.reconcile` from uploaded chunks.
+- **Workspace deleted by mistake**: an owner chooses Undo in Settings (`POST /api/v1/workspace/restore`) before the purge time shown there; every member, session and agent credential works again. After that time the `workspace.purge` job deletes the R2 objects under `workspaces/<id>/` and `meetings/<id>/`, then the rows, and writes its receipt to the job's `result`; nothing can be restored. Only an owner's deletion starts a purge.
+- **Purge interrupted**: object deletes are idempotent and the rows go in one transaction, so the next attempt continues where the last stopped; a rerun after the rows are gone returns the stored receipt.
 - **Rollback**: set `SANCTUM_IMAGE` to the previous validated tag and `docker compose up -d api worker`; data volumes and R2 objects are untouched and migrations are never reversed, so a previous image must support the current schema.
 
 ## Not yet selected
 
 The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted). The hosted site is configured for WorkOS AuthKit ([Cloudflare](#cloudflare)); the embedded issuer is not built yet.
 Saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
-Until they are selected, production activation is refused and no recording expires automatically.
+Until they are selected, production activation is refused and no recording expires automatically (only an owner's workspace deletion purges data).

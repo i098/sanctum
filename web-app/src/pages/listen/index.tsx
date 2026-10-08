@@ -221,7 +221,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
-      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} />
+      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} />
     </main>
   );
 }

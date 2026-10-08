@@ -4,9 +4,8 @@
  * live in job-types.ts so handler modules and jobs.ts never import this registry.
  */
 import type { SqlClient } from '@effect/sql';
-import { commitMemory, refreshContext } from './context-jobs.ts';
+import { commitMemoryJob, refreshContextJob } from './context-jobs.ts';
 import { executeAction, runResearch } from './executor.ts';
-import { extractCandidates } from './extraction.ts';
 import type { JobHandlers } from './job-types.ts';
 import type { LlmClient } from './llm.ts';
 import type { PipedreamClient } from './providers/pipedream.ts';
@@ -19,6 +18,7 @@ import { summarizeNotes } from './notes-job.ts';
 import { assembleRecording } from './playback.ts';
 import type { PyannoteClient } from './providers/pyannote.ts';
 import { refineSpeakers } from './speakers.ts';
+import { purgeWorkspace } from './workspaces.ts';
 
 /** Services every worker handler may use; a slice adds its provider tag here and its layer in worker.ts. */
 export type WorkerServices = SqlClient.SqlClient | ObjectStore | PyannoteClient | SpeechToText | LlmClient | PipedreamClient;
@@ -28,10 +28,11 @@ export const jobHandlers: JobHandlers<WorkerServices> = {
   'recording.assemble': assembleRecording,
   'speakers.refine': refineSpeakers,
   'transcript.reconcile': reconcileTranscript,
-  'context.refresh': refreshContext(extractCandidates),
-  'memory.commit': commitMemory(extractCandidates),
+  'context.refresh': refreshContextJob,
+  'memory.commit': commitMemoryJob,
   'notes.summarize': summarizeNotes,
   'matching.rank': rankMatchesJob,
   'action.execute': executeAction,
   'research.run': runResearch,
+  'workspace.purge': purgeWorkspace,
 };

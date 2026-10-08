@@ -5,7 +5,7 @@
  * writes, cursor pages and durable change cursors. Test-only; never used by the server.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { HttpApiBuilder, type HttpApiGroup } from '@effect/platform';
+import { HttpApiBuilder, type HttpApiGroup, HttpServerRequest } from '@effect/platform';
 import type { SqlClient } from '@effect/sql';
 import {
   type AccessScope,
@@ -28,6 +28,7 @@ import {
   TranscriptSegment,
   Unauthenticated,
   Unavailable,
+  WorkspaceOwner,
 } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
@@ -489,6 +490,12 @@ const listenersGroup = HttpApiBuilder.group(SanctumApi, 'listeners', handlers =>
   handlers.handle('registerListener', () => unmodeled).handle('heartbeat', () => unmodeled).handle('putChunk', () => unmodeled),
 );
 
+/** Workspace deletion is an owner surface over MySQL rows, not an adapter surface; modeled only so the API layer is complete. */
+const workspaceGroup = HttpApiBuilder.group(SanctumApi, 'workspace', handlers =>
+  handlers.handle('getWorkspace', () => unmodeled).handle('deleteWorkspace', () => unmodeled).handle('restoreWorkspace', () => unmodeled),
+);
+const FakeWorkspaceOwner = Layer.effect(WorkspaceOwner, Effect.map(Authenticator, authenticator => Effect.flatMap(HttpServerRequest.HttpServerRequest, authenticator.authenticate)));
+
 export function fakeDomain() {
   const store = createStore();
   const { space, tokens, interrupted } = store;
@@ -554,6 +561,6 @@ export const fakeApi = <R = SqlClient.SqlClient>(
   domain: ReturnType<typeof fakeDomain>,
   health: Layer.Layer<HttpApiGroup.ApiGroup<'sanctum', 'health'>, never, R> = HealthLive(loadMigrations()) as never,
 ) =>
-  HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, domain.groups]), Layer.provide(AuthenticatedLive));
+  HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, workspaceGroup, domain.groups]), Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]));
 
 const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));

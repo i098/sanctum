@@ -76,6 +76,8 @@ const memoryStore = Layer.sync(ObjectStore, () => {
     head: key => Effect.sync(() => describe(key)),
     get: key => Effect.sync(() => objects.get(key)?.bytes ?? new Uint8Array()),
     presignGet: key => Effect.succeed(`memory://${key}`),
+    list: prefix => Effect.sync(() => [...objects.keys()].filter(key => key.startsWith(prefix)).sort().slice(0, 1000)),
+    delete: key => Effect.sync(() => void objects.delete(key)),
   };
 });
 

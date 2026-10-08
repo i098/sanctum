@@ -12,6 +12,7 @@ import { ActionsApi } from './actions-api.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 import { MatchingApi } from './matching.ts';
 import { MeetingsApi } from './meetings.ts';
+import { WorkspaceApi } from './workspace.ts';
 
 /** Process health and dependency readiness without tenant content. */
 export class HealthApi extends HttpApiGroup.make('health')
@@ -29,6 +30,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(ActionsApi)
   .add(MatchingApi.middleware(Authenticated))
   .add(AgentsApi)
+  .add(WorkspaceApi)
   .addError(Unauthenticated)
   .addError(Forbidden)
   .addError(NotFound)
