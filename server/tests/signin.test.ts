@@ -160,6 +160,19 @@ describe('OIDC sign-in', () => {
     }),
   );
 
+  it.scoped('sends only local paths back after sign-in', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const { base, db } = yield* withServer(client);
+      const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const sub = yield* Effect.provide(identify(owner!), db);
+      for (const returnTo of ['/.//evil.com', '/..//evil.com', '/a/..//evil.com', '//evil.com', '/\\evil.com', 'https://evil.com/x']) {
+        const done = yield* Effect.promise(() => signIn(base, issuer, { sub }, `/auth/login?return_to=${encodeURIComponent(returnTo)}`));
+        expect([done.status, done.headers.get('location')]).toEqual([302, '/']);
+      }
+    }),
+  );
+
   it.scoped('opens no session for a wrong state, nonce, issuer, audience, expiry or PKCE verifier', () =>
     Effect.gen(function* () {
       const { issuer, client } = configured();

@@ -67,11 +67,12 @@ const Flow = Schema.Struct({
 type Flow = typeof Flow.Type;
 const FlowCookie = Schema.compose(Schema.StringFromBase64Url, Schema.parseJson(Flow));
 
-/** Same-origin path, query and fragment of `value`, else `/`; never an open redirect. */
+/** Same-origin path, query and fragment of `value`, else `/`; never an open redirect, so never `//` or `/\` after normalization. */
 const localPath = (value: string | null) => {
   const base = 'https://sanctum.invalid';
   const url = new URL(value ?? '/', base);
-  return value?.startsWith('/') && url.origin === base ? `${url.pathname}${url.search}${url.hash}` : '/';
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  return value?.startsWith('/') && url.origin === base && !path.startsWith('//') && !path.startsWith('/\\') ? path : '/';
 };
 
 /** Ends the callback at `/?signin=<code>`; `reason` goes to the log only. */
@@ -152,8 +153,14 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });
         }
         const member = { workspace_id: memberships[0]!.workspace_id, principal_id: principal.value };
-        const session = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
-        if (typeof name === 'string' && name.trim() !== '') yield* sql`UPDATE principals SET display_name = ${name.trim().slice(0, 200)} WHERE id = ${principal.value}`;
+        // Plan sign-in section 5.2: the ID token `name` claim, when present and non-empty, refreshes the display name in the session's transaction.
+        const session = yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
+            if (typeof name === 'string' && name.trim() !== '') yield* sql`UPDATE principals SET display_name = ${name.trim().slice(0, 200)} WHERE id = ${principal.value}`;
+            return opened;
+          }),
+        );
         const expires = new Date(session.expires_at);
         return HttpServerResponse.redirect(flow.return_to, { status: 302 }).pipe(
           HttpServerResponse.unsafeSetCookie(SESSION_COOKIE, session.token, { path: '/', httpOnly: true, sameSite: 'lax', expires }),
