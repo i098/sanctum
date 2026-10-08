@@ -52,8 +52,7 @@ A mock dashboard or an API-shaped stub does not satisfy this contract.
 
 ### Still to choose
 
-- MCP authorization server: select a maintained server that issues audience-bound Sanctum access tokens and supports the chosen protocol; this is separate from human login.
-- Identity issuer: proposed default is Google OIDC for human login, separate from Pipedream action credentials; allow deployment to supply its existing issuer instead.
+- MCP authorization server and identity issuer: decided on 2026-10-08 in docs/DECISIONS.md (WorkOS AuthKit hosted, embedded Better Auth self-hosted, both standard OIDC and OAuth selected by configuration).
 - Saved meeting retention: how long confirmed recordings and transcripts are kept before automatic deletion; no automatic expiry has been authorized.
 - Unassigned audio buffer: how long to hold captured speech before it has been assigned to a meeting, if the policy archives detected meetings only. This is separate from the offline upload recovery queue.
 - Speech outside a detected meeting: requires an explicit archive policy before unattended production capture is enabled.
@@ -569,14 +568,14 @@ Post-meeting completion updates context/activity silently.
 Add an authenticated human/workspace model before exposing multi-team context or SDK/MCP writes.
 Pipedream action linking is separate from user authentication.
 Use a maintained OIDC client and verified issuer, audience, signature, expiry, state, and PKCE handling.
-Prefer the deployment's existing issuer; proposed default is Google OIDC with separate login scopes/client from Pipedream's action credentials.
+The issuer is any standard OIDC issuer selected by configuration: WorkOS AuthKit hosted, embedded Better Auth self-hosted (docs/DECISIONS.md); keep login scopes and client separate from Pipedream's action credentials.
 Membership is stored explicitly; a matching email domain or spoken company name grants no access.
 
 Use browser sessions in secure HttpOnly cookies with CSRF protection for mutations.
 SDK automation uses revocable hashed tokens bound to a principal, workspace/meeting allowlist, and scopes.
 Remote MCP uses delegated OAuth and the same authorization functions.
 Use the official TypeScript MCP SDK authorization interfaces with a maintained authorization server that supports the selected protocol's resource/audience requirements.
-The authorization-server deployment choice is still open; do not implement a custom OAuth server or assume Google human-login tokens are Sanctum MCP access tokens.
+The same providers are the authorization servers (docs/DECISIONS.md); do not implement a custom OAuth server or assume human-login ID tokens are Sanctum MCP access tokens.
 Publish protected-resource metadata and test issuer discovery, PKCE, resource audience, scopes, expiry and revocation with the selected server.
 Verify the issued access token and map its validated subject to a Sanctum principal; durable grants and credentials live outside process memory.
 Do not forward arbitrary upstream OAuth tokens as Sanctum API credentials.

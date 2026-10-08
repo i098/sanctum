@@ -1,8 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Unauthenticated } from '@sanctum/contracts';
-import { Effect, Layer } from 'effect';
+import { ConfigProvider, Effect, Layer } from 'effect';
 import { Authenticator } from '../src/auth.ts';
-import { engineeringDefaults, requireActivation } from '../src/config.ts';
+import { engineeringDefaults, requireActivation, serverConfig } from '../src/config.ts';
 import { fixtureAccess } from './support/fixtures.ts';
 import { serveApi } from './http-server.ts';
 
@@ -44,12 +44,27 @@ describe('API entrypoint', () => {
     }),
   );
 
-  it.effect('refuses production activation while open decisions are unselected', () =>
+  it.effect('starts only when every listed decision is configured, and production only when all are listed', () =>
     Effect.gen(function* () {
-      yield* requireActivation({ environment: 'development', selectedDecisions: [] });
-      const blocked = yield* Effect.flip(requireActivation({ environment: 'production', selectedDecisions: ['identity_issuer'] }));
-      expect(blocked.message).toBe('Production activation blocked; unselected: mcp_authorization_server, meeting_retention, outside_meeting_speech');
-      yield* requireActivation({ environment: 'production', selectedDecisions: ['identity_issuer', 'mcp_authorization_server', 'meeting_retention', 'outside_meeting_speech'] });
+      const activate = (env: Record<string, string>) =>
+        Effect.flatMap(serverConfig, requireActivation).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env)))));
+      const signIn = {
+        SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test',
+        SANCTUM_OIDC_CLIENT_ID: 'client',
+        SANCTUM_OIDC_REDIRECT_URI: 'https://sanctum.test/auth/callback',
+        SANCTUM_MCP_ISSUER: 'https://issuer.sanctum.test',
+        SANCTUM_MCP_JWKS_URL: 'https://issuer.sanctum.test/oauth2/jwks',
+        SANCTUM_MCP_RESOURCE: 'https://sanctum.test/mcp',
+      };
+      yield* activate({});
+      yield* activate({ ...signIn, SANCTUM_ENV: 'production', SANCTUM_SELECTED_DECISIONS: 'identity_issuer,mcp_authorization_server,meeting_retention,outside_meeting_speech' });
+      const { SANCTUM_OIDC_CLIENT_ID: _, ...noClient } = signIn;
+      const incomplete = yield* Effect.flip(activate({ ...noClient, SANCTUM_SELECTED_DECISIONS: 'identity_issuer' }));
+      expect(incomplete.message).toBe('Selected decisions are not configured: identity_issuer needs SANCTUM_OIDC_CLIENT_ID');
+      const embedded = yield* Effect.flip(activate({ ...signIn, SANCTUM_EMBEDDED_ISSUER: 'better-auth', SANCTUM_SELECTED_DECISIONS: 'identity_issuer' }));
+      expect(embedded.message).toBe('Selected decisions are not configured: identity_issuer needs BETTER_AUTH_SECRET');
+      const blocked = yield* Effect.flip(activate({ ...signIn, SANCTUM_ENV: 'production', SANCTUM_SELECTED_DECISIONS: 'identity_issuer,mcp_authorization_server' }));
+      expect(blocked.message).toBe('Production activation blocked; unselected: meeting_retention, outside_meeting_speech');
     }),
   );
 
