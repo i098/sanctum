@@ -74,8 +74,8 @@ The hosted secret login link stays until WorkOS sign-in replaces it.
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.
 MySQL is an Aiven MySQL 8.4 service reached only over TLS verified with its project CA; recordings stay in a private R2 bucket in the same account.
-Anyone may open the site; until a sign-in issuer is selected, a secret login link hands the browser a pre-seeded owner session, and visitors without it have no session.
-This does not select the sign-in issuer or any other open decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
+Anyone may open the site; until sign-in is configured on the deployment, a secret login link hands the browser a pre-seeded owner session, and visitors without it have no session.
+This selects no sign-in issuer or any other decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
 
 ## Runtime decision — 2026-09-28
 

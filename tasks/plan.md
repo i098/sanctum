@@ -116,7 +116,7 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades | Correctable speaker tracks; names require enrollment or user confirmation. |
 | Speech output | Cartesia Sonic-3 streaming API | Requested output only, with response IDs and interruptible browser playback. |
 | Integrations | Pipedream Connect + Proxy/component APIs from TypeScript | One account-scoped client; search, inspect and request gateways. |
-| Human authentication | `openid-client` for OIDC | Google proposed, issuer still open; use verified identity plus explicit Sanctum membership. |
+| Human authentication | `openid-client` for OIDC | Issuer selected by configuration: WorkOS AuthKit hosted, embedded Better Auth self-hosted (docs/DECISIONS.md); use verified identity plus explicit Sanctum membership. |
 | Remote agents | Official `@modelcontextprotocol/sdk` TypeScript server over Streamable HTTP | Explicit tools calling the same Effect services and authorization as REST. |
 | Public SDKs | Promise-based TypeScript client; thin Python HTTPX client | Generate wire types from OpenAPI; neither client requires Effect in consumer code. |
 | Tests | Vitest + `@effect/vitest` + Playwright | Behavior, clocks, interruption, contracts, isolation, real MySQL and browser recovery. |
