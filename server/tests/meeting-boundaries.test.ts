@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { CaptureEpochId, MeetingId } from '@sanctum/contracts';
+import { CaptureEpochId, ListenerId, MeetingId } from '@sanctum/contracts';
 import { Effect } from 'effect';
+import { listenerFeed } from '../src/actions.ts';
 import { evaluateBoundary, LOW_CONFIDENCE } from '../src/boundaries.ts';
 import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments } from '../src/meetings.ts';
 import { claimed, hear, jobsOf, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
@@ -38,7 +39,7 @@ describe('boundary decisions', () => {
 });
 
 describe('automatic meeting lifecycle', () => {
-  it.effect('gives the capturing principal, and nobody else, access to a detected meeting', () =>
+  it.effect('gives the capturing principal, and nobody else, access to a detected meeting and its feed', () =>
     withDatabase(
       Effect.gen(function* () {
         const { owner, device, listener, epoch } = yield* setup;
@@ -48,6 +49,14 @@ describe('automatic meeting lifecycle', () => {
         expect((yield* listMeetings(device, {})).meetings.map(meeting => meeting.id)).toEqual([id]);
         expect(yield* Effect.flip(getMeeting(owner, id))).toMatchObject({ _tag: 'NotFound' });
         expect(yield* listMeetings(owner, {})).toEqual({ meetings: [], next_cursor: null });
+        // The capturer's listening feed shows its own work on the meeting; anyone without a grant sees no meeting.
+        const sql = yield* SqlClient.SqlClient;
+        const action_id = randomUUID();
+        yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, title, created_at, updated_at)
+          VALUES (${action_id}, ${listener.workspace_id}, ${id}, ${device.principal.id}, 'gmail-send-email', 'k1', '{}', ${Buffer.alloc(32)}, '1', 'queued', 'Email the notes', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+        const listener_id = ListenerId.make(listener.listener_id);
+        expect(yield* listenerFeed(device, listener_id)).toEqual({ meeting_id: id, actions: [{ action_id, action_key: 'gmail-send-email', state: 'queued', title: 'Email the notes' }] });
+        expect(yield* listenerFeed(owner, listener_id)).toEqual({ meeting_id: null, actions: [] });
       }),
       { migrated: true },
     ),
