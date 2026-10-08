@@ -22,12 +22,14 @@ export type SignInState =
 /** How the last sign-in redirect ended (`/?signin=<code>`), read once from the landing URL. */
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
 
-async function configured(): Promise<boolean> {
+/** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. */
+async function configured(): Promise<boolean | 'unavailable'> {
   try {
     const response = await fetch('/auth/config', { headers: { accept: 'application/json' } });
+    if (response.status >= 500) return 'unavailable';
     return response.ok && (await response.json()).sign_in === true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error instanceof SyntaxError ? false : 'unavailable';
   }
 }
 
@@ -41,7 +43,8 @@ async function session(client: SanctumClient): Promise<AccessScope | 'signed_out
 
 export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   const [issuer, current] = await Promise.all([configured(), session(client)]);
-  if (typeof current === 'object') return { status: 'signed_in', access: current, issuer };
+  if (typeof current === 'object') return { status: 'signed_in', access: current, issuer: issuer !== false };
+  if (current === 'unavailable' || issuer === 'unavailable') return { status: 'unavailable' };
   return { status: issuer ? current : 'unconfigured' };
 }
 

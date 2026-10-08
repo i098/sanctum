@@ -125,7 +125,8 @@ function installSpeech(fake: boolean): void {
 
 /** What the fake server says about sign-in: `/auth/config` and `GET /api/v1/session`. */
 export interface FakeSignIn {
-  configured: boolean;
+  /** `'unavailable'` answers `/auth/config` with a 503. */
+  configured: boolean | 'unavailable';
   /** The session body, or `null` for a 401. */
   access: object | null;
 }
@@ -147,7 +148,9 @@ export async function serveListening(page: Page, options: ListenOptions = {}): P
   await page.addInitScript(installSpeech, options.speech ?? false);
   await page.route('**/src/pages/listen/engine.ts*', route =>
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
-  await page.route('**/auth/config', route => route.fulfill({ json: { sign_in: options.configured ?? false, embedded_issuer: null } }));
+  await page.route('**/auth/config', route => options.configured === 'unavailable'
+    ? route.fulfill({ status: 503, json: { message: 'upstream down' } })
+    : route.fulfill({ json: { sign_in: options.configured ?? false, embedded_issuer: null } }));
   await page.route('**/api/v1/session', route => route.fulfill(options.access
     ? { json: options.access }
     : { status: 401, json: { _tag: 'Unauthenticated', code: 'unauthenticated', message: 'No credentials' } }));

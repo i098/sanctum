@@ -29,6 +29,12 @@ test('not configured: no sign-in path is offered', async ({ page }) => {
   await expect(page.getByRole('link')).toHaveCount(0);
 });
 
+test('a failing /auth/config reads as unavailable, not as not configured', async ({ page }) => {
+  await openListening(page, { configured: 'unavailable', access: null });
+  const settings = await openSettings(page);
+  await expect(row(settings, 'Sign-in')).toHaveText('Unavailable: the session could not be read');
+});
+
 test('signed out: the page and Settings link to sign-in', async ({ page }) => {
   await openListening(page, { configured: true, access: null });
   await expect(page.getByRole('link', { name: 'Sign in to listen' })).toHaveAttribute('href', '/auth/login?return_to=/');
