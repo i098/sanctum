@@ -21,3 +21,15 @@ for (const viewport of [
     expect(size.scrollWidth).toBeLessThanOrEqual(size.innerWidth);
   });
 }
+
+// Without a declared icon every page load requests /favicon.ico, which the server answers 404.
+test('declares a tab icon that decodes', async ({ page }) => {
+  await page.goto('/');
+  const width = await page.evaluate(async () => {
+    const icon = new Image();
+    icon.src = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href ?? '';
+    await icon.decode();
+    return icon.naturalWidth;
+  });
+  expect(width).toBeGreaterThan(0);
+});
