@@ -70,6 +70,31 @@ Rejected: Logto and ZITADEL need PostgreSQL; Keycloak is a separate Java service
 Meeting retention and speech outside detected meetings stay open, so production activation still refuses to start.
 The hosted secret login link stays until WorkOS sign-in replaces it.
 
+## Speech-to-text decision — 2026-10-08
+
+Accepted: live and batch speech-to-text use Whisper (`@cf/openai/whisper-large-v3-turbo`) on Cloudflare Workers AI in the 42nights account that already runs Sanctum.
+The reason is the owner's preference for open-source or free tools and no new vendor: Whisper is open source, and the account needs no new card.
+The daily free allocation is 10,000 neurons (about 200 audio minutes); after that, the cost is about $0.0005 per audio minute.
+The Deepgram adapter is removed; no second live provider stays configured.
+Whisper is batch-only, so the live transcript updates once per short chunk instead of word by word, and every live result is final.
+Diarization does not change: Whisper returns no speaker labels, and pyannote stays optional and off.
+
+Chunk measurement on 2026-10-08, with a 22 s synthetic speech clip at normal level and at -20 dB (word error rate against the script; the whole clip in one request gives 0.028 at both levels):
+
+| Live chunk | Normal | -20 dB |
+| --- | --- | --- |
+| Fixed 2 s | 0.085 | 0.113 |
+| Fixed 3 s | 0.070 | 0.085 |
+| Fixed 5 s | 0.056 | 0.070 |
+| Fixed 3 s with 0.5 s overlap | 0.211 | not run |
+| Cut at the quietest 20 ms between 1.5 s and 2.5 s | 0.028 | 0.028 |
+
+Fixed cuts split words, and the 2 s cut lost the word "Sanctum" from the direct request; overlap repeats words.
+Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2.5 s (`engineeringDefaults.liveAsr`).
+Requests take about 1.5–3 s with peaks near 9 s, so up to three chunks are in flight, and results keep audio order.
+Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
+A direct request can end in a later chunk, so the speech gate waits `turnWaitMs` for the next chunk's results before it ends a turn.
+
 ## Deployment decision — 2026-10-02
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.

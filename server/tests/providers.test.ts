@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
-import { NodeHttpServer } from '@effect/platform-node';
 import { describe, expect, it } from '@effect/vitest';
-import { ConfigProvider, Context, Effect, Layer, Stream } from 'effect';
+import { ConfigProvider, Effect, Layer, Option, Redacted, Stream } from 'effect';
+import { engineeringDefaults } from '../src/config.ts';
+import { SpeechToTextLive } from '../src/media/providers.ts';
 import { ObjectStore } from '../src/providers/object-store.ts';
-import { DeepgramLive, parseLiveMessage, SpeechToText } from '../src/providers/deepgram.ts';
+import { SpeechToText, whisperSpeechToText } from '../src/providers/whisper.ts';
 import { R2ObjectStoreLive } from '../src/providers/r2.ts';
 
 /** Local HTTP stand-in for a provider; records requests and answers with `respond`. */
@@ -80,81 +80,30 @@ describe('R2 object store', () => {
   );
 });
 
-/** Local stand-in for Deepgram's `/v1/listen` socket: interim result per audio message, final on CloseStream. */
-const fakeDeepgramSocket = Effect.gen(function* () {
-  const seen = { protocols: '', query: '', bytes: 0 };
-  const route = HttpRouter.empty.pipe(
-    HttpRouter.get(
-      '/v1/listen',
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        seen.protocols = request.headers['sec-websocket-protocol'] ?? '';
-        seen.query = request.url;
-        const socket = yield* request.upgrade;
-        const write = yield* socket.writer;
-        const results = (is_final: boolean, text: string) =>
-          JSON.stringify({ type: 'Results', start: 0, duration: seen.bytes / 32_000, is_final, channel: { alternatives: [{ transcript: text, confidence: 0.9, words: [{ speaker: 1 }] }] } });
-        yield* socket.runRaw(data =>
-          typeof data === 'string'
-            ? data.includes('CloseStream')
-              ? Effect.zipRight(write(results(true, 'final words')), write(new Socket.CloseEvent(1000)))
-              : Effect.void
-            : Effect.suspend(() => {
-                seen.bytes += data.byteLength;
-                return Effect.zipRight(write(JSON.stringify({ type: 'Metadata' })), write(results(false, 'interim')));
-              }),
-        );
-        return HttpServerResponse.empty();
-      }),
-    ),
-  );
-  const context = yield* Layer.build(HttpServer.serve(route).pipe(Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, host: '127.0.0.1' }))));
-  const address = Context.get(context, HttpServer.HttpServer).address as HttpServer.TcpAddress;
-  return { url: `http://127.0.0.1:${address.port}`, seen };
-});
+/** The WAV a Whisper request carried: its sample rate and samples. */
+const sentAudio = (body: Buffer) => {
+  const wav = Buffer.from(JSON.parse(body.toString()).audio, 'base64');
+  return { rate: wav.readUInt32LE(24), samples: new Int16Array(wav.buffer.slice(wav.byteOffset + 44, wav.byteOffset + wav.byteLength)) };
+};
 
-describe('Deepgram adapters', () => {
-  it('parses Results messages and ignores other message types', () => {
-    const message = { type: 'Results', start: 1.5, duration: 0.5, is_final: true, channel: { alternatives: [{ transcript: 'hi', confidence: 0.8, words: [{ speaker: 2 }] }] } };
-    expect(parseLiveMessage(JSON.stringify(message))).toEqual({ start_s: 1.5, end_s: 2, is_final: true, text: 'hi', confidence: 0.8, speaker: '2' });
-    expect(parseLiveMessage(JSON.stringify({ type: 'Metadata', request_id: 'x' }))).toBeNull();
-    expect(parseLiveMessage('not json')).toBeNull();
-  });
+const whisper = (url: string) =>
+  Effect.provide(SpeechToText, Layer.succeed(SpeechToText, whisperSpeechToText({ workersAi: Option.some({ baseUrl: url, apiToken: Redacted.make('wai-token') }), liveAsr: engineeringDefaults.liveAsr })));
 
-  it.scopedLive('streams PCM over an authenticated socket and flushes finals on finish', () =>
-    Effect.gen(function* () {
-      const fake = yield* fakeDeepgramSocket;
-      const stt = yield* Effect.provide(SpeechToText, DeepgramLive.pipe(Layer.provide(withConfig({ DEEPGRAM_API_KEY: 'dg-key', DEEPGRAM_URL: fake.url }))));
-      const stream = yield* stt.openStream(16_000);
-      expect(stream.send(new Int16Array(800))).toBe(true);
-      const collected = Stream.runCollect(stream.results).pipe(Effect.fork);
-      const fiber = yield* collected;
-      yield* Effect.sleep('100 millis');
-      yield* stream.finish;
-      const results = [...(yield* fiber.await.pipe(Effect.flatten))];
-      expect(fake.seen.protocols).toBe('token, dg-key');
-      expect(fake.seen.query).toContain('encoding=linear16');
-      expect(fake.seen.query).toContain('sample_rate=16000');
-      expect(fake.seen.bytes).toBe(1_600);
-      expect(results).toEqual([
-        { start_s: 0, end_s: 0.05, is_final: false, text: 'interim', confidence: 0.9, speaker: '1' },
-        { start_s: 0, end_s: 0.05, is_final: true, text: 'final words', confidence: 0.9, speaker: '1' },
-      ]);
-    }),
-  );
-
-  it.scoped('transcribes a batch range and maps utterances, failing visibly on provider errors', () =>
+describe('Workers AI Whisper', () => {
+  it.scoped('transcribes a batch range, keeping segment times relative to its first sample', () =>
     Effect.gen(function* () {
       let status = 200;
       const server = yield* localServer((_request, _body, response) => {
         response.writeHead(status, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ results: { utterances: [{ start: 0.25, end: 1, transcript: 'batch words', confidence: 0.7, speaker: 0 }] } }));
+        response.end(JSON.stringify({ success: true, result: { text: 'batch words', segments: [{ start: 0.25, end: 1, text: ' batch words ' }, { start: 1, end: 1.5, text: ' ' }] } }));
       });
-      const stt = yield* Effect.provide(SpeechToText, DeepgramLive.pipe(Layer.provide(withConfig({ DEEPGRAM_API_KEY: 'dg-key', DEEPGRAM_URL: server.url }))));
-      expect(yield* stt.transcribe(16_000, new Int16Array([1, -1]))).toEqual([{ start_s: 0.25, end_s: 1, is_final: true, text: 'batch words', confidence: 0.7, speaker: '0' }]);
-      expect(server.requests[0]!.headers.authorization).toBe('Token dg-key');
-      expect(server.requests[0]!.url).toContain('utterances=true');
-      expect([...server.requests[0]!.body]).toEqual([1, 0, 255, 255]);
+      const stt = yield* whisper(server.url);
+      expect(yield* stt.transcribe(16_000, new Int16Array([1, -1]))).toEqual([{ start_s: 0.25, end_s: 1, is_final: true, text: 'batch words', confidence: null, speaker: null }]);
+      const request = server.requests[0]!;
+      expect(request.url).toBe('/run/@cf/openai/whisper-large-v3-turbo');
+      expect(request.headers.authorization).toBe('Bearer wai-token');
+      expect(JSON.parse(request.body.toString())).toMatchObject({ vad_filter: true });
+      expect(sentAudio(request.body)).toEqual({ rate: 16_000, samples: new Int16Array([1, -1]) });
       status = 503;
       expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: true });
       status = 401;
@@ -162,11 +111,47 @@ describe('Deepgram adapters', () => {
     }),
   );
 
-  it.effect('reports a missing API key as unavailable instead of pretending to transcribe', () =>
+  it.scopedLive('sends live audio in chunks cut at a quiet moment and emits one final per chunk in audio order', () =>
     Effect.gen(function* () {
-      const stt = yield* Effect.provide(SpeechToText, DeepgramLive.pipe(Layer.provide(withConfig({}))));
+      // The first chunk is answered only after the second; results must still follow the audio.
+      const cut = 25_600 + 160;
+      let held: (() => void) | null = null;
+      let answeredLater = false;
+      const server = yield* localServer((_request, body, response) => {
+        const { samples } = sentAudio(body);
+        const reply = () => response.end(JSON.stringify({ result: { segments: [{ start: 0.1, end: 0.5, text: `heard ${samples.length}` }] } }));
+        if (samples.length !== cut) {
+          reply();
+          answeredLater = true;
+          held?.();
+        } else if (answeredLater) reply();
+        else held = reply;
+      });
+      const stt = yield* whisper(server.url);
+      const stream = yield* stt.openStream(16_000);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      // 2.5 s of loud audio with a pause at 1.6-1.7 s, then 0.5 s more.
+      const audio = new Int16Array(48_000).fill(8_000).fill(0, 25_600, 27_200);
+      for (let at = 0; at < audio.length; at += 1_600) expect(stream.send(audio.subarray(at, at + 1_600))).toBe(true);
+      yield* stream.finish;
+      expect(stream.send(new Int16Array(1))).toBe(false);
+      const results = [...(yield* Effect.flatten(collected.await))];
+      expect(server.requests.map(request => sentAudio(request.body).samples.length).sort()).toEqual([48_000 - cut, cut].sort());
+      expect(results).toEqual([
+        { start_s: 0.1, end_s: 0.5, is_final: true, text: `heard ${cut}`, confidence: null, speaker: null },
+        { start_s: cut / 16_000 + 0.1, end_s: cut / 16_000 + 0.5, is_final: true, text: `heard ${48_000 - cut}`, confidence: null, speaker: null },
+      ]);
+      expect(stream.backlogBytes()).toBe(0);
+    }),
+  );
+
+  it.effect('reports missing settings as unavailable instead of pretending to transcribe', () =>
+    Effect.gen(function* () {
+      const stt = yield* Effect.provide(SpeechToText, SpeechToTextLive.pipe(Layer.provide(withConfig({ WORKERS_AI_ACCOUNT_ID: 'acct' }))));
       expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: false });
-      expect(yield* Effect.flip(Effect.scoped(stt.openStream(16_000)))).toMatchObject({ message: 'Deepgram: DEEPGRAM_API_KEY is not configured' });
+      expect(yield* Effect.flip(Effect.scoped(stt.openStream(16_000)))).toMatchObject({
+        message: 'Workers AI: WORKERS_AI_ACCOUNT_ID and WORKERS_AI_API_TOKEN are not configured',
+      });
     }),
   );
 });

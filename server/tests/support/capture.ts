@@ -73,7 +73,7 @@ export const commitChunk = (listener: Listener, epoch: CaptureEpochId, sequence:
         ${Buffer.from(sha256, 'hex')}, ${key}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
   });
 
-export const seedConnection = (listener: Listener, epoch_id: CaptureEpochId, purpose = 'asr', provider = 'deepgram') =>
+export const seedConnection = (listener: Listener, epoch_id: CaptureEpochId, purpose = 'asr', provider = 'workers-ai') =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = ProviderConnectionId.make(randomUUID());
@@ -100,7 +100,7 @@ export const speak = (
       status: 'final',
       revision: 1,
       origin: 'live',
-      provider: 'deepgram',
+      provider: 'workers-ai',
       model: 'fixture',
       provider_connection_id: options.connection ?? null,
       speaker_label: options.label ?? null,
@@ -109,7 +109,7 @@ export const speak = (
       created_at: UtcTimestamp.make('2026-09-28T16:00:00Z'),
     };
     yield* sql`INSERT INTO transcript_segments (id, workspace_id, epoch_id, track, sample_start, sample_end, text, status, revision, origin, provider, model, provider_connection_id, speaker_label, confidence, created_at)
-      VALUES (${segment.id}, ${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, ${text}, 'final', 1, 'live', 'deepgram', 'fixture',
+      VALUES (${segment.id}, ${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, ${text}, 'final', 1, 'live', 'workers-ai', 'fixture',
         ${segment.provider_connection_id}, ${segment.speaker_label}, 0.9, UTC_TIMESTAMP(6))`;
     yield* sql`INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
       VALUES (${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, 'live', UTC_TIMESTAMP(6))`;

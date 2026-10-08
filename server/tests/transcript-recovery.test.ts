@@ -199,7 +199,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const { access, epoch_id, speech, reconcile } = yield* setup(1);
-      speech.controls.batch = () => Effect.fail(new Unavailable({ message: 'Deepgram: batch responded 503', retryable: true }));
+      speech.controls.batch = () => Effect.fail(new Unavailable({ message: 'Workers AI: batch responded 503', retryable: true }));
       const failure = yield* Effect.flip(reconcile(0, RATE));
       expect(failure).toMatchObject({ _tag: 'JobFailure', retryable: true });
       const [coverage] = yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM transcript_coverage WHERE epoch_id = ${epoch_id}`;

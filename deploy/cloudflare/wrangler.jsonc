@@ -20,7 +20,7 @@
     // API and worker pools together stay well under the managed server's connection limit.
     "MYSQL_POOL_SIZE": "8",
     "R2_BUCKET": "sanctum-recordings",
-    // Workers AI runs the voice and extraction models on this account (docs/operations.md).
+    // Workers AI runs speech-to-text and the voice and extraction models on this account (docs/operations.md).
     "WORKERS_AI_ACCOUNT_ID": "2c040ec5bc2efe34e60ab5b1b4fd2e99"
   },
   "containers": [

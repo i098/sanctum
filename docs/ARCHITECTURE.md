@@ -111,7 +111,7 @@ Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, the `int
 
 ### media (T08, server half of T09, T10, T11)
 
-Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcripts.ts`, `server/src/media/{ingest,session}.ts`, `server/src/providers/{deepgram,r2}.ts`, migrations `002_capture` and `003_transcripts`, `media.ts` and `ListenersApi` in contracts.
+Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcripts.ts`, `server/src/media/{ingest,session}.ts`, `server/src/providers/{whisper,r2}.ts`, migrations `002_capture` and `003_transcripts`, `media.ts` and `ListenersApi` in contracts.
 
 - Registers `ListenersApi` in contracts api.ts and its handlers in server api.ts; attaches the upgrade handler in main.ts.
 - `providers/r2.ts`: `R2ObjectStoreLive: Layer<ObjectStore, ConfigError>`; worker.ts provides it (an unconfigured stand-in until media lands).

@@ -26,7 +26,7 @@ import {
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
-import { type AsrResult, type AsrStream, SpeechToText } from '../providers/deepgram.ts';
+import { type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/cartesia.ts';
 import { SpeechGate, SpeechReplies, speechController } from './speech-gate.ts';

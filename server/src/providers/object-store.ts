@@ -31,3 +31,22 @@ interface ObjectStoreService {
 }
 
 export class ObjectStore extends Context.Tag('sanctum/ObjectStore')<ObjectStore, ObjectStoreService>() {}
+
+/** Mono PCM16 WAV file holding `parts` at `rate`, the format of every recording object. */
+export const wavFile = (rate: number, parts: ReadonlyArray<Uint8Array>) => {
+  const bytes = parts.reduce((total, part) => total + part.byteLength, 0);
+  const header = Buffer.alloc(44);
+  header.write('RIFFxxxxWAVEfmt ', 0, 'ascii');
+  header.writeUInt32LE(36 + bytes, 4);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(bytes, 40);
+  // A plain copy: Buffer.slice/subarray share memory, which callers of the object store do not expect.
+  return new Uint8Array(Buffer.concat([header, ...parts]));
+};

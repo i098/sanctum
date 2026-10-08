@@ -10,7 +10,7 @@ import { type AccessScope, ClientControlMessage, LISTENER_STREAM_PATH, ListenerI
 import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect';
 import { Authenticator } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
-import type { SpeechToText } from '../providers/deepgram.ts';
+import type { SpeechToText } from '../providers/whisper.ts';
 import { openLiveSession, reject, SessionRejected } from './session.ts';
 
 /** Queued inbound messages per socket (at most ~1.2 MB of maximum-size frames). */

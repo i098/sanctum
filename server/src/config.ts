@@ -34,8 +34,18 @@ export const engineeringDefaults = {
       'research.run': 20 * 60_000,
     } as Partial<Record<JobKind, number>>,
   },
-  /** Requested speech: open window, quiet time that ends a direct-request turn, echo memory after playback. */
-  speech: { windowMs: 30_000, endOfTurnMs: 700, echoTailMs: 1_500 },
+  /**
+   * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks cut at the
+   * quietest 20 ms between `minMs` and `maxMs` (measured in docs/DECISIONS.md), with at most
+   * `concurrency` requests in flight; results still arrive in audio order.
+   */
+  liveAsr: { minMs: 1_500, maxMs: 2_500, concurrency: 3, requestTimeoutMs: 60_000 },
+  /**
+   * Requested speech: open window, quiet audio that ends a direct-request turn, and echo memory
+   * after playback. Finals arrive once per live chunk, so a turn waits `turnWaitMs` for the next
+   * chunk's finals before it ends, and echo memory outlasts one chunk and its request.
+   */
+  speech: { windowMs: 30_000, endOfTurnMs: 700, turnWaitMs: 5_000, echoTailMs: 5_000 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
   /**
@@ -133,7 +143,7 @@ export const serverConfig = Config.all({
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
-  /** Cloudflare Workers AI REST base for this account and a token with only Workers AI permission. */
+  /** Cloudflare Workers AI REST base for this account and a token with only Workers AI permission: speech-to-text and the voice and extraction models. */
   workersAi: Config.option(
     Config.all({
       baseUrl: Config.string('WORKERS_AI_ACCOUNT_ID').pipe(Config.map(account => `https://api.cloudflare.com/client/v4/accounts/${account}/ai`)),
