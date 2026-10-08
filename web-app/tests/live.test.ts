@@ -76,4 +76,15 @@ describe('live stream', () => {
     socket.onmessage!({ data: JSON.stringify({ _tag: 'action_update', meeting_id: '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f', actions: [] }) });
     expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
   });
+
+  it('keeps the server reason for degraded live transcription, also through socket backpressure', () => {
+    const statuses: unknown[][] = [];
+    const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: (...update) => void statuses.push(update), WebSocket: FakeSocket as never });
+    const socket = FakeSocket.last;
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'accepted', epoch_id: start.epoch_id, resume_from_sample: 0, max_frame_bytes: 65_536 }) });
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'degraded', reason: 'provider_unavailable', from_sample: 17_640 }) });
+    socket.bufferedAmount = 1_000_000;
+    stream.send(0, new Int16Array(960));
+    expect(statuses).toEqual([['connecting'], ['live'], ['degraded', 'provider_unavailable'], ['degraded', 'provider_unavailable']]);
+  });
 });

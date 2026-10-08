@@ -28,3 +28,13 @@ test('page controls start the real engine, overlays leave capture running, pause
   await expect(state).toHaveText('paused', { timeout: 15_000 });
   await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
 });
+
+test('names lost live transcription while the audio keeps streaming', async ({ page }) => {
+  const server = await fakeServer(page, false, 'provider_unavailable');
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Listen' }).click();
+  await expect(page.locator('.listen-state')).toHaveText('degraded', { timeout: 15_000 });
+  await expect(page.locator('.listen-helper[data-warning="true"]')).toContainText('transcription');
+  const frames = server.frames;
+  await expect.poll(() => server.frames, { timeout: 10_000 }).toBeGreaterThan(frames);
+});

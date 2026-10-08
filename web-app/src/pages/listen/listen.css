@@ -64,6 +64,12 @@
 .listen-meeting {
   color: #a7adb8;
   font-size: 12px;
+  text-align: right;
+}
+
+/* Phones wrap before the start time, never inside it. */
+.listen-meeting time {
+  white-space: nowrap;
 }
 
 .listen-status {

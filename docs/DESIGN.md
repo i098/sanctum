@@ -11,7 +11,7 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - Canvas fills the viewport with near-black `#0a0c10`.
 - Header begins about 32 px from each horizontal edge and 28 px from the top.
 - Upper left: small Sanctum wordmark, then a compact local time/date block.
-- Upper right: current meeting title and a quiet participant/duration line.
+- Upper right: the open meeting's title (its start time when it has no title) and a quiet participant/duration line; with no open meeting, the corner stays empty.
 - The waveform is the kiosk's 760 px line (at most 92% of the viewport width), centered horizontally with its baseline around y=316 in the reference composition; narrower lines scale every size with it, as the kiosk's canvas did.
 - Its canvas covers the viewport, so loud needles and their glow keep their full shape instead of being cut flat at the kiosk's 300 px stage edges.
 - The stage remains mostly empty around narrow spikes.

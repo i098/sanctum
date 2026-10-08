@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { openListening, waveProfile } from './listen-fake.ts';
+import { openListening, openMeeting, waveProfile } from './listen-fake.ts';
+
+const MEETING = '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f';
 
 const REFERENCE = readFileSync(new URL('../../design/listener-reference.svg', import.meta.url), 'utf8');
 
@@ -28,6 +30,7 @@ test('1280 × 720 matches the reference composition', async ({ page }, testInfo)
   const reference = await referenceBoxes(page);
   await testInfo.attach('reference-1280x720', { body: await page.screenshot(), contentType: 'image/png' });
   await openListening(page);
+  await openMeeting(page, MEETING, 'Product sync');
   await page.evaluate(() => window.__capture.setGain(0.8));
   await page.waitForTimeout(400);
   await testInfo.attach('listening-1280x720', { body: await page.screenshot(), contentType: 'image/png' });
@@ -60,6 +63,7 @@ test('1280 × 720 matches the reference composition', async ({ page }, testInfo)
 test('narrow laptop keeps the same hierarchy without scrolling or overlap, live updates included', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1024, height: 640 });
   await openListening(page);
+  await openMeeting(page, MEETING, 'Product sync');
   await page.evaluate(() => window.__capture.setGain(0.8));
   await page.evaluate(() => { for (let n = 0; n < 12; n++) window.__capture.transcript(`line ${n}: what the room said, long enough to wrap across the rail`, '0'); });
   await page.waitForTimeout(400);
