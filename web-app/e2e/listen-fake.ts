@@ -87,6 +87,14 @@ export async function openListening(page: Page): Promise<void> {
   await page.getByText('listening', { exact: true }).waitFor();
 }
 
+/** Opens a meeting, started 10:02 UTC, on the listener as the stream does: an `action_update` naming it, then the page's read of it. */
+export async function openMeeting(page: Page, id: string, title: string | null): Promise<void> {
+  const processing = { transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' };
+  const meeting = { id, workspace_id: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', state: 'active', title, started_at: '2026-09-28T10:02:00.000Z', ended_at: null, timezone: 'UTC', boundary_revision: 1, visibility: 'restricted', processing };
+  await page.route(`**/api/v1/meetings/${id}`, route => route.fulfill({ json: meeting }));
+  await page.evaluate(meeting_id => window.__capture.actions({ meeting_id, actions: [] }), id);
+}
+
 export interface WaveProfile {
   /** CSS px above / below the baseline reached by wave-coloured pixels. */
   rise: number;

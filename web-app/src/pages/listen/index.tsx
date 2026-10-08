@@ -1,4 +1,4 @@
-import { createClient } from '@sanctum/sdk';
+import { createClient, type Meeting } from '@sanctum/sdk';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
@@ -95,6 +95,24 @@ function FullscreenButton() {
   );
 }
 
+/** The listener's open meeting, named by the stream's `action_update`: its title, else its start time; no line without one. */
+function MeetingLine() {
+  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  useEffect(() => {
+    let shown: string | null = null;
+    return subscribeActions(({ meeting_id }) => {
+      if (meeting_id === shown) return;
+      shown = meeting_id;
+      setMeeting(null);
+      // A failed read shows no line rather than a false one; a stale read never replaces a newer meeting.
+      if (meeting_id !== null) client.meetings.getMeeting({ meeting_id }).then(read => read.id === shown && setMeeting(read), () => undefined);
+    });
+  }, []);
+  if (meeting === null) return null;
+  const started = new Date(meeting.started_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return <p className="listen-meeting">{meeting.title ?? <>Meeting since <time dateTime={meeting.started_at}>{started}</time></>}</p>;
+}
+
 interface FooterProps {
   engine: CaptureView;
   snapshot: CaptureSnapshot;
@@ -162,7 +180,7 @@ export function ListenPage() {
           <span className="listen-wordmark">✦ SANCTUM</span>
           <Clock />
         </div>
-        <p className="listen-meeting">Meeting details unavailable</p>
+        <MeetingLine />
       </header>
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
