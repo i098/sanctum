@@ -45,8 +45,8 @@ export const engineeringDefaults = {
    * quietest 20 ms between `minMs` and `maxMs` (measured in docs/DECISIONS.md), with at most
    * `concurrency` chunks in flight; results still arrive in audio order, so in-flight chunks must
    * span the slowest answers (12–20 s, about 1 in 100) or later chunks wait and live falls behind.
-   * A chunk unanswered after `hedgeMs` (above every normal answer) is sent once more and the first
-   * answer wins. Audio without 100 ms in a row at `speechFloorRms` (PCM16 RMS, about -56 dBFS) is
+   * A chunk unanswered after `hedgeMs` (above every normal answer) is sent once more; the first
+   * success wins, a failed duplicate never does, and none is sent during a 429 pause. Audio without 100 ms in a row at `speechFloorRms` (PCM16 RMS, about -56 dBFS) is
    * never sent. A 429 pauses requests for its Retry-After, else `rateLimitBackoffMs`, and the chunks meanwhile are skipped.
    */
   liveAsr: { minMs: 1_500, maxMs: 2_500, concurrency: 8, hedgeMs: 8_000, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },

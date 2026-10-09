@@ -103,7 +103,7 @@ Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2
 Results keep audio order, so one slow answer holds back every later chunk.
 Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
 With three chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
-Up to eight chunks are therefore in flight, and a chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins.
+Up to eight chunks are therefore in flight, and a chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins, but the duplicate never wins by failing and is not sent during a 429 pause.
 Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
 In production, `vad_filter` still let "You" and "Thank you." through on near-silent audio.
 Sanctum therefore also drops a segment whose `no_speech_prob` is above 0.6, Whisper's `no_speech_threshold`.
