@@ -104,8 +104,8 @@ test('End meeting shows after a reload while no stream is open, for the meeting 
     return route.fulfill({ json: { meetings: query.get('state') === 'active' && query.get('listener') === listener ? [meeting('active')] : [], next_cursor: null } });
   });
   const closes: string[] = [];
-  await page.route(`**/api/v1/meetings/${id}/close`, (route) => {
-    closes.push(route.request().headers()['x-csrf-token']!);
+  await page.route(`**/api/v1/meetings/${id}/end`, (route) => {
+    closes.push(`${route.request().headers()['x-csrf-token']!}:${route.request().postData()}`);
     return route.fulfill({ json: meeting('closing') });
   });
 
@@ -117,7 +117,7 @@ test('End meeting shows after a reload while no stream is open, for the meeting 
   await end.click();
   await page.getByRole('dialog', { name: 'End this meeting?' }).getByRole('button', { name: 'End meeting' }).click();
   await expect(end).toHaveCount(0);
-  expect(closes).toEqual(['csrf-e2e-token']);
+  expect(closes).toEqual(['csrf-e2e-token:{}']);
   expect(server.starts).toHaveLength(0);
 });
 

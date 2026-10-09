@@ -258,6 +258,26 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
 const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 
 /**
+ * Adds late audio to a meeting that is not open. A finalized one moves to the next boundary revision first, with its
+ * ranges copied and its processing reset, so the recording cut, speaker refine, notes and memory are rebuilt from the
+ * larger meeting; a closing one has not run its first finalize yet. Either way it is finalized (again).
+ */
+const joinSealed = (row: MeetingRow, source: SourceRange) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    if (OPEN_STATES.includes(row.state)) return yield* Effect.asVoid(claimSource(row, source));
+    const revision = row.state === 'closing' ? row.boundary_revision : row.boundary_revision + 1;
+    if (revision !== row.boundary_revision) {
+      yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)
+        SELECT workspace_id, meeting_id, ${revision}, epoch_id, track, sample_start, sample_end FROM meeting_ranges
+        WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision}`;
+      yield* sql`UPDATE meetings SET boundary_revision = ${revision}, processing = ${JSON.stringify(PENDING_PROCESSING)}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${row.id}`;
+    }
+    yield* claimSource({ ...row, boundary_revision: revision }, source);
+    yield* scheduleFinalize(row, null);
+  });
+
+/**
  * Audio of an End from before the pause: an unowned final of an epoch End fenced that starts inside the fence window, from
  * the ended meeting's first sample in that epoch up to the fence. It joins the meeting that now owns the nearest earlier
  * range of that epoch at or after the window's start, whatever row that is after a merge or split, and a sealed meeting is
@@ -276,10 +296,7 @@ const endFenced = (workspace_id: WorkspaceId, segment: TranscriptSegment) =>
       FROM capture_epochs e WHERE e.workspace_id = ${workspace_id} AND e.id = ${source.epoch_id}
         AND e.end_fence_from_sample <= ${source.sample_start} AND e.end_fence_sample > ${source.sample_start}`;
     const owner = fenced?.meeting_id ? yield* selectMeeting(workspace_id, fenced.meeting_id, true) : null;
-    if (owner?._tag === 'Some') {
-      yield* claimSource(owner.value, source);
-      if (!OPEN_STATES.includes(owner.value.state)) yield* scheduleFinalize(owner.value, null);
-    }
+    if (owner?._tag === 'Some') yield* joinSealed(owner.value, source);
     return fenced !== undefined;
   });
 
@@ -300,9 +317,8 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
       WHERE n.state IN ('closing', 'closed') AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}`;
     const closed = next === undefined ? null : yield* selectMeeting(workspace_id, next.meeting_id, true);
     if (closed?._tag !== 'Some') return false;
-    yield* claimSource(closed.value, source);
+    yield* joinSealed(closed.value, source);
     yield* sql`UPDATE meetings SET started_at = LEAST(started_at, ${dbTime(sampleMs(epoch, source.sample_start))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
-    if (closed.value.state === 'closed') yield* scheduleFinalize(closed.value, null);
     return true;
   });
 
@@ -547,9 +563,9 @@ export const meetingRanges = (access: AccessScope, meeting_id: MeetingId) =>
   });
 
 /**
- * Validates the epoch an End fence names and returns the fence window to store, or null when no fence applies. The caller must own
- * the epoch's listener, which is the meeting's listener or one of its capture group; an epoch the server does not know, or
- * that ended before the meeting started, gets no fence. The window starts at the meeting's first sample in the epoch (the
+ * Authorizes End and returns the window to store on the epoch the page named, or null when none applies (no sample sent, an epoch
+ * the server does not know, or one that ended before the meeting started). The caller must own a listener of the meeting's
+ * listener or capture group, and the named epoch's listener. The window starts at the meeting's first sample in the epoch (the
  * sample of the meeting's start when it owns none there yet) and ends at the page's sample clamped to real time since the
  * server recorded the epoch's start (a known limit for archive-only epochs, which register late).
  */
@@ -557,14 +573,15 @@ const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeet
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const elapsed = sql`GREATEST(0, TIMESTAMPDIFF(MICROSECOND, e.started_at, UTC_TIMESTAMP(6))) + ${END_FENCE_CLOCK_SLACK_SECONDS * 1_000_000}`;
-    const [epoch] = yield* sql<{ in_meeting: number | null; owned: number; overlaps: number; from_sample: string; sample: string }>`SELECT
+    const { epoch_id, fence_sample } = fence;
+    const [epoch] = epoch_id === undefined || fence_sample === undefined ? [] : yield* sql<{ in_meeting: number | null; owned: number; overlaps: number; from_sample: string; sample: string }>`SELECT
         (e.listener_id = m.listener_id OR l.capture_group_id = m.capture_group_id) AS in_meeting, l.principal_id = ${access.principal.id} AS owned,
         (e.ended_at IS NULL OR e.ended_at >= m.started_at) AS overlaps,
         COALESCE((SELECT MIN(r.sample_start) FROM meeting_ranges r WHERE r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision AND r.epoch_id = e.id),
           e.sample_start + FLOOR(GREATEST(0, TIMESTAMPDIFF(MICROSECOND, e.started_at, m.started_at)) * e.sample_rate / 1000000)) AS from_sample,
-        LEAST(${fence.fence_sample}, e.sample_start + FLOOR((${elapsed}) * e.sample_rate / 1000000)) AS sample
+        LEAST(${fence_sample}, e.sample_start + FLOOR((${elapsed}) * e.sample_rate / 1000000)) AS sample
       FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id JOIN meetings m ON m.id = ${meeting.id}
-      WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${fence.epoch_id}`;
+      WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${epoch_id}`;
     const forbidden = new Forbidden({ message: 'Only the principal that owns the listener can end its meeting' });
     if (epoch === undefined) {
       const [own] = yield* sql`SELECT 1 FROM listeners WHERE workspace_id = ${access.workspace_id} AND principal_id = ${access.principal.id}
@@ -573,15 +590,15 @@ const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeet
     }
     if (Number(epoch.in_meeting) !== 1) return yield* new NotFound({ message: 'Capture epoch not found' });
     if (Number(epoch.owned) !== 1) return yield* forbidden;
-    return Number(epoch.overlaps) === 1 ? { from: Number(epoch.from_sample), sample: Number(epoch.sample) } : null;
+    return epoch_id !== undefined && Number(epoch.overlaps) === 1 ? { epoch_id, from: Number(epoch.from_sample), sample: Number(epoch.sample) } : null;
   });
 
 /**
  * Seals the open meeting at the listener's capture watermark for an explicit close. With a fence (End meeting) it also stores
- * the window `stored` on the epoch the page named, and a window on every other epoch the meeting owns ranges in: from the
- * meeting's first sample there to the end of the epoch (bounded by real time while it still runs).
+ * a window on every epoch the meeting owns ranges in, from the meeting's first sample there to the end of the epoch (bounded by
+ * real time while it still runs), and then the page's own window `stored` on the epoch it named.
  */
-const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | undefined, stored: { readonly from: number; readonly sample: number } | null) =>
+const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | undefined, stored: { readonly epoch_id: string; readonly from: number; readonly sample: number } | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [live] = yield* sql<{ epoch_id: SourceRange['epoch_id']; track: number; live_sample_end: string }>`SELECT e.id AS epoch_id, r.track, e.live_sample_end
@@ -601,8 +618,8 @@ const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | 
     yield* sql`UPDATE capture_epochs e JOIN (SELECT r.epoch_id, MIN(r.sample_start) AS from_sample FROM meeting_ranges r
         WHERE r.workspace_id = ${access.workspace_id} AND r.meeting_id = ${row.id} AND r.boundary_revision = ${row.boundary_revision} GROUP BY r.epoch_id) c ON c.epoch_id = e.id
       SET e.end_fence_from_sample = c.from_sample, e.end_fence_sample = GREATEST(${spent}, e.live_sample_end, COALESCE(e.archive_sample_end, 0))
-      WHERE e.workspace_id = ${access.workspace_id} AND e.id <> ${fence.epoch_id}`;
-    if (stored !== null) yield* sql`UPDATE capture_epochs SET end_fence_from_sample = ${stored.from}, end_fence_sample = ${stored.sample} WHERE workspace_id = ${access.workspace_id} AND id = ${fence.epoch_id}`;
+      WHERE e.workspace_id = ${access.workspace_id}`;
+    if (stored !== null) yield* sql`UPDATE capture_epochs SET end_fence_from_sample = ${stored.from}, end_fence_sample = ${stored.sample} WHERE workspace_id = ${access.workspace_id} AND id = ${stored.epoch_id}`;
   });
 
 /**
