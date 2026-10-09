@@ -324,13 +324,13 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
         yield* send({ _tag: 'ack', sequence: frame.sequence, sample_end: end });
       });
 
-    /** Client `stop`: persist the watermark, flush finals, then end the epoch. */
+    /** Client `stop`: persist the watermark and end the epoch where capture stopped, then flush finals, so trailing finals meet an ended epoch. */
     const stop = (reason: (typeof StopMessage.Type)['reason']) =>
       Effect.gen(function* () {
         yield* flush;
+        yield* stopEpoch(access, listener.id, epoch_id, start.lease_generation, reason);
         yield* asr.close('stopped');
         yield* speech.onEnd(reason === 'pause' ? 'pause' : 'disconnect');
-        yield* stopEpoch(access, listener.id, epoch_id, start.lease_generation, reason);
       });
 
     return { frame, stop, fenced: Deferred.await(fenced) };

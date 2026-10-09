@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { beforeAll, expect, layer } from '@effect/vitest';
-import type { AccessScope, CaptureEpochId, MeetingId } from '@sanctum/contracts';
+import { type AccessScope, type CaptureEpochId, MeetingId } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer } from 'effect';
+import { closeMeeting } from '../src/meetings.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
 import { finalSegments } from '../src/transcripts.ts';
@@ -26,6 +27,7 @@ import {
 import { serverLayer } from '../src/main.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { meetingsOf, rangesOf } from './support/capture.ts';
 
 const RATE = 16_000;
 
@@ -83,6 +85,25 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       yield* socket.take('transcript');
       yield* pause(200);
       expect(socket.messages.filter(message => message._tag === 'transcript')).toEqual([]);
+    }),
+  );
+
+  it.scoped('End meeting before the stop arrives: finals the pause flushes join the closed meeting, never a new one', () =>
+    Effect.gen(function* () {
+      const { access, speech, epoch_id, socket } = yield* setup;
+      for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+      const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 4_800);
+      stream!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'we should review the budget numbers today', confidence: 0.9, speaker: '0' });
+      const [meeting] = yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 1);
+      // The close lands first and seals at the lagging watermark; audio and the pause still arrive after it.
+      yield* closeMeeting({ ...access, scopes: ['context:write'] }, MeetingId.make(meeting!.id));
+      for (let sequence = 3; sequence < 6; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+      stream!.pending.push({ start_s: 0.4, end_s: 0.6, is_final: true, text: 'Alice will fish the billing report', confidence: 0.9, speaker: '0' });
+      socket.send(JSON.stringify({ _tag: 'stop', reason: 'pause' }));
+      expect(yield* socket.closed).toMatchObject({ code: 1000, reason: 'stopped' });
+      expect((yield* finals(access, epoch_id)).at(-1)).toEqual([6_400, 9_600, 'Alice will fish the billing report', 'live']);
+      expect((yield* meetingsOf(access.workspace_id)).map(row => row.state)).toEqual(['closing']);
+      expect(yield* rangesOf(meeting!.id)).toEqual([{ epoch_id, sample_start: 0, sample_end: 9_600 }]);
     }),
   );
 

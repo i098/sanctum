@@ -252,6 +252,32 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
     return yield* promoteIfEstablished(advanced, decision, sampleMs(epoch, segment.source.sample_end));
   });
 
+/**
+ * Trailing audio of an End: a final on an ended epoch after the latest range there of a meeting someone closed (finals the
+ * stop flushed, batch reconciliation of the last chunks). It joins that meeting until its close is finalized and is dropped
+ * after; it never opens a meeting. Returns whether the segment was such audio.
+ * ponytail: speech after an API close that first reaches ASR once capture ended is treated the same; add a close-time fence if that matters.
+ */
+const endTrail = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const { source } = segment;
+    const [last] = yield* sql<{ meeting_id: MeetingId; by_hand: number }>`SELECT r.meeting_id, EXISTS (SELECT 1 FROM boundary_events b
+        WHERE b.meeting_id = r.meeting_id AND b.operation = 'close' AND b.actor_principal_id IS NOT NULL) AS by_hand
+      FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+      JOIN capture_epochs e ON e.workspace_id = r.workspace_id AND e.id = r.epoch_id
+      WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track}
+        AND r.sample_end <= ${source.sample_start} AND e.ended_at IS NOT NULL
+      ORDER BY r.sample_end DESC LIMIT 1`;
+    if (last === undefined || Number(last.by_hand) !== 1) return false;
+    const closed = yield* selectMeeting(workspace_id, last.meeting_id, true);
+    if (closed._tag === 'Some' && closed.value.state === 'closing') {
+      const end = yield* claimSource(closed.value, source);
+      yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
+    }
+    return true;
+  });
+
 const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
   Effect.gen(function* () {
     const gap = open === null ? null : gapMs(open, epoch, segment.source.sample_start);
@@ -264,9 +290,12 @@ const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSeg
   });
 
 const placeSegment = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
-  Effect.flatMap(ownerOf(key.workspace_id, segment.source), owner =>
-    owner._tag === 'Some' ? extendOwned(open, owner.value, epoch, segment) : placeUnowned(key, epoch, segment, open),
-  );
+  Effect.gen(function* () {
+    const owner = yield* ownerOf(key.workspace_id, segment.source);
+    if (owner._tag === 'Some') return yield* extendOwned(open, owner.value, epoch, segment);
+    if (open === null && (yield* endTrail(key.workspace_id, epoch, segment))) return open;
+    return yield* placeUnowned(key, epoch, segment, open);
+  });
 
 /**
  * Media hook: final transcript segments for one listener, in any order; replays of owned sources are no-ops.

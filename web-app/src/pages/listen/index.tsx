@@ -170,8 +170,8 @@ function useOpenMeeting(): [string | null, () => void] {
 }
 
 /**
- * End meeting: capture stops first, so the close seals at everything the server accepted up to the pause (final
- * segments still in flight land inside the sealed range), then the meeting closes. `helper` says so until capture starts again, else names the listener state.
+ * End meeting: capture stops first, so the close seals at everything the server accepted up to the pause; finals still in
+ * flight join the closed meeting and never open a new one. Then the meeting closes. `helper` says so until capture starts again, else names the listener state.
  */
 function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: (message: string | null) => void) {
   const [meeting, forget] = useOpenMeeting();

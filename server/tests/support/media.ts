@@ -56,6 +56,8 @@ interface FakeStream {
   finished: boolean;
   /** The connection's scope closed (socket and keep-alive released). */
   released: boolean;
+  /** Finals the provider still holds; `finish` delivers them before the stream ends. */
+  readonly pending: Array<AsrResult>;
   readonly emit: (result: AsrResult) => void;
   /** One provider answer for a whole audio span, as a Whisper chunk. */
   readonly emitBatch: (batch: AsrBatch) => void;
@@ -88,6 +90,7 @@ export function fakeSpeech() {
           backlog: 0,
           finished: false,
           released: false,
+          pending: [],
           emit: result => void mailbox.unsafeOffer({ start_s: result.start_s, end_s: result.end_s, results: [result] }),
           emitBatch: batch => void mailbox.unsafeOffer(batch),
           drop: () => void mailbox.unsafeDone(Exit.fail(new Unavailable({ message: 'fake provider dropped', retryable: true }))),
@@ -103,6 +106,7 @@ export function fakeSpeech() {
           results: Mailbox.toStream(mailbox),
           finish: Effect.sync(() => {
             stream.finished = true;
+            for (const result of stream.pending) stream.emit(result);
             mailbox.unsafeDone(Exit.void);
           }),
         };

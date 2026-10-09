@@ -324,6 +324,50 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  /** End meeting while capture is live: the close seals at the lagging watermark (40 s), then the pause it sent ends the epoch at 50 s. */
+  const endWhileLive = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const { owner, listener, epoch } = yield* setup;
+    yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
+    const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+    yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
+    expect(yield* closeMeeting(owner, id)).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });
+    yield* sql`UPDATE capture_epochs SET live_sample_end = ${50 * RATE}, ended_at = UTC_TIMESTAMP(6), end_reason = 'pause' WHERE id = ${epoch}`;
+    yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE id = ${listener.listener_id}`;
+    return { owner, listener, epoch, id };
+  });
+
+  it.effect('End is final: speech from before the pause joins the closed meeting, or no meeting once finalized', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, listener, epoch, id } = yield* endWhileLive;
+        yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
+        expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:46Z' });
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 46 * RATE }]);
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
+        yield* hear(listener, epoch, 47, 49, 'and copy the finance lead on the report');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closed']);
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 46 * RATE }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('after End, speech once listening resumes opens a new meeting', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { listener } = yield* endWhileLive;
+        const resumed = yield* seedEpoch(listener, '2026-09-28 16:01:00.000000');
+        yield* hear(listener, resumed, 0, 5, "good morning everyone, let's go over the hiring plan");
+        const meetings = yield* meetingsOf(listener.workspace_id);
+        expect(meetings.map(row => row.state)).toEqual(['closing', 'provisional']);
+        expect(yield* rangesOf(meetings[1]!.id)).toEqual([{ epoch_id: resumed, sample_start: 0, sample_end: 5 * RATE }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('idle sweep closes true silence and a settled pause, never while ASR or upload lags', () =>
     withDatabase(
       Effect.gen(function* () {
