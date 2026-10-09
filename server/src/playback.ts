@@ -12,30 +12,11 @@ import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt, DbSha256 } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { asJobResult, currentRanges, MeetingJobPayload, type MeetingJob, OPEN_STATES, selectMeeting, type TimedRange } from './meeting-store.ts';
-import { ObjectStore } from './providers/object-store.ts';
+import { ObjectStore, wavFile } from './providers/object-store.ts';
 
 const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeInt, sha256: DbSha256, object_key: Schema.String });
 
 const RecordingRow = Schema.Struct({ object_key: Schema.String, pieces: DbJson(Schema.Array(SourceRange)), sample_rate: SampleRate });
-
-/** Mono PCM16 WAV file holding `parts` at `rate`. */
-const wavFile = (rate: number, parts: ReadonlyArray<Uint8Array>) => {
-  const bytes = parts.reduce((total, part) => total + part.byteLength, 0);
-  const header = Buffer.alloc(44);
-  header.write('RIFFxxxxWAVEfmt ', 0, 'ascii');
-  header.writeUInt32LE(36 + bytes, 4);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(rate, 24);
-  header.writeUInt32LE(rate * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write('data', 36, 'ascii');
-  header.writeUInt32LE(bytes, 40);
-  // A plain copy: Buffer.slice/subarray share memory, which callers of the object store do not expect.
-  return new Uint8Array(Buffer.concat([header, ...parts]));
-};
 
 /** Parts of `ranges` not covered by `pieces`: audio the meeting owns but no saved chunk supplied. */
 const gapsOf = (ranges: ReadonlyArray<SourceRange>, pieces: ReadonlyArray<SourceRange>): Array<SourceRange> =>

@@ -29,7 +29,7 @@ interface FakeServer {
   failUploads: boolean;
 }
 
-/** `degraded` makes the fake media server report live ASR trouble right after it accepts a stream, as production does without a Deepgram key. */
+/** `degraded` makes the fake media server report live ASR trouble right after it accepts a stream, as production does without a Workers AI token. */
 export async function fakeServer(page: Page, failUploads = false, degraded?: 'provider_unavailable' | 'asr_backlog'): Promise<FakeServer> {
   const server: FakeServer = { uploads: [], starts: [], frames: 0, failUploads };
   await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);

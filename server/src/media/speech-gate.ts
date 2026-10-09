@@ -190,7 +190,7 @@ export const speechController = (options: {
         if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples)) yield* completeTurn;
         turn = turn ? { ...turn, texts: [...turn.texts, segment.text], sample_end } : { epoch_id, texts: [segment.text], sample_end };
         if (turnTimer) yield* Fiber.interrupt(turnTimer);
-        turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.endOfTurnMs));
+        turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
       });
 
     return {

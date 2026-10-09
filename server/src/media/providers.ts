@@ -1,13 +1,19 @@
 /** Provider layers the API and worker entrypoints need for media: private R2 archive storage, speech-to-text and requested speech. */
 import { Config, Effect, Layer } from 'effect';
-import { serverConfig } from '../config.ts';
+import { engineeringDefaults, serverConfig } from '../config.ts';
 import { cartesiaSynthesizer, SpeechSynthesizer } from '../providers/cartesia.ts';
-import { DeepgramLive } from '../providers/deepgram.ts';
 import { R2ObjectStoreLive } from '../providers/r2.ts';
+import { SpeechToText, whisperSpeechToText } from '../providers/whisper.ts';
 
-export type { SpeechToText } from '../providers/deepgram.ts';
+export type { SpeechToText } from '../providers/whisper.ts';
 
-export const MediaProvidersLive = Layer.merge(R2ObjectStoreLive, DeepgramLive);
+/** Workers AI Whisper, live and batch; without its settings every call fails visibly. */
+export const SpeechToTextLive = Layer.effect(
+  SpeechToText,
+  Effect.map(Config.map(serverConfig, config => config.workersAi), workersAi => whisperSpeechToText({ workersAi, liveAsr: engineeringDefaults.liveAsr })),
+);
+
+export const MediaProvidersLive = Layer.merge(R2ObjectStoreLive, SpeechToTextLive);
 
 /** Cartesia text-to-speech; without an API key every synthesis fails visibly and nothing is spoken. */
 export const SpeechSynthesizerLive = Layer.effect(

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const SECRETS = [
   'MYSQL_PASSWORD',
   'R2_SECRET_ACCESS_KEY',
-  'DEEPGRAM_API_KEY',
+  'WORKERS_AI_API_TOKEN',
   'CARTESIA_API_KEY',
   'WORKERS_AI_API_TOKEN',
   'ANTHROPIC_API_KEY',

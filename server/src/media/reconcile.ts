@@ -10,7 +10,7 @@ import { SqlClient, SqlSchema } from '@effect/sql';
 import { CaptureEpochId, EpochEndReason, JobFailure, ListenerId, ProviderConnectionId, SampleIndex, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { ObjectStore } from '../providers/object-store.ts';
-import { SpeechToText } from '../providers/deepgram.ts';
+import { SpeechToText } from '../providers/whisper.ts';
 import { DbSafeInt } from '../db.ts';
 import { onCaptureEnded } from '../meetings.ts';
 import { listCommittedChunks } from '../recordings.ts';

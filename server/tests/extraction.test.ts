@@ -36,7 +36,7 @@ const segment = (startSeconds: number, endSeconds: number, text: string, speaker
     status,
     revision: 1,
     origin: 'live',
-    provider: 'deepgram',
+    provider: 'workers-ai',
     model: 'nova-3',
     provider_connection_id: null,
     speaker_label: speaker,

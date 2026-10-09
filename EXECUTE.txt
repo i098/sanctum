@@ -158,8 +158,8 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Background work | Node.js worker using Effect + MySQL job/lease table | Restart-safe accepted work, coalescing and fenced completion; no additional queue service. |
 | Fast LLM | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, through its OpenAI-compatible chat completions endpoint | Requested speech and structured notes/memory on the account Sanctum already runs on; smoke-compared on synthetic fixtures (see `docs/release-evidence.md`), not a measured winner. |
 | Planner and research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations, wrapped at the provider boundary. |
-| Transcription | Deepgram Nova-3 streaming API | Server-side provider connection, verified PCM encoding, source alignment and batch gap recovery. |
-| Speaker attribution | Deepgram baseline; pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades | Correctable speaker tracks; names require enrollment or user confirmation. |
+| Transcription | Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) over REST | Server-side requests per short live chunk and per archived chunk, verified PCM encoding, source alignment and batch gap recovery. |
+| Speaker attribution | pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades; Whisper returns no speaker labels | Correctable speaker tracks; names require enrollment or user confirmation. |
 | Speech output | Cartesia Sonic-3 streaming API | Requested output only, with response IDs and interruptible browser playback. |
 | Integrations | Pipedream Connect + Proxy/component APIs from TypeScript | One account-scoped client; search, inspect and request gateways. |
 | Human authentication | `openid-client` for OIDC | Issuer selected by configuration: WorkOS AuthKit hosted, embedded Better Auth self-hosted (docs/DECISIONS.md); use verified identity plus explicit Sanctum membership. |
@@ -266,11 +266,11 @@ MySQL is the only structured production database.
 
 ### Live media and speech ownership
 
-Implement concrete TypeScript adapters for Deepgram, Cartesia and optional pyannote cloud APIs.
+Implement concrete TypeScript adapters for Workers AI Whisper, Cartesia and optional pyannote cloud APIs.
 A socket connection ID identifies a transport attempt, never a meeting or speaker identity.
-For each provider connection, persist the source epoch/track/sample anchor and connection offset used to align returned timestamps.
-Reconnect starts a new provider offset mapping, while the application capture epoch can remain unchanged.
-Use provider keepalive/rotation rules from current documentation and release provider sockets when capture stops.
+For each provider request or connection, persist the source epoch/track/sample anchor and offset used to align returned timestamps.
+Whisper has no connection: each live chunk is one request anchored at its first sample, and its segment times are relative to the chunk.
+A provider socket (Cartesia, pyannote) starts a new offset mapping on reconnect, while the application capture epoch can remain unchanged; apply provider keepalive/rotation rules from current documentation and release the socket when capture stops.
 Business work enters the durable job ledger; closing a socket never discards accepted work.
 
 Replacing the earlier media framework requires explicit tests for end-of-turn detection, output interruption, echo protection, bounded playback queues and reconnect.
@@ -524,7 +524,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning. | Grounding, omissions, contradictions, names, and date resolution. |
 | Planner | Explicit role setting; retain explicitly configured Claude provider until Qwen passes action-selection replay. | No unauthorized action or material regression in labeled fixtures. |
 | Research executor | Use Anthropic-hosted search with correct tool continuation handling initially. | A provider URL swap cannot replace hosted web search or `pause_turn`. |
-| Speech transcription | Deepgram initially, with explicit model/version. | Word timing and recall on actual room/laptop audio. |
+| Speech transcription | Workers AI Whisper, with explicit model/version; live audio in short chunks. | Word timing and recall on actual room/laptop audio. |
 | TTS | Use Cartesia initially. | All output must pass the request-only speech gate. |
 
 Make provider/model selection explicit by role; do not select a provider merely because its API key happens to exist.
@@ -536,7 +536,7 @@ Add bounded retries for transport/rate-limit failures; do not retry malformed fa
 ### Speaker attribution
 
 Implement structured speaker tracks before adding another diarization provider.
-Benchmark existing Deepgram streaming diarization against pyannote Live-1.
+Benchmark pyannote Live-1 on real room audio before enabling it; Whisper supplies no diarization.
 Use Precision-3 for a later correction pass over complete recordings if its measured improvement justifies the additional call.
 Keep ASR and diarization sample-time alignment explicit, including provider-stream offsets.
 Record supported streaming/batch diarization versions, idle timeout, maximum stream duration and keepalive behavior from each provider during implementation.
@@ -932,7 +932,7 @@ Python paths in these historical source URLs describe the reference system only.
 - [Node.js TypeScript execution](https://nodejs.org/docs/latest-v24.x/api/typescript.html)
 - [Effect v3 HTTP contracts](https://effect.website/docs/v3/api/platform/HttpApi)
 - [Effect MySQL adapter](https://effect.website/docs/v3/api/sql-mysql2/MysqlClient)
-- [Deepgram streaming WebSockets](https://developers.deepgram.com/docs/lower-level-websockets)
+- [Workers AI Whisper large v3 turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/)
 - [OIDC client](https://github.com/panva/openid-client)
 - [Pipedream component execution](https://pipedream.com/docs/connect/components)
 - [MySQL 8.4 FULLTEXT](https://dev.mysql.com/doc/refman/8.4/en/fulltext-search.html)
@@ -941,7 +941,6 @@ Python paths in these historical source URLs describe the reference system only.
 - [R2 signed access](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
 - [Workers AI OpenAI-compatible endpoints](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)
 - [Workers AI JSON mode](https://developers.cloudflare.com/workers-ai/features/json-mode/) and the [Qwen 3.8 27B model schema](https://developers.cloudflare.com/workers-ai/models/qwen3.8-27b/)
-- [Deepgram diarization versions](https://developers.deepgram.com/docs/diarization)
 - [pyannote Live-1 protocol and limits](https://docs.pyannote.ai/tutorials/streaming-real-time)
 - [pyannote Precision-3 release](https://www.pyannote.ai/changelog/precision-3)
 - [Official TypeScript MCP SDK](https://ts.sdk.modelcontextprotocol.io/)

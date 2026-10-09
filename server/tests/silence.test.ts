@@ -27,7 +27,7 @@ vi.mock('../src/planner.ts', () => ({ planActions: vi.fn() }));
 const LISTENER = randomUUID() as ListenerId;
 const EPOCH = randomUUID() as CaptureEpochId;
 const RATE = 16_000;
-const { endOfTurnMs, windowMs } = engineeringDefaults.speech;
+const { endOfTurnMs, turnWaitMs, windowMs } = engineeringDefaults.speech;
 
 /** Final (or partial) transcript segment spanning `[startMs, endMs)` of the epoch. */
 const heard = (text: string, startMs: number, endMs: number, status: 'final' | 'partial' = 'final') =>
@@ -83,7 +83,7 @@ describe('speech gate', () => {
       yield* session.onSegment(heard('We could ask Sanctum about it later.', 3_100, 5_000));
       yield* session.onSegment(heard('Sanctum', 6_000, 6_400, 'partial'));
       yield* session.onSegment(heard('Sanctum', 6_000, 6_500));
-      yield* settle(endOfTurnMs * 3);
+      yield* settle(turnWaitMs * 2);
       yield* session.onEnd('pause');
       yield* session.onEnd('disconnect');
       expect(session.sent).toEqual([]);
@@ -91,15 +91,16 @@ describe('speech gate', () => {
       expect(synthesized).toEqual([]);
     }));
 
-  it.effect('speaks a direct request once its turn completes, and only then', () =>
+  it.effect('speaks a direct request split across live chunks once its turn completes, and only then', () =>
     Effect.gen(function* () {
       const session = yield* listen(() => Stream.make('The next item ', 'is hiring. Then budget.'));
       yield* session.onSegment(heard('Sanctum, what is', 10_000, 10_800));
-      yield* settle(endOfTurnMs / 2);
+      // The rest of the request is in the next live chunk, whose finals arrive one chunk later.
+      yield* settle(engineeringDefaults.liveAsr.maxMs);
       yield* session.onSegment(heard('next on the agenda?', 11_000, 11_900));
-      yield* settle(endOfTurnMs / 2);
+      yield* settle(turnWaitMs / 2);
       expect(session.sent).toEqual([]); // turn still open
-      yield* settle(endOfTurnMs);
+      yield* settle(turnWaitMs);
       expect(session.requests).toEqual(['what is next on the agenda?']);
       const chunks = session.chunks();
       expect(chunks).toHaveLength(4);
@@ -113,18 +114,18 @@ describe('speech gate', () => {
     Effect.gen(function* () {
       const session = yield* listen(() => Stream.make('Sanctum can send the notes to Alex.'));
       yield* session.onSegment(heard('Sanctum, who gets the notes?', 20_000, 21_000));
-      yield* settle(endOfTurnMs);
+      yield* settle(turnWaitMs);
       expect(session.chunks()).toHaveLength(2);
       // The room microphone picks up the reply.
       yield* session.onSegment(heard('sanctum can send the notes', 21_500, 22_500, 'partial'));
       yield* session.onSegment(heard('Sanctum can send the notes to Alex', 21_500, 23_000));
-      yield* settle(endOfTurnMs * 2);
+      yield* settle(turnWaitMs * 2);
       expect(session.requests).toHaveLength(1);
       expect(session.sent.filter(message => message._tag === 'speech_cancel')).toEqual([]);
       // Once the echo tail has passed, the same words from a person are a real request.
       clock.now += 60_000;
       yield* session.onSegment(heard('Sanctum can send the notes to Alex', 90_000, 91_000));
-      yield* settle(endOfTurnMs);
+      yield* settle(turnWaitMs);
       expect(session.requests).toEqual(['who gets the notes?', 'can send the notes to Alex']);
     }));
 
@@ -132,7 +133,7 @@ describe('speech gate', () => {
     Effect.gen(function* () {
       const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
       yield* session.onSegment(heard('Sanctum, summarize the meeting', 30_000, 31_000));
-      yield* settle(endOfTurnMs + 1_500);
+      yield* settle(turnWaitMs + 1_500);
       const before = session.chunks().length;
       expect(before).toBeGreaterThan(0);
       const { generation, request_id } = session.chunks()[0]!;
@@ -147,7 +148,7 @@ describe('speech gate', () => {
     Effect.gen(function* () {
       const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
       yield* session.onSegment(heard('Sanctum, summarize the meeting', 35_000, 36_000));
-      yield* settle(endOfTurnMs + 1_500);
+      yield* settle(turnWaitMs + 1_500);
       const before = session.chunks().length;
       // A slow provider re-sends the request range as a final.
       yield* session.onSegment(heard('Sanctum, summarize the meeting please', 35_000, 36_000));
@@ -161,7 +162,7 @@ describe('speech gate', () => {
     Effect.gen(function* () {
       const session = yield* listen(slowly('One.', 'Two.', 'Three.', 'Four.'));
       yield* session.onSegment(heard('Sanctum, read the action items', 40_000, 41_000));
-      yield* settle(endOfTurnMs + 1_500);
+      yield* settle(turnWaitMs + 1_500);
       const first = session.chunks()[0]!;
       clock.now += 1;
       yield* session.onSegment(heard('Sanctum, stop and tell me the time', 42_000, 43_000));
@@ -179,7 +180,7 @@ describe('speech gate', () => {
     Effect.gen(function* () {
       const session = yield* listen(slowly('One.', 'Two.', 'Three.'));
       yield* session.onSegment(heard('Sanctum, list everything', 50_000, 51_000));
-      yield* settle(endOfTurnMs + 1_500);
+      yield* settle(turnWaitMs + 1_500);
       const emitted = session.chunks().length;
       clock.now += windowMs + 1;
       yield* settle(5_000);
@@ -192,7 +193,7 @@ describe('speech gate', () => {
       const gate = makeSpeechGate(() => clock.now);
       const first = yield* listen(slowly('One.', 'Two.', 'Three.'), gate);
       yield* first.onSegment(heard('Sanctum, walk me through the plan', 60_000, 61_000));
-      yield* settle(endOfTurnMs + 1_500);
+      yield* settle(turnWaitMs + 1_500);
       const { request_id, generation } = first.chunks()[0]!;
       const before = first.chunks().length;
       yield* first.onEnd('disconnect');

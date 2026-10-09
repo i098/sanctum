@@ -19,7 +19,7 @@ import { serverLayer } from '../../src/main.ts';
 import { closeMeeting, finalizeMeeting } from '../../src/meetings.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 import { assembleRecording } from '../../src/playback.ts';
-import { DeepgramLive } from '../../src/providers/deepgram.ts';
+import { SpeechToTextLive } from '../../src/media/providers.ts';
 import { claimed, commitChunk, hear, meetingsOf, seedEpoch, seedListener } from './capture.ts';
 import { createDatabaseOn } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
@@ -91,7 +91,7 @@ try {
     authenticate: request =>
       request.headers.authorization === `Bearer ${token}` ? Effect.succeed<AccessScope>(owner) : Effect.fail(new Unauthenticated({ message: 'no credentials' })),
   });
-  const layer = serverLayer({ apiPort: 0, mysql }, authenticator, { media: Layer.merge(DeepgramLive, store.layer) });
+  const layer = serverLayer({ apiPort: 0, mysql }, authenticator, { media: Layer.merge(SpeechToTextLive, store.layer) });
   const address = Context.get(await Effect.runPromise(Scope.extend(Layer.build(layer), scope)), HttpServer.HttpServer).address;
   if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
   await new Promise<void>(resolve => objects.listen(0, '127.0.0.1', resolve));

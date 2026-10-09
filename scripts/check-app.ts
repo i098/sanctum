@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { validateManifest } from '../benchmarks/result-format.ts';
 
-const CREDENTIAL = /^(DEEPGRAM|CARTESIA|WORKERS_AI|ANTHROPIC|PYANNOTE|PIPEDREAM|R2|AWS)_/;
+const CREDENTIAL = /^(CARTESIA|WORKERS_AI|ANTHROPIC|PYANNOTE|PIPEDREAM|R2|AWS)_/;
 
 export function childEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const kept = Object.entries(source).filter(([name]) => !CREDENTIAL.test(name));

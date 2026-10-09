@@ -3,8 +3,8 @@ import { containerEnv } from '../src/settings.ts';
 
 describe('container environment', () => {
   it('forwards a provider key the Worker has, and omits one it lacks', () => {
-    expect(containerEnv({ DEEPGRAM_API_KEY: 'deepgram-key', MYSQL_HOST: 'db' })).toEqual({ DEEPGRAM_API_KEY: 'deepgram-key', MYSQL_HOST: 'db' });
-    expect(containerEnv({ MYSQL_HOST: 'db' })).not.toHaveProperty('DEEPGRAM_API_KEY');
+    expect(containerEnv({ WORKERS_AI_API_TOKEN: 'workers-ai-token', MYSQL_HOST: 'db' })).toEqual({ WORKERS_AI_API_TOKEN: 'workers-ai-token', MYSQL_HOST: 'db' });
+    expect(containerEnv({ MYSQL_HOST: 'db' })).not.toHaveProperty('WORKERS_AI_API_TOKEN');
   });
 
   it('forwards the hosted seat limit to the container', () => {
