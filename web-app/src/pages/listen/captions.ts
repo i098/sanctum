@@ -38,8 +38,8 @@ interface SpeechWindow {
   webkitSpeechRecognition?: RecognitionConstructor;
 }
 
-/** Errors after which the browser's recognition cannot work in this capture session (Dia and other Chromium builds without Google's speech service report `network`). */
-const UNAVAILABLE = ['network', 'service-not-allowed', 'not-allowed'];
+/** Errors that stop captions for this capture session, and what the page says: Dia and other Chromium builds without Google's speech service report `network`. */
+const STOPPED: Partial<Record<string, CaptionState>> = { network: 'unavailable', 'service-not-allowed': 'unavailable', 'not-allowed': 'unavailable', 'language-not-supported': 'language' };
 
 /** The browser's recognition, if it has one (Firefox has none). TypeScript's DOM types lack it; Chrome ships it prefixed. */
 export function browserRecognition(): RecognitionConstructor | undefined {
@@ -76,10 +76,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   const wordEnds = (text: string): number[] => [...segmenter.segment(text)].filter(part => part.isWordLike).map(part => part.index + part.segment.length);
   const unseen = (text: string): string => (skip === 0 ? text : text.slice(wordEnds(text)[skip - 1] ?? text.length)).trim();
 
-  let stopped = false;
   const stop = (state: CaptionState = 'off'): void => {
-    if (stopped) return;
-    stopped = true;
     recognition.onend = null;
     recognition.abort();
     rail.clear();
@@ -107,7 +104,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
     // The browser ends the session after these and it restarts.
     if (event.error === 'no-speech' || event.error === 'aborted') return;
     console.warn('Browser captions stopped:', event.error);
-    stop(UNAVAILABLE.includes(event.error) ? 'unavailable' : event.error === 'language-not-supported' ? 'language' : 'off');
+    stop(STOPPED[event.error] ?? 'off');
   };
   recognition.onend = () => {
     interim = '';
@@ -133,6 +130,5 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   return () => {
     unsubscribe();
     stop();
-    onState('off');
   };
 }
