@@ -7,7 +7,7 @@
  * that failed. Removals apply first, so a failure leaves the person without Sanctum access, not with it.
  */
 import { SqlClient } from '@effect/sql';
-import type { WorkspaceId } from '@sanctum/contracts';
+import type { PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Data, Effect, Option } from 'effect';
 import { identityPrincipal } from './auth.ts';
 import { claimSeat, createHumanPrincipal, linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
@@ -53,16 +53,24 @@ export const applyMember = (issuer: string, org_id: string, user: IssuerUser, ro
     const known = yield* identityPrincipal({ issuer, subject: user.id });
     if (Option.isNone(known) && roles === null) return;
     const principal_id = Option.isSome(known) ? known.value : yield* createHumanPrincipal({ issuer, subject: user.id, name: user.name });
-    let role = roles === null ? null : roleFromSlugs(roles.split(',').map(slug => slug.trim()));
-    if (keepOwner && role !== null && role !== 'owner') {
-      const sql = yield* SqlClient.SqlClient;
-      const [owner] = yield* sql`SELECT 1 FROM workspace_members WHERE workspace_id = ${workspace.value} AND principal_id = ${principal_id} AND role = 'owner' AND revoked_at IS NULL`;
-      if (owner !== undefined) {
-        yield* sql`UPDATE auth_member SET role = 'owner' WHERE organizationId = ${org_id} AND userId = ${user.id}`;
-        role = 'owner';
-      }
-    }
+    const role = yield* effectiveRole(workspace.value, org_id, principal_id, user.id, roles, keepOwner);
     yield* setMembership(issuer, workspace.value, principal_id, role);
+  });
+
+/**
+ * The Sanctum role for an organization role list (null: removed). With `keepOwner`, a person who
+ * already owns the workspace stays owner, and the organization role is set to owner too so both records agree.
+ */
+const effectiveRole = (workspace_id: WorkspaceId, org_id: string, principal_id: PrincipalId, user_id: string, roles: string | null, keepOwner: boolean) =>
+  Effect.gen(function* () {
+    if (roles === null) return null;
+    const role = roleFromSlugs(roles.split(',').map(slug => slug.trim()));
+    if (!keepOwner || role === 'owner') return role;
+    const sql = yield* SqlClient.SqlClient;
+    const [owner] = yield* sql`SELECT 1 FROM workspace_members WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND role = 'owner' AND revoked_at IS NULL`;
+    if (owner === undefined) return role;
+    yield* sql`UPDATE auth_member SET role = 'owner' WHERE organizationId = ${org_id} AND userId = ${user_id}`;
+    return 'owner' as const;
   });
 
 /** `beforeAcceptInvitation`: a full linked workspace refuses, so Better Auth adds no member that Sanctum would refuse. */

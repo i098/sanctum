@@ -31,16 +31,19 @@ function must<T>(result: { readonly data: T | null; readonly error: { readonly m
   return result.data;
 }
 
+/** A signed-in person whose workspace organization does not list them: no team yet (free slug), or a team they are not in (slug taken). */
+async function readOutsider(organizationId: string): Promise<View> {
+  const free = await auth.organization.checkSlug({ slug: organizationId });
+  if (free.error?.code === 'ORGANIZATION_SLUG_ALREADY_TAKEN') return { kind: 'not_member' };
+  if (must(free).status) return { kind: 'no_team' };
+  throw new Error('The team could not be read');
+}
+
 /** The workspace's organization (its id is the workspace id), made active so MCP tokens this browser authorizes carry it as `org_id`. */
 async function readTeam(organizationId: string): Promise<View> {
   const session = await auth.getSession();
   if (!session.data) return { kind: 'signed_out' };
-  if (!must(await auth.organization.list()).some(organization => organization.id === organizationId)) {
-    const free = await auth.organization.checkSlug({ slug: organizationId });
-    if (free.data?.status) return { kind: 'no_team' };
-    if (free.error?.code === 'ORGANIZATION_SLUG_ALREADY_TAKEN') return { kind: 'not_member' };
-    throw new Error(free.error?.message ?? 'The team could not be read');
-  }
+  if (!must(await auth.organization.list()).some(organization => organization.id === organizationId)) return readOutsider(organizationId);
   await auth.organization.setActive({ organizationId });
   const full = must(await auth.organization.getFullOrganization({ query: { organizationId } }));
   return { kind: 'team', team: { me: session.data.user.id, members: full.members, invitations: full.invitations.filter(invitation => invitation.status === 'pending') } };
