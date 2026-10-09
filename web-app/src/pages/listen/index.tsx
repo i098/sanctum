@@ -1,6 +1,7 @@
 import { createClient, type Meeting } from '@sanctum/sdk';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
+import { readSignIn, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { browserRecognition, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
@@ -14,6 +15,9 @@ type Overlay = 'review' | 'agents' | 'settings';
 
 /** Same-origin v1 client: calls carry the browser session like every other request from this page. */
 const client = createClient({ baseUrl: window.location.origin });
+
+/** Read once per page load: `/auth/callback` lands here with `?signin=<code>` when sign-in ends without a session. */
+const notice = takeSignInNotice(window.location, window.history);
 
 const HELPER: Record<ListenerState, string> = {
   stopped: 'Choose Listen to start the microphone.',
@@ -186,7 +190,11 @@ export function ListenPage() {
   const engine = getCaptureEngine();
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [overlay, setOverlay] = useState<Overlay | null>(null);
+  const [overlay, setOverlay] = useState<Overlay | null>(notice ? 'settings' : null);
+  const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
+  const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
+  // A capture issue may mean the session ended, so each new issue reads the session again.
+  useEffect(refreshSignIn, [refreshSignIn, snapshot.issue]);
   const [failure, setFailure] = useState<string | null>(null);
   const [captions, setCaptions] = useState(false);
   useEffect(() => startWaveform(canvas.current!, engine.levels, () => engine.getSnapshot().listener), [engine]);
@@ -205,14 +213,16 @@ export function ListenPage() {
       </header>
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
-        <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
+        {signIn.status === 'signed_out'
+          ? <a className="listen-helper" href={SIGN_IN_URL}>Sign in to listen</a>
+          : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
         {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
-      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} />
+      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} />
     </main>
   );
 }

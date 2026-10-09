@@ -13,6 +13,7 @@ export default defineConfig({
     proxy: {
       // `ws` forwards the live-ingest WebSocket upgrade under /api/v1/listeners.
       '/api': { target: api, ws: true },
+      '/auth': api,
       '/mcp': api,
       '/healthz': api,
       '/readyz': api,
