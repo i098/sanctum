@@ -7,7 +7,7 @@
  */
 import { HttpApiBuilder, HttpServerRequest, HttpServerResponse } from '@effect/platform';
 import { SqlClient, SqlSchema } from '@effect/sql';
-import { Forbidden, Unauthenticated, Unavailable, WorkspaceId } from '@sanctum/contracts';
+import { Forbidden, type NotFound, Unauthenticated, Unavailable, WorkspaceId } from '@sanctum/contracts';
 import { ConfigError, Context, Data, Effect, Layer, Option, Redacted, Schema } from 'effect';
 import * as oidc from 'openid-client';
 import { Authenticator, identityPrincipal, linkIdentity, openSession, ownerUntilPurge, revokeSession, SESSION_COOKIE } from './auth.ts';
@@ -86,8 +86,9 @@ class SignInFailed extends Data.TaggedError('SignInFailed')<{
   readonly params?: ReadonlyArray<[string, string]>;
 }> {}
 
-const errorResponse = (error: Unauthenticated | Forbidden | Unavailable) =>
-  HttpServerResponse.unsafeJson(error, { status: { Unauthenticated: 401, Forbidden: 403, Unavailable: 503 }[error._tag] });
+/** The contract error envelope as a JSON response, for routes mounted outside `SanctumApi`. */
+export const errorResponse = (error: Unauthenticated | Forbidden | NotFound | Unavailable) =>
+  HttpServerResponse.unsafeJson(error, { status: { Unauthenticated: 401, Forbidden: 403, NotFound: 404, Unavailable: 503 }[error._tag] });
 
 /** Discovery runs once per process; a failed attempt is retried on the next request. */
 const relyingParty = (settings: SignIn) => {
@@ -116,7 +117,9 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
   Effect.gen(function* () {
     const { client, embeddedIssuer } = yield* SignInSettings;
     const organizations = yield* WorkosOrganizations;
-    const selfServe = Option.isSome(client) && Option.exists(organizations, settings => settings.selfServe);
+    // WorkOS organizations hold the hosted team; the website's Team overlay runs on them.
+    const workos = Option.isSome(client) && Option.isSome(organizations);
+    const selfServe = workos && Option.exists(organizations, settings => settings.selfServe);
     const authenticator = yield* Authenticator;
     const sql = yield* SqlClient.SqlClient;
     const party = Option.map(client, settings => ({ settings, configuration: relyingParty(settings) }));
@@ -217,7 +220,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
 
     yield* router.get(
       '/auth/config',
-      Effect.succeed(HttpServerResponse.unsafeJson({ sign_in: Option.isSome(client), embedded_issuer: embeddedIssuer, self_serve_workspaces: selfServe })),
+      Effect.succeed(HttpServerResponse.unsafeJson({ sign_in: Option.isSome(client), embedded_issuer: embeddedIssuer, self_serve_workspaces: selfServe, workos_organizations: workos })),
     );
 
     yield* router.get(

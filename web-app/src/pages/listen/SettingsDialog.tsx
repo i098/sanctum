@@ -1,10 +1,13 @@
 import type { SanctumClient } from '@sanctum/sdk';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
 import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
+
+// The WorkOS widgets load only when an owner or admin first opens Team (Dialog renders its children only while open).
+const TeamWidgets = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.TeamWidgets })));
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -130,11 +133,26 @@ function SignInRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInCh
   );
 }
 
+/** Hosted owners and admins open Team (the WorkOS widgets) from here; the dialog shows over Settings. */
+function WorkspaceRow({ signIn }: { signIn: SignInState }) {
+  const [team, setTeam] = useState(false);
+  if (signIn.status !== 'signed_in' || !signIn.workosTeam) return WORKSPACE[signIn.status];
+  return (
+    <>
+      <span>{WORKSPACE.signed_in}</span>
+      <span className="listen-signin-actions"><button type="button" onClick={() => setTeam(true)}>Team</button></span>
+      <Dialog title="Team" open={team} onClose={() => setTeam(false)}>
+        <Suspense><TeamWidgets /></Suspense>
+      </Dialog>
+    </>
+  );
+}
+
 /** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange }: SettingsProps) {
   const rows: ReadonlyArray<readonly [string, ReactNode]> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
-    ['Workspace', WORKSPACE[signIn.status]],
+    ['Workspace', <WorkspaceRow signIn={signIn} />],
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', MICROPHONE[permission]],
     ['Integrations', 'Unavailable: integrations are not connected yet'],

@@ -1,4 +1,7 @@
-import type { Page } from '@playwright/test';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { test, type Page } from '@playwright/test';
 import type { ActionUpdateMessage } from '@sanctum/contracts';
 import type { CaptureSnapshot } from '../src/lib/capture/view.ts';
 
@@ -131,6 +134,8 @@ export interface FakeSignIn {
   access: object | null;
   /** `self_serve_workspaces` in `/auth/config`. */
   selfServe?: boolean;
+  /** `workos_organizations` in `/auth/config`: WorkOS holds the team, so owners and admins get Team. */
+  workos?: boolean;
 }
 
 /** `FakeSignIn` is read on every request, so a spec may change it mid-test. */
@@ -152,10 +157,65 @@ export async function serveListening(page: Page, options: ListenOptions = {}): P
     route.fulfill({ contentType: 'text/javascript', body: FAKE_ENGINE }));
   await page.route('**/auth/config', route => options.configured === 'unavailable'
     ? route.fulfill({ status: 503, json: { message: 'upstream down' } })
-    : route.fulfill({ json: { sign_in: options.configured ?? false, embedded_issuer: null, self_serve_workspaces: options.selfServe ?? false } }));
+    : route.fulfill({ json: { sign_in: options.configured ?? false, embedded_issuer: null, self_serve_workspaces: options.selfServe ?? false, workos_organizations: options.workos ?? false } }));
   await page.route('**/api/v1/session', route => route.fulfill(options.access
     ? { json: options.access }
     : { status: 401, json: { _tag: 'Unauthenticated', code: 'unauthenticated', message: 'No credentials' } }));
+}
+
+const MEMBER = { emailVerified: true, profilePictureUrl: null, lastActivityAt: '2026-10-08T15:00:00.000Z', createdAt: '2026-10-01T09:00:00.000Z', isDirectoryManaged: false };
+const role = (slug: string, isDefault = false) => ({ id: `role_${slug}`, slug, name: slug[0]!.toUpperCase() + slug.slice(1), description: null, isDefault, createdAt: MEMBER.createdAt, updatedAt: MEMBER.createdAt });
+
+/**
+ * The WorkOS side of the hosted Team overlay: `POST /api/v1/workspace/widget-token` answers an
+ * unsigned token whose claims grant the user-management widget, and the widgets' GraphQL calls to
+ * `api.workos.com` get one owner, one member and one pending invitation. Nothing leaves the browser.
+ */
+export async function fakeWorkosWidgets(page: Page): Promise<void> {
+  const claims = { sub: 'user_ada', org_id: 'org_acme', permissions: ['widgets:users-table:manage'], exp: Math.floor(Date.now() / 1000) + 3600 };
+  const token = ['{"alg":"none"}', JSON.stringify(claims)].map(part => Buffer.from(part).toString('base64url')).join('.') + '.fake';
+  await page.route('**/api/v1/workspace/widget-token', route => route.fulfill({ json: { token } }));
+  const data: Record<string, unknown> = {
+    Me: { me: { id: 'user_ada', email: 'ada@example.test', firstName: 'Ada', lastName: 'Lovelace', ...MEMBER, mfaEnabled: false, mfaLastUsedAt: null, passwordSet: true, passwordLastUsedAt: null, updatedAt: MEMBER.createdAt, connectedAccounts: [] } },
+    ListRoles: { roles: { multipleRolesEnabled: false, roles: [role('owner'), role('admin'), role('member', true)] } },
+    ListOrganizationMemberships: {
+      organizationMemberships: {
+        data: [
+          { id: 'om_ada', email: 'ada@example.test', firstName: 'Ada', lastName: 'Lovelace', ...MEMBER, status: 'Active', actions: [], isCurrentUser: true, roles: [{ slug: 'owner', name: 'Owner' }] },
+          { id: 'om_grace', email: 'grace@example.test', firstName: 'Grace', lastName: 'Hopper', ...MEMBER, status: 'Active', actions: ['EditRole', 'RevokeMembership'], isCurrentUser: false, roles: [{ slug: 'member', name: 'Member' }] },
+          { id: 'om_alan', email: 'alan@example.test', firstName: null, lastName: null, ...MEMBER, lastActivityAt: null, status: 'Invited', actions: ['ResendInvite', 'RevokeInvite'], isCurrentUser: false, roles: [{ slug: 'member', name: 'Member' }] },
+        ],
+        listMetadata: { after: null, before: null },
+      },
+    },
+  };
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
+  await page.route('https://api.workos.com/**', route => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const operation = String(route.request().postDataJSON()?.operationName);
+    return route.fulfill({ headers: cors, json: operation in data ? { data: data[operation] } : { errors: [{ message: `no fixture for ${operation}` }] } });
+  });
+}
+
+/**
+ * Runs a server script (server/tests/support) for the spec's tests: started before them, stopped
+ * with SIGTERM after. The script prints its address and fixtures as one JSON line; the returned
+ * function reads it. Request logs share stdout and keep being read.
+ */
+export function realServer<T>(script: URL, ...args: Array<string>): () => T {
+  let child: ChildProcess;
+  let started: T;
+  test.beforeAll(async () => {
+    child = spawn(process.execPath, [fileURLToPath(script), ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const lines = createInterface({ input: child.stdout! });
+    started = JSON.parse(await new Promise<string>(resolve => lines.on('line', line => line.startsWith('{') && resolve(line))));
+  });
+  test.afterAll(async () => {
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    child.kill('SIGTERM');
+    await exited;
+  });
+  return () => started;
 }
 
 /** Opens the listening page on the fake engine and starts listening in silence. */

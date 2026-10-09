@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { openListening, serveListening, type FakeSignIn } from './listen-fake.ts';
+import { fakeWorkosWidgets, openListening, serveListening, type FakeSignIn } from './listen-fake.ts';
 
 const ACCESS = {
   workspace_id: '00000000-0000-4000-8000-000000000001',
@@ -18,7 +18,7 @@ async function openSettings(page: Page) {
 }
 
 const row = (settings: Locator, term: string) =>
-  settings.locator('.listen-settings div').filter({ has: settings.page().getByRole('term').filter({ hasText: term }) }).getByRole('definition');
+  settings.locator('.listen-settings > div').filter({ has: settings.page().getByRole('term').filter({ hasText: term }) }).getByRole('definition');
 
 test('not configured: no sign-in path is offered', async ({ page }) => {
   await openListening(page, { configured: false, access: null });
@@ -110,6 +110,63 @@ test('a login-link session without an issuer offers no sign out', async ({ page 
   const settings = await openSettings(page);
   await expect(row(settings, 'Sign-in')).toHaveText('Signed in as Ada Lovelace (owner)');
   await expect(settings.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+});
+
+test('WorkOS: an owner manages the team in the widgets over Settings, and closing Team keeps capture running', async ({ page }) => {
+  await fakeWorkosWidgets(page);
+  await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
+  const settings = await openSettings(page);
+  // The closed Team dialog sits in the row, so compare the rendered text (buttons render uppercase).
+  await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet\nTEAM', { useInnerText: true });
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  await expect(team.getByRole('region', { name: 'Members' })).toContainText('grace@example.test');
+  await expect(team.getByRole('region', { name: 'Your profile' })).toContainText('Ada Lovelace');
+
+  // The widgets' own dialogs open inside Team, where the modal page still takes input, and Escape closes only them.
+  await team.getByRole('button', { name: 'Invite user' }).click();
+  const invite = team.getByRole('dialog', { name: 'Invite user' });
+  await invite.getByLabel('Email').fill('alan@example.test');
+  await page.keyboard.press('Escape');
+  await expect(invite).toBeHidden();
+  await expect(team).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(team).toBeHidden();
+  await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
+  await expect(page.getByText('listening', { exact: true })).toBeVisible();
+});
+
+test('WorkOS on a phone: Team hides only the Last active column, and the members table fits the screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fakeWorkosWidgets(page);
+  await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const members = page.getByRole('dialog', { name: 'Team' }).getByRole('region', { name: 'Members' });
+  await expect(members).toContainText('grace@example.test');
+  await expect(members.getByRole('columnheader', { name: 'Last active' })).toBeHidden();
+  for (const name of ['User', 'Role']) await expect(members.getByRole('columnheader', { name })).toBeVisible();
+  await expect(members.getByRole('row').filter({ hasText: 'grace@example.test' }).getByRole('button', { name: 'User actions' })).toBeInViewport({ ratio: 1 });
+  // The table's scroll area has nothing to scroll sideways, and the table ends inside the screen.
+  const viewport = members.locator('.rt-ScrollAreaViewport');
+  expect(await viewport.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+  const table = (await members.locator('table').boundingBox())!;
+  expect(table.x + table.width).toBeLessThanOrEqual(390);
+});
+
+test('WorkOS: a member, or an owner without WorkOS organizations, gets no Team', async ({ page }) => {
+  const signIn: FakeSignIn = { configured: true, workos: true, access: { ...ACCESS, role: 'member' } };
+  await openListening(page, signIn);
+  let settings = await openSettings(page);
+  await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet');
+  await page.keyboard.press('Escape');
+  Object.assign(signIn, { workos: false, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
+  await page.reload();
+  settings = await openSettings(page);
+  await expect(row(settings, 'Sign-in')).toContainText('(owner)');
+  await expect(settings.getByRole('button', { name: 'Team' })).toHaveCount(0);
 });
 
 test('not a member: Settings opens with the issuer and subject for the operator', async ({ page }) => {

@@ -136,7 +136,8 @@
   margin-right: -8px;
 }
 
-.listen button {
+/* The WorkOS widgets in Team (`.radix-themes`) keep their own button styles. */
+.listen button:where(:not(.radix-themes *)) {
   padding: 4px 8px;
   border: 0;
   border-radius: 3px;
@@ -148,16 +149,16 @@
   cursor: pointer;
 }
 
-.listen button:hover,
-.listen button:focus-visible {
+.listen button:where(:not(.radix-themes *)):hover,
+.listen button:where(:not(.radix-themes *)):focus-visible {
   color: #e7ecf3;
 }
 
-.listen button:focus-visible {
+.listen button:where(:not(.radix-themes *)):focus-visible {
   outline: 1px solid #3d7dff;
 }
 
-.listen button:disabled {
+.listen button:where(:not(.radix-themes *)):disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -382,7 +383,7 @@
   font-weight: 500;
 }
 
-.listen-dialog button {
+.listen-dialog button:where(:not(.radix-themes *)) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10px;
   color: #a7adb8;
@@ -406,7 +407,8 @@
   color: #a7adb8;
 }
 
-.listen-settings div {
+/* Direct rows only: Team's dialog and widgets render inside the Workspace row. */
+.listen-settings > div {
   display: grid;
   grid-template-columns: 9rem 1fr;
   gap: 16px;
@@ -692,7 +694,7 @@
   }
 
   /* Settings: the term sits above its value, so values and sign-in controls get the full width. */
-  .listen-settings div {
+  .listen-settings > div {
     grid-template-columns: 1fr;
     gap: 4px;
   }

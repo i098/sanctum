@@ -1,0 +1,71 @@
+/* Hosted Team overlay: the WorkOS widgets (Radix Themes) inside the Sanctum dialog, on Sanctum's tokens. */
+.listen-team .radix-themes {
+  /* The widgets' root theme otherwise fills the viewport height and stretches the dialog. */
+  min-height: 0;
+  --accent-9: #3d7dff;
+  --accent-10: #5b8fff;
+  --color-background: #12161e;
+  --color-panel-solid: #171c26;
+}
+
+.listen-team h3 {
+  margin: 24px 0 8px;
+  color: #e7ecf3;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.listen-team section:first-of-type h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  /* Team takes the whole phone screen, so the members table and profile get its full width. */
+  .listen-dialog:has(> .listen-team) {
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    padding: 20px 16px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* Profile labels sit above their values, as Settings rows do on phones. */
+  .listen-team .rt-DataListItem {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .listen-team .rt-DataListLabel {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  /*
+   * The members table needs more than a phone's width, so its third column (Last active) goes and the
+   * fixed layout gives the User column the rest of the width, where long names and emails truncate.
+   * The widget gives columns no class of their own; listen-signin.spec.ts checks that the hidden
+   * header is Last active and that the table then fits 390 px.
+   */
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :nth-child(3) {
+    display: none;
+  }
+
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRootTable {
+    table-layout: fixed;
+  }
+
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :first-child {
+    width: auto;
+  }
+
+  /* The widget's 28 px actions column counts its padding, which the fixed layout keeps; the button needs both. */
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :last-child {
+    width: calc(28px + 2 * var(--table-cell-padding));
+  }
+}

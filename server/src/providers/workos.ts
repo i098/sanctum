@@ -1,6 +1,7 @@
 /**
  * Plain-fetch client for the WorkOS REST API calls the hosted organization glue needs
- * (org-sync.ts): organizations, organization memberships and the Events API.
+ * (org-sync.ts): organizations, organization memberships and the Events API, plus widget tokens
+ * for the website's Team overlay (widget-token.ts).
  * Providers never import application modules; org-sync.ts passes the key and timeout.
  */
 import { Data, Effect, Option, Redacted, Schema } from 'effect';
@@ -54,6 +55,8 @@ export interface WorkosClient {
   readonly listMemberships: (userId: string) => Effect.Effect<ReadonlyArray<OrganizationMembership>, WorkosFailure>;
   /** One page of followed events in creation order, after the given event id (from the oldest retained event when null). */
   readonly listEvents: (after: string | null) => Effect.Effect<ReadonlyArray<WorkosEvent>, WorkosFailure>;
+  /** A widget token (valid one hour) letting `user_id` manage the members of `organization_id` in the WorkOS widgets. */
+  readonly widgetToken: (input: { readonly user_id: string; readonly organization_id: string }) => Effect.Effect<string, WorkosFailure>;
 }
 
 export const makeWorkosClient = (options: WorkosOptions): WorkosClient => {
@@ -104,5 +107,10 @@ export const makeWorkosClient = (options: WorkosOptions): WorkosClient => {
       const query = new URLSearchParams({ events: [...MEMBERSHIP_EVENTS, 'organization.deleted', 'user.deleted'].join(','), order: 'asc', limit: String(PAGE_LIMIT), ...(after ? { after } : {}) });
       return Effect.map(call(page(WorkosEvent), 'GET', `/events?${query}`), listed => listed.data);
     },
+    widgetToken: (input: { readonly user_id: string; readonly organization_id: string }) =>
+      Effect.map(
+        call(Schema.Struct({ token: Schema.String }), 'POST', '/widgets/token', { ...input, scopes: ['widgets:users-table:manage'] }),
+        response => response.token,
+      ),
   };
 };
