@@ -27,7 +27,7 @@ export interface AsrStream {
   readonly send: (samples: Int16Array) => boolean;
   /** Bytes queued by `send` but not yet sent to the provider. */
   readonly backlogBytes: () => number;
-  /** Results in audio order; ends after `finish` once the provider answered everything, fails on a provider error. */
+  /** Results in audio order; ends after `finish` once the provider answered everything, fails on a provider error. An empty-text final marks audio the provider finished, so reconciliation skips it. */
   readonly results: Stream.Stream<AsrResult, Unavailable>;
   /** Sends the audio still buffered and ends `results` after its answer. */
   readonly finish: Effect.Effect<void>;
@@ -168,7 +168,10 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrResult>);
         if (Date.now() < pausedUntil) return skipped;
         return transcribe(sample_rate, samples).pipe(
-          Effect.map(results => results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift }))),
+          Effect.map(results => [
+            ...results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })),
+            { start_s: shift, end_s: shift + samples.length / sample_rate, is_final: true, text: '', confidence: null, speaker: null },
+          ]),
           Effect.catchIf(
             error => error.retry_after_ms !== undefined,
             error => {

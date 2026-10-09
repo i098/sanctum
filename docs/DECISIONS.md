@@ -100,6 +100,7 @@ Before every Whisper request, live and `transcript.reconcile`, the adapter finds
 A skipped live chunk emits nothing, and a skipped batch range stays an empty transcript window.
 Past the allocation, requests cost about $0.0005 per audio minute (about $0.72 a day for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
+A live chunk Whisper answered or the gate skipped records coverage for its whole span, so `transcript.reconcile` does not re-send the gaps between its segments; a chunk skipped by a 429 stays uncovered.
 
 ## Deployment decision — 2026-10-02
 
