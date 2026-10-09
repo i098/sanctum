@@ -121,13 +121,13 @@ function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { s
     <>
       <span className="listen-account">
         <span className="listen-avatar" aria-hidden="true">
-          {principal.display_name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
+          {principal.display_name.split('@')[0]!.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
         </span>
         <span className="listen-account-text">
           <span className="listen-account-name">
             {principal.display_name} <span className="listen-role">{role}</span>
           </span>
-          {principal.email && <span className="listen-account-email">{principal.email}</span>}
+          {principal.email && principal.email !== principal.display_name && <span className="listen-account-email">{principal.email}</span>}
         </span>
       </span>
       {signIn.issuer && (

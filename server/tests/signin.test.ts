@@ -31,6 +31,8 @@ interface Grant {
   readonly exp?: number;
   readonly name?: string;
   readonly email?: string;
+  readonly given_name?: string;
+  readonly family_name?: string;
   /** Replaces the PKCE challenge the issuer binds to the code. */
   readonly challenge?: string;
 }
@@ -69,7 +71,7 @@ const fixtureIssuer = (): FixtureIssuer => {
   const authorize = async (location: string, grant: Grant) => {
     const request = new URL(location).searchParams;
     expect(request.get('client_id')).toBe(CLIENT_ID);
-    const claims = { nonce: grant.nonce ?? request.get('nonce'), ...(grant.name ? { name: grant.name } : {}), ...(grant.email ? { email: grant.email } : {}) };
+    const claims = { nonce: grant.nonce ?? request.get('nonce'), ...(grant.name ? { name: grant.name } : {}), ...(grant.email ? { email: grant.email } : {}), ...(grant.given_name ? { given_name: grant.given_name } : {}), ...(grant.family_name ? { family_name: grant.family_name } : {}) };
     const idToken = await new SignJWT(claims)
       .setProtectedHeader({ alg: 'ES256', kid: 'fixture' })
       .setIssuer(grant.iss ?? ISSUER)
@@ -261,6 +263,22 @@ describe('OIDC sign-in', () => {
 
       const later = yield* Effect.promise(() => signIn(base, issuer, { sub: subject }));
       expect((yield* Effect.promise(() => sessionOf(later))).principal).toMatchObject({ display_name: 'Ada Lovelace', email: 'ada@example.test' });
+    }),
+  );
+
+  it.scoped('with an email and no name, the email replaces the seeded placeholder; given and family name beat it', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const { base, db } = yield* withServer(client);
+      const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const subject = yield* Effect.provide(identify(owner!), db);
+      const principalOf = (response: Response) => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(response, 'sanctum_session')}`).then(r => r.json() as Promise<AccessScope>).then(a => a.principal);
+
+      const emailOnly = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, email: 'cap@example.test' }).then(principalOf));
+      expect(emailOnly).toMatchObject({ display_name: 'cap@example.test', email: 'cap@example.test' });
+
+      const parts = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, email: 'cap@example.test', given_name: 'Cap', family_name: 'Tain' }).then(principalOf));
+      expect(parts).toMatchObject({ display_name: 'Cap Tain', email: 'cap@example.test' });
     }),
   );
 

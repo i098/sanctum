@@ -91,6 +91,16 @@ test('signed in: name, email, role label, keyboard focus, sign out', async ({ pa
   await expect(page.getByRole('link', { name: 'Sign in to listen' })).toBeVisible();
 });
 
+test('signed in with an email and no name: the email leads, once', async ({ page }) => {
+  const email = 'cap@example.test';
+  await openListening(page, { configured: true, access: { ...ACCESS, principal: { ...ACCESS.principal, display_name: email, email } } });
+  const settings = await openSettings(page);
+  await expect(row(settings, 'Sign-in').locator('.listen-account-name')).toHaveText(`${email} owner`);
+  await expect(row(settings, 'Sign-in').locator('.listen-account-email')).toHaveCount(0);
+  await expect(row(settings, 'Sign-in').locator('.listen-avatar')).toHaveText('C');
+  await expect(settings).not.toContainText('Owner');
+});
+
 test('a failed sign out says the session is still open', async ({ page }) => {
   await page.route('**/auth/logout', route => route.fulfill({ status: 503 }));
   await openListening(page, { configured: true, access: ACCESS });

@@ -177,13 +177,13 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });
         }
         const member = { workspace_id: memberships[0]!.workspace_id, principal_id: principal.value };
-        // Plan sign-in section 5.2: non-empty ID token `name` and `email` claims refresh the profile in the session's transaction.
+        // Plan sign-in section 5.2: non-empty ID token `name` (or given and family name) and `email` claims refresh the profile in the session's transaction; with no name the email replaces any seeded placeholder.
         const session = yield* sql.withTransaction(
           Effect.gen(function* () {
             const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
             const fresh = typeof name === 'string' && name.trim() !== '' ? name.trim().slice(0, 200) : null;
             const address = typeof email === 'string' && email.trim() !== '' && email.trim().length <= 320 ? email.trim() : null;
-            yield* sql`UPDATE principals SET display_name = COALESCE(${fresh}, display_name), email = COALESCE(${address}, email) WHERE id = ${principal.value}`;
+            yield* sql`UPDATE principals SET display_name = COALESCE(${fresh}, ${address}, display_name), email = COALESCE(${address}, email) WHERE id = ${principal.value}`;
             return opened;
           }),
         );
@@ -221,7 +221,9 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         const claims = tokens.claims();
         if (claims === undefined) return yield* failed('no ID token');
         const identity = { issuer: claims.iss, subject: claims.sub };
-        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, claims['name'], claims['email']);
+        const parts = [claims['given_name'], claims['family_name']].filter((part): part is string => typeof part === 'string' && part.trim() !== '');
+        const name = typeof claims['name'] === 'string' && claims['name'].trim() !== '' ? claims['name'] : parts.join(' ');
+        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, name, claims['email']);
       });
 
     const answer = (error: Unauthenticated | Forbidden | Unavailable) => Effect.succeed(errorResponse(error));
