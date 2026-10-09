@@ -165,8 +165,9 @@
 /*
  * Side live updates, ported from the earlier kiosk's .tlog/.feed rules: the room's transcript on
  * the left, agent work on the right, bottom-anchored in the band beside the status and above the
- * footer so neither ever covers the line or the status. Aging is a colour step, never an opacity
- * fade below the muted tier.
+ * footer so neither ever covers the line or the status. The band itself takes no pointer input, so
+ * the status between the rails (the Sign in to listen link) stays clickable; only the agent-work
+ * rail does. Aging is a colour step, never an opacity fade below the muted tier.
  */
 .listen-rails {
   position: absolute;
@@ -178,6 +179,7 @@
   justify-content: space-between;
   align-items: flex-end;
   gap: 24px;
+  pointer-events: none;
 }
 
 .listen-tlog,
@@ -192,12 +194,12 @@
 .listen-tlog {
   width: min(360px, calc(50% - 150px));
   font-size: 12.5px;
-  pointer-events: none;
 }
 
 .listen-feed {
   width: min(400px, calc(50% - 150px));
   font-size: 13.5px;
+  pointer-events: auto;
 }
 
 .listen-rails .eyebrow {
