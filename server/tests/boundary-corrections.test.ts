@@ -108,6 +108,25 @@ describe('split and merge', () => {
     ),
   );
 
+  it.effect('a nameless member splitting and merging leaves no email in the boundary records', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, epoch, first, second } = yield* twoMeetings;
+        const nameless: AccessScope = { ...owner, principal: { ...owner.principal, display_name: null, email: 'cap@example.test' } };
+        yield* splitMeeting(nameless, second, { expected_revision: 1, at: { epoch_id: epoch, sample: (130 + 6 * MIN) * RATE } });
+        yield* mergeMeetings(nameless, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 2 } });
+        const events = yield* sql<{ operation: string; decision: string }>`SELECT operation, CAST(decision AS CHAR) AS decision FROM boundary_events WHERE operation IN ('split', 'merge')`;
+        expect(events.map(event => event.operation).sort()).toEqual(['merge', 'merge', 'split', 'split']);
+        for (const event of events) {
+          expect(event.decision).toContain(`${event.operation === 'split' ? 'split' : 'merged'} by a member`);
+          expect(event.decision).not.toContain('cap@example.test');
+        }
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('merge preserves coverage, leaves the absorbed meeting without ranges and keeps action receipts untouched', () =>
     withDatabase(
       Effect.gen(function* () {

@@ -189,6 +189,7 @@ describe('automatic meeting lifecycle', () => {
         expect(event!.decision).toContain('closed by a member');
         expect(event!.decision).not.toContain('cap@example.test');
       }),
+      { migrated: true },
     ),
   );
 

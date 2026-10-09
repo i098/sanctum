@@ -282,6 +282,20 @@ describe('OIDC sign-in', () => {
     }),
   );
 
+  it.scoped('an email of 201 to 320 characters with no name still signs in and is reported in full', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const { base, db } = yield* withServer(client);
+      const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const subject = yield* Effect.provide(identify(owner!), db);
+      const long = `${'a'.repeat(300)}@example.test`;
+
+      const response = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, email: long }));
+      const access = yield* Effect.promise(() => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(response, 'sanctum_session')}`).then(r => r.json() as Promise<AccessScope>));
+      expect(access.principal).toEqual({ id: owner!.principal.id, kind: 'human', display_name: null, email: long });
+    }),
+  );
+
   it.scoped('sends only local paths back after sign-in', () =>
     Effect.gen(function* () {
       const { issuer, client } = configured();
