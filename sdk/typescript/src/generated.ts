@@ -132,11 +132,11 @@ export type CloseMeetingInput = {
 
 export type SplitMeetingInput = {
   readonly expected_revision: number;
-  readonly at: EndMeeting;
+  readonly at: SplitMeetingInputAt;
   readonly meeting_id: string;
 };
 
-export type EndMeeting = {
+export type SplitMeetingInputAt = {
   readonly epoch_id: string;
   readonly sample: number;
 };

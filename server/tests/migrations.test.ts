@@ -139,14 +139,17 @@ describe('migrate against MySQL 8.4', () => {
     ),
   );
 
-  it.effect('adds the End fence to capture epochs as one nullable column with no default, so existing epochs stay unfenced', () =>
+  it.effect('adds the End fence window to capture epochs as two nullable columns with no default, so existing epochs stay unfenced', () =>
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* migrate(migrations);
         const columns = yield* sql`SELECT TABLE_NAME AS tbl, COLUMN_NAME AS name, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS dflt FROM information_schema.COLUMNS
-          WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME LIKE 'end_fence%'`;
-        expect(columns).toEqual([{ tbl: 'capture_epochs', name: 'end_fence_sample', nullable: 'YES', dflt: null }]);
+          WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME LIKE 'end_fence%' ORDER BY COLUMN_NAME`;
+        expect(columns).toEqual([
+          { tbl: 'capture_epochs', name: 'end_fence_from_sample', nullable: 'YES', dflt: null },
+          { tbl: 'capture_epochs', name: 'end_fence_sample', nullable: 'YES', dflt: null },
+        ]);
       }),
     ),
   );

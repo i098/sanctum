@@ -1,4 +1,4 @@
-/** The audio End meeting fences: the capture epoch and the last sample captured before the pause (the contracts' `EndMeeting`). */
+/** The audio End meeting fences: the capture epoch and the last sample captured before the pause (sent as the contracts' `EndMeeting`). */
 export interface EndFence {
   readonly epoch_id: string;
   readonly sample: number;

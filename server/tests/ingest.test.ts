@@ -100,7 +100,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const [meeting] = yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 1);
       // The End lands first and seals at the lagging watermark; it fences the 6 frames the page captured, and the stop still arrives after it.
       tokens.set('ender', { ...access, scopes: ['context:write'] });
-      expect((yield* api(host, 'ender', 'POST', `/meetings/${meeting!.id}/end`, { epoch_id, sample: 9_600 })).body).toMatchObject({ state: 'closing' });
+      expect((yield* api(host, 'ender', 'POST', `/meetings/${meeting!.id}/end`, { epoch_id, fence_sample: 9_600 })).body).toMatchObject({ state: 'closing' });
       for (let sequence = 3; sequence < 6; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
       stream!.pending.push({ start_s: 0.4, end_s: 0.6, is_final: true, text: 'Alice will fish the billing report', confidence: 0.9, speaker: '0' });
       socket.send(JSON.stringify({ _tag: 'stop', reason: 'pause' }));

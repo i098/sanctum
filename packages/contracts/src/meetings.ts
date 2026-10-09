@@ -125,10 +125,12 @@ export type SplitResult = typeof SplitResult.Type;
  * End meeting, for the website only (kept out of OpenAPI, the SDKs and MCP): closes like `closeMeeting` and fences the audio
  * the page captured before it paused. Only the principal that owns the listener of `epoch_id` may send it; that listener is
  * the meeting's own or one of its capture group. The fence is stored on the epoch, clamped to real time since the server
- * recorded the epoch's start plus a short allowance. An unowned final of `epoch_id` that starts before it never opens a
- * meeting: it joins the meeting owning the nearest earlier range of that epoch, which is finalized again if it was sealed.
+ * recorded the epoch's start plus a short allowance. An unowned final of `epoch_id` that starts inside the window from the
+ * meeting's first sample in that epoch up to `fence_sample` never opens a meeting: it joins the meeting owning the nearest earlier
+ * range of that epoch within the window, which is finalized again if it was sealed. The field is not `sample` so that the
+ * payload shares no shape with a public schema, which would name that schema after this route in the SDKs.
  */
-export const EndMeeting = Schema.Struct({ epoch_id: CaptureEpochId, sample: SampleIndex });
+export const EndMeeting = Schema.Struct({ epoch_id: CaptureEpochId, fence_sample: SampleIndex });
 export type EndMeeting = typeof EndMeeting.Type;
 
 const RevisionedMeeting = Schema.Struct({ meeting_id: MeetingId, expected_revision: Revision });

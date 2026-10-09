@@ -62,7 +62,7 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
   await page.route(`**/api/v1/meetings/${id}`, route => (reads++, route.fulfill({ json: meeting() })));
   await page.route(`**/api/v1/meetings/${id}/end`, (route) => {
     const fence = route.request().postDataJSON() as Record<string, unknown>;
-    events.push(`end:${route.request().headers()['x-csrf-token']}:${fence['epoch_id'] === epochs.at(-1)}:${typeof fence['sample']}`);
+    events.push(`end:${route.request().headers()['x-csrf-token']}:${fence['epoch_id'] === epochs.at(-1)}:${typeof fence['fence_sample']}`);
     open = false;
     return route.fulfill({ json: meeting() });
   });

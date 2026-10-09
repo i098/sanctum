@@ -62,7 +62,7 @@ describe('split and merge', () => {
     withDatabase(
       Effect.gen(function* () {
         const { owner, device, listener, epoch, first, second } = yield* twoMeetings;
-        yield* closeMeeting(device, second, { epoch_id: epoch, sample: (200 + 6 * MIN) * RATE });
+        yield* closeMeeting(device, second, { epoch_id: epoch, fence_sample: (200 + 6 * MIN) * RATE });
         yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
         yield* hear(listener, epoch, 170 + 6 * MIN, 175 + 6 * MIN, 'next slide shows the mobile layout');
         expect(yield* rangesOf(second)).toEqual([]);
@@ -78,7 +78,7 @@ describe('split and merge', () => {
     withDatabase(
       Effect.gen(function* () {
         const { owner, device, listener, epoch, second } = yield* twoMeetings;
-        yield* closeMeeting(device, second, { epoch_id: epoch, sample: (200 + 6 * MIN) * RATE });
+        yield* closeMeeting(device, second, { epoch_id: epoch, fence_sample: (200 + 6 * MIN) * RATE });
         const { earlier, later } = yield* splitMeeting(owner, second, { expected_revision: 1, at: { epoch_id: epoch, sample: (130 + 6 * MIN) * RATE } });
         const before = yield* rangesOf(earlier.id);
         yield* hear(listener, epoch, 170 + 6 * MIN, 175 + 6 * MIN, 'next slide shows the mobile layout');

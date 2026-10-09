@@ -104,7 +104,7 @@ export async function post(path: string, body?: unknown): Promise<Response> {
 
 /** End meeting with the fence of the audio this page captured; a website-only route, so it is not in the SDK. */
 export async function endMeeting(meeting_id: string, fence: { readonly epoch_id: string; readonly sample: number }): Promise<void> {
-  await post(`/api/v1/meetings/${meeting_id}/end`, fence);
+  await post(`/api/v1/meetings/${meeting_id}/end`, { epoch_id: fence.epoch_id, fence_sample: fence.sample });
 }
 
 /** Revokes this browser's session on the server; the issuer's own session is left alone (plan 4.3). */

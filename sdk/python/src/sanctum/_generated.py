@@ -138,11 +138,11 @@ class CloseMeetingInput(TypedDict):
 
 class SplitMeetingInput(TypedDict):
     expected_revision: int
-    at: EndMeeting
+    at: SplitMeetingInputAt
     meeting_id: str
 
 
-class EndMeeting(TypedDict):
+class SplitMeetingInputAt(TypedDict):
     epoch_id: str
     sample: int
 
