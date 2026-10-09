@@ -33,6 +33,7 @@ class Principal(TypedDict):
     id: str
     kind: Literal["human", "agent", "device"]
     display_name: str
+    email: NotRequired[str]
 
 
 class AccessScopeMeetings(TypedDict):

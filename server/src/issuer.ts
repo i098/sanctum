@@ -175,8 +175,8 @@ export const createIssuer = (
       consentReferenceId: ({ session }) => (typeof session['activeOrganizationId'] === 'string' ? session['activeOrganizationId'] : undefined),
     },
     customAccessTokenClaims: ({ referenceId }) => (referenceId === undefined ? {} : { org_id: referenceId }),
-    // Sanctum reads the display name from the ID token at sign-in (plan section 5.2); the library emits no profile claims by itself.
-    customIdTokenClaims: ({ user, scopes }) => (scopes.includes('profile') ? { name: user.name } : {}),
+    // Sanctum reads the display name and email from the ID token at sign-in (plan section 5.2); the library emits no profile claims by itself.
+    customIdTokenClaims: ({ user, scopes }) => ({ ...(scopes.includes('profile') ? { name: user.name } : {}), ...(scopes.includes('email') ? { email: user.email } : {}) }),
     schema: {
       oauthClient: { modelName: 'auth_oauth_client' },
       oauthResource: { modelName: 'auth_oauth_resource' },

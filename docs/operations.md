@@ -110,6 +110,7 @@ Never edit an applied migration (its checksum is verified), and never roll back 
 With the `SANCTUM_OIDC_*` group set, `/auth/login` signs a person in through any OIDC issuer (authorization code with `state`, `nonce` and PKCE), and `POST /auth/logout` revokes the browser session. Without the group, `/auth/login` answers `503`.
 The verified issuer and subject select a principal through `principal_identities`; membership never comes from an email address.
 Each successful sign-in with a non-empty ID token `name` claim replaces the principal's display name, including one set with `--display-name`, in the transaction that opens the session (plan sign-in section 5.2).
+A non-empty `email` claim refreshes `principals.email` in the same transaction; only the principal's own session (`GET /api/v1/session`) and Settings show it. A token without the claim keeps the stored value.
 An unknown identity lands on `/?signin=not_member&issuer=…&subject=…`. On a fresh install, make that identity the first owner:
 
 ```bash

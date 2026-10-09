@@ -261,6 +261,9 @@
                         },
                         "display_name": {
                           "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
                         }
                       },
                       "additionalProperties": false
@@ -8286,6 +8289,9 @@
                         },
                         "display_name": {
                           "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
                         }
                       },
                       "additionalProperties": false
@@ -8661,6 +8667,9 @@
                                 ]
                               },
                               "display_name": {
+                                "type": "string"
+                              },
+                              "email": {
                                 "type": "string"
                               }
                             },

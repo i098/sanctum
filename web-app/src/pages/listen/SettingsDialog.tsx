@@ -106,10 +106,12 @@ function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolea
 }
 
 /**
- * Sign out shows only with a configured issuer: without one, the session is an operator-seeded row,
- * and revoking it would leave no way back in.
+ * The account the issuer reported: name, email and role, with initials in place of an avatar (no issuer sends a picture
+ * claim, and the CSP loads no remote images). Sign out shows only with a configured issuer: without one, the session is
+ * an operator-seeded row, and revoking it would leave no way back in.
  */
 function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { status: 'signed_in' }>; onSignInChange: () => void }) {
+  const { principal, role } = signIn.access;
   const [failure, setFailure] = useState<string | null>(null);
   const run = (action: () => Promise<void>, failed: string) => {
     setFailure(null);
@@ -117,7 +119,17 @@ function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { s
   };
   return (
     <>
-      <span>Signed in as {signIn.access.principal.display_name} ({signIn.access.role})</span>
+      <span className="listen-account">
+        <span className="listen-avatar" aria-hidden="true">
+          {principal.display_name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
+        </span>
+        <span className="listen-account-text">
+          <span className="listen-account-name">
+            {principal.display_name} <span className="listen-role">{role}</span>
+          </span>
+          {principal.email && <span className="listen-account-email">{principal.email}</span>}
+        </span>
+      </span>
       {signIn.issuer && (
         <span className="listen-signin-actions">
           <button type="button" onClick={() => run(connectSignIn, 'Connect sign-in could not start. Try again.')}>Connect sign-in</button>

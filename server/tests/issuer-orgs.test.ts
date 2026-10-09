@@ -153,7 +153,12 @@ describe('self-hosted organizations', () => {
         expect(accepted.status).toBe(200);
         const signedIn = await signIn(server, invitee.cookie);
         expect(signedIn.location).toBe('/');
-        expect((await session(server, signedIn.cookie)).body).toMatchObject({ workspace_id: team.workspace_id, role: 'member', principal: { display_name: 'Grace' } });
+        // The embedded issuer's ID token carries the account email, which the session then reports.
+        expect((await session(server, signedIn.cookie)).body).toMatchObject({
+          workspace_id: team.workspace_id,
+          role: 'member',
+          principal: { display_name: 'Grace', email: expect.stringMatching(/^grace-[0-9a-f]{8}@fixture\.test$/) },
+        });
 
         const memberId = accepted.body['member'].id as string;
         expect((await idp(server, '/organization/update-member-role', team.owner.cookie, { memberId, role: 'admin', organizationId: team.workspace_id })).status).toBe(200);

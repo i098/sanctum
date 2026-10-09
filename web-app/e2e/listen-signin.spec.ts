@@ -57,8 +57,8 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900
   });
 }
 
-test('signed in: name, role, keyboard focus, sign out', async ({ page, context }) => {
-  const signIn: FakeSignIn = { configured: true, access: ACCESS };
+test('signed in: name, email, role label, keyboard focus, sign out', async ({ page, context }) => {
+  const signIn: FakeSignIn = { configured: true, access: { ...ACCESS, principal: { ...ACCESS.principal, email: 'ada@example.test' } } };
   await context.addCookies([{ name: 'sanctum_csrf', value: 'csrf-fixture', url: 'http://localhost' }]);
   let csrf: string | null = null;
   await page.route('**/auth/logout', route => {
@@ -69,7 +69,11 @@ test('signed in: name, role, keyboard focus, sign out', async ({ page, context }
   await openListening(page, signIn);
   await expect(page.locator('.listen-helper')).toHaveText('Speak to Sanctum when you need it.');
   const settings = await openSettings(page);
-  await expect(row(settings, 'Sign-in')).toContainText('Signed in as Ada Lovelace (owner)');
+  // The issuer's name and email lead; the role is a small label beside the name, and initials stand in for an avatar.
+  await expect(row(settings, 'Sign-in').locator('.listen-account-name')).toHaveText('Ada Lovelace owner');
+  await expect(row(settings, 'Sign-in').locator('.listen-role')).toHaveText('owner');
+  await expect(row(settings, 'Sign-in').locator('.listen-account-email')).toHaveText('ada@example.test');
+  await expect(row(settings, 'Sign-in').locator('.listen-avatar')).toHaveText('AL');
 
   // Tab reaches each sign-in control and stays inside the dialog.
   const reached = new Set<string>();
@@ -93,7 +97,7 @@ test('a failed sign out says the session is still open', async ({ page }) => {
   const settings = await openSettings(page);
   await settings.getByRole('button', { name: 'Sign out' }).click();
   await expect(settings.getByRole('alert')).toHaveText('Sign out did not finish; you are still signed in.');
-  await expect(row(settings, 'Sign-in')).toContainText('Signed in as Ada Lovelace (owner)');
+  await expect(row(settings, 'Sign-in')).toContainText('Ada Lovelace owner');
 });
 
 test('Connect sign-in navigates to the issuer URL the server returns', async ({ page }) => {
@@ -145,10 +149,11 @@ test('self-hosted issuer: on a phone Team covers the whole viewport', async ({ p
   expect(box).toEqual({ x: 0, y: 0, width: 390, height: 780 });
 });
 
-test('an operator-seeded session without an issuer offers no sign out', async ({ page }) => {
+test('an operator-seeded session without an issuer or email offers no sign out', async ({ page }) => {
   await openListening(page, { configured: false, access: ACCESS });
   const settings = await openSettings(page);
-  await expect(row(settings, 'Sign-in')).toHaveText('Signed in as Ada Lovelace (owner)');
+  // Initials, name and role; no email line until the issuer reports one.
+  await expect(row(settings, 'Sign-in')).toHaveText('ALAda Lovelace owner');
   await expect(settings.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
 });
 
@@ -205,7 +210,7 @@ test('WorkOS: a member, or an owner without WorkOS organizations, gets no Team',
   Object.assign(signIn, { workos: false, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
   await page.reload();
   settings = await openSettings(page);
-  await expect(row(settings, 'Sign-in')).toContainText('(owner)');
+  await expect(row(settings, 'Sign-in').locator('.listen-role')).toHaveText('owner');
   await expect(settings.getByRole('button', { name: 'Team' })).toHaveCount(0);
 });
 

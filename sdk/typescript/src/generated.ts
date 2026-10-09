@@ -28,6 +28,7 @@ export type Principal = {
   readonly id: string;
   readonly kind: "human" | "agent" | "device";
   readonly display_name: string;
+  readonly email?: string;
 };
 
 export type AccessScopeMeetings = {

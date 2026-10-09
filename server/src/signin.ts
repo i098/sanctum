@@ -147,7 +147,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         return { url: url.href, flow };
       });
 
-    const login = (identity: { issuer: string; subject: string }, flow: Flow, name: unknown) =>
+    const login = (identity: { issuer: string; subject: string }, flow: Flow, name: unknown, email: unknown) =>
       Effect.gen(function* () {
         const notMember = (reason: string) => new SignInFailed({ code: 'not_member', reason, params: [['issuer', identity.issuer], ['subject', identity.subject]] });
         yield* reconcileSignIn(identity, typeof name === 'string' ? name : null, flow.create).pipe(
@@ -177,11 +177,13 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });
         }
         const member = { workspace_id: memberships[0]!.workspace_id, principal_id: principal.value };
-        // Plan sign-in section 5.2: the ID token `name` claim, when present and non-empty, refreshes the display name in the session's transaction.
+        // Plan sign-in section 5.2: non-empty ID token `name` and `email` claims refresh the profile in the session's transaction.
         const session = yield* sql.withTransaction(
           Effect.gen(function* () {
             const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
-            if (typeof name === 'string' && name.trim() !== '') yield* sql`UPDATE principals SET display_name = ${name.trim().slice(0, 200)} WHERE id = ${principal.value}`;
+            const fresh = typeof name === 'string' && name.trim() !== '' ? name.trim().slice(0, 200) : null;
+            const address = typeof email === 'string' && email.trim() !== '' && email.trim().length <= 320 ? email.trim() : null;
+            yield* sql`UPDATE principals SET display_name = COALESCE(${fresh}, display_name), email = COALESCE(${address}, email) WHERE id = ${principal.value}`;
             return opened;
           }),
         );
@@ -219,7 +221,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         const claims = tokens.claims();
         if (claims === undefined) return yield* failed('no ID token');
         const identity = { issuer: claims.iss, subject: claims.sub };
-        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, claims['name']);
+        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, claims['name'], claims['email']);
       });
 
     const answer = (error: Unauthenticated | Forbidden | Unavailable) => Effect.succeed(errorResponse(error));

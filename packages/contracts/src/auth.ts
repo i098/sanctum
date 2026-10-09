@@ -26,6 +26,8 @@ export const Principal = Schema.Struct({
   id: PrincipalId,
   kind: PrincipalKind,
   display_name: Schema.String,
+  /** The sign-in email the issuer last reported; only the caller's own access (`getSession`) carries it. */
+  email: Schema.optional(Schema.String),
 });
 export type Principal = typeof Principal.Type;
 

@@ -30,6 +30,7 @@ interface Grant {
   readonly aud?: string;
   readonly exp?: number;
   readonly name?: string;
+  readonly email?: string;
   /** Replaces the PKCE challenge the issuer binds to the code. */
   readonly challenge?: string;
 }
@@ -68,7 +69,8 @@ const fixtureIssuer = (): FixtureIssuer => {
   const authorize = async (location: string, grant: Grant) => {
     const request = new URL(location).searchParams;
     expect(request.get('client_id')).toBe(CLIENT_ID);
-    const idToken = await new SignJWT({ nonce: grant.nonce ?? request.get('nonce'), ...(grant.name ? { name: grant.name } : {}) })
+    const claims = { nonce: grant.nonce ?? request.get('nonce'), ...(grant.name ? { name: grant.name } : {}), ...(grant.email ? { email: grant.email } : {}) };
+    const idToken = await new SignJWT(claims)
       .setProtectedHeader({ alg: 'ES256', kid: 'fixture' })
       .setIssuer(grant.iss ?? ISSUER)
       .setSubject(grant.sub)
@@ -243,6 +245,22 @@ describe('OIDC sign-in', () => {
       expect(out.status).toBe(204);
       expect(out.headers.getSetCookie()).toEqual(expect.arrayContaining([expect.stringMatching(/^sanctum_session=; Max-Age=0/), expect.stringMatching(/^sanctum_csrf=; Max-Age=0/)]));
       expect((yield* Effect.promise(() => get(`${base}/api/v1/session`, session))).status).toBe(401);
+    }),
+  );
+
+  it.scoped('replaces a seeded placeholder with the issuer name and email, and keeps them when a later token omits the claims', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const { base, db } = yield* withServer(client);
+      const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const subject = yield* Effect.provide(identify(owner!), db);
+      const sessionOf = (response: Response) => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(response, 'sanctum_session')}`).then(r => r.json() as Promise<AccessScope>);
+
+      const first = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, name: '  Ada Lovelace ', email: 'ada@example.test' }));
+      expect((yield* Effect.promise(() => sessionOf(first))).principal).toEqual({ id: owner!.principal.id, kind: 'human', display_name: 'Ada Lovelace', email: 'ada@example.test' });
+
+      const later = yield* Effect.promise(() => signIn(base, issuer, { sub: subject }));
+      expect((yield* Effect.promise(() => sessionOf(later))).principal).toMatchObject({ display_name: 'Ada Lovelace', email: 'ada@example.test' });
     }),
   );
 
