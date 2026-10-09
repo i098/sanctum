@@ -37,8 +37,8 @@ export const engineeringDefaults = {
   /**
    * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks cut at the
    * quietest 20 ms between `minMs` and `maxMs` (measured in docs/DECISIONS.md), with at most
-   * `concurrency` requests in flight; results still arrive in audio order. Audio whose loudest
-   * 20 ms stays under `speechFloorRms` (PCM16 RMS, about -56 dBFS) is never sent. A 429 pauses
+   * `concurrency` requests in flight; results still arrive in audio order. Audio without 100 ms in
+   * a row at `speechFloorRms` (PCM16 RMS, about -56 dBFS) is never sent. A 429 pauses
    * requests for its Retry-After, else `rateLimitBackoffMs`, and the chunks meanwhile are skipped.
    */
   liveAsr: { minMs: 1_500, maxMs: 2_500, concurrency: 3, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },

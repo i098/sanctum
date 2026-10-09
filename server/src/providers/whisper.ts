@@ -4,9 +4,10 @@
  * and posts short chunks cut at the quietest moment (`engineeringDefaults.liveAsr`), so every
  * result is final and arrives once per chunk. Times are seconds from the first sample sent on
  * that stream or request; callers map them to epoch samples through the anchor they persisted
- * (provider_connections). `vad_filter` skips silence, where Whisper otherwise invents text such
- * as "Thank you.". API per developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo
- * (checked 2026-10-08).
+ * (provider_connections). Whisper invents text such as "Thank you." on silence and room noise, so
+ * audio without sustained sound is never sent, `vad_filter` drops silence inside a request, and a
+ * segment Whisper scores as likely no speech is dropped. API and segment fields per
+ * developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo (checked 2026-10-09).
  */
 import { Context, Effect, Option, Queue, Redacted, Schema, type Scope, Stream } from 'effect';
 import { MAX_FRAME_SAMPLES, Unavailable } from '@sanctum/contracts';
@@ -52,10 +53,20 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
 
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 
+/**
+ * Whisper's own `no_speech_threshold` default. The provider drops any segment whose `no_speech_prob`
+ * is above it, whatever its `avg_logprob`, because confident filler like "Thank you." on silence must not arrive.
+ */
+const NO_SPEECH_PROB = 0.6;
+/** Sound must stay at the speech floor this long; a click, tap or breath in a quiet chunk is shorter than one word. */
+const SUSTAINED_SOUND_MS = 100;
+
 const WhisperResponse = Schema.Struct({
   result: Schema.Struct({
     text: Schema.String,
-    segments: Schema.optional(Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String }))),
+    segments: Schema.optional(
+      Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String, no_speech_prob: Schema.optionalWith(Schema.Number, { default: () => 0 }) })),
+    ),
   }),
 });
 
@@ -82,10 +93,13 @@ function quietestCut(samples: Int16Array, min: number, max: number, frame: numbe
   return cut;
 }
 
-/** True when some 20 ms window reaches `floorRms`; audio below it is never sent, so silence costs no allocation. */
-function hasSound(samples: Int16Array, frame: number, floorRms: number): boolean {
+/** True when `SUSTAINED_SOUND_MS` of consecutive 20 ms windows reach `floorRms`; other audio is never sent, so silence costs no allocation. */
+function hasSustainedSound(samples: Int16Array, frame: number, floorRms: number): boolean {
+  const needed = SUSTAINED_SOUND_MS / 20;
+  let run = 0;
   for (let start = 0; start < samples.length; start += frame) {
-    if (meanSquare(samples, start, Math.min(start + frame, samples.length)) >= floorRms * floorRms) return true;
+    run = meanSquare(samples, start, Math.min(start + frame, samples.length)) >= floorRms * floorRms ? run + 1 : 0;
+    if (run >= needed) return true;
   }
   return false;
 }
@@ -120,7 +134,9 @@ const toResults = (result: typeof WhisperResponse.Type.result) => {
   return Effect.succeed(
     result.segments.flatMap((segment): Array<AsrResult> => {
       const text = segment.text.trim();
-      return text === '' ? [] : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
+      return text === '' || segment.no_speech_prob > NO_SPEECH_PROB
+        ? []
+        : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
     }),
   );
 };
@@ -156,7 +172,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
   const transcribe = (sample_rate: number, samples: Int16Array) =>
     Effect.gen(function* () {
       const { url, token } = yield* configured;
-      if (!hasSound(samples, Math.round((20 * sample_rate) / 1000), limits.speechFloorRms)) return [];
+      if (!hasSustainedSound(samples, Math.round((20 * sample_rate) / 1000), limits.speechFloorRms)) return [];
       return yield* requestSegments(url, token, wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]), limits);
     });
 
