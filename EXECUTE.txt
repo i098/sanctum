@@ -21,7 +21,7 @@ Implement actual behavior and tests, not only the illustrative interface.
 
 Read docs/DECISIONS.md before dependent work.
 Website capture, TypeScript + Effect, MySQL, R2, silent behavior, automatic meeting boundaries, and the visual direction are settled.
-Sign-in and MCP authorization are decided in docs/DECISIONS.md but not configured on any deployment; the recording policies have not yet been selected.
+Sign-in and MCP authorization are decided in docs/DECISIONS.md; the hosted site is configured for WorkOS AuthKit and the embedded self-hosted issuer is not built. The recording policies have not yet been selected.
 Do not silently invent the recording policies; complete independent implementation and fixtures while they remain open.
 No prior data import or legacy API compatibility is required unless separately requested.
 
