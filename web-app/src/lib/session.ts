@@ -93,9 +93,8 @@ export function takeSignInNotice(location: Location, history: History): SignInNo
   const [code, issuer, subject] = ['signin', 'issuer', 'subject'].map(name => params.get(name));
   if (code === null) return null;
   history.replaceState(history.state, '', location.pathname);
-  if (code === 'ok') return 'signed_in';
   if (code === 'not_member') return { code, issuer: issuer ?? '', subject: subject ?? '' };
-  return { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
+  return code === 'ok' ? 'signed_in' : { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
 }
 
 /** Same-origin POST with the CSRF header; a refusal throws the error envelope's message, else the status. */

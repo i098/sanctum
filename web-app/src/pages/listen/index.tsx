@@ -275,18 +275,6 @@ function Rails({ live, capturing, onCaptions }: RailsProps) {
   );
 }
 
-/** After SIGN_IN_URL's return, names who is signed in for a few seconds; nothing when the session reads otherwise. */
-function SignedInConfirmation({ signIn }: { signIn: SignInState }) {
-  const [shown, setShown] = useState(landing === 'signed_in');
-  useEffect(() => {
-    if (!shown) return;
-    const timer = setTimeout(() => setShown(false), 8000);
-    return () => clearTimeout(timer);
-  }, [shown]);
-  if (!shown || signIn.status !== 'signed_in') return null;
-  return <p className="listen-helper listen-welcome">Signed in as {signIn.access.principal.display_name}</p>;
-}
-
 /** Fullscreen listening view: waveform stage, sparse header, side live updates, quiet footer controls, secondary overlays. */
 export function ListenPage() {
   const engine = getCaptureEngine();
@@ -319,7 +307,7 @@ export function ListenPage() {
         {signIn.status === 'signed_out'
           ? <a href={SIGN_IN_URL} data-primary>Sign in to listen</a>
           : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
-        <SignedInConfirmation signIn={signIn} />
+        {landing === 'signed_in' && signIn.status === 'signed_in' && <p className="listen-helper listen-welcome">Signed in as {signIn.access.principal.display_name}</p>}
         {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />
