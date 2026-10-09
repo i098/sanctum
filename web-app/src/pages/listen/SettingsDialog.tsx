@@ -65,7 +65,8 @@ function CreateWorkspace() {
   const create = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const query = new URLSearchParams({ return_to: '/', workspace_name: String(form.get('name')).trim(), timezone: String(form.get('timezone')) });
+    // `/?signin=ok` is SIGN_IN_URL's return, so the first signed-in view confirms who signed in.
+    const query = new URLSearchParams({ return_to: '/?signin=ok', workspace_name: String(form.get('name')).trim(), timezone: String(form.get('timezone')) });
     // A navigation, not a form submission: the issuer redirect leaves the origin, and the CSP allows only `form-action 'self'`.
     window.location.assign(`/auth/login?${query}`);
   };
