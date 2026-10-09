@@ -23,7 +23,8 @@ export class MigrationError extends Data.TaggedError('MigrationError')<{ readonl
 type SchemaObject =
   | { readonly kind: 'table'; readonly table: string }
   | { readonly kind: 'index'; readonly table: string; readonly index: string }
-  | { readonly kind: 'column'; readonly table: string; readonly column: string };
+  | { readonly kind: 'column'; readonly table: string; readonly column: string }
+  | { readonly kind: 'backfill'; readonly table: string };
 
 export interface MigrationStep {
   readonly index: number;
@@ -45,6 +46,8 @@ const TABLE = /^CREATE TABLE `?(\w+)`?/i;
 const INDEX = /^CREATE (?:UNIQUE |FULLTEXT )?INDEX `?(\w+)`? ON `?(\w+)`?/i;
 /** One column per statement, so the step stays a single inspectable object. */
 const COLUMN = /^ALTER TABLE `?(\w+)`? ADD COLUMN `?(\w+)`?[^,]*$/i;
+/** Re-runnable data fix after a column add: it must be idempotent, so a crash needs no inspection. */
+const BACKFILL = /^UPDATE `?(\w+)`? /i;
 
 function schemaObject(statement: string, file: string): SchemaObject {
   const table = TABLE.exec(statement);
@@ -53,7 +56,9 @@ function schemaObject(statement: string, file: string): SchemaObject {
   if (index) return { kind: 'index', index: index[1]!, table: index[2]! };
   const column = COLUMN.exec(statement);
   if (column) return { kind: 'column', table: column[1]!, column: column[2]! };
-  throw new MigrationError({ message: `${file}: only CREATE TABLE, CREATE INDEX and single ADD COLUMN steps can be inspected after a crash: ${statement.slice(0, 60)}` });
+  const backfill = BACKFILL.exec(statement);
+  if (backfill) return { kind: 'backfill', table: backfill[1]! };
+  throw new MigrationError({ message: `${file}: only CREATE TABLE, CREATE INDEX, single ADD COLUMN and idempotent UPDATE steps are allowed: ${statement.slice(0, 60)}` });
 }
 
 /** Parses `NNN_name.sql`: `--` comment lines are dropped and statements end with `;` at end of line. */
@@ -119,6 +124,7 @@ const withMigrationLock = <A, E, R>(effect: Effect.Effect<A, E, R>, timeoutSecon
 
 const objectExists = (object: SchemaObject) =>
   Effect.gen(function*() {
+    if (object.kind === 'backfill') return false;
     const sql = yield* SqlClient.SqlClient;
     const [row] =
       object.kind === 'table'
@@ -135,7 +141,7 @@ export interface MigrationReport {
 }
 
 const stepLabel = (migration: Migration, step: MigrationStep) =>
-  `${migration.version}.${step.index} ${step.object.kind === 'table' ? step.object.table : `${step.object.table}.${step.object.kind === 'index' ? step.object.index : step.object.column}`}`;
+  `${migration.version}.${step.index} ${step.object.kind === 'table' ? step.object.table : step.object.kind === 'backfill' ? `${step.object.table} backfill` : `${step.object.table}.${step.object.kind === 'index' ? step.object.index : step.object.column}`}`;
 
 function runStep(migration: Migration, step: MigrationStep, resumed: boolean, recorded: Map<number, string>, report: { applied: string[]; adopted: string[] }) {
   return Effect.gen(function*() {

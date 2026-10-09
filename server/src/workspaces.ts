@@ -191,6 +191,11 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore> = job
         for (const table of PURGED_TABLES) yield* purge(table);
         yield* purge('jobs', sql`id <> ${job.id} AND kind <> 'workos.sync'`);
         yield* purge('workspace_members');
+        // The embedded issuer's organization of this workspace has its id; its tables hold no `workspace_id`.
+        for (const [table, column] of [['auth_invitation', 'organizationId'], ['auth_member', 'organizationId'], ['auth_organization', 'id']] as const) {
+          rows_deleted[table] = (yield* write(sql`DELETE FROM ${sql(table)} WHERE ${sql(column)} = ${workspace_id}`)).affectedRows;
+        }
+        yield* sql`UPDATE auth_session SET activeOrganizationId = NULL WHERE activeOrganizationId = ${workspace_id}`;
         // Principals left with no membership in any workspace (agents, devices, people only here) go with it.
         if (members.length > 0) {
           const orphaned = sql`IN ${sql.in(members.map(member => member.principal_id))} AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.principal_id = x.id)`;

@@ -14,6 +14,7 @@ import { Authenticator, identityPrincipal, linkIdentity, openSession, ownerUntil
 import { serverConfig } from './config.ts';
 import { reconcileSignIn, SelfServeRequest, WorkosOrganizations } from './org-sync.ts';
 import { DbSafeInt } from './db.ts';
+import { reconcileMember } from './issuer-orgs.ts';
 
 /** Relying-party settings: the `SANCTUM_OIDC_*` group, all set or not configured. */
 export interface SignIn {
@@ -153,6 +154,12 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           Effect.provideService(WorkosOrganizations, organizations),
           Effect.catchTag('WorkosFailure', error => new SignInFailed({ code: 'failed', reason: error.message })),
         );
+        // The embedded issuer's organizations decide membership; this repairs a change whose Sanctum side failed after Better Auth saved it.
+        if (embeddedIssuer !== null) {
+          yield* reconcileMember(identity.issuer, { id: identity.subject, name: typeof name === 'string' ? name : '' }).pipe(
+            Effect.catchTag('Forbidden', error => new SignInFailed({ code: 'failed', reason: error.message })),
+          );
+        }
         const principal = yield* identityPrincipal(identity);
         if (Option.isNone(principal)) return yield* notMember('unknown identity');
         const found = yield* SqlSchema.findAll({

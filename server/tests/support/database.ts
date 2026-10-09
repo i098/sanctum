@@ -44,6 +44,9 @@ export const freshDatabase = Effect.acquireRelease(Effect.promise(createTestData
 
 export const migrateDatabase = (database: TestDatabase) => Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
 
+/** Runs `effect` against `database` and resolves with its result. */
+export const runSql = <A, E>(database: TestDatabase, effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.runPromise(Effect.provide(effect, dbLayer(database.mysql)));
+
 /** Runs `use` against a fresh database (optionally fully migrated) and drops it afterwards. */
 export const withDatabase = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>, options: { readonly migrated?: boolean } = {}) =>
   Effect.acquireUseRelease(

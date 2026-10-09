@@ -1,13 +1,22 @@
 /**
  * Pages of the embedded issuer (server/src/issuer.ts): Better Auth sends the browser here during
  * an authorization request. The client plugin forwards the signed request with each call and
- * follows the redirect back to the client when Better Auth answers with one.
+ * follows the redirect back to the client when Better Auth answers with one. An invitation link
+ * (`/invite/<id>`) lands here too.
  */
 import { oauthProviderClient } from '@better-auth/oauth-provider/client';
 import { createAuthClient } from 'better-auth/client';
+import { organizationClient } from 'better-auth/client/plugins';
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { SIGN_IN_URL } from '../../lib/session.ts';
 
-const auth = createAuthClient({ baseURL: `${location.origin}/idp`, plugins: [oauthProviderClient()] });
+export const auth = createAuthClient({ baseURL: `${location.origin}/idp`, plugins: [oauthProviderClient(), organizationClient()] });
+
+/** `?next=` names the invitation page to return to after signing in; any other value returns home. */
+const next = () => {
+  const path = new URLSearchParams(location.search).get('next') ?? '';
+  return /^\/invite\/[\w-]+$/.test(path) ? path : '/';
+};
 
 const input = 'w-full rounded border border-divider bg-surface px-3 py-2 text-ink outline-none focus-visible:border-accent';
 const primary = 'rounded bg-accent px-4 py-2 font-medium text-ink disabled:opacity-60';
@@ -49,7 +58,7 @@ const MODES = {
   },
 };
 
-/** Email and password sign-in or registration; without a pending authorization it returns home. */
+/** Email and password sign-in or registration; without a pending authorization it returns home, or to the invitation it came from. */
 export function AccountPage({ mode }: { mode: keyof typeof MODES }) {
   const copy = MODES[mode];
   const [error, setError] = useState<Failure>(null);
@@ -61,7 +70,7 @@ export function AccountPage({ mode }: { mode: keyof typeof MODES }) {
     setBusy(false);
     setError(error);
     // With a pending authorization Better Auth answers `redirect: true` and the client follows it.
-    if (data && !('redirect' in data && data.redirect)) location.assign('/');
+    if (data && !('redirect' in data && data.redirect)) location.assign(next());
   };
   return (
     <Card title={copy.title} error={error}>
@@ -128,6 +137,85 @@ export function ConsentPage() {
           Deny
         </button>
       </div>
+    </Card>
+  );
+}
+
+interface Invitation { readonly organizationName: string; readonly inviterEmail: string; readonly role: string }
+type InvitePageState = { readonly kind: 'loading' | 'signed_out' } | { readonly kind: 'open'; readonly email: string; readonly invitation: Invitation | null };
+
+const secondary = 'rounded border border-divider px-4 py-2';
+
+function InviteSignedOut({ back }: { back: string }) {
+  return (
+    <>
+      <p className="mb-5 text-ink-secondary">Sign in or create an account with the email address this invitation was sent to.</p>
+      <div className="flex gap-3">
+        <a className={primary} href={`/sign-up${back}`}>Create account</a>
+        <a className={secondary} href={`/sign-in${back}`}>Sign in</a>
+      </div>
+    </>
+  );
+}
+
+/** Accepting continues to Sanctum's own sign-in, which makes the person a member of the workspace. */
+function InviteOpen({ id, back, email, invitation, onError }: { id: string; back: string; email: string; invitation: Invitation | null; onError: (error: Failure) => void }) {
+  const [busy, setBusy] = useState(false);
+  const accept = async () => {
+    setBusy(true);
+    const { error } = await auth.organization.acceptInvitation({ invitationId: id });
+    setBusy(false);
+    onError(error);
+    if (!error) location.assign(SIGN_IN_URL);
+  };
+  const switchAccount = async () => {
+    await auth.signOut();
+    location.assign(`/sign-in${back}`);
+  };
+  return (
+    <>
+      {invitation && (
+        <p className="mb-5 text-ink-secondary">
+          {invitation.inviterEmail} invited you to join <span className="text-ink">{invitation.organizationName}</span> as {invitation.role}.
+        </p>
+      )}
+      <div className="flex gap-3">
+        {invitation && (
+          <button className={primary} type="button" disabled={busy} onClick={() => void accept()}>
+            Accept
+          </button>
+        )}
+        <button className={secondary} type="button" onClick={() => void switchAccount()}>
+          Use another account
+        </button>
+      </div>
+      <p className="mt-4 text-xs text-ink-muted">Signed in as {email}.</p>
+    </>
+  );
+}
+
+/** `/invite/<id>`: the invited person signs in or signs up with the invited email address, then accepts. */
+export function InvitePage({ id }: { id: string }) {
+  const [state, setState] = useState<InvitePageState>({ kind: 'loading' });
+  const [error, setError] = useState<Failure>(null);
+  const back = `?next=${encodeURIComponent(`/invite/${id}`)}`;
+  useEffect(() => {
+    void auth.getSession().then(async ({ data }) => {
+      if (!data) return setState({ kind: 'signed_out' });
+      const invitation = await auth.organization.getInvitation({ query: { id } });
+      setError(invitation.error);
+      setState({ kind: 'open', email: data.user.email, invitation: invitation.data });
+    });
+  }, [id]);
+  return (
+    <Card title="Join a Sanctum team" error={error}>
+      {state.kind === 'open' ? (
+        <InviteOpen id={id} back={back} email={state.email} invitation={state.invitation} onError={setError} />
+      ) : state.kind === 'signed_out' ? (
+        <InviteSignedOut back={back} />
+      ) : (
+        <p className="text-ink-muted">Loading…</p>
+      )}
     </Card>
   );
 }

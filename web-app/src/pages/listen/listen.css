@@ -698,4 +698,15 @@
     grid-template-columns: 1fr;
     gap: 4px;
   }
+
+  /* Team and Profile open inside Settings and take the whole screen, so Settings never shows around them. */
+  .listen-dialog .listen-dialog {
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
 }

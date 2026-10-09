@@ -8,6 +8,12 @@ import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
 
 // The WorkOS widgets load only when an owner or admin first opens Team (Dialog renders its children only while open).
 const TeamWidgets = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.TeamWidgets })));
+const SetUpTeam = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.SetUpTeam })));
+// The embedded issuer's client loads only when Settings opens on a self-hosted install with it.
+const TeamDialog = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.TeamDialog })));
+const ProfileDialog = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.ProfileDialog })));
+
+type Manage = 'team' | 'profile';
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -133,8 +139,20 @@ function SignInRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInCh
   );
 }
 
+type Row = readonly [string, ReactNode];
+
+/** Text plus one action, laid out like the sign-in row. */
+function WithAction({ text, label, onClick }: { text: string; label: string; onClick: () => void }) {
+  return (
+    <>
+      <span>{text}</span>
+      <span className="listen-signin-actions"><button type="button" onClick={onClick}>{label}</button></span>
+    </>
+  );
+}
+
 /** Hosted owners and admins open Team (the WorkOS widgets) from here; the dialog shows over Settings. */
-function WorkspaceRow({ signIn }: { signIn: SignInState }) {
+function WorkspaceRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInChange: () => void }) {
   const [team, setTeam] = useState(false);
   if (signIn.status !== 'signed_in' || !signIn.workosTeam) return WORKSPACE[signIn.status];
   return (
@@ -142,17 +160,39 @@ function WorkspaceRow({ signIn }: { signIn: SignInState }) {
       <span>{WORKSPACE.signed_in}</span>
       <span className="listen-signin-actions"><button type="button" onClick={() => setTeam(true)}>Team</button></span>
       <Dialog title="Team" open={team} onClose={() => setTeam(false)}>
-        <Suspense><TeamWidgets /></Suspense>
+        <Suspense>{signIn.workosTeam === 'setup' ? <SetUpTeam onLinked={onSignInChange} /> : <TeamWidgets />}</Suspense>
       </Dialog>
     </>
   );
 }
 
+/** The self-hosted issuer adds a Profile row and a Team action on the Workspace row. */
+function accountRows(signIn: SignInState, open: (view: Manage) => void, onSignInChange: () => void): ReadonlyArray<Row> {
+  const workspace = WORKSPACE[signIn.status];
+  if (signIn.status !== 'signed_in' || !signIn.team) return [['Workspace', <WorkspaceRow signIn={signIn} onSignInChange={onSignInChange} />]];
+  return [
+    ['Profile', <WithAction text="Display name and password" label="Edit" onClick={() => open('profile')} />],
+    ['Workspace', <WithAction text={workspace} label="Team" onClick={() => open('team')} />],
+  ];
+}
+
+/** Team and Profile open over Settings; their code loads only with the self-hosted issuer. */
+function ManageDialogs({ signIn, manage, onClose }: { signIn: SignInState; manage: Manage | null; onClose: () => void }) {
+  if (signIn.status !== 'signed_in' || !signIn.team) return null;
+  return (
+    <Suspense>
+      <TeamDialog access={signIn.access} open={manage === 'team'} onClose={onClose} />
+      <ProfileDialog open={manage === 'profile'} onClose={onClose} />
+    </Suspense>
+  );
+}
+
 /** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange }: SettingsProps) {
-  const rows: ReadonlyArray<readonly [string, ReactNode]> = [
+  const [manage, setManage] = useState<Manage | null>(null);
+  const rows: ReadonlyArray<Row> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
-    ['Workspace', <WorkspaceRow signIn={signIn} />],
+    ...accountRows(signIn, setManage, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', MICROPHONE[permission]],
     ['Integrations', 'Unavailable: integrations are not connected yet'],
@@ -171,6 +211,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
       </dl>
       <LocalRecordings engine={engine} />
       <WorkspaceDeletion client={client} onDeleted={() => void engine.pause()} />
+      <ManageDialogs signIn={signIn} manage={manage} onClose={() => setManage(null)} />
     </Dialog>
   );
 }

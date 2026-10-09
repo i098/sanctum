@@ -25,24 +25,27 @@ export const SIGN_IN_URL = '/auth/login?return_to=/';
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
  * come from an operator-seeded `browser_sessions` row. A server without the route counts as not configured.
- * `workosTeam`: WorkOS organizations hold the workspace's team (hosted) and the caller is an owner or admin, so Settings offers Team.
+ * `workosTeam`: WorkOS organizations hold the hosted team. `linked`: the workspace has its WorkOS
+ * organization and the caller is an owner or admin, so Settings offers Team; `setup`: it has none
+ * yet and the caller is its owner, so Team offers "Set up team"; false: no Team.
  * `selfServe`: a signed-in user without a membership may create a workspace.
+ * `team`: that issuer is the embedded self-hosted one, whose organizations hold the workspace's team.
  */
 export type SignInState =
-  | { status: 'signed_in'; access: AccessScope; issuer: boolean; workosTeam: boolean }
+  | { status: 'signed_in'; access: AccessScope; issuer: boolean; team: boolean; workosTeam: 'linked' | 'setup' | false }
   | { status: 'signed_out'; selfServe: boolean }
   | { status: 'checking' | 'unconfigured' | 'unavailable' };
 
 /** How the last sign-in redirect ended (`/?signin=<code>`), read once from the landing URL. */
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
 
-/** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. */
-async function configured(): Promise<false | 'unavailable' | { selfServe: boolean; workos: boolean }> {
+/** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. `embedded`: the self-hosted Better Auth issuer. */
+async function configured(): Promise<false | 'unavailable' | { selfServe: boolean; embedded: boolean; workos: boolean }> {
   try {
     const response = await fetch('/auth/config', { headers: { accept: 'application/json' } });
     if (response.status >= 500) return 'unavailable';
     const config = response.ok ? await response.json() : {};
-    return config.sign_in === true && { selfServe: config.self_serve_workspaces === true, workos: config.workos_organizations === true };
+    return config.sign_in === true && { selfServe: config.self_serve_workspaces === true, embedded: config.embedded_issuer === 'better-auth', workos: config.workos_organizations === true };
   } catch (error) {
     return error instanceof SyntaxError ? false : 'unavailable';
   }
@@ -56,11 +59,25 @@ async function session(client: SanctumClient): Promise<AccessScope | 'signed_out
   }
 }
 
+/** `workosTeam` for an owner or admin on a WorkOS server; a failed read offers no Team. */
+async function workosTeam(access: AccessScope): Promise<'linked' | 'setup' | false> {
+  if (!access.scopes.includes('workspace:admin')) return false;
+  try {
+    const response = await fetch('/api/v1/workspace/team', { headers: { accept: 'application/json' } });
+    if (!response.ok) return false;
+    if ((await response.json()).linked === true) return 'linked';
+    return access.role === 'owner' && 'setup';
+  } catch {
+    return false;
+  }
+}
+
 export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   const [issuer, current] = await Promise.all([configured(), session(client)]);
   if (typeof current === 'object') {
-    const workosTeam = typeof issuer === 'object' && issuer.workos && current.scopes.includes('workspace:admin');
-    return { status: 'signed_in', access: current, issuer: issuer !== false, workosTeam };
+    const team = typeof issuer === 'object' && issuer.embedded;
+    const workos = typeof issuer === 'object' && issuer.workos ? await workosTeam(current) : false;
+    return { status: 'signed_in', access: current, issuer: issuer !== false, team, workosTeam: workos };
   }
   if (current === 'unavailable' || issuer === 'unavailable') return { status: 'unavailable' };
   return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
