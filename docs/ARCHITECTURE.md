@@ -122,7 +122,7 @@ Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcri
 
 ### meetings (T12, T13, T14)
 
-Owns `server/src/meetings.ts`, `server/src/meeting-store.ts`, `server/src/meeting-corrections.ts`, `server/src/meetings-api.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges` and `006_speakers`, `MeetingsApi` in contracts meetings.ts.
+Owns `server/src/meetings.ts`, `server/src/meeting-store.ts`, `server/src/meeting-corrections.ts`, `server/src/meetings-api.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges`, `006_speakers` and `017_meeting_end_fence`, `MeetingsApi` in contracts meetings.ts.
 Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so media keeps `recordings.ts`.
 
 - `meetings.ts`: `onFinalSegments(event: { workspace_id; listener_id; capture_group_id: string | null; segments: ReadonlyArray<TranscriptSegment> }): Effect<void, SqlError, R>`.
