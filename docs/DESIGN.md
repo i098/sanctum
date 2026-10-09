@@ -65,6 +65,7 @@ The glow is a canvas shadow in the state colour that grows with the overall leve
 - State looks follow the kiosk table: stopped and paused use its idle look, starting and reconnecting its connecting look, listening and degraded its listening look; changes tween over 0.9 s with a quartic ease-out.
 - Only listening states read the microphone; every other state breathes gently without reacting to audio, so the line never implies audio is being captured or saved.
 - Quiet input returns toward a thin, gently breathing line.
+- Steady room noise, such as hum, fans and hiss, becomes a per-band noise floor within a few seconds and draws the same calm line. Only sound above that floor, such as speech, moves the needles. The capture stream stays unprocessed apart from echo cancellation.
 - The requested speaking state may react to output audio, but background work never causes unsolicited sound.
 - Reduced-motion mode draws about four frames a second at 45% amplitude, skips rail motion, and keeps state readable without affecting capture.
 - Stop drawing when the page is hidden; do not stop microphone capture solely because the canvas stops drawing.
