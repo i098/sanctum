@@ -111,6 +111,7 @@ A live chunk Whisper answered or the gate skipped records coverage for its whole
 Accepted (plan 10.1 option A): a workspace owner deleting the workspace deletes all its data, including meetings restricted to other principals; one owner suffices.
 The grace-period undo protects against mistakes; after it, a durable `workspace.purge` job deletes the recordings, transcripts, memory and rows.
 This is not a retention policy: no recording expires automatically.
+The purge makes no provider call: it does not disconnect Pipedream-connected accounts, so an operator removes them in Pipedream before the grace period ends ([operations.md](operations.md#recovery)).
 
 ## Deployment decision — 2026-10-02
 

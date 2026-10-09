@@ -21,7 +21,7 @@ function ConfirmDeletion({ name, busy, onCancel, onConfirm }: ConfirmProps) {
   };
   return (
     <form className="listen-panel listen-confirm" onSubmit={submit}>
-      <p>Everyone loses access to {name} at once. After the grace period its recordings, transcripts and memory are purged permanently; until then you can undo in Settings.</p>
+      <p>Everyone loses access to {name} at once. After the grace period its recordings, transcripts and memory are purged permanently; until then you can undo in Settings. Connected third-party accounts are not disconnected by this and must be disconnected separately.</p>
       <label>
         <span>Type <strong>{name}</strong> to confirm</span>
         <input value={typed} onChange={event => setTyped(event.target.value)} autoComplete="off" spellCheck={false} autoFocus />
