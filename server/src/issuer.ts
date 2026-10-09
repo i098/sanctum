@@ -222,6 +222,7 @@ export const createIssuer = (
             if (invitation.role.split(',').some(role => role.trim() === 'owner')) throw new APIError('FORBIDDEN', { message: 'An owner is made by changing a member\'s role, not by invitation' });
           },
           beforeCreateOrganization: sanctum(({ organization, user }) => Effect.map(workspaceOrganization(issuer, organization.slug, user), workspace => ({ data: { ...organization, ...workspace } }))),
+          afterCreateOrganization: sanctum(({ organization, user }) => applyMember(issuer, organization.id, user, 'owner', true)),
           beforeAcceptInvitation: sanctum(({ invitation, user }) => requireSeat(issuer, invitation.organizationId, user)),
           afterAcceptInvitation: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role, true)),
           afterUpdateMemberRole: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role, false)),

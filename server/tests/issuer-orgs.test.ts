@@ -295,6 +295,30 @@ describe('self-hosted organizations', () => {
     }),
   );
 
+  it.scoped('removing the creator, whose membership predates the team, ends their session', () =>
+    Effect.gen(function* () {
+      const server = yield* selfHosted;
+      yield* Effect.promise(async () => {
+        const creator = await signUp(server, 'Creator');
+        const [seeded] = await server.sql(seedWorkspace('Acme', ['owner']));
+        const workspace_id = seeded!.workspace_id;
+        await linkIdentity(server, creator.id, seeded!.principal.id);
+        // Signed in before the team exists, so no sign-in repair has yet bound the membership to the issuer.
+        const signedIn = await signIn(server, creator.cookie);
+        expect((await session(server, signedIn.cookie)).status).toBe(200);
+        expect((await idp(server, '/organization/create', creator.cookie, { name: 'Team', slug: workspace_id })).status).toBe(200);
+
+        const team = { owner: creator, workspace_id };
+        const { invitee: second, accepted } = await join(server, team, 'Second');
+        const memberId = accepted.body['member'].id as string;
+        expect((await idp(server, '/organization/update-member-role', creator.cookie, { memberId, role: 'owner', organizationId: workspace_id })).status).toBe(200);
+
+        expect((await idp(server, '/organization/remove-member', second.cookie, { memberIdOrEmail: creator.email, organizationId: workspace_id })).status).toBe(200);
+        expect((await session(server, signedIn.cookie)).status).toBe(401);
+      });
+    }),
+  );
+
   it.scoped('sign-in repairs a membership whose Sanctum side failed, and MCP org_id selects the workspace', () =>
     Effect.gen(function* () {
       const server = yield* selfHosted;
