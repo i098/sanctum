@@ -76,6 +76,7 @@ export type ListMeetingsInput = {
   readonly state?: "provisional" | "active" | "closing" | "closed" | "interrupted";
   readonly from?: string;
   readonly to?: string;
+  readonly listener?: string;
   readonly participant?: string;
   readonly cursor?: string;
   readonly limit?: number;
@@ -662,7 +663,7 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'session.getSession': {"method":"GET","path":"/api/v1/session","pathParams":[],"queryParams":[],"body":false},
   'listeners.registerListener': {"method":"POST","path":"/api/v1/listeners","pathParams":[],"queryParams":[],"body":true},
   'listeners.heartbeat': {"method":"POST","path":"/api/v1/listeners/{listener_id}/heartbeat","pathParams":["listener_id"],"queryParams":[],"body":true},
-  'meetings.listMeetings': {"method":"GET","path":"/api/v1/meetings","pathParams":[],"queryParams":["state","from","to","participant","cursor","limit"],"body":false},
+  'meetings.listMeetings': {"method":"GET","path":"/api/v1/meetings","pathParams":[],"queryParams":["state","from","to","listener","participant","cursor","limit"],"body":false},
   'meetings.mergeMeetings': {"method":"POST","path":"/api/v1/meetings/merge","pathParams":[],"queryParams":[],"body":true},
   'meetings.getMeeting': {"method":"GET","path":"/api/v1/meetings/{meeting_id}","pathParams":["meeting_id"],"queryParams":[],"body":false},
   'meetings.closeMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/close","pathParams":["meeting_id"],"queryParams":[],"body":false},

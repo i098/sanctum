@@ -68,6 +68,28 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('lists only the meetings of the listener asked for, even when the principal can read others', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { device, listener, epoch } = yield* setup;
+        const other = yield* seedListener(device);
+        const otherEpoch = yield* seedEpoch(other);
+        yield* hear(listener, epoch, 0, 30, 'first topic is the launch date');
+        yield* hear(other, otherEpoch, 0, 30, 'second room is talking about hiring');
+        const idsFor = (listener_id: string) => listMeetings(device, { listener: ListenerId.make(listener_id) }).pipe(Effect.map(page => page.meetings.map(meeting => meeting.id)));
+        const all = (yield* listMeetings(device, {})).meetings.map(meeting => meeting.id);
+        expect(all).toHaveLength(2);
+        const first = yield* idsFor(listener.listener_id);
+        const second = yield* idsFor(other.listener_id);
+        expect(first).toHaveLength(1);
+        expect(second).toHaveLength(1);
+        expect([...first, ...second].sort()).toEqual([...all].sort());
+        expect(yield* idsFor(randomUUID())).toEqual([]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('keeps one meeting across pauses and promotes it once a conversation is established', () =>
     withDatabase(
       Effect.gen(function* () {

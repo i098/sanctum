@@ -525,6 +525,7 @@ export const listMeetings = (access: AccessScope, params: ListMeetingsParams) =>
           ${params.state === undefined ? sql`` : sql`AND m.state = ${params.state}`}
           ${params.from === undefined ? sql`` : sql`AND m.started_at >= ${Schema.encodeSync(DbUtc)(params.from)}`}
           ${params.to === undefined ? sql`` : sql`AND m.started_at < ${Schema.encodeSync(DbUtc)(params.to)}`}
+          ${params.listener === undefined ? sql`` : sql`AND m.listener_id = ${params.listener}`}
           ${params.participant === undefined ? sql`` : sql`AND EXISTS (SELECT 1 FROM meeting_ranges r JOIN speaker_tracks t ON t.workspace_id = r.workspace_id
             AND t.epoch_id = r.epoch_id AND t.track = r.track AND t.sample_start < r.sample_end AND t.sample_end > r.sample_start
             WHERE r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision AND t.profile_id = ${params.participant})`}

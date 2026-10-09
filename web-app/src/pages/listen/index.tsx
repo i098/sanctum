@@ -1,5 +1,6 @@
 import type { Meeting } from '@sanctum/sdk';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
@@ -127,10 +128,20 @@ function MeetingLine() {
 
 const OPEN: ReadonlyArray<Meeting['state']> = ['provisional', 'active'];
 
+/** The newest open meeting this browser's listener captures, for a page that loaded before any stream update; none before the browser has registered a listener. */
+async function readOpenMeeting(): Promise<string | null> {
+  const listener = storedListenerId();
+  if (listener === null) return null;
+  const pages = await Promise.all(OPEN.map(state => client.meetings.listMeetings({ state, listener, limit: 1 })));
+  const newest = pages.flatMap(page => page.meetings).sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+  return newest?.id ?? null;
+}
+
 /**
- * The listener's open meeting that End meeting closes, named by the stream's `action_update`. A pause
- * ends the stream with an update naming no meeting, so a null update keeps the meeting while the
- * server still reports it open. The returned function forgets it once closed.
+ * The listener's open meeting that End meeting closes: read once on load, so a reload while paused still
+ * shows it, then named by the stream's `action_update`. A pause ends the stream with an update naming
+ * no meeting, so a null update keeps the meeting while the server still reports it open. The returned
+ * function forgets it once closed.
  */
 function useOpenMeeting(): [string | null, () => void] {
   const shown = useRef<string | null>(null);
@@ -139,12 +150,22 @@ function useOpenMeeting(): [string | null, () => void] {
     shown.current = id;
     setMeeting(id);
   }, []);
-  useEffect(() => subscribeActions(({ meeting_id }) => {
-    const previous = shown.current;
-    if (meeting_id !== null || previous === null) show(meeting_id);
-    // A failed read keeps the control: closing is idempotent. A newer update or a close wins over this read.
-    else client.meetings.getMeeting({ meeting_id: previous }).then(read => shown.current === previous && !OPEN.includes(read.state) && show(null), () => {});
-  }), [show]);
+  useEffect(() => {
+    // A stream update before the read returns is newer than the read.
+    let current = true;
+    readOpenMeeting().then(id => current && id !== null && show(id), () => {});
+    const stop = subscribeActions(({ meeting_id }) => {
+      current = false;
+      const previous = shown.current;
+      if (meeting_id !== null || previous === null) show(meeting_id);
+      // A failed read keeps the control: closing is idempotent. A newer update or a close wins over this read.
+      else client.meetings.getMeeting({ meeting_id: previous }).then(read => shown.current === previous && !OPEN.includes(read.state) && show(null), () => {});
+    });
+    return () => {
+      current = false;
+      stop();
+    };
+  }, [show]);
   return [meeting, () => show(null)];
 }
 

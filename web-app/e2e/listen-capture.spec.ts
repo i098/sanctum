@@ -86,3 +86,44 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
   // Capture stopped before the close, so the server placed the last speech first.
   expect(events).toEqual(['stop:pause', 'stop:pause', 'close:csrf-e2e-token']);
 });
+
+test('End meeting shows after a reload while no stream is open, for the meeting of this browser\'s listener only', async ({ page }) => {
+  const server = await fakeServer(page);
+  const id = '5b0c2d4e-6f70-4a81-92b3-c4d5e6f7a8b9';
+  const listener = '7c1d3e5f-8091-4a2b-93c4-d5e6f7a8b9c0';
+  await page.addInitScript(stored => localStorage.setItem('sanctum.listener', stored), JSON.stringify({ id: listener, lease_generation: 1 }));
+  const processing = { transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' };
+  const meeting = (state: string) => ({ id, workspace_id: id, state, title: null, started_at: '2026-09-28T10:02:00.000Z', ended_at: null, timezone: 'UTC', boundary_revision: 1, visibility: 'restricted', processing });
+  const asked: string[] = [];
+  await page.route('**/api/v1/meetings?*', (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    asked.push(`${query.get('state')}:${query.get('listener')}`);
+    return route.fulfill({ json: { meetings: query.get('state') === 'active' && query.get('listener') === listener ? [meeting('active')] : [], next_cursor: null } });
+  });
+  const closes: string[] = [];
+  await page.route(`**/api/v1/meetings/${id}/close`, (route) => {
+    closes.push(route.request().headers()['x-csrf-token']!);
+    return route.fulfill({ json: meeting('closing') });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.listen-state')).toHaveText('stopped');
+  const end = page.getByRole('button', { name: 'End meeting' });
+  await expect(end).toBeVisible();
+  expect([...new Set(asked)].sort()).toEqual([`active:${listener}`, `provisional:${listener}`]);
+  await end.click();
+  await page.getByRole('dialog', { name: 'End this meeting?' }).getByRole('button', { name: 'End meeting' }).click();
+  await expect(end).toHaveCount(0);
+  expect(closes).toEqual(['csrf-e2e-token']);
+  expect(server.starts).toHaveLength(0);
+});
+
+test('no End meeting control on load when this browser has no listener', async ({ page }) => {
+  await fakeServer(page);
+  let asked = 0;
+  await page.route('**/api/v1/meetings?*', route => (asked++, route.fulfill({ json: { meetings: [], next_cursor: null } })));
+  await page.goto('/');
+  await expect(page.locator('.listen-state')).toHaveText('stopped');
+  await expect(page.getByRole('button', { name: 'End meeting' })).toHaveCount(0);
+  expect(asked).toBe(0);
+});
