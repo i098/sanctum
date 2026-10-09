@@ -233,7 +233,8 @@ export async function startRecorder(stream: MediaStream, onBlock: (sampleStart: 
   try {
     await context.audioWorklet.addModule(workletUrl);
     const source = context.createMediaStreamSource(stream);
-    const analyser = new AnalyserNode(context, { fftSize: 2048, smoothingTimeConstant: 0 });
+    // Spectral smoothing for the waveform only; the worklet still gets every sample unchanged.
+    const analyser = new AnalyserNode(context, { fftSize: 2048, smoothingTimeConstant: 0.7 });
     const node = new AudioWorkletNode(context, RECORDER_PROCESSOR, { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
     // The worklet writes no output; the destination link keeps the graph pulled in every browser.
     source.connect(analyser).connect(node).connect(context.destination);
