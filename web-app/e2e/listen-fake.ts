@@ -51,6 +51,7 @@ const engine = {
   async orphanedRecordings() { return []; },
   async exportRecording() { return null; },
   async discardRecording() {},
+  async chooseInput() {},
 };
 export function getCaptureEngine() { return engine; }
 export function subscribeTranscript(listener) { transcriptListeners.add(listener); return () => transcriptListeners.delete(listener); }

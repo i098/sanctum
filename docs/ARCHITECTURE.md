@@ -73,7 +73,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 
 ### capture (T06, T07, browser half of T09)
 
-Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet,buffer,uploader,orphans}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
+Owns `web-app/src/lib/capture/{controller,permissions,microphone,recorder,recording-worklet,buffer,uploader,orphans}.ts`, `web-app/src/pages/listen/engine.ts`, their tests.
 
 - `engine.ts`: `getCaptureEngine(): CaptureView`, a singleton above every overlay/router lifecycle; `subscribeTranscript(listener)` and `subscribeActions(listener)` fan out live transcript segments and `action_update` messages from the listener stream.
 - `controller.ts`: `createCaptureController(deps): CaptureView & { dispose(): void }`, publishing through `createCaptureStore`.
@@ -82,12 +82,13 @@ Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet
 
 ### listen-ui (T21 visual core)
 
-Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,ReviewDialog.tsx}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
+Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,ReviewDialog.tsx,InputPicker.tsx,input-level.ts}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
 
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
+- `InputPicker.tsx`: `InputPicker({ engine, check? })`, the microphone choice (through `CaptureView.chooseInput`); only with `check` does it also test the chosen input for sound while capture is stopped or paused; `input-level.ts`: `useInputLevel(deviceId)`, the live level and dead-input state of one input outside capture. Settings and the silent-input warning use the picker, and only Settings sets `check`; the onboarding mic step (branch `fm/sanctum-onboarding`) is the intended second consumer of both. The dead-input floor, threshold and run rule (`SILENT_PEAK`, `SILENT_SECONDS`, `deadRun`) live once in capture's `microphone.ts`, shared by the capture engine and the check.
 - `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.
 - `rails.ts`: `startTranscriptRail(lines, subscribeTranscript)` and `startActionFeed(feed, subscribeActions)`, the kiosk's side live updates.
-- Imports only `getCaptureEngine`, `subscribeTranscript`, `subscribeActions` and view.ts types from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
+- Imports only `getCaptureEngine`, `subscribeTranscript`, `subscribeActions`, view.ts types and `microphone.ts` (light: no recorder) from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
 - Review tabs (T21 box 2) live in `ReviewPanels.tsx` and `review-data.ts`. They added three compatible API fields: `GET /meetings/{id}/actions` (`listMeetingActions` in `ActionsApi` and actions.ts), an optional `meeting_id` on `GET /context/changes`, and `pieces` plus `sample_rate` on `RecordingAccess` (playback.ts) to map a source sample to a playback offset.
 
 ### models (T04, T15)

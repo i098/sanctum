@@ -224,6 +224,8 @@ export interface Recorder {
   readonly levels: LevelSource;
   /** Resolves after every sample captured so far reached `onBlock`. */
   flush(): Promise<void>;
+  /** Feeds `stream` instead of the current input; the sample clock and the epoch go on without a gap. */
+  replaceInput(stream: MediaStream): void;
   close(): Promise<void>;
 }
 
@@ -232,7 +234,7 @@ export async function startRecorder(stream: MediaStream, onBlock: (sampleStart: 
   const context = new AudioContext({ latencyHint: 'interactive' });
   try {
     await context.audioWorklet.addModule(workletUrl);
-    const source = context.createMediaStreamSource(stream);
+    let source = context.createMediaStreamSource(stream);
     // Spectral smoothing for the waveform only; the worklet still gets every sample unchanged.
     const analyser = new AnalyserNode(context, { fftSize: 2048, smoothingTimeConstant: 0.7 });
     const node = new AudioWorkletNode(context, RECORDER_PROCESSOR, { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
@@ -258,6 +260,12 @@ export async function startRecorder(stream: MediaStream, onBlock: (sampleStart: 
       sampleRate: context.sampleRate,
       levels: createAnalyserLevels(analyser, WAVEFORM_BANDS),
       flush,
+      replaceInput(next) {
+        const created = context.createMediaStreamSource(next);
+        source.disconnect();
+        source = created;
+        source.connect(analyser);
+      },
       async close() {
         await flush();
         source.disconnect();
