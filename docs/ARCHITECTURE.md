@@ -178,13 +178,19 @@ Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of
 
 Owns `deploy/cloudflare/` (Worker, Container classes, secret login link, `wrangler.jsonc`) and the Cloudflare section of [operations.md](operations.md#cloudflare); runs the `server/Dockerfile` image unchanged.
 
+### sign-in (S1)
+
+Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts`; operation in [operations.md](operations.md#sign-in).
+
+- Mounts `/auth/*` from main.ts; opens sessions through `openSession` and `linkIdentity` in auth.ts.
+
 ## Hot files
 
 | File | Who touches it | How |
 | --- | --- | --- |
 | `packages/contracts/src/api.ts` | every slice with REST | One `.add(XApi)` line. |
 | `server/src/api.ts` | every slice with REST | One handler layer in the `ApiLive` list. |
-| `server/src/main.ts` | kernel, media, interfaces, serve | Authenticator swap; upgrade handler; `/mcp` mount; static assets. |
+| `server/src/main.ts` | kernel, media, interfaces, serve, sign-in | Authenticator swap; upgrade handler; `/mcp` mount; `/auth/*` mount; static assets. |
 | `server/src/worker.ts` | slices with provider layers | Provide the layer next to `dbLayer`. |
 | `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; add provider tags to `WorkerServices`. Handler modules import `job-types.ts`, never this file. |
 | `server/src/config.ts` | models, media, actions, pipedream | Own key inside `serverConfig`; defaults stay in `engineeringDefaults`. |
