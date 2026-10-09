@@ -182,6 +182,13 @@ Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of
 
 Owns `deploy/cloudflare/` (Worker, Container classes, `wrangler.jsonc`) and the Cloudflare section of [operations.md](operations.md#cloudflare); runs the `server/Dockerfile` image unchanged.
 
+### landing
+
+Owns `web-app/landing/` (static page, `npm run build:landing`), `web-app/e2e/landing.spec.ts` and the apex exception in `deploy/cloudflare/src/index.ts`; operation in [operations.md](operations.md#cloudflare).
+
+- The hero runs the listening view's `startWaveform` from `web-app/src/pages/listen/waveform.ts` on simulated levels and never asks for the microphone; reduced motion keeps one still frame.
+- The page loads only its own built files; the Worker adds its CSP, and the copy states only what the hosted site runs today.
+
 ### sign-in (S1)
 
 Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts`; operation in [operations.md](operations.md#sign-in).

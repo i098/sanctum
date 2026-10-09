@@ -5,6 +5,7 @@
     "snippets/**",
     "index.html"
   ],
+  "entry": ["web-app/landing/index.html"],
   "audit": {
     "gate": "new-only"
   },

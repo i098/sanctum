@@ -7,5 +7,5 @@
     "moduleResolution": "Bundler",
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "tests", "e2e", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "landing", "tests", "e2e", "vite.config.ts", "playwright.config.ts"]
 }
