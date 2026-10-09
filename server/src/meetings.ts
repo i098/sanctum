@@ -259,17 +259,17 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
 const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 
 /**
- * Adds late audio to a meeting that is not open. A finalized one moves to the next boundary revision first, with its
- * ranges copied and its processing reset, so the recording cut, speaker refine, notes and memory are rebuilt from the
- * larger meeting; a closing one, or one whose finalize is queued to run again (pending, paused, or running and rearmed), joins the revision that finalize will build.
- * Either way it is finalized (again).
+ * Adds late audio to a meeting that is not open. When the current boundary revision already has its recording cut, the
+ * meeting moves to the next revision first, with its ranges copied and its processing reset, so the cut, speaker refine,
+ * notes and memory are rebuilt from the larger meeting; without a cut the audio joins the current revision, which is still
+ * to be built. Either way the meeting is finalized (again).
  */
 const joinSealed = (row: MeetingRow, source: SourceRange) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     if (OPEN_STATES.includes(row.state)) return yield* Effect.asVoid(claimSource(row, source));
-    const [unbuilt] = yield* sql`SELECT 1 FROM jobs WHERE workspace_id = ${row.workspace_id} AND kind = 'meeting.finalize' AND work_key = ${`meeting:${row.id}`} AND (status IN ('pending', 'paused') OR (status = 'running' AND rearmed = 1)) LIMIT 1`;
-    const bump = row.state !== 'closing' && unbuilt === undefined;
+    const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1`;
+    const bump = built !== undefined;
     const revision = row.boundary_revision + Number(bump);
     if (bump) {
       yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)

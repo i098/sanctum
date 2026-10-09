@@ -373,6 +373,8 @@ describe('automatic meeting lifecycle', () => {
         const sql = yield* SqlClient.SqlClient;
         const { owner, listener, epoch, id } = yield* endWhileLive;
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
+        yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
+          VALUES (UUID(), ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         const segments = [
           yield* speak(listener, epoch, 41, 46, 'Alice will fish the billing report'),
@@ -390,22 +392,26 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
-  it.effect('late finals while a finalize run is in flight: the first moves to a new revision, once the run is rearmed later ones join it', () =>
+  it.effect('the revision moves by the stored recording cut, not by finalize job state: a queued re-finalize of a built revision still gets a new revision', () =>
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { owner, listener, epoch, id } = yield* endWhileLive;
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
-        yield* sql`UPDATE jobs SET status = 'running', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
+        yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
+          VALUES (UUID(), ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+        yield* sql`UPDATE jobs SET status = 'pending', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
-        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
-        expect(yield* sql`SELECT rearmed FROM jobs WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`).toEqual([{ rearmed: 1 }]);
+        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2, processing: { recording: 'pending' } });
+        yield* sql`UPDATE jobs SET status = 'running', rearmed = 1 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 47, 49, 'and copy the finance lead on the report');
-        yield* sql`UPDATE jobs SET status = 'paused', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
-        yield* hear(listener, epoch, 49, 50, 'then we are done for today');
         expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
+        yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
+          VALUES (UUID(), ${listener.workspace_id}, ${id}, 2, 'cut-2.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+        yield* hear(listener, epoch, 49, 50, 'then we are done for today');
+        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 3 });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 50 * RATE }]);
-        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '1' }]);
+        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '2' }]);
       }),
       { migrated: true },
     ),
