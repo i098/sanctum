@@ -370,10 +370,12 @@ describe('automatic meeting lifecycle', () => {
         yield* sweepIdleMeetings(5 * MIN * 1000);
         expect(yield* stateOf(briefly)).toBe('closing');
         expect(yield* stateOf(talking)).toBe('active');
-        // Coverage and the final landed together but placement was still in flight: placing it keeps the meeting open.
+        // Coverage and the final landed together but placement was still in flight: neither sweep closes it, and placing the final keeps the meeting open.
+        expect(yield* stateOf(racing)).toBe('provisional');
         yield* onFinalSegments({ ...racing.listener, segments: [late] });
         yield* sweepIdleMeetings();
-        expect(yield* stateOf(racing)).toBe('provisional');
+        // Placed 640 s into the meeting, the final establishes it (promoted to active); it is still open.
+        expect(yield* stateOf(racing)).toBe('active');
       }),
       { migrated: true },
     ),
