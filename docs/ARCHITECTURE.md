@@ -25,7 +25,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Live media | [media.ts](../packages/contracts/src/media.ts) | Binary PCM frame layout, `encodePcmFrame`, `decodePcmFrame`, control messages. |
 | Listener device API | [capture.ts](../packages/contracts/src/capture.ts) | `ListenersApi` (register, heartbeat, `putChunk`), `LISTENER_STREAM_PATH`. |
 | Test audio | [fixtures.ts](../packages/contracts/src/fixtures.ts) | `syntheticPcm` from `@sanctum/contracts/fixtures`. |
-| Config | [server/src/config.ts](../server/src/config.ts) | `serverConfig`, `engineeringDefaults` (plan 02), `requireActivation` refuses production while decisions are open. |
+| Config | [server/src/config.ts](../server/src/config.ts) | `serverConfig`, `engineeringDefaults` (plan 02), `mcpAuthorizationConfig`, `requireActivation` (rules in [operations.md](operations.md#processes)). |
 | Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `mysqlErrno`. |
 | Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
