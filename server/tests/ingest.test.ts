@@ -2,11 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { SqlClient } from '@effect/sql';
 import { beforeAll, expect, layer } from '@effect/vitest';
-import { type AccessScope, type CaptureEpochId, encodePcmFrame, MeetingId } from '@sanctum/contracts';
+import { type AccessScope, type CaptureEpochId, encodePcmFrame, type MeetingId } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
-import { closeMeeting } from '../src/meetings.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
 import { coverageIn, finalSegments, uncovered } from '../src/transcripts.ts';
@@ -57,7 +56,7 @@ const setup = Effect.gen(function* () {
     return { socket, accepted: yield* socket.take('accepted') };
   });
   const { socket } = yield* connect;
-  return { host, access, speech, store, providers, listener_id, epoch_id, socket, connect };
+  return { host, tokens, access, speech, store, providers, listener_id, epoch_id, socket, connect };
 });
 
 const finals = (access: AccessScope, epoch_id: CaptureEpochId) =>
@@ -94,13 +93,14 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
 
   it.scoped('End meeting before the stop arrives: finals the stop flushes join the closed meeting, never a new one', () =>
     Effect.gen(function* () {
-      const { access, speech, epoch_id, socket } = yield* setup;
+      const { host, tokens, access, speech, epoch_id, socket } = yield* setup;
       for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
       const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 4_800);
       stream!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'we should review the budget numbers today', confidence: 0.9, speaker: '0' });
       const [meeting] = yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 1);
       // The End lands first and seals at the lagging watermark; it fences the 6 frames the page captured, and the stop still arrives after it.
-      yield* closeMeeting({ ...access, scopes: ['context:write'] }, MeetingId.make(meeting!.id), { epoch_id, sample: 9_600 });
+      tokens.set('ender', { ...access, scopes: ['context:write'] });
+      expect((yield* api(host, 'ender', 'POST', `/meetings/${meeting!.id}/end`, { epoch_id, sample: 9_600 })).body).toMatchObject({ state: 'closing' });
       for (let sequence = 3; sequence < 6; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
       stream!.pending.push({ start_s: 0.4, end_s: 0.6, is_final: true, text: 'Alice will fish the billing report', confidence: 0.9, speaker: '0' });
       socket.send(JSON.stringify({ _tag: 'stop', reason: 'pause' }));
