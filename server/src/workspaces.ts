@@ -48,6 +48,7 @@ export const PURGED_TABLES = [
   'capture_groups',
   'profiles',
   'agent_credentials',
+  'workspace_orgs',
   'browser_sessions',
 ] as const;
 
