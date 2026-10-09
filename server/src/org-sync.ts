@@ -12,12 +12,12 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { JobFailure, type PrincipalId, WorkspaceId, type WorkspaceRole } from '@sanctum/contracts';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { identityPrincipal } from './auth.ts';
+import { createHumanPrincipal, identityPrincipal } from './auth.ts';
 import { engineeringDefaults, serverConfig } from './config.ts';
 import type { JobHandler } from './job-types.ts';
 import { enqueueJob } from './jobs.ts';
 import { makeWorkosClient, type OrganizationMembership, PAGE_LIMIT, type WorkosClient, type WorkosEvent, type WorkosOptions } from './providers/workos.ts';
-import { createHumanPrincipal, linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
+import { linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 interface WorkosOrganizationSettings {
   readonly client: WorkosClient;

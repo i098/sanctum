@@ -9,8 +9,8 @@
 import { SqlClient } from '@effect/sql';
 import type { PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Data, Effect, Option } from 'effect';
-import { identityPrincipal } from './auth.ts';
-import { claimSeat, createHumanPrincipal, linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
+import { createHumanPrincipal, identityPrincipal } from './auth.ts';
+import { claimSeat, linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 /** A Better Auth user; its id is the `sub` of its ID and access tokens. */
 export interface IssuerUser {
