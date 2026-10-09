@@ -2,8 +2,8 @@
  * Remote MCP (plan section 13): eleven explicit tools over Streamable HTTP at `/mcp`.
  * A tool runs the same v1 REST handler the SDKs and website call, in-process, as the principal
  * its delegated OAuth token maps to, so validation, authorization and errors cannot drift.
- * The authorization server is unselected (docs/DECISIONS.md): tokens are verified against the
- * configured issuer, audience-bound to this resource; with no issuer configured MCP refuses.
+ * The authorization server is chosen in docs/DECISIONS.md and set by configuration: tokens are
+ * verified against the configured issuer, audience-bound to this resource; with none MCP refuses.
  */
 import { randomUUID } from 'node:crypto';
 import { HttpApi, HttpApiBuilder, HttpApp, type HttpRouter, HttpServerRequest, HttpServerResponse } from '@effect/platform';
@@ -161,7 +161,7 @@ function mcpServer(routes: ReadonlyArray<ToolRoute>, dispatch: Dispatch) {
   return server;
 }
 
-/** Delegated-token verification settings; `None` while the authorization server is unselected. */
+/** Delegated-token verification settings; `None` while the authorization server is not configured. */
 export interface McpAuthorization {
   /** Canonical URL of `/mcp`, the only audience accepted. */
   readonly resource: string;
