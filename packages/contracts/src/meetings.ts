@@ -127,10 +127,11 @@ export type SplitResult = typeof SplitResult.Type;
  * send it; `epoch_id` must name an epoch of such a listener the caller owns. The server fences every epoch the meeting owns ranges
  * in, up to the end of that epoch (real time while it still runs, plus a short allowance); the page names the epoch it captured
  * last and `fence_sample`, its last sample, which is stored clamped to real time since the server recorded the epoch's start. A
- * page that captured nothing (a reload while paused) sends neither, and only the server's own windows apply. An unowned final of `epoch_id` that starts inside the window from the
- * meeting's first sample in that epoch up to `fence_sample` never opens a meeting: it joins the meeting owning the nearest earlier
- * range of that epoch within the window, which is finalized again if it was sealed. The field is not `sample` so that the
- * payload shares no shape with a public schema, which would name that schema after this route in the SDKs.
+ * page that captured nothing (a reload while paused) sends neither, and only the server's own windows apply. An unowned final
+ * of `epoch_id` that starts inside the window from the meeting's first sample in that epoch up to `fence_sample` never opens
+ * a meeting: it joins the meeting owning the nearest earlier range of that epoch within the window, which is finalized again
+ * if it was sealed. The field is not `sample` so that the payload shares no shape with a public schema, which would name that
+ * schema after this route in the SDKs.
  */
 export const EndMeeting = Schema.Struct({ epoch_id: Schema.optional(CaptureEpochId), fence_sample: Schema.optional(SampleIndex) }).pipe(
   Schema.filter(end => (end.epoch_id === undefined) === (end.fence_sample === undefined), { message: () => 'epoch_id and fence_sample are sent together or not at all' }),
