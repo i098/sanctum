@@ -98,6 +98,8 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     loginPage: '/sign-in',
     consentPage: '/consent',
     scopes: ['openid', 'profile', 'email', 'offline_access', ...MCP_SCOPES],
+    clientRegistrationDefaultScopes: ['openid', 'profile', 'email', 'offline_access', 'context:read', 'context:write', 'recordings:read'],
+    clientRegistrationAllowedScopes: ['actions:request', 'actions:execute'],
     resources: [{ identifier: resource, allowedScopes: [...MCP_SCOPES] }],
     clientRegistrationDefaultResources: [resource],
     allowDynamicClientRegistration: true,

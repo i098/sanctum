@@ -171,6 +171,32 @@ describe('embedded Better Auth issuer', () => {
     }),
   );
 
+  it.scoped('offers a scopeless DCR client no action scopes, while an explicit request still gets them', () =>
+    Effect.gen(function* () {
+      const { url } = yield* serveIssuer;
+      const send: Send = (path, init) => fetch(`${url}${path}`, init);
+      const { cookie } = yield* Effect.promise(() => signUp(send));
+      const register = (scope?: string) =>
+        Effect.promise(async () => {
+          const response = await send('/idp/oauth2/register', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ client_name: 'Fixture', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', ...(scope ? { scope } : {}) }),
+          });
+          return (await response.json()) as { client_id: string; scope?: string };
+        });
+
+      const plain = yield* register();
+      expect(plain.scope?.split(' ')).toEqual(['openid', 'profile', 'email', 'offline_access', 'context:read', 'context:write', 'recordings:read']);
+      const granted = yield* Effect.promise(() => authorize(send, cookie, plain.client_id, { resource: RESOURCE }));
+      expect(decodeJwt(granted.access_token)['scope']).toBe('context:read context:write recordings:read');
+
+      const explicit = yield* register('openid actions:request');
+      const actions = yield* Effect.promise(() => authorize(send, cookie, explicit.client_id, { scope: 'openid actions:request', resource: RESOURCE }));
+      expect(decodeJwt(actions.access_token)['scope']).toBe('actions:request');
+    }),
+  );
+
   it.scoped('issuer:client registers a first-party public PKCE client for the redirect, without consent', () =>
     Effect.gen(function* () {
       const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
