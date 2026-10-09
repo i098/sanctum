@@ -81,6 +81,31 @@ const loopbackClientsAreNative = {
   },
 } satisfies BetterAuthPlugin;
 
+/** What a client is offered when it registers or authorizes without naming `scope`: no action scopes. */
+const DEFAULT_CLIENT_SCOPES = ['openid', 'profile', 'email', 'offline_access', 'context:read', 'context:write', 'recordings:read'];
+
+/**
+ * Better Auth stores every dynamic and metadata-document client with all registrable scopes and,
+ * when `/oauth2/authorize` carries no `scope`, requests all of them. Filling the default list in
+ * first keeps `actions:request` and `actions:execute` for clients that name them explicitly.
+ */
+const scopelessAuthorizeGetsDefaults = {
+  id: 'sanctum-default-scopes',
+  hooks: {
+    before: [
+      {
+        matcher: (ctx: { path?: string }) => ctx.path === '/oauth2/authorize',
+        handler: createAuthMiddleware(async ctx => {
+          const field = ctx.method === 'POST' ? 'body' : 'query';
+          const params = (ctx[field] ?? {}) as { scope?: unknown };
+          if (params.scope !== undefined) return;
+          return { context: { ...ctx, [field]: { ...params, scope: DEFAULT_CLIENT_SCOPES.join(' ') } } };
+        }),
+      },
+    ],
+  },
+} satisfies BetterAuthPlugin;
+
 /** Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it. */
 export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource) => {
   const pool = createPool({
@@ -98,7 +123,7 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     loginPage: '/sign-in',
     consentPage: '/consent',
     scopes: ['openid', 'profile', 'email', 'offline_access', ...MCP_SCOPES],
-    clientRegistrationDefaultScopes: ['openid', 'profile', 'email', 'offline_access', 'context:read', 'context:write', 'recordings:read'],
+    clientRegistrationDefaultScopes: DEFAULT_CLIENT_SCOPES,
     clientRegistrationAllowedScopes: ['actions:request', 'actions:execute'],
     resources: [{ identifier: resource, allowedScopes: [...MCP_SCOPES] }],
     clientRegistrationDefaultResources: [resource],
@@ -132,6 +157,7 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
       provider as typeof provider & BetterAuthPlugin,
       cimd({ fetchClientMetadataResource: fetchMetadata }),
       loopbackClientsAreNative,
+      scopelessAuthorizeGetsDefaults,
     ],
   });
   return { auth, pool };

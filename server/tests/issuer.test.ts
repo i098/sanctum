@@ -171,7 +171,7 @@ describe('embedded Better Auth issuer', () => {
     }),
   );
 
-  it.scoped('offers a scopeless DCR client no action scopes, while an explicit request still gets them', () =>
+  it.scoped('offers a scopeless authorization no action scopes, while an explicit request still gets them', () =>
     Effect.gen(function* () {
       const { url } = yield* serveIssuer;
       const send: Send = (path, init) => fetch(`${url}${path}`, init);
@@ -183,11 +183,11 @@ describe('embedded Better Auth issuer', () => {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ client_name: 'Fixture', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', ...(scope ? { scope } : {}) }),
           });
-          return (await response.json()) as { client_id: string; scope?: string };
+          return (await response.json()) as { client_id: string };
         });
 
       const plain = yield* register();
-      expect(plain.scope?.split(' ')).toEqual(['openid', 'profile', 'email', 'offline_access', 'context:read', 'context:write', 'recordings:read']);
+      expect(plain.client_id).toBeDefined();
       const granted = yield* Effect.promise(() => authorize(send, cookie, plain.client_id, { resource: RESOURCE }));
       expect(decodeJwt(granted.access_token)['scope']).toBe('context:read context:write recordings:read');
 
