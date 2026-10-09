@@ -184,7 +184,7 @@ Owns `deploy/cloudflare/` (Worker, Container classes, `wrangler.jsonc`) and the 
 
 ### landing
 
-Owns `web-app/landing/` (static page, `npm run build:landing`), `web-app/e2e/landing.spec.ts` and the apex exception in `deploy/cloudflare/src/index.ts`; operation in [operations.md](operations.md#cloudflare).
+Owns `web-app/landing/` (static page, `npm run build:landing`), `web-app/e2e/landing.spec.ts` and the landing branch of the Worker in `deploy/cloudflare/src/index.ts`; operation in [operations.md](operations.md#cloudflare).
 
 - The hero runs the listening view's `startWaveform` from `web-app/src/pages/listen/waveform.ts` on simulated levels and never asks for the microphone; reduced motion keeps one still frame.
 - The page loads only its own built files; the Worker adds its CSP, and the copy states only what the hosted site runs today.
