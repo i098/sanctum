@@ -224,7 +224,11 @@ describe('self-hosted organizations', () => {
         const admin = (await join(server, team, 'Ava', 'admin')).invitee;
         const pending = await idp(server, '/organization/invite-member', team.owner.cookie, { email: `pending-${randomBytes(4).toString('hex')}@fixture.test`, role: 'admin', organizationId: team.workspace_id });
         const full = `/organization/get-full-organization?organizationId=${team.workspace_id}`;
-        for (const manager of [team.owner, admin]) expect((await idp(server, full, manager.cookie)).body['invitations']).toEqual([expect.objectContaining({ id: pending.body['id'] })]);
+        // Better Auth also lists the accepted invitations of the two joiners; only the pending one still carries a usable id.
+        for (const manager of [team.owner, admin]) {
+          const invitations = (await idp(server, full, manager.cookie)).body['invitations'] as Array<{ id: string; status: string }>;
+          expect(invitations.filter(({ status }) => status === 'pending')).toEqual([expect.objectContaining({ id: pending.body['id'] })]);
+        }
         const seen = await idp(server, full, member.cookie);
         expect(seen.body['members']).toHaveLength(3);
         expect(seen.body['invitations']).toEqual([]);
