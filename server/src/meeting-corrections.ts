@@ -71,8 +71,8 @@ const copyMeeting = (row: MeetingRow, input: { readonly state: MeetingRow['state
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = MeetingIdSchema.make(randomUUID());
-    yield* sql`INSERT INTO meetings (id, workspace_id, capture_group_id, listener_id, state, title, timezone, started_at, ended_at, boundary_revision, visibility, processing, end_fence_epoch_id, end_fence_sample, created_at, updated_at)
-      SELECT ${id}, workspace_id, capture_group_id, listener_id, ${input.state}, title, timezone, ${dbTime(input.started_ms)}, ${input.ended_at}, 1, visibility, processing, end_fence_epoch_id, end_fence_sample,
+    yield* sql`INSERT INTO meetings (id, workspace_id, capture_group_id, listener_id, state, title, timezone, started_at, ended_at, boundary_revision, visibility, processing, created_at, updated_at)
+      SELECT ${id}, workspace_id, capture_group_id, listener_id, ${input.state}, title, timezone, ${dbTime(input.started_ms)}, ${input.ended_at}, 1, visibility, processing,
         UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) FROM meetings WHERE id = ${row.id}`;
     yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
       SELECT workspace_id, ${id}, principal_id, access, granted_by, UTC_TIMESTAMP(6) FROM meeting_access WHERE meeting_id = ${row.id}`;
@@ -197,9 +197,6 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
         yield* sql`UPDATE meetings SET boundary_revision = ${revision}, state = ${open ? 'active' : 'closing'}, ended_at = ${ended},
           started_at = ${dbTime(Math.min(...ranges.map(range => range.start_ms)))}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${into.id}`;
         yield* sql`UPDATE meetings SET boundary_revision = ${folded.boundary_revision + 1}, state = 'closed', updated_at = UTC_TIMESTAMP(6) WHERE id = ${folded.id}`;
-        yield* sql`UPDATE meetings m JOIN meetings f ON f.id = ${folded.id}
-          SET m.end_fence_epoch_id = f.end_fence_epoch_id, m.end_fence_sample = f.end_fence_sample
-          WHERE m.id = ${into.id} AND m.end_fence_epoch_id IS NULL`;
         yield* insertRanges(access.workspace_id, into.id, revision, coalesce(ranges.map(source)));
         const decision = {
           decision: 'continue' as const,

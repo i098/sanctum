@@ -258,25 +258,26 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
 const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 
 /**
- * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence and not before the
- * closed meeting started. It joins the closed meeting, and a meeting already finalized is finalized again with it; it
- * never opens a meeting. Returns whether the segment was such audio.
+ * Audio of an End from before the pause: an unowned final of an epoch End fenced that starts before the fence. It joins
+ * the meeting that now owns the nearest earlier range of that epoch, whatever row that is after a merge or split, and a
+ * sealed meeting is finalized again with it; with no earlier range it is dropped. It never opens a meeting. Returns
+ * whether the segment was such audio.
  */
-const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
+const endFenced = (workspace_id: WorkspaceId, segment: TranscriptSegment) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { source } = segment;
-    const [fenced] = yield* sql<{ id: MeetingId }>`SELECT id FROM meetings
-      WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start} AND state IN ('closing', 'closed')
-        AND started_at <= ${dbTime(sampleMs(epoch, source.sample_start))}
-        AND EXISTS (SELECT 1 FROM meeting_ranges r WHERE r.meeting_id = meetings.id AND r.boundary_revision = meetings.boundary_revision)
-      ORDER BY started_at DESC, end_fence_sample LIMIT 1`;
-    const closed = fenced === undefined ? null : yield* selectMeeting(workspace_id, fenced.id, true);
-    if (closed?._tag !== 'Some') return false;
-    const end = yield* claimSource(closed.value, source);
-    yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
-    if (closed.value.state !== 'closing') yield* scheduleFinalize(closed.value, null);
-    return true;
+    const [fenced] = yield* sql<{ meeting_id: MeetingId | null }>`SELECT (SELECT r.meeting_id FROM meeting_ranges r
+          JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+          WHERE r.workspace_id = e.workspace_id AND r.epoch_id = e.id AND r.track = ${source.track} AND r.sample_start <= ${source.sample_start}
+          ORDER BY r.sample_start DESC LIMIT 1) AS meeting_id
+      FROM capture_epochs e WHERE e.workspace_id = ${workspace_id} AND e.id = ${source.epoch_id} AND e.end_fence_sample > ${source.sample_start}`;
+    const owner = fenced?.meeting_id ? yield* selectMeeting(workspace_id, fenced.meeting_id, true) : null;
+    if (owner?._tag === 'Some') {
+      yield* claimSource(owner.value, source);
+      if (!OPEN_STATES.includes(owner.value.state)) yield* scheduleFinalize(owner.value, null);
+    }
+    return fenced !== undefined;
   });
 
 /**
@@ -319,8 +320,8 @@ const placeSegment = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSeg
   Effect.gen(function* () {
     const owner = yield* ownerOf(key.workspace_id, segment.source);
     if (owner._tag === 'Some') return yield* extendOwned(open, owner.value, epoch, segment);
-    if (yield* endFenced(key.workspace_id, epoch, segment)) return open;
     if (yield* adjacentToClosed(key.workspace_id, epoch, segment)) return open;
+    if (yield* endFenced(key.workspace_id, segment)) return open;
     return yield* placeUnowned(key, epoch, segment, open);
   });
 
@@ -586,7 +587,7 @@ const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | 
       cue: { evidence: ['explicit_close'], reason: `closed by ${access.principal.display_name}`, uncertainty: 0 },
       actor: access.principal.id,
     });
-    if (fence !== null) yield* sql`UPDATE meetings SET end_fence_epoch_id = ${fence.epoch_id}, end_fence_sample = ${fence.sample} WHERE id = ${row.id}`;
+    if (fence !== null) yield* sql`UPDATE capture_epochs SET end_fence_sample = GREATEST(COALESCE(end_fence_sample, 0), ${fence.sample}) WHERE workspace_id = ${access.workspace_id} AND id = ${fence.epoch_id}`;
   });
 
 /**
