@@ -67,6 +67,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `store.ts`: `workspaceForOrg(input: { issuer; org_id }): Effect<Option<WorkspaceId>, SqlError, R>` and `linkWorkspaceOrg(input: { workspace_id; issuer; org_id }): Effect<void, SqlError, R>` (idempotent; a clash with another link is a defect) over migration `012_workspace_orgs`.
 - `store.ts`: `addMember(input: { workspace_id; principal_id; role; org_issuer? })` stores `workspace_members.org_issuer` (migration `016_member_org_issuer`): the issuer whose organization sync granted the membership, NULL when Sanctum did; org sync revokes only memberships its issuer granted.
+- `store.ts`: `setMembership(workspace_id, principal_id, role | null): Effect<void, SeatLimitReached | SqlError, R>`, the upsert (through `addMember` and its seat limit) and revoke path that provider organization glue calls; `claimSeat(workspace_id, principal_id | null)` checks a seat in its own transaction.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
 - contracts: `AgentsApi` with `createAgent`, `listAgents`, `revokeCredential`.
 
@@ -186,6 +187,7 @@ Owns `deploy/cloudflare/` (Worker, Container classes, `wrangler.jsonc`) and the 
 Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts`; operation in [operations.md](operations.md#sign-in).
 
 - Mounts `/auth/*` from main.ts; opens sessions through `openSession` and `linkIdentity` in auth.ts.
+- B1 (self-hosted organizations): `server/src/issuer-orgs.ts` (Better Auth organization hooks and the sign-in repair `reconcileMember`), migration `013_issuer_organizations`, `web-app/src/pages/auth/team.tsx` (Team and Profile dialogs) and the `/invite/<id>` page; operation in [operations.md](operations.md#self-hosted-sign-in).
 
 ### organizations (W1)
 

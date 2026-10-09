@@ -96,7 +96,7 @@ async function authorize(send: Send, cookie: string, client: string, params: Rec
 }
 
 describe('embedded Better Auth issuer', () => {
-  it.scoped('fits migration 011: Better Auth finds no schema drift once Sanctum has migrated', () =>
+  it.scoped('fits migrations 011 and 013: Better Auth finds no schema drift once Sanctum has migrated', () =>
     Effect.gen(function* () {
       const database = yield* freshDatabase;
       // Better Auth caches the result per pool, so each check uses its own issuer.

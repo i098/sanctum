@@ -65,10 +65,11 @@ const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSa
 
 /**
  * Refuses a new seat once active seats reach the workspace's `seat_limit`, else the configured
- * default (NULL default: no limit). Holders keep their seat and may change role even over the limit.
- * Locks the workspace row, so concurrent additions in one workspace cannot overshoot.
+ * default (NULL default: no limit). Holders keep their seat and may change role even over the limit;
+ * a null principal holds none. Locks the workspace row, so concurrent additions in one workspace
+ * cannot overshoot; outside `addMember`, run it in its own transaction as a check.
  */
-const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId) =>
+export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fallback = yield* Effect.orDie(defaultSeatLimit);
@@ -100,6 +101,25 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
           ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL, org_issuer = new.org_issuer`;
         return yield* bumpPermissionRevision(input.workspace_id);
       }),
+    );
+  });
+
+/**
+ * Moves one membership to `role`, or revokes it for null, through `addMember` and its seat limit;
+ * no write when it already matches, so a repeated sync keeps access caches.
+ */
+export const setMembership = (workspace_id: WorkspaceId, principal_id: PrincipalId, role: WorkspaceRole | null) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [current] = yield* sql<{ role: WorkspaceRole }>`SELECT role FROM workspace_members
+      WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`;
+    if ((current?.role ?? null) === role) return;
+    if (role !== null) return yield* Effect.asVoid(addMember({ workspace_id, principal_id, role }));
+    yield* sql.withTransaction(
+      Effect.zipRight(
+        sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
+        bumpPermissionRevision(workspace_id),
+      ),
     );
   });
 

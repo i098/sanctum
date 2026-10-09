@@ -52,7 +52,7 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 ## Self-hosted sign-in
 
 `SANCTUM_EMBEDDED_ISSUER=better-auth` mounts Better Auth ([server/src/issuer.ts](../server/src/issuer.ts)) in the API process at `/idp`: the OIDC issuer for website sign-in and the OAuth authorization server for `/mcp`.
-It uses the existing MySQL through its own two-connection pool and the `auth_*` tables of migration `011_embedded_issuer`; run migrations first. Sanctum never runs Better Auth's own migrator.
+It uses the existing MySQL through its own two-connection pool and the `auth_*` tables of migrations `011_embedded_issuer` and `013_issuer_organizations`; run migrations first. Sanctum never runs Better Auth's own migrator.
 
 | Setting | Value |
 | --- | --- |
@@ -68,6 +68,11 @@ It uses the existing MySQL through its own two-connection pool and the `auth_*` 
 - **MCP clients** register themselves (open registration or a metadata document URL). A registration without `application_type` whose redirect URIs are all `http` loopback URIs (`localhost`, `127.0.0.1`, `[::1]`, any port) is registered as `native`; every other registration keeps the OIDC default `web`, which allows only `https` redirects. Access tokens carry only the Sanctum scopes the user approved for the `/mcp` resource.
 - **Client scopes**: an authorization request that names no `scope` is offered only the OIDC scopes plus `context:read`, `context:write` and `recordings:read`, for every client (registered, metadata document or `issuer:client`). While `SANCTUM_MCP_DEFAULT_SCOPES` is unset, the `/mcp` 401 challenge names every MCP scope except `actions:request` and `actions:execute`, and the resource metadata lists every supported scope. Setting `SANCTUM_MCP_DEFAULT_SCOPES=context:read,context:write,recordings:read` makes both stop naming scopes and grants those scopes to tokens that name no Sanctum scope. `actions:request` and `actions:execute` are granted only when a client names them in its authorization request.
 - **Access**: an issuer account alone grants nothing. Its `(issuer, subject)` pair must be linked to a principal with an active membership in `principal_identities`; membership never comes from the email address.
+- **Team**: the team of a workspace is a Better Auth organization with the workspace's id and name ([server/src/issuer-orgs.ts](../server/src/issuer-orgs.ts)). An owner sets it up in Settings → Workspace → Team. Then owners and admins invite people (email and role), change roles and remove members there; members see the list. Each change goes to `workspace_members`: an accepted invitation creates the human principal and its identity, and a removal revokes the membership before Better Auth deletes it, so the person's sessions and MCP tokens stop at once. Each sign-in applies the person's organization roles again, which repairs an addition or role change whose Sanctum side failed. A workspace at its seat limit refuses the invitation before Better Auth adds the member. Leaving an organization and deleting one are off; a workspace is deleted in Sanctum.
+- **Invitation links**: Sanctum has no email transport, so the inviter copies the link `https://<host>/invite/<id>` (valid for 48 hours) and sends it. Without email verification, anyone who has the link and registers the invited email address can accept, so give the link only to that person. When SMTP exists, send invitations by email and set `requireEmailVerificationOnInvitation: true` for the organization plugin in issuer.ts.
+- **Members outside the team**: an owner added with `npm run owner -w server -- --workspace-id <id>` keeps access but is not in the team list until someone invites them.
+- **Profile**: Settings → Profile changes the display name and the password at the issuer; Sanctum shows the new name after the next sign-in.
+- **MCP workspace**: an MCP access token carries `org_id`, the active organization of the browser session that authorized it (opening Team or accepting an invitation sets it), so `/mcp` selects that workspace.
 - **Upgrades**: Better Auth versions are pinned. At startup it logs any difference between its expected schema and the database; an upgrade that needs more than new tables, indexes or columns is its own reviewed task.
 
 ## Cloudflare
@@ -156,6 +161,6 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 
 ## Not yet selected
 
-The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted). The hosted site is configured for WorkOS AuthKit ([Cloudflare](#cloudflare)); the embedded issuer is not built yet.
+The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted). The hosted site is configured for WorkOS AuthKit ([Cloudflare](#cloudflare)); the embedded issuer is built ([Self-hosted sign-in](#self-hosted-sign-in)) but runs in no deployment.
 Saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
 Until they are selected, production activation is refused and no recording expires automatically (only an owner's workspace deletion purges data).

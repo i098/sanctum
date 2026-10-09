@@ -1,23 +1,26 @@
 /**
  * Embedded OIDC issuer and MCP authorization server for self-hosting (docs/DECISIONS.md, sign-in):
  * Better Auth at `/idp` when `SANCTUM_EMBEDDED_ISSUER=better-auth`. It keeps its own small mysql2
- * pool and the `auth_*` tables of migration 011; Sanctum never runs Better Auth's migrator. Login
+ * pool and the `auth_*` tables of migrations 011 and 013; Sanctum never runs Better Auth's migrator. Login
  * ID tokens and MCP access tokens carry the same `iss` and `sub`, so one `principal_identities`
  * row serves both, and mcp.ts verifies these tokens like any other authorization server's.
+ * Its organizations are the teams of Sanctum workspaces (issuer-orgs.ts).
  */
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { type ClientMetadataResourceFetch, oauthProvider } from '@better-auth/oauth-provider';
 import { HttpApiBuilder, HttpApp } from '@effect/platform';
 import { NodeRuntime } from '@effect/platform-node';
+import { SqlClient } from '@effect/sql';
 import { type BetterAuthPlugin, betterAuth } from 'better-auth';
 // `better-auth/api` through the `imports` alias in package.json: Sentrux resolves that specifier to server/src/api.ts.
-import { createAuthMiddleware } from '#better-auth-api';
-import { jwt } from 'better-auth/plugins';
-import { Config, Effect, Option, Redacted } from 'effect';
+import { APIError, createAuthMiddleware } from '#better-auth-api';
+import { jwt, organization } from 'better-auth/plugins';
+import { Config, Effect, Either, Option, Redacted } from 'effect';
 import { createPool } from 'mysql2/promise';
 import { serverConfig } from './config.ts';
 import type { MysqlOptions } from './db.ts';
+import { applyMember, requireSeat, workspaceOrganization } from './issuer-orgs.ts';
 import { MCP_SCOPES } from './mcp.ts';
 
 /** Better Auth's base path; the public issuer is `<origin>/idp`. */
@@ -103,8 +106,16 @@ const scopelessAuthorizeGetsDefaults = rewritesRequest('sanctum-default-scopes',
   return { [field]: { ...params, scope: DEFAULT_CLIENT_SCOPES.join(' ') } };
 });
 
-/** Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it. */
-export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource) => {
+/**
+ * Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it.
+ * `sql` is the API's database client, which organization changes need for Sanctum's side; without it they fail.
+ */
+export const createIssuer = (
+  settings: IssuerSettings,
+  mysql: MysqlOptions,
+  fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource,
+  sql?: SqlClient.SqlClient,
+) => {
   const pool = createPool({
     host: mysql.host,
     port: mysql.port,
@@ -116,6 +127,15 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     ...(mysql.caCert === undefined ? {} : { ssl: { ca: mysql.caCert, verifyIdentity: true } }),
   });
   const resource = settings.resource.href;
+  const issuer = settings.issuer.href;
+  /** Sanctum's side of one organization change: a refusal answers 403 with its message and stops the change; a database error answers 500. */
+  const sanctum = async <A, E extends { readonly _tag: string; readonly message: string }>(change: Effect.Effect<A, E, SqlClient.SqlClient>) => {
+    if (sql === undefined) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Organizations change only through the API process' });
+    const result = await Effect.runPromise(Effect.either(Effect.provideService(change, SqlClient.SqlClient, sql)));
+    if (Either.isRight(result)) return result.right;
+    if (result.left._tag === 'SqlError') throw result.left;
+    throw new APIError('FORBIDDEN', { message: result.left.message });
+  };
   const provider = oauthProvider({
     loginPage: '/sign-in',
     consentPage: '/consent',
@@ -126,6 +146,13 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     clientRegistrationDefaultResources: [resource],
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
+    // The authorizing session's active organization becomes the access token's `org_id`, which selects the workspace at /mcp.
+    postLogin: {
+      page: '/sign-in',
+      shouldRedirect: () => false,
+      consentReferenceId: ({ session }) => (typeof session['activeOrganizationId'] === 'string' ? session['activeOrganizationId'] : undefined),
+    },
+    customAccessTokenClaims: ({ referenceId }) => (referenceId === undefined ? {} : { org_id: referenceId }),
     schema: {
       oauthClient: { modelName: 'auth_oauth_client' },
       oauthResource: { modelName: 'auth_oauth_resource' },
@@ -147,7 +174,8 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     account: { modelName: 'auth_account' },
     verification: { modelName: 'auth_verification' },
     // The JWT plugin's session-token endpoint is not an OAuth grant; tokens come from /oauth2/token only.
-    disabledPaths: ['/token'],
+    // Leaving runs no organization hook, so a member leaves only by an admin's removal, which Sanctum sees.
+    disabledPaths: ['/token', '/organization/leave'],
     plugins: [
       jwt({ schema: { jwks: { modelName: 'auth_jwks' } } }),
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
@@ -155,6 +183,22 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
       cimd({ fetchClientMetadataResource: fetchMetadata }),
       loopbackClientsAreNative,
       scopelessAuthorizeGetsDefaults,
+      // No email transport: inviters copy the link, and Better Auth's default lets any session with the invited email accept.
+      // Once SMTP exists, send invitations by email and set `requireEmailVerificationOnInvitation: true` (docs/operations.md).
+      organization({
+        schema: { organization: { modelName: 'auth_organization' }, member: { modelName: 'auth_member' }, invitation: { modelName: 'auth_invitation' } },
+        // Sanctum's seat limit applies instead (store.ts `claimSeat`); a workspace is deleted in Sanctum, never through its organization.
+        // Finite, because member lists also use it as their SQL LIMIT.
+        membershipLimit: Number.MAX_SAFE_INTEGER,
+        disableOrganizationDeletion: true,
+        organizationHooks: {
+          beforeCreateOrganization: async ({ organization, user }) => ({ data: { ...organization, ...(await sanctum(workspaceOrganization(issuer, organization.slug, user))) } }),
+          beforeAcceptInvitation: ({ invitation, user }) => sanctum(requireSeat(issuer, invitation.organizationId, user)),
+          afterAcceptInvitation: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, member.role)),
+          afterUpdateMemberRole: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, member.role)),
+          beforeRemoveMember: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, null)),
+        },
+      }),
     ],
   });
   return { auth, pool };
@@ -166,8 +210,9 @@ export const embeddedIssuerLive = (mysql: MysqlOptions) =>
     Effect.gen(function* () {
       const settings = yield* issuerSettings;
       if (Option.isNone(settings)) return;
+      const sql = yield* SqlClient.SqlClient;
       const { auth } = yield* Effect.acquireRelease(
-        Effect.sync(() => createIssuer(settings.value, mysql)),
+        Effect.sync(() => createIssuer(settings.value, mysql, undefined, sql)),
         ({ pool }) => Effect.promise(() => pool.end()),
       );
       const app = HttpApp.fromWebHandler(auth.handler);

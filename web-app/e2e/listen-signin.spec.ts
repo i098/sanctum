@@ -105,6 +105,22 @@ test('Connect sign-in navigates to the issuer URL the server returns', async ({ 
   await expect(page).toHaveURL(/\/fixture-issuer\/authorize\?state=s$/);
 });
 
+test('self-hosted issuer: Team opens over Settings, closes back to it, and capture keeps running', async ({ page }) => {
+  await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await expect(row(settings, 'Profile')).toHaveText('Display name and passwordEdit');
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  // An ended issuer session asks for sign-in instead of showing an empty team.
+  await expect(team.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/');
+  await page.keyboard.press('Escape');
+  await expect(team).toBeHidden();
+  await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
+  await expect(page.getByText('listening', { exact: true })).toBeVisible();
+});
+
 test('an operator-seeded session without an issuer offers no sign out', async ({ page }) => {
   await openListening(page, { configured: false, access: ACCESS });
   const settings = await openSettings(page);
