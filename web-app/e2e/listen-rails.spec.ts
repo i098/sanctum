@@ -17,6 +17,74 @@ test('final live transcript lines arrive in the left rail; partial ones never do
   await expect(rail).toHaveAttribute('data-live', 'false');
 });
 
+const NOTE = "Live captions use your browser's speech service (in Chrome, Google's).";
+
+test('browser captions show words as they are heard, give way to server segments, and never leave the page', async ({ page }) => {
+  const sent: string[] = [];
+  page.on('request', request => sent.push(`${new URL(request.url()).search} ${request.postData() ?? ''}`));
+  page.on('websocket', socket => socket.on('framesent', frame => sent.push(String(frame.payload))));
+  await openListening(page, { speech: true });
+  const rail = page.getByRole('region', { name: 'Live transcript' });
+  await expect(page.getByText(NOTE)).toBeVisible();
+  await page.evaluate(() => window.__speech.say('we keep'));
+  await expect(rail.getByText('we keep', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.__speech.say('we keep the pilot small and'));
+  await expect(rail.getByText('we keep the pilot small and', { exact: true })).toBeVisible();
+  // The saved segment replaces every browser word shown so far; the utterance goes on after them.
+  await page.evaluate(() => window.__capture.transcript('we keep the pilot small', '0'));
+  await expect(rail.getByText('S0: we keep the pilot small')).toBeVisible();
+  await expect(rail.getByText('we keep the pilot small and', { exact: true })).toHaveCount(0);
+  await page.evaluate(() => window.__speech.say('we keep the pilot small and review it Friday', true));
+  await expect(rail.getByText('review it Friday', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.__capture.transcript('and review it on Friday.', '0'));
+  await expect(rail.getByText('S0: and review it on Friday.')).toBeVisible();
+  await expect(rail.getByText('review it Friday', { exact: true })).toHaveCount(0);
+  // The browser ends sessions on its own; captions restart until the page pauses.
+  await page.evaluate(() => window.__speech.end());
+  await expect.poll(() => page.evaluate(() => window.__speech.starts)).toBe(2);
+  await page.evaluate(() => window.__speech.say('one more thing'));
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(rail.getByText('one more thing')).toHaveCount(0);
+  await expect(page.getByText(NOTE)).toHaveCount(0);
+  expect(sent.filter(data => /keep|pilot|review|thing/.test(decodeURIComponent(data)))).toEqual([]);
+});
+
+test('without browser recognition (as in Firefox) the rail shows only server segments', async ({ page }) => {
+  await openListening(page);
+  const rail = page.getByRole('region', { name: 'Live transcript' });
+  await page.evaluate(() => window.__capture.transcript('we keep the pilot small', '0'));
+  await expect(rail.getByText('S0: we keep the pilot small')).toBeVisible();
+  await expect(page.getByText(NOTE)).toHaveCount(0);
+});
+
+test('a browser caption taller than the rail shows its tail after an ellipsis and stays one line', async ({ page }) => {
+  await openListening(page, { speech: true });
+  const rail = page.getByRole('region', { name: 'Live transcript' });
+  const words = Array.from({ length: 120 }, (_, index) => `word${index}`);
+  for (const count of [60, 90, 120]) await page.evaluate(text => window.__speech.say(text), words.slice(0, count).join(' '));
+  const caption = rail.locator('.tline.interim');
+  await expect(caption).toHaveCount(1);
+  await expect(caption).toHaveText(/^…word\d+ .*word119$/);
+  await expect(rail.locator('.tline:not(.bye)')).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      const [line, band] = await Promise.all([caption.boundingBox(), rail.locator('.tlines').boundingBox()]);
+      return line!.y >= band!.y - 1 && line!.y + line!.height <= band!.y + band!.height + 1;
+    })
+    .toBe(true);
+});
+
+test('a recognition error removes browser captions and their note', async ({ page }) => {
+  await openListening(page, { speech: true });
+  const rail = page.getByRole('region', { name: 'Live transcript' });
+  await page.evaluate(() => window.__speech.say('we keep the pilot'));
+  await expect(rail.getByText('we keep the pilot', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.__speech.end('network'));
+  await expect(rail.getByText('we keep the pilot', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(NOTE)).toHaveCount(0);
+  expect(await page.evaluate(() => window.__speech.starts)).toBe(1);
+});
+
 test("agent work shows the live meeting's actions by title, follows their state and takes a reconnect's snapshot", async ({ page }) => {
   await openListening(page);
   const feed = page.getByRole('region', { name: 'Agent work' });

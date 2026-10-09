@@ -80,7 +80,7 @@ Owns `web-app/src/lib/capture/{controller,permissions,recorder,recording-worklet
 
 ### listen-ui (T21 visual core)
 
-Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,listen.css,Dialog.tsx,ReviewDialog.tsx}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
+Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,ReviewDialog.tsx}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
 
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
 - `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.

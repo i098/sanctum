@@ -98,6 +98,11 @@
   color: #f2a23b;
 }
 
+/* The browser-captions note keeps to the centre column the rails leave free (50% - 150px each side). */
+.listen-note {
+  max-width: 300px;
+}
+
 .listen-footer {
   bottom: 30px;
   align-items: center;
@@ -507,6 +512,11 @@
     align-items: stretch;
     justify-content: flex-end;
     gap: 16px;
+  }
+
+  /* The captions note adds its two lines and gap to the status above the rails. */
+  .listen:has(.listen-note) .listen-rails {
+    top: calc(var(--stage-floor) + 134px);
   }
 
   .listen-tlog,

@@ -39,24 +39,30 @@ function cutOff(container: HTMLElement, items: ReadonlyArray<HTMLElement>): Read
   return items.filter(item => item.getBoundingClientRect().top < edge);
 }
 
-/** One rail line, sliding up into place. Live ASR labels speakers 0, 1, …; the kiosk showed them as S0, S1. */
-function appendLine(lines: HTMLElement, segment: TranscriptSegment): void {
+/** One rail line, sliding up into place. */
+function appendLine(lines: HTMLElement, text: string, className = 'tline'): HTMLElement {
   const line = document.createElement('div');
-  line.className = 'tline';
-  line.textContent = segment.speaker_label === null ? segment.text.trim() : `S${segment.speaker_label}: ${segment.text.trim()}`;
+  line.className = className;
+  line.textContent = text;
   lines.append(line);
   animate(line, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], 200, POWER2_OUT);
+  return line;
 }
 
-/** Past ten lines, or once the band is full, the oldest collapse away so no line ever shows half. */
+/**
+ * Past ten lines, or once the band is full, the oldest collapse away so no line ever shows half.
+ * The caption in progress stays: it fits itself (see `showCaption`) and only pushes older lines out.
+ */
 function trimLines(lines: HTMLElement): void {
   const current = [...lines.querySelectorAll<HTMLElement>('.tline:not(.bye)')];
-  const drop = Math.max(current.length - TRANSCRIPT_MAX, cutOff(lines, current).length);
-  for (const old of current.splice(0, drop)) {
+  const settled = current.filter(line => !line.classList.contains('interim'));
+  const drop = Math.max(current.length - TRANSCRIPT_MAX, cutOff(lines, settled).length);
+  for (const old of settled.slice(0, drop)) {
     old.classList.add('bye');
     collapse(old, 300);
   }
-  current.forEach((element, index) => element.classList.toggle('old', index < current.length - TRANSCRIPT_FRESH));
+  const kept = current.filter(line => !line.classList.contains('bye'));
+  kept.forEach((element, index) => element.classList.toggle('old', index < kept.length - TRANSCRIPT_FRESH));
 }
 
 /**
@@ -68,13 +74,49 @@ export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: Sub
   resized.observe(lines);
   const unsubscribe = subscribeTranscript(segment => {
     if (segment.status !== 'final' || segment.text.trim() === '') return;
-    appendLine(lines, segment);
+    // Live ASR labels speakers 0, 1, …; the kiosk showed them as S0, S1.
+    appendLine(lines, segment.speaker_label === null ? segment.text.trim() : `S${segment.speaker_label}: ${segment.text.trim()}`);
     trimLines(lines);
   });
   return () => {
     resized.disconnect();
     unsubscribe();
   };
+}
+
+/**
+ * Browser captions (display-only, see captions.ts) at the bottom of the rail, in its line style:
+ * the utterance in progress updates its line word by word; a final one stays until a server
+ * segment replaces it. A line taller than the band shows only its tail, after an ellipsis.
+ * Empty text removes the line in progress.
+ */
+export function showCaption(lines: HTMLElement, text: string, final: boolean): void {
+  const line = lines.querySelector<HTMLElement>('.tline.interim:not(.bye)');
+  if (text === '') return line?.remove();
+  const shown = line ?? appendLine(lines, text, `tline caption${final ? '' : ' interim'}`);
+  shown.classList.toggle('interim', !final);
+  fitTail(lines, shown, text);
+  trimLines(lines);
+}
+
+function fitTail(lines: HTMLElement, line: HTMLElement, text: string): void {
+  line.textContent = text;
+  if (line.offsetHeight <= lines.clientHeight) return;
+  const starts = [...new Intl.Segmenter(navigator.language, { granularity: 'word' }).segment(text)].filter(part => part.isWordLike).map(part => part.index);
+  let from = 1;
+  let to = starts.length - 1;
+  while (from < to) {
+    const middle = (from + to) >> 1;
+    line.textContent = `…${text.slice(starts[middle])}`;
+    if (line.offsetHeight <= lines.clientHeight) to = middle;
+    else from = middle + 1;
+  }
+  if (starts.length > 1) line.textContent = `…${text.slice(starts[from])}`;
+}
+
+export function clearCaptions(lines: HTMLElement): void {
+  for (const caption of lines.querySelectorAll('.caption')) caption.remove();
+  trimLines(lines);
 }
 
 /** Row tone (the kiosk's status classes) and status label per action state. */
