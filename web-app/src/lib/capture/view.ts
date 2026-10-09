@@ -23,7 +23,11 @@ export type CaptureIssue =
   | 'lease_lost'
   | 'listener_removed'
   | 'transcription_unavailable'
-  | 'transcription_behind';
+  | 'transcription_behind'
+  /** The input sends exact digital zero, which no real room does (a closed MacBook's built-in microphone). */
+  | 'silent_input'
+  /** The chosen input is gone, so capture uses the browser's default input. */
+  | 'input_unavailable';
 
 export interface CaptureSnapshot {
   readonly listener: ListenerState;
@@ -39,6 +43,10 @@ export interface CaptureSnapshot {
   readonly refusedChunks: number;
   readonly savedThroughMs: number | null;
   readonly wakeLock: 'unsupported' | 'released' | 'held';
+  /** The chosen input's `deviceId`, kept on this device; null uses the browser's default input. */
+  readonly inputId: string | null;
+  /** The label of the input being captured, null while nothing is captured. */
+  readonly inputLabel: string | null;
 }
 
 export interface LevelSource {
@@ -96,6 +104,8 @@ export interface CaptureView {
   exportRecording(recording: OrphanedRecording, part: number): Promise<WavPart | null>;
   /** Deletes only this orphaned recording's chunks, and only when a person asks. */
   discardRecording(recording: OrphanedRecording): Promise<void>;
+  /** Remembers the input (null: the default) and moves a running capture to it; failures show as `issue`. */
+  chooseInput(deviceId: string | null): Promise<void>;
 }
 
 export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
@@ -109,6 +119,8 @@ export const initialCaptureSnapshot: CaptureSnapshot = Object.freeze({
   refusedChunks: 0,
   savedThroughMs: null,
   wakeLock: 'released',
+  inputId: null,
+  inputLabel: null,
 });
 
 function differs(snapshot: CaptureSnapshot, patch: Partial<CaptureSnapshot>): boolean {

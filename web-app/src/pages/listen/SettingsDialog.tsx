@@ -3,6 +3,7 @@ import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react'
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
+import { InputPicker } from './InputPicker.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
 import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
 
@@ -194,7 +195,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
     ...accountRows(signIn, setManage, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
-    ['Microphone', MICROPHONE[permission]],
+    ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} /></>],
     ['Integrations', 'Unavailable: integrations are not connected yet'],
     ['Retention', 'Not selected: nothing is deleted automatically'],
   ];

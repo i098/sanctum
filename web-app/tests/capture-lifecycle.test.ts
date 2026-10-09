@@ -17,6 +17,7 @@ const BLOCK = 2_400;
 
 class FakeTrack extends EventTarget {
   readyState: MediaStreamTrackState = 'live';
+  label = 'Default - MacBook Pro Microphone';
   stop(): void {
     this.readyState = 'ended';
   }
@@ -254,18 +255,31 @@ class FakeListenerServer {
   };
 }
 
-function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[]; signedOut?: boolean } = {}) {
+/** The captain's inputs: the closed MacBook's built-in microphone is the default, an iPhone through Continuity and a virtual device are the others. */
+const INPUTS: Record<string, string> = { default: 'Default - MacBook Pro Microphone', builtin: 'MacBook Pro Microphone', iphone: '萧 Microphone', loom: 'LoomAudioDevice' };
+
+function harness(options: { secure?: boolean; getUserMedia?: () => Promise<MediaStream>; buffer?: MemoryBuffer; locks?: FakeLocks; stored?: boolean; unclaimed?: boolean; epochs?: string[]; signedOut?: boolean; input?: string } = {}) {
   const win = Object.assign(new EventTarget(), { isSecureContext: options.secure ?? true });
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
   const tracks: FakeTrack[] = [];
-  const microphone = async () => {
-    const track = tracks[tracks.push(new FakeTrack()) - 1];
+  const inputs = { ...INPUTS };
+  /** Every `getUserMedia` audio request, in order. */
+  const requests: MediaTrackConstraints[] = [];
+  const microphone = async (constraints: MediaStreamConstraints) => {
+    const audio = constraints.audio as MediaTrackConstraints;
+    requests.push(audio);
+    const label = inputs[((audio.deviceId as ConstrainDOMStringParameters | undefined)?.exact as string | undefined) ?? 'default'];
+    if (label === undefined) throw new DOMException('no such input', 'OverconstrainedError');
+    const track = tracks[tracks.push(Object.assign(new FakeTrack(), { label })) - 1];
     return { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
   };
   const status = new FakeStatus();
   const sentinels: FakeSentinel[] = [];
   const buffer = options.buffer ?? new MemoryBuffer();
   const storage = new Map<string, string>(options.stored ? [['sanctum.listener', JSON.stringify({ id: LISTENER_ID, lease_generation: 1 })]] : []);
+  if (options.input) storage.set('sanctum.microphone', options.input);
+  /** Streams the recorder was moved to without a restart. */
+  const replaced: MediaStream[] = [];
   const server = new FakeListenerServer(options);
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const { lives, calls, client } = server;
@@ -282,17 +296,18 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     openBuffer: async () => buffer,
     startRecorder: async (_stream, callback) => {
       onBlock = callback;
-      return { sampleRate: RATE, levels: { bandCount: 33, read: (bands) => (bands.fill(0.5), 0.5) }, flush: async () => { }, close: async () => { } };
+      return { sampleRate: RATE, levels: { bandCount: 33, read: (bands) => (bands.fill(0.5), 0.5) }, flush: async () => { }, replaceInput: (stream) => void replaced.push(stream), close: async () => { } };
     },
     client,
     openLive: server.openLive,
     streamUrl: (id) => `ws://test/api/v1/listeners/${id}/stream`,
-    timing: { chunkSeconds: 1, commitSeconds: 0.5, heartbeatMs: 15_000, gapMs: 3_000 },
+    timing: { chunkSeconds: 1, commitSeconds: 0.5, heartbeatMs: 15_000, gapMs: 3_000, silentSeconds: 1 },
   };
   const engine = createCaptureController(deps);
   let next = 0;
-  const feed = (seconds: number) => {
-    for (let i = 0; i < (seconds * RATE) / BLOCK; i++, next += BLOCK) onBlock!(next, new Int16Array(BLOCK).fill(100));
+  /** `sample`: every PCM16 value fed; 0 is a dead input, small values a quiet room. */
+  const feed = (seconds: number, sample = 100) => {
+    for (let i = 0; i < (seconds * RATE) / BLOCK; i++, next += BLOCK) onBlock!(next, new Int16Array(BLOCK).fill(sample));
   };
   const accept = () => lives.at(-1)!.options.onStatus('live');
   const reject = (reason: 'stale_generation' | 'unauthorized' = 'stale_generation') => lives.at(-1)!.options.onStatus('rejected', reason);
@@ -308,6 +323,9 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     sentinels,
     buffer,
     storage,
+    inputs,
+    requests,
+    replaced,
     lives,
     calls,
     feed,
@@ -466,6 +484,74 @@ describe('capture lifecycle', () => {
     h.track.unplug();
     await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'input_lost', archive: 'interrupted' }));
     expect(h.lives[0]!.stopped).toBe('interrupted');
+  });
+
+  it('warns, naming the input, after it sends exact zero for the threshold, and clears at the first real sound', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.feed(0.9, 0);
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null });
+    h.feed(0.1, 0);
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'silent_input', inputLabel: 'Default - MacBook Pro Microphone' });
+    h.feed(0.05, 2);
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null });
+  });
+
+  it('never warns about a quiet room, whose noise is never exact zero', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.feed(1.5, 2);
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null });
+  });
+
+  it('moves a running capture to the chosen input in the same epoch, and remembers the choice for the next page', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.feed(1, 0);
+    const { epochId } = h.snapshot();
+    const dead = h.track;
+    await h.engine.chooseInput('iphone');
+    expect(h.requests.at(-1)).toMatchObject({ deviceId: { exact: 'iphone' } });
+    expect(h.replaced).toHaveLength(1);
+    expect(dead.readyState).toBe('ended');
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null, epochId, inputId: 'iphone', inputLabel: '萧 Microphone' });
+    expect(h.lives).toHaveLength(1);
+    expect(h.storage.get('sanctum.microphone')).toBe('iphone');
+
+    const next = harness({ input: 'iphone' });
+    expect(next.snapshot().inputId).toBe('iphone');
+    await next.engine.start();
+    expect(next.requests).toMatchObject([{ deviceId: { exact: 'iphone' } }]);
+  });
+
+  it('falls back to the default input when the chosen one is gone, and says so', async () => {
+    const h = harness({ input: 'iphone' });
+    delete h.inputs['iphone'];
+    await h.engine.start();
+    expect(h.requests.map(({ deviceId }) => deviceId)).toEqual([{ exact: 'iphone' }, undefined]);
+    expect(h.snapshot()).toMatchObject({ issue: 'input_unavailable', inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
+    expect(h.storage.has('sanctum.microphone')).toBe(false);
+
+    // A chosen input unplugged during capture hands the same epoch to the default input.
+    h.feed(0.1);
+    h.accept();
+    h.inputs['loom'] = 'LoomAudioDevice';
+    await h.engine.chooseInput('loom');
+    const { epochId } = h.snapshot();
+    expect(h.snapshot()).toMatchObject({ issue: null, inputId: 'loom' });
+    h.track.unplug();
+    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: 'input_unavailable', inputId: null, inputLabel: 'Default - MacBook Pro Microphone', epochId }));
+
+    // An input that cannot open leaves capture on the current one.
+    delete h.inputs['loom'];
+    await h.engine.chooseInput('loom');
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: 'unsupported_constraints', inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
   });
 
   it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {

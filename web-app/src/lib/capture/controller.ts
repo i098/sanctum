@@ -11,7 +11,8 @@ import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type RejectReason, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
-import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
+import { acquireMicrophone, SILENT_PEAK, SILENT_SECONDS } from './microphone.ts';
+import { captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { LISTENER_KEY } from './stored-listener.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
@@ -24,9 +25,13 @@ export interface CaptureTiming {
   readonly heartbeatMs: number;
   /** Wall-clock time beyond the sample clock that counts as sleep/suspension and starts a new epoch. */
   readonly gapMs: number;
+  /** Seconds of exact digital zero before the input counts as sending no sound. */
+  readonly silentSeconds: number;
 }
 
-const DEFAULT_TIMING: CaptureTiming = { chunkSeconds: 30, commitSeconds: 2, heartbeatMs: 15_000, gapMs: 3_000 };
+const DEFAULT_TIMING: CaptureTiming = { chunkSeconds: 30, commitSeconds: 2, heartbeatMs: 15_000, gapMs: 3_000, silentSeconds: SILENT_SECONDS };
+/** The chosen input's `deviceId` in `localStorage`; absent means the browser's default input. */
+const INPUT_KEY = 'sanctum.microphone';
 /** Server-reported live transcription trouble; audio still reaches the archive either way. */
 const TRANSCRIPTION_ISSUE: Record<DegradedReason, CaptureIssue> = { provider_unavailable: 'transcription_unavailable', asr_backlog: 'transcription_behind' };
 const transcriptionIssue = (...[status, reason]: LiveUpdate): CaptureIssue | null => (status === 'degraded' && reason ? TRANSCRIPTION_ISSUE[reason] : null);
@@ -80,7 +85,7 @@ interface Epoch {
 }
 
 interface Session {
-  readonly stream: MediaStream;
+  stream: MediaStream;
   readonly recorder: Recorder;
   readonly buffer: CaptureBuffer;
   listener: StoredListener;
@@ -121,6 +126,12 @@ class CaptureController implements CaptureView {
   private live: LiveStatus | null = null;
   private transcription: CaptureIssue | null = null;
   private muted = false;
+  /** The input has sent nothing above `SILENT_PEAK` for `silentSeconds`; `silentSamples` counts the dead run. */
+  private silent = false;
+  private silentSamples = 0;
+  /** A lower-priority note than `issue`: the chosen input was gone, so the default one is used. */
+  private notice: CaptureIssue | null = null;
+  private input: string | null;
   private leaseLost = false;
   private interrupted = false;
   private missing = false;
@@ -149,6 +160,7 @@ class CaptureController implements CaptureView {
     this.timing = { ...DEFAULT_TIMING, ...deps.timing };
     this.wakeLock = this.nav.wakeLock === undefined ? 'unsupported' : 'released';
     this.listener = this.storedListener();
+    this.input = this.storage.getItem(INPUT_KEY);
     this.listen(this.win, 'pagehide', () => this.endPage());
     this.listen(this.doc, 'freeze', () => this.endPage());
     this.listen(this.doc, 'visibilitychange', () => this.onVisible());
@@ -168,7 +180,7 @@ class CaptureController implements CaptureView {
       return this.publish();
     }
     const before = this.permission;
-    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, cancelStart: null });
+    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, notice: null, cancelStart: null });
     this.publish();
     try {
       const session = await this.openSession();
@@ -203,6 +215,13 @@ class CaptureController implements CaptureView {
   };
 
   readonly resume = (): Promise<void> => this.start();
+
+  readonly chooseInput = async (deviceId: string | null): Promise<void> => {
+    const previous = this.input;
+    this.notice = null;
+    this.remember(deviceId);
+    if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId))) this.remember(previous);
+  };
 
   async orphanedRecordings(): Promise<readonly OrphanedRecording[] | null> {
     const buffer = await this.openBuffer();
@@ -282,7 +301,7 @@ class CaptureController implements CaptureView {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) void this.refreshPending().then(() => this.startDrain());
       const listener = await this.claimListener(buffer);
-      stream = await acquireMicrophone(this.nav.mediaDevices);
+      stream = await this.openMicrophone();
       const recorder = await (this.deps.startRecorder ?? startRecorder)(stream, (start, samples) => this.onBlock(start, samples));
       if (!isSampleRate(recorder.sampleRate)) {
         await recorder.close();
@@ -295,6 +314,55 @@ class CaptureController implements CaptureView {
       await releaseLock();
       throw error;
     }
+  }
+
+  /** The chosen input, else the default one; a chosen input that is gone is forgotten and the default used, and the page says so. */
+  private async openMicrophone(): Promise<MediaStream> {
+    try {
+      return await acquireMicrophone(this.nav.mediaDevices, this.input);
+    } catch (error) {
+      const issue = captureIssue(error);
+      if (this.input === null || (issue !== 'no_input' && issue !== 'unsupported_constraints')) throw error;
+      this.remember(null);
+      this.notice = 'input_unavailable';
+      return acquireMicrophone(this.nav.mediaDevices);
+    }
+  }
+
+  /** Moves the running capture to `deviceId` in the same epoch; false, with `issue` set, keeps the earlier input. */
+  private async switchInput(deviceId: string | null): Promise<boolean> {
+    const session = this.session!;
+    try {
+      const stream = await acquireMicrophone(this.nav.mediaDevices, deviceId);
+      if (this.session !== session) return (stream.getTracks().forEach((track) => track.stop()), true);
+      try {
+        session.recorder.replaceInput(stream);
+      } catch {
+        // An AudioContext that cannot take this input (another sample rate) restarts capture on it cleanly.
+        stream.getTracks().forEach((track) => track.stop());
+        await this.stopSession('pause', 'paused');
+        await this.start();
+        return true;
+      }
+      session.stream.getTracks().forEach((track) => track.stop());
+      session.stream = stream;
+      this.watchTrack(stream);
+      Object.assign(this, { muted: false, silent: false, silentSamples: 0 });
+      if (this.issue === 'input_lost') this.issue = null;
+      this.publish();
+      return true;
+    } catch (error) {
+      this.issue = captureIssue(error);
+      this.publish();
+      return false;
+    }
+  }
+
+  private remember(deviceId: string | null): void {
+    this.input = deviceId;
+    if (deviceId === null) this.storage.removeItem(INPUT_KEY);
+    else this.storage.setItem(INPUT_KEY, deviceId);
+    this.publish();
   }
 
   /** Registers when needed and claims the lease before any epoch opens, so the first `start` carries a live generation. */
@@ -333,6 +401,7 @@ class CaptureController implements CaptureView {
     if (session === null) return;
     const now = Date.now();
     const rate = session.recorder.sampleRate;
+    this.hearSilence(samples, rate);
     let epoch = session.epoch;
     if (epoch !== null && now - epoch.lastWallMs - ((sampleStart + samples.length - epoch.lastEnd) / rate) * 1000 > this.timing.gapMs) {
       // The sample clock paused (sleep, suspension) while wall time moved: re-anchor in a new epoch.
@@ -345,6 +414,17 @@ class CaptureController implements CaptureView {
     epoch.live?.send(offset, samples);
     epoch.lastWallMs = now;
     epoch.lastEnd = sampleStart + samples.length;
+  }
+
+  /** Any sample above `SILENT_PEAK` ends the dead run and clears the warning at once. */
+  private hearSilence(samples: Int16Array, rate: number): void {
+    const loud = samples.some((sample) => sample > SILENT_PEAK || sample < -SILENT_PEAK);
+    this.silentSamples = loud ? 0 : this.silentSamples + samples.length;
+    const silent = this.silentSamples >= rate * this.timing.silentSeconds;
+    if (silent !== this.silent) {
+      this.silent = silent;
+      this.publish();
+    }
   }
 
   private openEpoch(session: Session, base: number, startedAtMs: number): Epoch {
@@ -430,8 +510,7 @@ class CaptureController implements CaptureView {
     session.stream.getTracks().forEach((track) => track.stop());
     await session.releaseLock();
     void this.sentinel?.release();
-    this.phase = phase;
-    this.live = null;
+    Object.assign(this, { phase, live: null, silent: false, silentSamples: 0, notice: null });
     await this.refreshPending();
     this.startDrain();
   }
@@ -452,10 +531,19 @@ class CaptureController implements CaptureView {
 
   private watchTrack(stream: MediaStream): void {
     for (const track of stream.getAudioTracks()) {
-      track.addEventListener('ended', () => this.session?.stream === stream && this.halt('input_lost', true));
+      track.addEventListener('ended', () => this.session?.stream === stream && void this.onInputEnded());
       track.addEventListener('mute', () => this.setMuted(stream, true));
       track.addEventListener('unmute', () => this.setMuted(stream, false));
     }
+  }
+
+  /** A chosen input that disappears hands capture to the default input and says so; the default disappearing stops capture. */
+  private async onInputEnded(): Promise<void> {
+    if (this.input === null) return this.halt('input_lost', true);
+    this.remember(null);
+    if (!(await this.switchInput(null))) return this.halt('input_lost', true);
+    this.notice = 'input_unavailable';
+    this.publish();
   }
 
   private setMuted(stream: MediaStream, muted: boolean): void {
@@ -657,7 +745,7 @@ class CaptureController implements CaptureView {
 
   private listenerState(): ListenerState {
     if (this.phase !== 'capturing') return this.phase;
-    if (this.muted || this.leaseLost || this.live === 'degraded' || this.live === 'rejected') return 'degraded';
+    if (this.muted || this.silent || this.leaseLost || this.live === 'degraded' || this.live === 'rejected') return 'degraded';
     if (this.live === 'reconnecting') return 'reconnecting';
     return this.live === 'live' ? 'listening' : 'starting';
   }
@@ -678,13 +766,15 @@ class CaptureController implements CaptureView {
       listener,
       permission: this.permission,
       archive: this.archiveState(),
-      issue: this.issue ?? transcription,
+      issue: this.issue ?? (this.silent ? 'silent_input' : (this.notice ?? transcription)),
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,
       refusedChunks: this.refused,
       savedThroughMs: this.savedThroughMs,
       wakeLock: this.wakeLock,
+      inputId: this.input,
+      inputLabel: this.session?.stream.getAudioTracks()[0]?.label || null,
     });
   }
 

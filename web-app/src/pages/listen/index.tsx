@@ -7,6 +7,7 @@ import { AgentsDialog } from './AgentsDialog.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
+import { deviceName, InputPicker } from './InputPicker.tsx';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
@@ -44,6 +45,8 @@ const ISSUE: Record<CaptureIssue, string> = {
   listener_removed: 'This device was removed, so listening stopped. Resume registers it again.',
   transcription_unavailable: 'Live transcription is unavailable. Audio is still being saved.',
   transcription_behind: 'Live transcription is behind. Audio is still being saved and is transcribed later.',
+  silent_input: 'The microphone is sending no sound.',
+  input_unavailable: 'The chosen microphone is not connected, so Sanctum uses the default microphone.',
 };
 
 const ARCHIVE: Record<ArchiveState, string> = {
@@ -65,10 +68,27 @@ function health(snapshot: CaptureSnapshot): string {
   return `Silent · ${archive}${pending}${stranded}${refused}`;
 }
 
+/** A silent input is named, so the person knows which one to replace. */
+function issueText({ issue, inputLabel }: CaptureSnapshot): string | null {
+  if (issue === null) return null;
+  return issue === 'silent_input' && inputLabel ? `${deviceName(inputLabel)} is sending no sound.` : ISSUE[issue];
+}
+
 /** `helper`: the quiet line shown when nothing is wrong. */
 function statusMessage(snapshot: CaptureSnapshot, failure: string | null, helper: string): { text: string; warning: boolean } {
-  const problem = failure ?? (snapshot.issue && ISSUE[snapshot.issue]);
+  const problem = failure ?? issueText(snapshot);
   return problem ? { text: problem, warning: true } : { text: helper, warning: false };
+}
+
+/** A silent or missing input gets the picker right under the warning (and, when silent, one line of help); otherwise `children` show. */
+function InputHelp({ engine, issue, children }: { engine: CaptureView; issue: CaptureIssue | null; children: ReactNode }) {
+  if (issue !== 'silent_input' && issue !== 'input_unavailable') return children;
+  return (
+    <>
+      {issue === 'silent_input' && <p className="listen-helper listen-input-help">A Mac with its lid closed turns off its built-in microphone. Choose another input:</p>}
+      <InputPicker engine={engine} />
+    </>
+  );
 }
 
 const CAPTURING: ReadonlyArray<ListenerState> = ['listening', 'degraded', 'reconnecting'];
@@ -319,7 +339,9 @@ export function ListenPage() {
         {signIn.status === 'signed_out'
           ? <a className="listen-helper" href={SIGN_IN_URL}>Sign in to listen</a>
           : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
-        <CaptionNote state={captions} capturing={capturing} />
+        <InputHelp engine={engine} issue={snapshot.issue}>
+          <CaptionNote state={captions} capturing={capturing} />
+        </InputHelp>
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={capturing} onCaptions={setCaptions} />
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure}>

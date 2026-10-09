@@ -3,6 +3,7 @@
  * input, hardware errors and unsupported constraints stay distinct, and a revoked permission is
  * observed through the Permissions API where the browser offers it.
  */
+import { deviceIssue } from './microphone.ts';
 import { StorageError } from './recorder.ts';
 import type { CaptureIssue, PermissionState } from './view.ts';
 
@@ -11,44 +12,10 @@ class CaptureLockHeld extends Error { }
 
 const CAPTURE_LOCK = 'sanctum-capture';
 
-/**
- * Raw mono speech: browser echo cancellation on, no gain or noise processing on the archive.
- * Whisper reads the same PCM: on a speech + room-noise test, Chrome's noise suppression and gain
- * control changed "Sanctum, add a" to "Sanctum had a" at 5 dB SNR, and gain control would shift
- * the levels the server's speech gate is set for. The waveform removes steady noise on its own.
- */
-const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-  channelCount: 1,
-  echoCancellation: true,
-  noiseSuppression: false,
-  autoGainControl: false,
-};
-
-const DEVICE_ISSUES: Record<string, CaptureIssue> = {
-  NotAllowedError: 'permission_denied',
-  SecurityError: 'permission_denied',
-  NotFoundError: 'no_input',
-  OverconstrainedError: 'unsupported_constraints',
-  NotSupportedError: 'unsupported_constraints',
-  NotReadableError: 'hardware_error',
-  AbortError: 'hardware_error',
-  /** `Effect.runPromise` rejects with a fiber failure named after the API error; a missing session is `Unauthenticated`. */
-  '(FiberFailure) Unauthenticated': 'signed_out',
-};
-
 export function captureIssue(error: unknown): CaptureIssue {
   if (error instanceof StorageError) return error.kind === 'full' ? 'storage_full' : 'storage_unavailable';
   if (error instanceof CaptureLockHeld) return 'lease_lost';
-  const name = error instanceof Error || error instanceof DOMException ? error.name : '';
-  return DEVICE_ISSUES[name] ?? 'socket_unavailable';
-}
-
-/** Prompts if needed; a stream without a live audio track counts as missing input. */
-export async function acquireMicrophone(mediaDevices: MediaDevices): Promise<MediaStream> {
-  const stream = await mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
-  if (stream.getAudioTracks().some((track) => track.readyState === 'live')) return stream;
-  stream.getTracks().forEach((track) => track.stop());
-  throw new DOMException('no live microphone track', 'NotFoundError');
+  return deviceIssue(error);
 }
 
 /** Current microphone permission, reporting later changes (revocation) to `onChange`. */

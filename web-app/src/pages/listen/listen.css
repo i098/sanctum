@@ -103,6 +103,72 @@
   max-width: 300px;
 }
 
+/* A silent input's help keeps to the same centre column; its picker sits right under it. */
+.listen-input-help {
+  max-width: 300px;
+  line-height: 1.6;
+}
+
+.listen-input {
+  max-width: 300px;
+  padding: 5px 8px;
+  border: 1px solid #222936;
+  border-radius: 3px;
+  background: #0b0e14;
+  color: #e7ecf3;
+  font: inherit;
+  font-size: 11px;
+  color-scheme: dark;
+  cursor: pointer;
+}
+
+.listen-input:hover {
+  border-color: #2c3545;
+}
+
+.listen-input:focus-visible {
+  outline: 1px solid #3d7dff;
+  border-color: #3d7dff;
+}
+
+.listen-input-picker {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.listen-input-check {
+  font-size: 11px;
+}
+
+.listen-input-check[data-state='sound'] {
+  color: #22d3c5;
+}
+
+.listen-input-check[data-state='silent'] {
+  color: #f2a23b;
+}
+
+/* A grid column's automatic minimum is its widest content; the long input names must not push the row past the dialog. */
+.listen-settings dd:has(.listen-input-picker) {
+  min-width: 0;
+}
+
+/* In Settings the picker reads like the other rows: left-aligned, at the dialog's text size. */
+.listen-settings .listen-input-picker {
+  flex-basis: 100%;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.listen-settings .listen-input,
+.listen-settings .listen-input-check {
+  max-width: 100%;
+  font-size: inherit;
+}
+
 .listen-footer {
   bottom: 30px;
   align-items: center;
@@ -644,6 +710,11 @@
   /* The captions note adds its two lines and gap to the status above the rails. */
   .listen:has(.listen-note) .listen-rails {
     top: calc(var(--stage-floor) + 134px);
+  }
+
+  /* A silent input's help and picker take about 140 px, so the rails start below them. */
+  .listen:has(.listen-status .listen-input) .listen-rails {
+    top: calc(var(--stage-floor) + 154px);
   }
 
   .listen-tlog,
