@@ -206,6 +206,7 @@ const meetingsGroup = (store: Store) => {
       )
       // ponytail: boundary edits are the meetings slice's job (tested against MySQL); adapters only need the routes.
       .handle('mergeMeetings', () => unmodeled)
+      .handle('endMeeting', () => unmodeled)
       .handle('splitMeeting', () => unmodeled)
       .handle('mapSpeaker', () => unmodeled),
   );

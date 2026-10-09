@@ -2158,6 +2158,266 @@
         }
       }
     },
+    "/api/v1/meetings/{meeting_id}/end": {
+      "post": {
+        "tags": [
+          "meetings"
+        ],
+        "operationId": "meetings.endMeeting",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "a Universally Unique Identifier",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "required": true,
+            "description": "a Universally Unique Identifier"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "workspace_id",
+                    "state",
+                    "title",
+                    "started_at",
+                    "ended_at",
+                    "timezone",
+                    "boundary_revision",
+                    "visibility",
+                    "processing"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "a Universally Unique Identifier",
+                      "format": "uuid",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "workspace_id": {
+                      "type": "string",
+                      "description": "a Universally Unique Identifier",
+                      "format": "uuid",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "provisional",
+                        "active",
+                        "closing",
+                        "closed",
+                        "interrupted"
+                      ]
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "started_at": {
+                      "type": "string",
+                      "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                    },
+                    "ended_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "boundary_revision": {
+                      "type": "integer",
+                      "description": "a positive number",
+                      "title": "positive",
+                      "exclusiveMinimum": 0
+                    },
+                    "visibility": {
+                      "type": "string",
+                      "enum": [
+                        "restricted",
+                        "workspace"
+                      ]
+                    },
+                    "processing": {
+                      "type": "object",
+                      "required": [
+                        "transcript",
+                        "notes",
+                        "memory",
+                        "recording"
+                      ],
+                      "properties": {
+                        "transcript": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "partial",
+                            "complete",
+                            "failed"
+                          ]
+                        },
+                        "notes": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "partial",
+                            "complete",
+                            "failed"
+                          ]
+                        },
+                        "memory": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "partial",
+                            "complete",
+                            "failed"
+                          ]
+                        },
+                        "recording": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "partial",
+                            "complete",
+                            "failed"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not match the expected schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpApiDecodeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthenticated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RevisionConflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionConflict"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HashConflict"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "epoch_id",
+                  "sample"
+                ],
+                "properties": {
+                  "epoch_id": {
+                    "type": "string",
+                    "description": "a Universally Unique Identifier",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  },
+                  "sample": {
+                    "type": "integer",
+                    "description": "a number less than or equal to 9007199254740991",
+                    "title": "lessThanOrEqualTo(9007199254740991)",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/v1/meetings/{meeting_id}/split": {
       "post": {
         "tags": [

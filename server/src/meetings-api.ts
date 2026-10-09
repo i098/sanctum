@@ -110,6 +110,7 @@ export const MeetingsLive = HttpApiBuilder.group(SanctumApi, 'meetings', handler
     .handle('listMeetings', ({ urlParams }) => Effect.flatMap(CurrentAccess, access => Effect.zipRight(requireScope(access, 'context:read'), listMeetings(access, urlParams))))
     .handle('getMeeting', ({ path }) => Effect.flatMap(CurrentAccess, access => Effect.zipRight(requireScope(access, 'context:read'), getMeeting(access, path.meeting_id))))
     .handle('closeMeeting', ({ path }) => Effect.flatMap(CurrentAccess, access => closeMeeting(access, path.meeting_id)))
+    .handle('endMeeting', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => closeMeeting(access, path.meeting_id, payload)))
     .handle('splitMeeting', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => splitMeeting(access, path.meeting_id, payload)))
     .handle('mergeMeetings', ({ payload }) => Effect.flatMap(CurrentAccess, access => mergeMeetings(access, payload)))
     .handle('getTranscript', ({ path, urlParams }) => Effect.flatMap(CurrentAccess, access => getTranscript(access, path.meeting_id, urlParams)))

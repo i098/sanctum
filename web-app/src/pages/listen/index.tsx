@@ -170,8 +170,9 @@ function useOpenMeeting(): [string | null, () => void] {
 }
 
 /**
- * End meeting: capture stops first, so the close seals at everything the server accepted up to the pause; finals still in
- * flight join the closed meeting and never open a new one. Then the meeting closes. `helper` says so until capture starts again, else names the listener state.
+ * End meeting: capture stops first, and the end request carries the last sample this page captured before the pause (also
+ * when it is already paused), so finals still in flight or reconciled later join the closed meeting and never open a new one.
+ * Without any capture on this page (a reload while paused) it is a plain close. `helper` says so until capture starts again, else names the listener state.
  */
 function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: (message: string | null) => void) {
   const [meeting, forget] = useOpenMeeting();
@@ -181,8 +182,8 @@ function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: 
   }, [listener]);
   const end = (meeting_id: string): void => {
     onFailure(null);
-    const stopped = CAPTURING.includes(engine.getSnapshot().listener) ? engine.pause() : Promise.resolve();
-    stopped.then(() => client.meetings.closeMeeting({ meeting_id })).then(() => {
+    const fence = engine.getSnapshot().listener === 'starting' ? Promise.resolve(null) : engine.end();
+    fence.then(captured => (captured === null ? client.meetings.closeMeeting({ meeting_id }) : client.meetings.endMeeting({ meeting_id, ...captured }))).then(() => {
       forget();
       setEnded(true);
     }, (error: unknown) => onFailure(`Meeting not ended: ${error instanceof Error ? error.message : String(error)}`));

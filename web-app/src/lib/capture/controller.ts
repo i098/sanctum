@@ -5,7 +5,7 @@
  * directly. Closing the tab ends capture: the next page load seals what the closed page had
  * committed and reports that capture as interrupted, never as still recording.
  */
-import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpochId, type RecordingChunkManifest } from '@sanctum/contracts';
+import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpochId, type EndMeeting, type RecordingChunkManifest } from '@sanctum/contracts';
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
@@ -114,6 +114,8 @@ class CaptureController implements CaptureView {
   private phase: Phase = 'stopped';
   /** A pause or halt requested while the microphone was still being opened. */
   private cancelStart: 'paused' | 'stopped' | null = null;
+  /** Where the last epoch of this page stopped capturing: what End meeting fences while paused. */
+  private captured: EndMeeting | null = null;
   private permission: PermissionState = 'unknown';
   private issue: CaptureIssue | null = null;
   private live: LiveStatus | null = null;
@@ -191,6 +193,13 @@ class CaptureController implements CaptureView {
   readonly pause = async (): Promise<void> => {
     this.issue = null;
     await this.stopSession('pause', 'paused');
+  };
+
+  /** Pauses for End meeting; resolves with where this page last stopped capturing (also when already paused), or null when it never has. */
+  readonly end = async (): Promise<EndMeeting | null> => {
+    this.issue = null;
+    await this.stopSession('pause', 'paused');
+    return this.captured;
   };
 
   readonly resume = (): Promise<void> => this.start();
@@ -411,6 +420,7 @@ class CaptureController implements CaptureView {
     session.stopping = true;
     session.epoch?.live?.stop(reason);
     await session.recorder.flush();
+    if (session.epoch !== null) this.captured = { epoch_id: session.epoch.id, sample: session.epoch.lastEnd - session.epoch.base };
     this.session = null;
     if (session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
     await session.epoch?.assembler.close();
@@ -555,6 +565,7 @@ class CaptureController implements CaptureView {
   private endEpoch(session: Session, reason: EpochEnd): void {
     const epoch = session.epoch;
     if (epoch === null) return;
+    this.captured = { epoch_id: epoch.id, sample: epoch.lastEnd - epoch.base };
     epoch.live?.stop('close');
     epoch.live = null;
     this.live = null;

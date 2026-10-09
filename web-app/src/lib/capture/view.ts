@@ -1,3 +1,5 @@
+import type { EndMeeting } from '@sanctum/contracts';
+
 /** Listener lifecycle (plan 06). */
 export type ListenerState = 'stopped' | 'starting' | 'listening' | 'reconnecting' | 'paused' | 'degraded';
 export type PermissionState = 'unknown' | 'prompt' | 'pending' | 'granted' | 'denied' | 'unsupported';
@@ -81,6 +83,8 @@ export interface CaptureView {
   readonly levels: LevelSource;
   start(): Promise<void>;
   pause(): Promise<void>;
+  /** Pauses like `pause` for End meeting; resolves with the last sample captured before the pause, or null when no epoch was open. */
+  end(): Promise<EndMeeting | null>;
   resume(): Promise<void>;
   /** Recordings orphaned by a removed listener, never pending audio; null while any tab of this browser captures. */
   orphanedRecordings(): Promise<readonly OrphanedRecording[] | null>;

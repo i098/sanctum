@@ -84,4 +84,36 @@ describe('MeetingsApi over HTTP', () => {
       });
     }),
   );
+
+  it.scoped('ends a meeting with a fence over HTTP, and rejects an end without one', () =>
+    Effect.gen(function* () {
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      const fixture = yield* Effect.provide(
+        Effect.gen(function* () {
+          yield* migrate(loadMigrations());
+          const [owner, device] = yield* seedWorkspace('End', ['owner', 'device']);
+          const listener = yield* seedListener(device!);
+          const epoch = yield* seedEpoch(listener);
+          yield* hear(listener, epoch, 0, 30, 'first topic is the launch date');
+          return { owner: owner!, listener, epoch, meeting: (yield* meetingsOf(listener.workspace_id))[0]!.id };
+        }),
+        dbLayer(database.mysql),
+      );
+      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: fixture.owner }));
+      const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
+      if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
+      const base = `http://127.0.0.1:${address.port}`;
+      const { meeting, epoch } = fixture;
+
+      expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch })).status).toBe(400);
+      expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch, sample: 40 * RATE })).body).toMatchObject({ id: meeting, state: 'closing' });
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          yield* hear(fixture.listener, epoch, 35, 38, "good morning everyone, let's go over the hiring plan");
+          expect((yield* meetingsOf(fixture.listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
+        }),
+        dbLayer(database.mysql),
+      );
+    }),
+  );
 });

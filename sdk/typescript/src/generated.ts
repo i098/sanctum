@@ -130,13 +130,19 @@ export type CloseMeetingInput = {
   readonly meeting_id: string;
 };
 
-export type SplitMeetingInput = {
-  readonly expected_revision: number;
-  readonly at: SplitMeetingInputAt;
+export type EndMeetingInput = {
+  readonly epoch_id: string;
+  readonly sample: number;
   readonly meeting_id: string;
 };
 
-export type SplitMeetingInputAt = {
+export type SplitMeetingInput = {
+  readonly expected_revision: number;
+  readonly at: EndMeeting;
+  readonly meeting_id: string;
+};
+
+export type EndMeeting = {
   readonly epoch_id: string;
   readonly sample: number;
 };
@@ -642,6 +648,7 @@ export interface Operations {
   'meetings.mergeMeetings': { input: MergeMeetings; output: Meeting };
   'meetings.getMeeting': { input: GetMeetingInput; output: Meeting };
   'meetings.closeMeeting': { input: CloseMeetingInput; output: Meeting };
+  'meetings.endMeeting': { input: EndMeetingInput; output: Meeting };
   'meetings.splitMeeting': { input: SplitMeetingInput; output: SplitResult };
   'meetings.getTranscript': { input: GetTranscriptInput; output: TranscriptPage };
   'meetings.recordingAccess': { input: RecordingAccessInput; output: RecordingAccess };
@@ -681,6 +688,7 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'meetings.mergeMeetings': {"method":"POST","path":"/api/v1/meetings/merge","pathParams":[],"queryParams":[],"body":true},
   'meetings.getMeeting': {"method":"GET","path":"/api/v1/meetings/{meeting_id}","pathParams":["meeting_id"],"queryParams":[],"body":false},
   'meetings.closeMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/close","pathParams":["meeting_id"],"queryParams":[],"body":false},
+  'meetings.endMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/end","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'meetings.splitMeeting': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/split","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'meetings.getTranscript': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/transcript","pathParams":["meeting_id"],"queryParams":["cursor","limit"],"body":false},
   'meetings.recordingAccess': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/recording-access","pathParams":["meeting_id"],"queryParams":[],"body":false},

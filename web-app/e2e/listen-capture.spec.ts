@@ -43,6 +43,7 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
   await fakeServer(page);
   const id = '5b0c2d4e-6f70-4a81-92b3-c4d5e6f7a8b9';
   const events: string[] = [];
+  const epochs: unknown[] = [];
   let open = true;
   let reads = 0;
   // Replaces the fake media socket: each accepted stream names the listener's open meeting first, as the server's feed does.
@@ -51,6 +52,7 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
       if (typeof message !== 'string') return;
       const control = JSON.parse(message) as Record<string, unknown>;
       if (control['_tag'] === 'stop') return void events.push(`stop:${String(control['reason'])}`);
+      epochs.push(control['epoch_id']);
       ws.send(JSON.stringify({ _tag: 'accepted', epoch_id: control['epoch_id'], resume_from_sample: 0, max_frame_bytes: 19_224 }));
       ws.send(JSON.stringify({ _tag: 'action_update', meeting_id: open ? id : null, actions: [] }));
     });
@@ -58,8 +60,9 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
   const processing = { transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' };
   const meeting = () => ({ id, workspace_id: id, state: open ? 'active' : 'closing', title: null, started_at: '2026-09-28T10:02:00.000Z', ended_at: null, timezone: 'UTC', boundary_revision: 1, visibility: 'restricted', processing });
   await page.route(`**/api/v1/meetings/${id}`, route => (reads++, route.fulfill({ json: meeting() })));
-  await page.route(`**/api/v1/meetings/${id}/close`, (route) => {
-    events.push(`close:${route.request().headers()['x-csrf-token']}`);
+  await page.route(`**/api/v1/meetings/${id}/end`, (route) => {
+    const fence = route.request().postDataJSON() as Record<string, unknown>;
+    events.push(`end:${route.request().headers()['x-csrf-token']}:${fence['epoch_id'] === epochs.at(-1)}:${typeof fence['sample']}`);
     open = false;
     return route.fulfill({ json: meeting() });
   });
@@ -84,7 +87,7 @@ test('End meeting keeps through a pause, then stops capture and closes the meeti
   await expect(state).toHaveText('paused');
   await expect(end).toHaveCount(0);
   // Capture stopped before the close, so the server placed the last speech first.
-  expect(events).toEqual(['stop:pause', 'stop:pause', 'close:csrf-e2e-token']);
+  expect(events).toEqual(['stop:pause', 'stop:pause', 'end:csrf-e2e-token:true:number']);
 });
 
 test('End meeting shows after a reload while no stream is open, for the meeting of this browser\'s listener only', async ({ page }) => {
