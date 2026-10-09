@@ -20,7 +20,8 @@ export function sessionClient(): SanctumClient {
   });
 }
 
-export const SIGN_IN_URL = '/auth/login?return_to=/';
+/** A completed sign-in returns to `/?signin=ok`, so the page can confirm it even when the issuer redirects back instantly. */
+export const SIGN_IN_URL = '/auth/login?return_to=/?signin=ok';
 
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
@@ -38,6 +39,12 @@ export type SignInState =
 
 /** How the last sign-in redirect ended (`/?signin=<code>`), read once from the landing URL. */
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
+
+/** Who the signed-in person is to themself: the provider name, else the email (shown only in their own view); `beneath` is the email next to a name. */
+export const accountLabel = ({ display_name, email }: AccessScope['principal']) => ({
+  label: display_name ?? email ?? '',
+  beneath: display_name === null ? undefined : email,
+});
 
 /** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. `embedded`: the self-hosted Better Auth issuer. */
 async function configured(): Promise<false | 'unavailable' | { selfServe: boolean; embedded: boolean; workos: boolean }> {
@@ -83,14 +90,17 @@ export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
 }
 
-/** Clears the query off the address bar so a reload does not repeat the notice; the callback lands on `/`. */
-export function takeSignInNotice(location: Location, history: History): SignInNotice | null {
+/**
+ * Clears the query off the address bar so a reload does not repeat the notice; the callback lands on `/`.
+ * `'signed_in'`: the return of SIGN_IN_URL; the caller confirms it only if the session reads as signed in.
+ */
+export function takeSignInNotice(location: Location, history: History): SignInNotice | 'signed_in' | null {
   const params = new URLSearchParams(location.search);
   const [code, issuer, subject] = ['signin', 'issuer', 'subject'].map(name => params.get(name));
   if (code === null) return null;
   history.replaceState(history.state, '', location.pathname);
   if (code === 'not_member') return { code, issuer: issuer ?? '', subject: subject ?? '' };
-  return { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
+  return code === 'ok' ? 'signed_in' : { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
 }
 
 /** Same-origin POST with the CSRF header; a refusal throws the error envelope's message, else the status. */

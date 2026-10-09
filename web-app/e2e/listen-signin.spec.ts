@@ -37,11 +37,38 @@ test('a failing /auth/config reads as unavailable, not as not configured', async
 
 test('signed out: the page and Settings link to sign-in', async ({ page }) => {
   await openListening(page, { configured: true, access: null });
-  await expect(page.getByRole('link', { name: 'Sign in to listen' })).toHaveAttribute('href', '/auth/login?return_to=/');
+  await expect(page.locator('.listen-status').getByRole('link', { name: 'Sign in to listen' })).toHaveAttribute('href', '/auth/login?return_to=/?signin=ok');
   const settings = await openSettings(page);
   await expect(row(settings, 'Sign-in')).toHaveText('Signed outSign in');
-  await expect(settings.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth/login?return_to=/');
+  await expect(settings.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth/login?return_to=/?signin=ok');
   await expect(row(settings, 'Workspace')).toHaveText('Unavailable until you sign in');
+});
+
+test('a return from sign-in with a session confirms it once, without opening Settings', async ({ page }) => {
+  await serveListening(page, { configured: true, access: ACCESS });
+  await page.goto('/?signin=ok');
+  const status = page.locator('.listen-status');
+  await expect(status).toContainText('Signed in as Ada Lovelace');
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
+  await page.reload();
+  const settings = await openSettings(page);
+  await expect(row(settings, 'Sign-in').locator('.listen-account-name')).toHaveText('Ada Lovelace owner');
+  await expect(status).not.toContainText('Signed in as');
+});
+
+test('a return from sign-in without a provider name confirms with the email, never a placeholder', async ({ page }) => {
+  await serveListening(page, { configured: true, access: { ...ACCESS, principal: { ...ACCESS.principal, display_name: null, email: 'cap@example.test' } } });
+  await page.goto('/?signin=ok');
+  await expect(page.locator('.listen-welcome')).toHaveText('Signed in as cap@example.test');
+});
+
+test('a return from sign-in without a session confirms nothing and offers sign-in again', async ({ page }) => {
+  await serveListening(page, { configured: true, access: null });
+  await page.goto('/?signin=ok');
+  await expect(page.getByRole('link', { name: 'Sign in to listen' })).toBeVisible();
+  await expect(page.locator('.listen-status')).not.toContainText('Signed in as');
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
 });
 
 for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -127,7 +154,7 @@ test('self-hosted issuer: Team opens over Settings, closes back to it, and captu
   await settings.getByRole('button', { name: 'Team' }).click();
   const team = page.getByRole('dialog', { name: 'Team' });
   // An ended issuer session asks for sign-in instead of showing an empty team.
-  await expect(team.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/');
+  await expect(team.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/?signin=ok');
   await page.keyboard.press('Escape');
   await expect(team).toBeHidden();
   await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();

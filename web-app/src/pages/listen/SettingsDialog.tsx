@@ -1,7 +1,7 @@
 import type { SanctumClient } from '@sanctum/sdk';
 import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
-import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
+import { accountLabel, connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
 import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
@@ -107,12 +107,9 @@ function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolea
 
 type Principal = Extract<SignInState, { status: 'signed_in' }>['access']['principal'];
 
-/** The email leads when sign-in gave no name; it is listed beneath only next to a name. */
-const account = ({ display_name, email }: Principal) => ({ label: display_name ?? email ?? '', beneath: display_name === null ? undefined : email });
-
 /** Initials stand in for an avatar: no issuer sends a picture claim, and the CSP loads no remote images. */
 function Account({ principal, role }: { principal: Principal; role: string }) {
-  const { label, beneath } = account(principal);
+  const { label, beneath } = accountLabel(principal);
   return (
     <span className="listen-account">
       <span className="listen-avatar" aria-hidden="true">
