@@ -380,6 +380,12 @@ const isQuiet = (meeting: { readonly workspace_id: WorkspaceId; readonly id: Mee
     for (const epoch of epochs) {
       const clock = clocks.get(epoch.id)!;
       const from = Math.max(clock.sample_start, msToSample(clock, last.end_ms));
+      const [unplaced] = yield* sql`SELECT 1 FROM transcript_segments s
+        WHERE s.workspace_id = ${meeting.workspace_id} AND s.epoch_id = ${epoch.id} AND s.status = 'final' AND s.sample_start >= ${from}
+          AND NOT EXISTS (SELECT 1 FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+            WHERE r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start)
+        LIMIT 1`;
+      if (unplaced !== undefined) return false;
       const through = coveredThrough(from, yield* sql<Span>`SELECT CAST(sample_start AS DOUBLE) AS sample_start, CAST(sample_end AS DOUBLE) AS sample_end
         FROM transcript_coverage WHERE workspace_id = ${meeting.workspace_id} AND epoch_id = ${epoch.id} AND track = ${last.track} AND sample_end > ${from} ORDER BY sample_start`);
       silent ||= through > from && sampleMs(clock, through) - last.end_ms >= idleMs;

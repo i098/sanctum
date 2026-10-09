@@ -342,10 +342,14 @@ describe('automatic meeting lifecycle', () => {
         // Speech 2.5 minutes ago, long after the first words, keeps a live listener's meeting open.
         const talking = yield* talked(20);
         yield* hear(talking.listener, talking.epoch, 17 * MIN, 17 * MIN + 30, 'one more point on the roadmap before we wrap');
+        // ASR covered 10 minutes past the last speech, but a final inside that coverage is not placed in a meeting yet.
+        const racing = yield* talked();
+        yield* transcribed(racing, 30, 640);
+        const late = yield* speak(racing.listener, racing.epoch, 640, 660, 'sorry about that, back to the roadmap');
 
         yield* sweepIdleMeetings();
-        expect(yield* Effect.all([silent, briefly, outage, gappy, settled, untranscribed, unuploaded, recent, talking].map(stateOf))).toEqual([
-          'closing', 'provisional', 'provisional', 'provisional', 'closing', 'provisional', 'provisional', 'provisional', 'active',
+        expect(yield* Effect.all([silent, briefly, outage, gappy, settled, untranscribed, unuploaded, recent, talking, racing].map(stateOf))).toEqual([
+          'closing', 'provisional', 'provisional', 'provisional', 'closing', 'provisional', 'provisional', 'provisional', 'active', 'provisional',
         ]);
         const [closed] = yield* sql<{ id: string }>`SELECT id FROM meetings WHERE listener_id = ${silent.listener.listener_id}`;
         expect(yield* rangesOf(closed!.id)).toEqual([{ epoch_id: silent.epoch, sample_start: 0, sample_end: 30 * RATE }]);
@@ -366,6 +370,10 @@ describe('automatic meeting lifecycle', () => {
         yield* sweepIdleMeetings(5 * MIN * 1000);
         expect(yield* stateOf(briefly)).toBe('closing');
         expect(yield* stateOf(talking)).toBe('active');
+        // Coverage and the final landed together but placement was still in flight: placing it keeps the meeting open.
+        yield* onFinalSegments({ ...racing.listener, segments: [late] });
+        yield* sweepIdleMeetings();
+        expect(yield* stateOf(racing)).toBe('provisional');
       }),
       { migrated: true },
     ),
