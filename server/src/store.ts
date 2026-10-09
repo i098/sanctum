@@ -11,13 +11,14 @@ import { SqlClient, type SqlError } from '@effect/sql';
 import { Data, Effect, Option, Schema } from 'effect';
 import {
   NotFound,
+  PrincipalId,
   ProfileId,
   RevisionConflict,
   type MeetingId,
-  type PrincipalId,
   type WorkspaceId,
   type WorkspaceRole,
 } from '@sanctum/contracts';
+import { linkIdentity } from './auth.ts';
 import { defaultSeatLimit } from './config.ts';
 import { DbSafeInt } from './db.ts';
 
@@ -104,23 +105,46 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
     );
   });
 
-/**
- * Moves one membership to `role`, or revokes it for null, through `addMember` and its seat limit;
- * no write when it already matches, so a repeated sync keeps access caches.
- */
-export const setMembership = (workspace_id: WorkspaceId, principal_id: PrincipalId, role: WorkspaceRole | null) =>
+/** A new human principal bound to a verified issuer/subject pair; its display name is the trimmed `name` (200 characters at most), else the subject. */
+export const createHumanPrincipal = (input: { readonly issuer: string; readonly subject: string; readonly name: string | null }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [current] = yield* sql<{ role: WorkspaceRole }>`SELECT role FROM workspace_members
-      WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`;
-    if ((current?.role ?? null) === role) return;
-    if (role !== null) return yield* Effect.asVoid(addMember({ workspace_id, principal_id, role }));
+    const principal_id = PrincipalId.make(randomUUID());
     yield* sql.withTransaction(
       Effect.zipRight(
-        sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
-        bumpPermissionRevision(workspace_id),
+        sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.name?.trim().slice(0, 200) || input.subject}, UTC_TIMESTAMP(6))`,
+        linkIdentity({ issuer: input.issuer, subject: input.subject, principal_id }),
       ),
     );
+    return principal_id;
+  });
+
+/** Sanctum role of an organization's role slugs (WorkOS gives one, Better Auth a comma list): `owner` and `admin` map one to one, anything else is a plain member. */
+export const roleFromSlugs = (slugs: ReadonlyArray<string>): WorkspaceRole => (slugs.includes('owner') ? 'owner' : slugs.includes('admin') ? 'admin' : 'member');
+
+/**
+ * Moves one membership to `role` and marks it granted by `issuer`, or revokes it for null, through
+ * `addMember` and its seat limit; no write when it already matches, so a repeated sync keeps access
+ * caches. Only a membership this issuer granted is revoked: a member Sanctum added stays until the
+ * issuer grants and later removes it.
+ */
+export const setMembership = (issuer: string, workspace_id: WorkspaceId, principal_id: PrincipalId, role: WorkspaceRole | null) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [active] = yield* sql<{ role: WorkspaceRole; org_issuer: string | null }>`SELECT role, org_issuer FROM workspace_members
+      WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`;
+    if (role === null) {
+      if (active === undefined || active.org_issuer !== issuer) return;
+      yield* sql.withTransaction(
+        Effect.zipRight(
+          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
+          bumpPermissionRevision(workspace_id),
+        ),
+      );
+      return;
+    }
+    if (active?.role === role && active.org_issuer === issuer) return;
+    yield* addMember({ workspace_id, principal_id, role, org_issuer: issuer });
   });
 
 /** The workspace linked to an issuer organization (`workspace_orgs`), if any. */

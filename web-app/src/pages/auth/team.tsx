@@ -23,7 +23,7 @@ const row = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5'
 const inviteLink = (id: string) => `${location.origin}/invite/${id}`;
 
 interface Team { readonly me: string; readonly members: ReadonlyArray<Member>; readonly invitations: ReadonlyArray<Invitation> }
-type View = { readonly kind: 'loading' | 'signed_out' | 'no_team' } | { readonly kind: 'team'; readonly team: Team };
+type View = { readonly kind: 'loading' | 'signed_out' | 'no_team' | 'not_member' } | { readonly kind: 'team'; readonly team: Team };
 
 /** The data of a Better Auth answer; its error (or an empty answer) throws with the issuer's message. */
 function must<T>(result: { readonly data: T | null; readonly error: { readonly message?: string | undefined } | null }): T {
@@ -35,7 +35,12 @@ function must<T>(result: { readonly data: T | null; readonly error: { readonly m
 async function readTeam(organizationId: string): Promise<View> {
   const session = await auth.getSession();
   if (!session.data) return { kind: 'signed_out' };
-  if (!must(await auth.organization.list()).some(organization => organization.id === organizationId)) return { kind: 'no_team' };
+  if (!must(await auth.organization.list()).some(organization => organization.id === organizationId)) {
+    const free = await auth.organization.checkSlug({ slug: organizationId });
+    if (free.data?.status) return { kind: 'no_team' };
+    if (free.error?.code === 'ORGANIZATION_SLUG_ALREADY_TAKEN') return { kind: 'not_member' };
+    throw new Error(free.error?.message ?? 'The team could not be read');
+  }
   await auth.organization.setActive({ organizationId });
   const full = must(await auth.organization.getFullOrganization({ query: { organizationId } }));
   return { kind: 'team', team: { me: session.data.user.id, members: full.members, invitations: full.invitations.filter(invitation => invitation.status === 'pending') } };
@@ -225,6 +230,7 @@ export function TeamDialog({ access, open, onClose }: { access: AccessScope; ope
     loading: () => <p className="text-ink-muted">Loading…</p>,
     signed_out: () => <SignedOutNote task="manage the team" />,
     no_team: () => <NoTeam access={access} busy={busy} change={change} />,
+    not_member: () => <p className="text-ink-secondary">This workspace has a team. Ask an owner to invite you.</p>,
     team: () => view.kind === 'team' && <TeamList access={access} team={view.team} busy={busy} change={change} />,
   };
   return (

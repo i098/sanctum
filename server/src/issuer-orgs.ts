@@ -6,12 +6,11 @@
  * Additions and role changes apply after Better Auth commits, and sign-in applies them again in case
  * that failed. Removals apply first, so a failure leaves the person without Sanctum access, not with it.
  */
-import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { PrincipalId, type WorkspaceId, type WorkspaceRole } from '@sanctum/contracts';
+import type { WorkspaceId } from '@sanctum/contracts';
 import { Data, Effect, Option } from 'effect';
-import { identityPrincipal, linkIdentity } from './auth.ts';
-import { claimSeat, linkWorkspaceOrg, setMembership, workspaceForOrg } from './store.ts';
+import { identityPrincipal } from './auth.ts';
+import { claimSeat, createHumanPrincipal, linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 /** A Better Auth user; its id is the `sub` of its ID and access tokens. */
 export interface IssuerUser {
@@ -42,28 +41,28 @@ export const workspaceOrganization = (issuer: string, slug: string | undefined, 
 
 /**
  * Applies one person's organization role (null: removed) to the linked workspace; an unlinked
- * organization changes nothing. Better Auth keeps a comma list of roles: `owner` and `admin` map one
- * to one, anything else is `member`. A new person becomes a human principal with this identity.
+ * organization changes nothing. Better Auth keeps a comma list of roles, mapped by `roleFromSlugs`.
+ * A new person becomes a human principal with this identity. With `keepOwner` (joining, sign-in
+ * repair), a person who already owns the workspace in Sanctum stays owner there and becomes owner
+ * in the organization too; an explicit role change or removal always applies.
  */
-export const applyMember = (issuer: string, org_id: string, user: IssuerUser, roles: string | null) =>
+export const applyMember = (issuer: string, org_id: string, user: IssuerUser, roles: string | null, keepOwner: boolean) =>
   Effect.gen(function* () {
     const workspace = yield* workspaceForOrg({ issuer, org_id });
     if (Option.isNone(workspace)) return;
     const known = yield* identityPrincipal({ issuer, subject: user.id });
     if (Option.isNone(known) && roles === null) return;
-    const principal_id = Option.getOrElse(known, () => PrincipalId.make(randomUUID()));
-    if (Option.isNone(known)) {
+    const principal_id = Option.isSome(known) ? known.value : yield* createHumanPrincipal({ issuer, subject: user.id, name: user.name });
+    let role = roles === null ? null : roleFromSlugs(roles.split(',').map(slug => slug.trim()));
+    if (keepOwner && role !== null && role !== 'owner') {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql.withTransaction(
-        Effect.zipRight(
-          sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${user.name.trim().slice(0, 200) || user.id}, UTC_TIMESTAMP(6))`,
-          linkIdentity({ issuer, subject: user.id, principal_id }),
-        ),
-      );
+      const [owner] = yield* sql`SELECT 1 FROM workspace_members WHERE workspace_id = ${workspace.value} AND principal_id = ${principal_id} AND role = 'owner' AND revoked_at IS NULL`;
+      if (owner !== undefined) {
+        yield* sql`UPDATE auth_member SET role = 'owner' WHERE organizationId = ${org_id} AND userId = ${user.id}`;
+        role = 'owner';
+      }
     }
-    const held = roles?.split(',').map(role => role.trim());
-    const role: WorkspaceRole | null = held === undefined ? null : held.includes('owner') ? 'owner' : held.includes('admin') ? 'admin' : 'member';
-    yield* setMembership(workspace.value, principal_id, role);
+    yield* setMembership(issuer, workspace.value, principal_id, role);
   });
 
 /** `beforeAcceptInvitation`: a full linked workspace refuses, so Better Auth adds no member that Sanctum would refuse. */
@@ -85,7 +84,7 @@ export const reconcileMember = (issuer: string, user: IssuerUser) =>
     const sql = yield* SqlClient.SqlClient;
     const memberships = yield* sql<{ organizationId: string; role: string }>`SELECT organizationId, role FROM auth_member WHERE userId = ${user.id}`;
     for (const { organizationId, role } of memberships) {
-      yield* applyMember(issuer, organizationId, user, role).pipe(
+      yield* applyMember(issuer, organizationId, user, role, true).pipe(
         Effect.catchTag('SeatLimitReached', error => Effect.logWarning('Organization member not added to Sanctum', { organizationId, reason: error.message })),
       );
     }

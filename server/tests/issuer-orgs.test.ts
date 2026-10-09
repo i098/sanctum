@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
@@ -215,6 +215,19 @@ describe('self-hosted organizations', () => {
     }),
   );
 
+  it.scoped('a non-member can tell that a workspace has a team, and that another has none', () =>
+    Effect.gen(function* () {
+      const server = yield* selfHosted;
+      yield* Effect.promise(async () => {
+        const team = await ownerWithTeam(server);
+        const outsider = await signUp(server, 'Outsider');
+        expect(await idp(server, '/organization/list', outsider.cookie)).toMatchObject({ status: 200, body: [] });
+        expect(await idp(server, '/organization/check-slug', outsider.cookie, { slug: team.workspace_id })).toMatchObject({ status: 400, body: { code: 'ORGANIZATION_SLUG_ALREADY_TAKEN' } });
+        expect(await idp(server, '/organization/check-slug', outsider.cookie, { slug: randomUUID() })).toMatchObject({ status: 200, body: { status: true } });
+      });
+    }),
+  );
+
   it.scoped('only owners and admins see pending invitations, and none can name the owner role', () =>
     Effect.gen(function* () {
       const server = yield* selfHosted;
@@ -239,6 +252,45 @@ describe('self-hosted organizations', () => {
         const owner = await idp(server, '/organization/invite-member', team.owner.cookie, { email: 'boss@fixture.test', role: 'owner', organizationId: team.workspace_id });
         expect(owner.status).toBe(403);
         expect(owner.body).toMatchObject({ message: expect.stringContaining('changing a member') });
+      });
+    }),
+  );
+
+  it.scoped('an owner added outside the team stays owner when joining by an admin invitation; an explicit demotion applies', () =>
+    Effect.gen(function* () {
+      const server = yield* selfHosted;
+      yield* Effect.promise(async () => {
+        const team = await ownerWithTeam(server);
+        const boris = await signUp(server, 'Boris');
+        const principal = randomUUID();
+        await server.sql(
+          Effect.flatMap(SqlClient.SqlClient, sql =>
+            Effect.zipRight(
+              sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal}, 'human', 'Boris', UTC_TIMESTAMP(6))`,
+              sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${team.workspace_id}, ${principal}, 'owner', UTC_TIMESTAMP(6))`,
+            ),
+          ),
+        );
+        await linkIdentity(server, boris.id, principal);
+
+        const invited = await idp(server, '/organization/invite-member', team.owner.cookie, { email: boris.email, role: 'admin', organizationId: team.workspace_id });
+        const accepted = await idp(server, '/organization/accept-invitation', boris.cookie, { invitationId: invited.body['id'] });
+        expect(accepted.status).toBe(200);
+        const roleOfBoris = async () => {
+          const full = await idp(server, `/organization/get-full-organization?organizationId=${team.workspace_id}`, team.owner.cookie);
+          return (full.body['members'] as Array<{ userId: string; role: string }>).find(member => member.userId === boris.id)?.role;
+        };
+        expect(await roleOfBoris()).toBe('owner');
+        const first = await signIn(server, boris.cookie);
+        expect((await session(server, first.cookie)).body).toMatchObject({ role: 'owner' });
+        expect(await roleOfBoris()).toBe('owner');
+
+        const memberId = accepted.body['member'].id as string;
+        expect((await idp(server, '/organization/update-member-role', team.owner.cookie, { memberId, role: 'member', organizationId: team.workspace_id })).status).toBe(200);
+        expect((await session(server, first.cookie)).body).toMatchObject({ role: 'member' });
+        const again = await signIn(server, boris.cookie);
+        expect((await session(server, again.cookie)).body).toMatchObject({ role: 'member' });
+        expect(await roleOfBoris()).toBe('member');
       });
     }),
   );

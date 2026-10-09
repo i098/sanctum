@@ -121,6 +121,20 @@ test('self-hosted issuer: Team opens over Settings, closes back to it, and captu
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });
 
+test('self-hosted issuer: a signed-in user outside the workspace team is told to ask an owner', async ({ page }) => {
+  const now = new Date().toISOString();
+  const user = { id: 'u', name: 'Ada Lovelace', email: 'ada@fixture.test', emailVerified: false, createdAt: now, updatedAt: now };
+  await page.route('**/idp/get-session', route => route.fulfill({ json: { session: { id: 's', token: 't', userId: 'u', expiresAt: now, createdAt: now, updatedAt: now }, user } }));
+  await page.route('**/idp/organization/list', route => route.fulfill({ json: [] }));
+  await page.route('**/idp/organization/check-slug', route => route.fulfill({ status: 400, json: { code: 'ORGANIZATION_SLUG_ALREADY_TAKEN', message: 'Slug is taken' } }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  await expect(team).toContainText('This workspace has a team. Ask an owner to invite you.');
+  await expect(team.getByRole('button', { name: 'Set up team' })).toHaveCount(0);
+});
+
 test('self-hosted issuer: on a phone Team covers the whole viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 });
   await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
