@@ -143,6 +143,34 @@ describe('embedded Better Auth issuer', () => {
     }),
   );
 
+  it.scoped('registers a loopback-only DCR client without application_type as native and leaves other requests unchanged', () =>
+    Effect.gen(function* () {
+      const { url } = yield* serveIssuer;
+      const register = (body: Record<string, unknown>) =>
+        Effect.promise(async () => {
+          const response = await fetch(`${url}/idp/oauth2/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ client_name: 'Fixture', token_endpoint_auth_method: 'none', ...body }),
+          });
+          return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+        });
+
+      for (const redirect of ['http://localhost:8123/callback', 'http://127.0.0.1:8123/callback', 'http://[::1]:8123/callback']) {
+        const accepted = yield* register({ redirect_uris: [redirect] });
+        expect(accepted.status, redirect).toBe(201);
+        expect(accepted.body['application_type'], redirect).toBe('native');
+      }
+      const remote = yield* register({ redirect_uris: ['http://evil.fixture.test/callback'] });
+      expect(remote.status).toBe(400);
+      expect(remote.body['error']).toBe('invalid_redirect_uri');
+      const mixed = yield* register({ redirect_uris: ['http://127.0.0.1:8123/callback', 'https://client.fixture.test/callback'] });
+      expect(mixed.body['error']).toBe('invalid_redirect_uri');
+      const web = yield* register({ application_type: 'web', redirect_uris: ['http://127.0.0.1:8123/callback'] });
+      expect(web.body['error']).toBe('invalid_redirect_uri');
+    }),
+  );
+
   it.scoped('completes an authorization for a URL-style CIMD client id', () =>
     Effect.gen(function* () {
       const clientId = 'https://client.fixture.test/oauth/client-metadata.json';
@@ -159,7 +187,9 @@ describe('embedded Better Auth issuer', () => {
       const token = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid offline_access context:read', resource: RESOURCE }));
       expect(decodeJwt(token.access_token)).toMatchObject({ iss: ISSUER, sub: user, scope: 'context:read' });
       expect(token.refresh_token).toBeDefined();
-      const stored = (table: string) => Effect.promise(() => pool.query(`SELECT clientId FROM ${table}`).then(([rows]) => rows));
+      // A resource-bound JWT access token is not stored; only the opaque one from a resource-less grant is.
+      yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid profile' }));
+      const stored = (table: string) => Effect.promise(() => pool.query(`SELECT DISTINCT clientId FROM ${table}`).then(([rows]) => rows));
       for (const table of ['auth_oauth_consent', 'auth_oauth_access_token', 'auth_oauth_refresh_token']) {
         expect(yield* stored(table), table).toEqual([{ clientId }]);
       }

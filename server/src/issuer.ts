@@ -11,6 +11,7 @@ import { type ClientMetadataResourceFetch, oauthProvider } from '@better-auth/oa
 import { HttpApiBuilder, HttpApp } from '@effect/platform';
 import { NodeRuntime } from '@effect/platform-node';
 import { type BetterAuthPlugin, betterAuth } from 'better-auth';
+import { createAuthMiddleware } from 'better-auth/api';
 import { jwt } from 'better-auth/plugins';
 import { Config, Effect, Option, Redacted } from 'effect';
 import { createPool } from 'mysql2/promise';
@@ -45,6 +46,40 @@ const issuerSettings = Effect.gen(function* () {
     }),
   );
 });
+
+/** Hosts a native client may use for `http` redirects (RFC 8252 §7.3); the port is free. */
+const LOOPBACK_HOSTS: Record<string, true> = { localhost: true, '127.0.0.1': true, '[::1]': true };
+const isHttpLoopback = (value: unknown) => {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && Object.hasOwn(LOOPBACK_HOSTS, url.hostname);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * OIDC treats a registration without `application_type` as `web`, which Better Auth rejects for
+ * loopback redirects, yet MCP clients register `http://127.0.0.1:<port>/callback` without it. When
+ * every redirect URI is an http loopback URI, the type defaults to `native`; nothing else changes.
+ */
+const loopbackClientsAreNative = {
+  id: 'sanctum-loopback-native',
+  hooks: {
+    before: [
+      {
+        matcher: (ctx: { path?: string }) => ctx.path === '/oauth2/register',
+        handler: createAuthMiddleware(async ctx => {
+          const body = ctx.body as { application_type?: unknown; redirect_uris?: unknown } | undefined;
+          const uris = body?.redirect_uris;
+          if (body?.application_type !== undefined || !Array.isArray(uris) || uris.length === 0 || !uris.every(isHttpLoopback)) return;
+          return { context: { ...ctx, body: { ...body, application_type: 'native' } } };
+        }),
+      },
+    ],
+  },
+} satisfies BetterAuthPlugin;
 
 /** Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it. */
 export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource) => {
@@ -94,6 +129,7 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
       provider as typeof provider & BetterAuthPlugin,
       cimd({ fetchClientMetadataResource: fetchMetadata }),
+      loopbackClientsAreNative,
     ],
   });
   return { auth, pool };
