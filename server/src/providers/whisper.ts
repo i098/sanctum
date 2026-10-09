@@ -117,6 +117,7 @@ interface WhisperConfig {
     readonly minMs: number;
     readonly maxMs: number;
     readonly concurrency: number;
+    readonly hedgeMs: number;
     readonly requestTimeoutMs: number;
     readonly speechFloorRms: number;
     readonly rateLimitBackoffMs: number;
@@ -202,7 +203,12 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const shift = offset / sample_rate;
         const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrBatch>);
         if (Date.now() < pausedUntil) return skipped;
-        return transcribe(sample_rate, samples).pipe(
+        const request = transcribe(sample_rate, samples);
+        // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
+        // The duplicate is never sent during a 429 pause and never wins by failing: the original settles the chunk then.
+        const hedge = Effect.suspend(() => (Date.now() < pausedUntil ? Effect.never : request)).pipe(Effect.delay(limits.hedgeMs), Effect.catchAll(() => Effect.never));
+        return request.pipe(
+          Effect.raceFirst(hedge),
           Effect.map(results => [
             { start_s: shift, end_s: shift + samples.length / sample_rate, results: results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })) },
           ]),

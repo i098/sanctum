@@ -216,6 +216,30 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
+  it.scopedLive('keeps waiting for the first send when the hedged send fails at once', () =>
+    Effect.gen(function* () {
+      let first: (() => void) | undefined;
+      const server = yield* localServer((_request, _body, response) => {
+        if (first) {
+          response.writeHead(503).end();
+          first();
+          return;
+        }
+        first = () => response.end(JSON.stringify({ result: { text: 'first send', segments: [{ start: 0, end: 0.5, text: 'first send' }] } }));
+      });
+      const stt = whisperSpeechToText({
+        workersAi: Option.some({ baseUrl: `${server.url}/accounts/acct/ai`, apiToken: Redacted.make('wai-token') }),
+        liveAsr: { ...engineeringDefaults.liveAsr, hedgeMs: 50 },
+      });
+      const stream = yield* stt.openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      stream.send(new Int16Array(16_000).fill(8_000));
+      yield* stream.finish;
+      expect([...(yield* Effect.flatten(collected.await))]).toMatchObject([{ results: [{ text: 'first send' }] }]);
+      expect(server.requests).toHaveLength(2);
+    }),
+  );
+
   it.scopedLive('sends live audio in chunks cut at a quiet moment and emits one final per chunk in audio order', () =>
     Effect.gen(function* () {
       // The first chunk is answered only after the second; results must still follow the audio.

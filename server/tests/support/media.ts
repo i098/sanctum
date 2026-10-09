@@ -14,13 +14,13 @@ import {
   Unauthenticated,
   Unavailable,
 } from '@sanctum/contracts';
-import { Clock, Context, Effect, Exit, Layer, Mailbox, Schedule } from 'effect';
+import { Clock, Context, Effect, Exit, Layer, Mailbox, Option, Redacted, Schedule } from 'effect';
 import { Authenticator } from '../../src/auth.ts';
 import { dbLayer } from '../../src/db.ts';
 import type { serverLayer } from '../../src/main.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 import type { ObjectStore } from '../../src/providers/object-store.ts';
-import { type AsrBatch, type AsrResult, SpeechToText } from '../../src/providers/whisper.ts';
+import { type AsrBatch, type AsrResult, SpeechToText, whisperSpeechToText } from '../../src/providers/whisper.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
 
@@ -62,6 +62,10 @@ interface FakeStream {
   /** The provider drops the connection unexpectedly. */
   readonly drop: () => void;
 }
+
+/** The real Workers AI Whisper adapter, pointed at a local stand-in server. */
+export const workersAiWhisper = (baseUrl: string, liveAsr: Parameters<typeof whisperSpeechToText>[0]['liveAsr']) =>
+  Layer.succeed(SpeechToText, whisperSpeechToText({ workersAi: Option.some({ baseUrl, apiToken: Redacted.make('wai-token') }), liveAsr }));
 
 /** Scriptable speech provider: live streams record audio and emit what the test pushes; batch answers via `batch`. */
 export function fakeSpeech() {
@@ -281,6 +285,7 @@ export const startMessage = (input: {
   readonly epoch_id: string;
   readonly lease_generation: number;
   readonly sample_start?: number;
+  readonly sample_rate?: number;
   readonly archive_only?: boolean;
   readonly captured_at?: string;
   readonly end_reason?: string;
@@ -291,7 +296,7 @@ export const startMessage = (input: {
     listener_id: input.listener_id,
     epoch_id: input.epoch_id,
     track: 0,
-    clock: { sample_rate: 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: input.captured_at ?? '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
+    clock: { sample_rate: input.sample_rate ?? 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: input.captured_at ?? '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
     lease_generation: input.lease_generation,
     ...(input.archive_only === undefined ? {} : { archive_only: input.archive_only }),
     ...(input.end_reason === undefined ? {} : { end_reason: input.end_reason }),

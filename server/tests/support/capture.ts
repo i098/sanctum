@@ -16,8 +16,7 @@ import {
   type WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import type { ClaimedJob } from '../../src/job-types.ts';
-import { onFinalSegments } from '../../src/meetings.ts';
+import { finalizeMeeting, onFinalSegments } from '../../src/meetings.ts';
 import type { MemoryObjectStore } from './object-store.ts';
 
 export const RATE = 16_000;
@@ -159,7 +158,7 @@ export const jobsOf = (workspace_id: WorkspaceId) =>
     return yield* sql<{ kind: string; work_key: string; status: string }>`SELECT kind, work_key, status FROM jobs WHERE workspace_id = ${workspace_id} ORDER BY kind, work_key`;
   });
 
-export const claimed = (workspace_id: WorkspaceId, kind: JobKind, payload: unknown): ClaimedJob => ({
+export const claimed = (workspace_id: WorkspaceId, kind: JobKind, payload: unknown) => ({
   id: JobId.make(randomUUID()),
   workspace_id,
   kind,
@@ -170,3 +169,7 @@ export const claimed = (workspace_id: WorkspaceId, kind: JobKind, payload: unkno
   attempt: 1,
   lease_generation: 1,
 });
+
+/** The worker's `meeting.finalize` job for a sealed meeting; returns its result. */
+export const finalizeSealed = (workspace_id: WorkspaceId, meeting_id: string) =>
+  Effect.map(finalizeMeeting(claimed(workspace_id, 'meeting.finalize', { meeting_id })), outcome => outcome.result);

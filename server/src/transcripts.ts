@@ -18,7 +18,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbUtc } from './db.ts';
-import { onFinalSegments } from './meetings.ts';
+import { onFinalSegments, refinalizeSealed } from './meetings.ts';
 import { workspaceIsLive } from './store.ts';
 
 export interface SampleSpan {
@@ -125,6 +125,7 @@ const LatestText = Schema.Struct({ text: Schema.String, revision: DbSafeInt });
 
 /**
  * Records one finalized window atomically (serialized per epoch) and returns the inserted segments.
+ * A window inside a meeting that was sealed before its transcript was complete finalizes that meeting again.
  */
 export const recordFinalWindow = (input: FinalWindow) =>
   Effect.gen(function* () {
@@ -167,6 +168,7 @@ export const recordFinalWindow = (input: FinalWindow) =>
           INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
           VALUES (${workspace_id}, ${epoch_id}, ${track}, ${input.window.sample_start}, ${input.window.sample_end}, ${input.origin}, UTC_TIMESTAMP(6)) AS new
           ON DUPLICATE KEY UPDATE sample_end = GREATEST(transcript_coverage.sample_end, new.sample_end)`;
+        yield* refinalizeSealed(workspace_id, epoch_id, track, input.window);
         return inserted.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${sql.in('id', inserted)}`);
       }),
     );
