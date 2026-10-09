@@ -15,13 +15,17 @@ const CHECK: Record<InputLevel['state'], string> = {
 };
 
 /** Before listening, says whether the chosen input hears anything, so a dead one is found before a meeting. */
-function InputCheck({ deviceId }: { deviceId: string | null }) {
+function Probe({ deviceId }: { deviceId: string | null }) {
   const { state, issue } = useInputLevel(deviceId);
   return (
     <span className="listen-input-check" data-state={issue ? 'silent' : state}>
       {issue ? 'This input cannot be opened.' : CHECK[state]}
     </span>
   );
+}
+
+function InputCheck({ deviceId, listener }: { deviceId: string | null; listener: ListenerState }) {
+  return IDLE.includes(listener) ? <Probe deviceId={deviceId} /> : null;
 }
 
 /** Chrome lists the default input as its own `default` entry; other browsers do not, so the option names no device there. */
@@ -58,7 +62,7 @@ export function InputPicker({ engine, check = false }: { engine: CaptureView; ch
         <option value="">{defaultLabel(inputs)}</option>
         {inputs.filter(device => device.deviceId !== 'default').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label}</option>)}
       </select>
-      {check && IDLE.includes(listener) && <InputCheck deviceId={inputId} />}
+      {check && <InputCheck deviceId={inputId} listener={listener} />}
     </span>
   );
 }
