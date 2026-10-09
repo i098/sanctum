@@ -307,6 +307,26 @@ describe('OIDC sign-in', () => {
       const chosen = yield* Effect.promise(() => signIn(base, issuer, { sub }, `/auth/login?workspace=${second!.workspace_id}`));
       const access = yield* Effect.promise(() => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(chosen, 'sanctum_session')}`).then(r => r.json()));
       expect(access).toMatchObject({ workspace_id: second!.workspace_id, role: 'owner' });
+
+      // A deleted workspace drops out of the choice: the live one is entered, and an owner alone may still enter a deleted one until its purge.
+      const enteredWorkspace = (grant: Grant) =>
+        Effect.gen(function* () {
+          const response = yield* Effect.promise(() => signIn(base, issuer, grant));
+          if (cookieValue(response, 'sanctum_session') === undefined) return null;
+          const [row] = yield* Effect.provide(
+            Effect.flatMap(SqlClient.SqlClient, sql => sql<{ workspace_id: string }>`SELECT workspace_id FROM browser_sessions WHERE principal_id = ${first!.principal.id} ORDER BY created_at DESC LIMIT 1`),
+            db,
+          );
+          return row!.workspace_id;
+        });
+      const mark = (id: string, days: number) =>
+        Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+      yield* mark(second!.workspace_id, 7);
+      expect(yield* enteredWorkspace({ sub })).toBe(first!.workspace_id);
+      yield* mark(first!.workspace_id, 7);
+      expect(yield* enteredWorkspace({ sub })).toBe(second!.workspace_id);
+      yield* mark(second!.workspace_id, -1);
+      expect(yield* enteredWorkspace({ sub })).toBeNull();
     }),
   );
 

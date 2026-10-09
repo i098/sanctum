@@ -3,6 +3,7 @@ import { expect, layer } from '@effect/vitest';
 import { type AccessScope, type CaptureEpochId, Unavailable } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Either, Layer } from 'effect';
+import { REQUESTER_REFUSED } from '../src/jobs.ts';
 import { heartbeat, registerListener, startEpoch, stopEpoch } from '../src/listeners.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { putChunk } from '../src/recordings.ts';
@@ -208,6 +209,20 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       speech.controls.batch = (samples, rate) => Effect.succeed([{ start_s: 0, end_s: samples.length / rate, is_final: true, text: 'after retry', confidence: 0.7, speaker: null }]);
       yield* reconcile(0, RATE);
       expect(yield* texts(access, epoch_id)).toEqual([['batch', 0, RATE, 'after retry', 1]]);
+    }),
+  );
+
+  it.effect('fails a reconcile whose workspace was deleted mid-transcription with a requeueable refusal', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { access, epoch_id, speech, reconcile } = yield* setup(1);
+      speech.controls.batch = (samples, rate) =>
+        Effect.zipRight(
+          sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${access.workspace_id}`,
+          Effect.succeed([{ start_s: 0, end_s: samples.length / rate, is_final: true, text: 'too late', confidence: 0.9, speaker: null }]),
+        ).pipe(Effect.orDie);
+      expect(yield* Effect.flip(reconcile(0, RATE))).toMatchObject({ _tag: 'JobFailure', message: REQUESTER_REFUSED, retryable: false });
+      expect(yield* texts(access, epoch_id)).toEqual([]);
     }),
   );
 

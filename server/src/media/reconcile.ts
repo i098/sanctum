@@ -12,8 +12,10 @@ import { Effect, Schema } from 'effect';
 import { ObjectStore } from '../providers/object-store.ts';
 import { SpeechToText } from '../providers/whisper.ts';
 import { DbSafeInt } from '../db.ts';
+import { REQUESTER_REFUSED } from '../jobs.ts';
 import { onCaptureEnded } from '../meetings.ts';
 import { listCommittedChunks } from '../recordings.ts';
+import { workspaceIsLive } from '../store.ts';
 import { coverageIn, publishFinalWindow, type SampleSpan, uncovered } from '../transcripts.ts';
 
 const ReconcilePayload = Schema.Struct({
@@ -112,6 +114,7 @@ export const reconcileTranscript = (job: { readonly workspace_id: WorkspaceId; r
           listener_id: listener.id,
           capture_group_id: listener.capture_group_id,
         });
+        if (!(yield* workspaceIsLive(workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
         transcribed.push(gap);
       }
     }

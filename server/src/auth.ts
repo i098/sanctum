@@ -127,7 +127,7 @@ const authenticate = (request: HttpServerRequest.HttpServerRequest) => {
   return bearer ? credentialAccess(bearer) : sessionAccess(request);
 };
 
-const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`;
+export const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`;
 
 /**
  * `WorkspaceOwner` middleware: an owner's browser session. Only an owner's session still reaches a

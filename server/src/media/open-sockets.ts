@@ -1,7 +1,7 @@
 import type { WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 
-type Close = (code: number, reason: string) => void;
+type Close = () => void;
 
 const open = new Map<WorkspaceId, Set<Close>>();
 
@@ -17,8 +17,8 @@ export const trackSocket = (workspace_id: WorkspaceId, close: Close) =>
       }),
   );
 
-/** Ends every live listener socket this process holds for the workspace. */
-export const closeWorkspaceSockets = (workspace_id: WorkspaceId, reason: string) =>
+/** Ends every live listener socket this process holds for the workspace; each client is told its access ended. */
+export const closeWorkspaceSockets = (workspace_id: WorkspaceId) =>
   Effect.sync(() => {
-    for (const close of [...(open.get(workspace_id) ?? [])]) close(1008, reason);
+    for (const close of [...(open.get(workspace_id) ?? [])]) close();
   });

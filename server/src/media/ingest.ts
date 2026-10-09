@@ -6,7 +6,7 @@
  */
 import { HttpApiBuilder, HttpRouter, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
 import type { SqlClient } from '@effect/sql';
-import { type AccessScope, ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, type ServerControlMessage } from '@sanctum/contracts';
+import { type AccessScope, ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage } from '@sanctum/contracts';
 import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect';
 import { Authenticator } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
@@ -64,8 +64,9 @@ const converse = (access: AccessScope, listener: ListenerRow, socket: Socket.Soc
     Effect.gen(function* () {
       const writer = yield* socket.writer;
       const inbound = yield* Mailbox.make<string | Uint8Array>(INBOUND_LIMIT);
-      const overflow = yield* Deferred.make<Closing>();
-      yield* trackSocket(access.workspace_id, (code, reason) => Deferred.unsafeDone(overflow, Exit.succeed({ code, reason })));
+      const overflow = yield* Deferred.make<Closing, SessionRejected>();
+      const deleted = new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message: 'This workspace was deleted' }) });
+      yield* trackSocket(access.workspace_id, () => Deferred.unsafeDone(overflow, Exit.fail(deleted)));
       const ended = yield* Deferred.make<void>();
       // The writer waits for an open socket, so writes race the peer's disconnect instead of hanging.
       const write = (chunk: string | Socket.CloseEvent) => writer(chunk).pipe(Effect.ignore, Effect.raceFirst(Deferred.await(ended)));

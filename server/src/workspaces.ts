@@ -91,7 +91,7 @@ export const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
         }),
       )
       .pipe(Effect.catchTag('SqlError', Effect.die));
-    yield* closeWorkspaceSockets(access.workspace_id, 'workspace deleted');
+    yield* closeWorkspaceSockets(access.workspace_id);
     return yield* getWorkspace(access.workspace_id);
   });
 

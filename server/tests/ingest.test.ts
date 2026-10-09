@@ -96,7 +96,8 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const [row] = yield* sql<{ name: string }>`SELECT name FROM workspaces WHERE id = ${access.workspace_id}`;
       yield* deleteWorkspace(access, row!.name);
 
-      expect(yield* socket.closed).toEqual({ code: 1008, reason: 'workspace deleted' });
+      expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
+      expect(yield* socket.closed).toEqual({ code: 1008, reason: 'unauthorized' });
       other.socket.send(pcmFrame(0, 0));
       expect(yield* other.socket.take('ack')).toMatchObject({ sample_end: 1_600 });
     }),
