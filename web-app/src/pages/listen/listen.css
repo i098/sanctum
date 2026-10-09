@@ -437,7 +437,7 @@
   white-space: nowrap;
 }
 
-.listen-dialog a[data-primary] {
+.listen a[data-primary] {
   padding: 4px 8px;
   border-radius: 3px;
   color: #e7ecf3;
@@ -453,10 +453,31 @@
   outline: 1px solid #3d7dff;
 }
 
-.listen-status a {
-  color: #e7ecf3;
-  text-decoration: underline #3d7dff;
-  text-underline-offset: 4px;
+.listen a[data-primary]:hover {
+  background: rgb(61 125 255 / 0.14);
+}
+
+/* Signed out, the status's one action: the dialog's primary link at the status size. */
+.listen-status a[data-primary] {
+  padding: 9px 18px;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+}
+
+/* The health line's dot in the listening colour: the sign-in finished. */
+.listen-welcome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a7adb8;
+}
+
+.listen-welcome::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #22d3c5;
 }
 
 .listen-signin-notice {
