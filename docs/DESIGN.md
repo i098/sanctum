@@ -85,7 +85,7 @@ Use restrained dark overlays and the same tokens; closing them returns to the li
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (name and role, Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
-On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins; it opens Team over Settings with the WorkOS profile and members widgets on the same tokens, and full screen on phones.
+On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it opens Team over Settings with the WorkOS profile and members widgets on the same tokens, and full screen on phones.
 Signed out, the helper line under the status becomes a Sign in to listen link. A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
 Keep controls keyboard-accessible, trap focus correctly in dialogs, and return focus on close.
 
