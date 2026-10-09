@@ -1,18 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import type { AccessScope } from '@sanctum/contracts';
-import { Context, Effect, Layer, Option } from 'effect';
+import { Effect, Layer, Option } from 'effect';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { CustomFetch } from 'openid-client';
 import { linkIdentity, openSession } from '../src/auth.ts';
-import { dbLayer } from '../src/db.ts';
-import { serverLayer } from '../src/main.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
-import { createTestDatabase } from './support/database.ts';
+import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const ISSUER = 'https://issuer.fixture.test';
@@ -82,15 +78,7 @@ const fixtureIssuer = (): FixtureIssuer => {
 
 /** The real API with the kernel authenticator, plus SQL on the same disposable database. */
 const withServer = (client: Option.Option<SignIn>) =>
-  Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    const db = dbLayer(database.mysql);
-    yield* Effect.provide(migrate(loadMigrations()), db);
-    const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, undefined, { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }) });
-    const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
-    if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
-    return { base: `http://127.0.0.1:${address.port}`, db };
-  });
+  serveApiWithDb({ overrides: { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }) } });
 
 const configured = () => {
   const issuer = fixtureIssuer();

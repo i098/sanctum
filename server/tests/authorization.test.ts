@@ -1,31 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, Authenticated, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
-import { ConfigProvider, Context, Effect, Layer, Option } from 'effect';
+import { ConfigProvider, Effect, Option } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { authorizeMeeting, identityPrincipal, listVisibleMeetingIds, openSession, resolveAccess } from '../src/auth.ts';
 import { scopedCacheKey } from '../src/cache.ts';
-import { dbLayer } from '../src/db.ts';
-import { serverLayer } from '../src/main.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
 import { grantMeetingAccess } from '../src/store.ts';
-import { createTestDatabase, withDatabase } from './support/database.ts';
+import { serveApiWithDb } from './http-server.ts';
+import { withDatabase } from './support/database.ts';
 import { fixtureAccess, seedWorkspace } from './support/fixtures.ts';
 import { upgradeStatus } from './support/media.ts';
 
 /** Real HTTP server with the kernel authenticator plus direct SQL on the same disposable database. */
 const withServer = <A, E>(use: (base: string) => Effect.Effect<A, E, SqlClient.SqlClient>) =>
-  Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
-    const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }));
-    const address = Context.get(context, HttpServer.HttpServer).address;
-    if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
-    return yield* Effect.provide(use(`http://127.0.0.1:${address.port}`), dbLayer(database.mysql));
-  });
+  Effect.flatMap(serveApiWithDb(), ({ base, db }) => Effect.provide(use(base), db));
 
 const call = (url: string, init: { method?: string; headers?: Record<string, string>; body?: unknown } = {}) =>
   Effect.promise(async () => {

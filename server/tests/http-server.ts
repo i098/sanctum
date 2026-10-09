@@ -26,18 +26,27 @@ export const builtWebsite = Effect.acquireRelease(
   root => Effect.sync(() => rmSync(join(root, '..'), { recursive: true, force: true })),
 );
 
-/** Scoped: yields the base URL; the server and database (migrated unless `migrated: false`) are removed with the scope. */
-export const serveApi = (
-  options: { readonly migrated?: boolean; readonly webRoot?: string; readonly auth?: Parameters<typeof serverLayer>[1] } = {},
+/** Scoped: the base URL and a layer on the same database; the server and database (migrated unless `migrated: false`) are removed with the scope. */
+export const serveApiWithDb = (
+  options: {
+    readonly migrated?: boolean;
+    readonly webRoot?: string;
+    readonly auth?: Parameters<typeof serverLayer>[1];
+    readonly overrides?: Parameters<typeof serverLayer>[2];
+  } = {},
 ) =>
   Effect.gen(function* () {
     const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    if (options.migrated !== false) yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
-    const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql, webRoot: options.webRoot }, options.auth));
+    const db = dbLayer(database.mysql);
+    if (options.migrated !== false) yield* Effect.provide(migrate(loadMigrations()), db);
+    const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql, webRoot: options.webRoot }, options.auth, options.overrides));
     const address = Context.get(context, HttpServer.HttpServer).address;
     if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
-    return `http://127.0.0.1:${address.port}`;
+    return { base: `http://127.0.0.1:${address.port}`, db };
   });
+
+/** Scoped: yields the base URL only. */
+export const serveApi = (options: Parameters<typeof serveApiWithDb>[0] = {}) => Effect.map(serveApiWithDb(options), ({ base }) => base);
 
 interface RawResponse {
   readonly status: number;
