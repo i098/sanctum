@@ -18,7 +18,7 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 };
 
 /** PCM16 peak at or below which audio is dead: about -90 dBFS, under any real room's noise floor, so a quiet room never counts. */
-export const SILENT_PEAK = 1;
+const SILENT_PEAK = 1;
 /** Seconds of dead audio before an input counts as sending no sound (a closed MacBook's built-in microphone). */
 export const SILENT_SECONDS = 3;
 
