@@ -17,4 +17,21 @@ describe('Worker routing', () => {
     }
     expect(forwarded.map(request => new URL(request.url).pathname)).toEqual(['/__login/link-token', '/__login/anything']);
   });
+
+  it('sends every apex request to the same path and query on the app host', async () => {
+    forwarded.length = 0;
+    for (const path of ['/listen', '/api/v1/session?x=1', '/mcp']) {
+      const response = await worker.fetch(new Request(`https://sanctum.42nights.dev${path}`), {} as never);
+      expect(response.status).toBe(308);
+      expect(response.headers.get('location')).toBe(`https://app.sanctum.42nights.dev${path}`);
+    }
+    expect(forwarded).toEqual([]);
+  });
+
+  it('serves an app host request from the API container', async () => {
+    forwarded.length = 0;
+    const response = await worker.fetch(new Request('https://app.sanctum.42nights.dev/api/v1/session?x=1'), {} as never);
+    expect(await response.text()).toBe('app');
+    expect(forwarded.map(request => request.url)).toEqual(['https://app.sanctum.42nights.dev/api/v1/session?x=1']);
+  });
 });

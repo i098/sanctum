@@ -37,6 +37,11 @@ This unassigned-speech buffer is different from the browser queue of recordings 
 An actual deployment also needs a timezone, identity configuration, MySQL/R2/provider credentials, approved audio fixtures, and an authorized hosting target.
 These secrets and production resources do not belong in this repository.
 
+## Hosts decision — 2026-10-09
+
+Accepted: the hosted app, `/api/v1` and `/mcp` move to `app.sanctum.42nights.dev`; the apex `sanctum.42nights.dev` is for the landing page and answers every other request with `308` to the same path and query on the app host.
+The API and MCP stay on the app host, because a separate `api.*` host needs cross-origin cookies, CORS and a new MCP address ([operations.md](operations.md#cloudflare)).
+
 ## Meeting end decision — 2026-10-09
 
 Accepted: a meeting ends in one of two ways, and both run the same close as `POST /api/v1/meetings/{id}/close` (finalize, recording, notes and memory).
