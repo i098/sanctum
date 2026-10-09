@@ -9,7 +9,7 @@ import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTVerifyGetKey } from '
 import { createConnection } from 'mysql2/promise';
 import { inject } from 'vitest';
 import { dbLayer } from '../src/db.ts';
-import { createIssuer } from '../src/issuer.ts';
+import { createIssuer, registerSanctumClient } from '../src/issuer.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -168,6 +168,24 @@ describe('embedded Better Auth issuer', () => {
       expect(mixed.body['error']).toBe('invalid_redirect_uri');
       const web = yield* register({ application_type: 'web', redirect_uris: ['http://127.0.0.1:8123/callback'] });
       expect(web.body['error']).toBe('invalid_redirect_uri');
+    }),
+  );
+
+  it.scoped('issuer:client registers a first-party public PKCE client for the redirect, without consent', () =>
+    Effect.gen(function* () {
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+      const redirect = new URL('https://sanctum.fixture.test/auth/callback');
+      const settings = { issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) };
+      const clientId = yield* registerSanctumClient(settings, database.mysql, redirect);
+      const rows = yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ clientId: string; clientSecret: string | null; skipConsent: number; requirePKCE: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>`SELECT clientId, clientSecret, skipConsent, requirePKCE, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client`),
+        dbLayer(database.mysql),
+      );
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row).toMatchObject({ clientId, clientSecret: null, skipConsent: 1, requirePKCE: 1, tokenEndpointAuthMethod: 'none' });
+      expect(typeof row!.redirectUris === 'string' ? JSON.parse(row!.redirectUris) : row!.redirectUris).toEqual([redirect.href]);
     }),
   );
 

@@ -152,31 +152,33 @@ export const embeddedIssuerLive = (mysql: MysqlOptions) =>
   );
 
 /**
- * `npm run issuer:client -w server`: registers Sanctum's own sign-in client (public, PKCE, no
- * consent screen, redirect `SANCTUM_OIDC_REDIRECT_URI`) and prints the id for `SANCTUM_OIDC_CLIENT_ID`.
- * Better Auth's admin create endpoint needs a signed-in user, so this registers through the
- * validated DCR path and then sets the one restricted flag, `skipConsent`, on the stored row.
+ * Registers Sanctum's own sign-in client (public, PKCE, no consent screen) for `redirect` and
+ * returns its id. Better Auth's admin create endpoint needs a signed-in user, so this registers
+ * through the validated DCR path and then sets the one restricted flag, `skipConsent`, on the stored row.
  */
+export const registerSanctumClient = (settings: IssuerSettings, mysql: MysqlOptions, redirect: URL) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => createIssuer(settings, mysql)),
+    ({ auth }) =>
+      Effect.promise(async () => {
+        // Present at runtime; the typing workaround in createIssuer makes every endpoint optional.
+        const { client_id } = await auth.api.registerOAuthClient!({
+          body: { client_name: 'Sanctum', redirect_uris: [redirect.href], token_endpoint_auth_method: 'none' },
+        });
+        const { adapter } = await auth.$context;
+        await adapter.update({ model: 'oauthClient', where: [{ field: 'clientId', value: client_id }], update: { skipConsent: true } });
+        return client_id;
+      }),
+    ({ pool }) => Effect.promise(() => pool.end()),
+  );
+
+/** `npm run issuer:client -w server`: prints the id of a new client for `SANCTUM_OIDC_CLIENT_ID`; redirect is `SANCTUM_OIDC_REDIRECT_URI`. */
 if (import.meta.main) {
   Effect.gen(function* () {
     const settings = yield* issuerSettings;
     if (Option.isNone(settings)) return yield* Effect.dieMessage('Set SANCTUM_EMBEDDED_ISSUER=better-auth first');
     const redirect = yield* Config.url('SANCTUM_OIDC_REDIRECT_URI');
     const { mysql } = yield* serverConfig;
-    const clientId = yield* Effect.acquireUseRelease(
-      Effect.sync(() => createIssuer(settings.value, mysql)),
-      ({ auth }) =>
-        Effect.promise(async () => {
-          // Present at runtime; the typing workaround in createIssuer makes every endpoint optional.
-          const { client_id } = await auth.api.registerOAuthClient!({
-            body: { client_name: 'Sanctum', redirect_uris: [redirect.href], token_endpoint_auth_method: 'none' },
-          });
-          const { adapter } = await auth.$context;
-          await adapter.update({ model: 'oauthClient', where: [{ field: 'clientId', value: client_id }], update: { skipConsent: true } });
-          return client_id;
-        }),
-      ({ pool }) => Effect.promise(() => pool.end()),
-    );
-    console.log(clientId);
+    console.log(yield* registerSanctumClient(settings.value, mysql, redirect));
   }).pipe(NodeRuntime.runMain);
 }
