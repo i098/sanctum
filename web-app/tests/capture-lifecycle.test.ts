@@ -661,6 +661,24 @@ describe('capture lifecycle', () => {
     expect(h.replaced).toHaveLength(1);
   });
 
+  it('hands capture to the default input when the running input is unplugged while the default is being chosen', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    await h.engine.chooseInput('iphone');
+    const unplugged = h.track;
+    let open!: () => void;
+    h.gates['default'] = new Promise<void>((resolve) => (open = resolve));
+    const choosing = h.engine.chooseInput(null);
+    unplugged.unplug();
+    await settle();
+    open();
+    await choosing;
+    await settle();
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
+  });
+
   it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {
     const h = harness();
     await h.engine.start();

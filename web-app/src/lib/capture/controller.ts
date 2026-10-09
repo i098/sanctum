@@ -570,7 +570,7 @@ class CaptureController implements CaptureView {
 
   /** A chosen input that disappears hands capture to the default input and says so; the default disappearing stops capture. */
   private async onInputEnded(): Promise<void> {
-    if (this.input === null) return this.halt('input_lost', true);
+    if (this.session!.input === null) return this.halt('input_lost', true);
     const choice = ++this.choice;
     this.remember(null);
     if (!(await this.switchInput(null, choice))) return this.halt('input_lost', true);
