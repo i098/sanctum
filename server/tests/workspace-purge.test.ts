@@ -130,6 +130,34 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
     }),
   );
 
+  it.effect('deletes the embedded issuer organization, members and invitations of the purged workspace only', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = memoryObjectStore();
+      const a = yield* seed('Purged', store);
+      const b = yield* seed('Kept', store);
+      const user = randomUUID();
+      yield* sql`INSERT INTO auth_user (id, name, email, emailVerified) VALUES (${user}, 'Ada', ${`${user}@fixture.test`}, false)`;
+      for (const id of [a.workspace_id, b.workspace_id]) {
+        yield* sql`INSERT INTO auth_organization (id, name, slug, createdAt) VALUES (${id}, 'Team', ${id}, UTC_TIMESTAMP(3))`;
+        yield* sql`INSERT INTO auth_member (id, organizationId, userId, role, createdAt) VALUES (${randomUUID()}, ${id}, ${user}, 'owner', UTC_TIMESTAMP(3))`;
+        yield* sql`INSERT INTO auth_invitation (id, organizationId, email, role, status, expiresAt, inviterId)
+          VALUES (${randomUUID()}, ${id}, 'invitee@fixture.test', 'member', 'pending', UTC_TIMESTAMP(3) + INTERVAL 2 DAY, ${user})`;
+        yield* sql`INSERT INTO auth_session (id, expiresAt, token, updatedAt, userId, activeOrganizationId)
+          VALUES (${randomUUID()}, UTC_TIMESTAMP(3) + INTERVAL 1 DAY, ${randomUUID()}, UTC_TIMESTAMP(3), ${user}, ${id})`;
+      }
+      yield* deleteNow(a.owner);
+      const lease = yield* claim;
+      const outcome = yield* Effect.provide(purgeWorkspace(lease.job), store.layer);
+      expect(outcome).toMatchObject({ status: 'succeeded', result: { purged: true, rows_deleted: { auth_invitation: 1, auth_member: 1, auth_organization: 1 } } });
+      expect(yield* Effect.provide(purgeWorkspace(lease.job), store.layer)).toEqual(outcome);
+      const left = yield* sql<{ organizationId: string }>`SELECT organizationId FROM auth_invitation UNION ALL SELECT organizationId FROM auth_member UNION ALL SELECT id FROM auth_organization`;
+      expect(left.map(row => row.organizationId)).toEqual([b.workspace_id, b.workspace_id, b.workspace_id]);
+      const sessions = yield* sql<{ activeOrganizationId: string | null }>`SELECT activeOrganizationId FROM auth_session ORDER BY activeOrganizationId IS NULL DESC`;
+      expect(sessions.map(row => row.activeOrganizationId)).toEqual([null, b.workspace_id]);
+    }),
+  );
+
   it.effect('never purges a restored workspace', () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

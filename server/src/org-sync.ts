@@ -9,16 +9,15 @@
  * with its workspace, and Team links an existing workspace to a new organization.
  */
 import { randomUUID } from 'node:crypto';
-import { SqlClient, SqlSchema } from '@effect/sql';
-import { JobFailure, PrincipalId, WorkspaceId, WorkspaceRole } from '@sanctum/contracts';
+import { SqlClient } from '@effect/sql';
+import { JobFailure, type PrincipalId, WorkspaceId, type WorkspaceRole } from '@sanctum/contracts';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { identityPrincipal, linkIdentity } from './auth.ts';
+import { createHumanPrincipal, identityPrincipal } from './auth.ts';
 import { engineeringDefaults, serverConfig } from './config.ts';
-import { DbSafeInt } from './db.ts';
 import type { JobHandler } from './job-types.ts';
 import { enqueueJob } from './jobs.ts';
 import { makeWorkosClient, type OrganizationMembership, PAGE_LIMIT, type WorkosClient, type WorkosEvent, type WorkosOptions } from './providers/workos.ts';
-import { addMember, bumpPermissionRevision, linkWorkspaceOrg, workspaceForOrg } from './store.ts';
+import { linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 interface WorkosOrganizationSettings {
   readonly client: WorkosClient;
@@ -67,42 +66,14 @@ type Identity = { readonly issuer: string; readonly subject: string };
  * Sanctum role of a WorkOS membership: null unless it is active; the slugs `owner` and `admin` map
  * one to one, and any other slug (`member` or a custom role) is a plain member.
  */
-const roleOf = (membership: OrganizationMembership): WorkspaceRole | null => {
-  const slug = membership.role?.slug;
-  if (membership.status !== 'active') return null;
-  return slug === 'owner' || slug === 'admin' ? slug : 'member';
-};
+const roleOf = (membership: OrganizationMembership): WorkspaceRole | null =>
+  membership.status === 'active' ? roleFromSlugs(membership.role ? [membership.role.slug] : []) : null;
 
-/**
- * Moves one membership to `role` and marks it granted by `issuer`, or revokes it for null; no write
- * when it already matches, so a repeated sign-in does not invalidate caches. Only a membership this
- * issuer granted is revoked: a member Sanctum added (for example before the workspace was linked)
- * stays until the issuer grants and later removes it. A seat over the workspace limit is refused and logged.
- */
-const setMembership = (issuer: string, workspace_id: WorkspaceId, principal_id: PrincipalId, role: WorkspaceRole | null) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const current = yield* SqlSchema.findOne({
-      Request: Schema.Void,
-      Result: Schema.Struct({ role: WorkspaceRole, active: DbSafeInt, org_issuer: Schema.NullOr(Schema.String) }),
-      execute: () => sql`SELECT role, revoked_at IS NULL AS active, org_issuer FROM workspace_members WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id}`,
-    })(undefined).pipe(Effect.orDie);
-    const active = Option.filter(current, row => row.active === 1);
-    if (role === null) {
-      if (Option.isNone(active) || active.value.org_issuer !== issuer) return;
-      yield* sql.withTransaction(
-        Effect.zipRight(
-          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
-          bumpPermissionRevision(workspace_id),
-        ),
-      );
-      return;
-    }
-    if (Option.isSome(active) && active.value.role === role && active.value.org_issuer === issuer) return;
-    yield* addMember({ workspace_id, principal_id, role, org_issuer: issuer }).pipe(
-      Effect.catchTag('SeatLimitReached', error => Effect.logWarning('WorkOS member not added to Sanctum', { workspace_id, principal_id, reason: error.message })),
-    );
-  });
+/** `setMembership` for WorkOS: a seat over the workspace limit is refused and logged. */
+const syncMembership = (issuer: string, workspace_id: WorkspaceId, principal_id: PrincipalId, role: WorkspaceRole | null) =>
+  setMembership(issuer, workspace_id, principal_id, role).pipe(
+    Effect.catchTag('SeatLimitReached', error => Effect.logWarning('WorkOS member not added to Sanctum', { workspace_id, principal_id, reason: error.message })),
+  );
 
 /** Active memberships of the principal in workspaces linked under `issuer`. */
 const linkedMemberships = (issuer: string, principal_id: PrincipalId) =>
@@ -141,17 +112,10 @@ const reconcileMemberships = ({ client, issuer }: WorkosOrganizationSettings, id
     if (Option.isSome(principal)) {
       for (const held of yield* linkedMemberships(issuer, principal.value)) if (!desired.has(held.workspace_id)) desired.set(held.workspace_id, null);
     } else if ([...desired.values()].some(role => role !== null)) {
-      const principal_id = PrincipalId.make(randomUUID());
-      yield* sql.withTransaction(
-        Effect.zipRight(
-          sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${name?.trim().slice(0, 200) || identity.subject}, UTC_TIMESTAMP(6))`,
-          linkIdentity({ ...identity, principal_id }),
-        ),
-      );
-      principal = Option.some(principal_id);
+      principal = Option.some(yield* createHumanPrincipal({ ...identity, name }));
     }
     if (Option.isNone(principal)) return;
-    for (const [workspace_id, role] of desired) yield* setMembership(issuer, workspace_id, principal.value, role);
+    for (const [workspace_id, role] of desired) yield* syncMembership(issuer, workspace_id, principal.value, role);
   });
 
 /**
@@ -239,12 +203,12 @@ const applyEvent = (issuer: string, event: WorkosEvent) =>
     const principal = yield* identityPrincipal({ issuer, subject });
     if (Option.isNone(principal)) return; // Not signed in yet: the first sign-in creates the member.
     if (event.event === 'user.deleted') {
-      for (const held of yield* linkedMemberships(issuer, principal.value)) yield* setMembership(issuer, held.workspace_id, principal.value, null);
+      for (const held of yield* linkedMemberships(issuer, principal.value)) yield* syncMembership(issuer, held.workspace_id, principal.value, null);
       return;
     }
     const workspace = yield* workspaceForOrg({ issuer, org_id: event.data.organization_id });
     if (Option.isNone(workspace)) return;
-    yield* setMembership(issuer, workspace.value, principal.value, event.event === 'organization_membership.deleted' ? null : roleOf(event.data));
+    yield* syncMembership(issuer, workspace.value, principal.value, event.event === 'organization_membership.deleted' ? null : roleOf(event.data));
   });
 
 /**

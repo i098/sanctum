@@ -1,23 +1,26 @@
 /**
  * Embedded OIDC issuer and MCP authorization server for self-hosting (docs/DECISIONS.md, sign-in):
  * Better Auth at `/idp` when `SANCTUM_EMBEDDED_ISSUER=better-auth`. It keeps its own small mysql2
- * pool and the `auth_*` tables of migration 011; Sanctum never runs Better Auth's migrator. Login
+ * pool and the `auth_*` tables of migrations 011 and 013; Sanctum never runs Better Auth's migrator. Login
  * ID tokens and MCP access tokens carry the same `iss` and `sub`, so one `principal_identities`
  * row serves both, and mcp.ts verifies these tokens like any other authorization server's.
+ * Its organizations are the teams of Sanctum workspaces (issuer-orgs.ts).
  */
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { type ClientMetadataResourceFetch, oauthProvider } from '@better-auth/oauth-provider';
 import { HttpApiBuilder, HttpApp } from '@effect/platform';
 import { NodeRuntime } from '@effect/platform-node';
+import { SqlClient } from '@effect/sql';
 import { type BetterAuthPlugin, betterAuth } from 'better-auth';
 // `better-auth/api` through the `imports` alias in package.json: Sentrux resolves that specifier to server/src/api.ts.
-import { createAuthMiddleware } from '#better-auth-api';
-import { jwt } from 'better-auth/plugins';
-import { Config, Effect, Option, Redacted } from 'effect';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from '#better-auth-api';
+import { jwt, organization } from 'better-auth/plugins';
+import { Config, Effect, Either, Option, Redacted } from 'effect';
 import { createPool } from 'mysql2/promise';
 import { serverConfig } from './config.ts';
 import type { MysqlOptions } from './db.ts';
+import { applyMember, requireSeat, workspaceOrganization } from './issuer-orgs.ts';
 import { MCP_SCOPES } from './mcp.ts';
 
 /** Better Auth's base path; the public issuer is `<origin>/idp`. */
@@ -103,8 +106,36 @@ const scopelessAuthorizeGetsDefaults = rewritesRequest('sanctum-default-scopes',
   return { [field]: { ...params, scope: DEFAULT_CLIENT_SCOPES.join(' ') } };
 });
 
-/** Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it. */
-export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource) => {
+/** Pending invitations carry the ids that accept them, so only an owner or admin of the organization gets them back from `get-full-organization`; for anyone else the list is empty. */
+const invitationsOnlyForManagers = {
+  id: 'sanctum-invitations-for-managers',
+  hooks: {
+    after: [
+      {
+        matcher: (ctx: { path?: string }) => ctx.path === '/organization/get-full-organization',
+        handler: createAuthMiddleware(async ctx => {
+          const returned = ctx.context.returned as { members?: ReadonlyArray<{ userId: string; role: string }> } | null;
+          if (!returned?.members) return;
+          const session = await getSessionFromCtx(ctx);
+          const mine = returned.members.find(member => member.userId === session?.user.id);
+          if (mine?.role.split(',').some(role => ['owner', 'admin'].includes(role.trim()))) return;
+          ctx.context.returned = { ...returned, invitations: [] };
+        }),
+      },
+    ],
+  },
+} satisfies BetterAuthPlugin;
+
+/**
+ * Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it.
+ * `sql` is the API's database client, which organization changes need for Sanctum's side; without it they fail.
+ */
+export const createIssuer = (
+  settings: IssuerSettings,
+  mysql: MysqlOptions,
+  fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource,
+  sql?: SqlClient.SqlClient,
+) => {
   const pool = createPool({
     host: mysql.host,
     port: mysql.port,
@@ -116,6 +147,17 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     ...(mysql.caCert === undefined ? {} : { ssl: { ca: mysql.caCert, verifyIdentity: true } }),
   });
   const resource = settings.resource.href;
+  const issuer = settings.issuer.href;
+  /** Makes the hook of one organization change that runs Sanctum's side: a refusal answers 403 with its message and stops the change; a database error answers 500. */
+  const sanctum =
+    <D, A, E extends { readonly _tag: string; readonly message: string }>(change: (data: D) => Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    async (data: D) => {
+      if (sql === undefined) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Organizations change only through the API process' });
+      const result = await Effect.runPromise(Effect.either(Effect.provideService(change(data), SqlClient.SqlClient, sql)));
+      if (Either.isRight(result)) return result.right;
+      if (result.left._tag === 'SqlError') throw result.left;
+      throw new APIError('FORBIDDEN', { message: result.left.message });
+    };
   const provider = oauthProvider({
     loginPage: '/sign-in',
     consentPage: '/consent',
@@ -126,6 +168,15 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     clientRegistrationDefaultResources: [resource],
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
+    // The authorizing session's active organization becomes the access token's `org_id`, which selects the workspace at /mcp.
+    postLogin: {
+      page: '/sign-in',
+      shouldRedirect: () => false,
+      consentReferenceId: ({ session }) => (typeof session['activeOrganizationId'] === 'string' ? session['activeOrganizationId'] : undefined),
+    },
+    customAccessTokenClaims: ({ referenceId }) => (referenceId === undefined ? {} : { org_id: referenceId }),
+    // Sanctum reads the display name from the ID token at sign-in (plan section 5.2); the library emits no profile claims by itself.
+    customIdTokenClaims: ({ user, scopes }) => (scopes.includes('profile') ? { name: user.name } : {}),
     schema: {
       oauthClient: { modelName: 'auth_oauth_client' },
       oauthResource: { modelName: 'auth_oauth_resource' },
@@ -147,7 +198,9 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
     account: { modelName: 'auth_account' },
     verification: { modelName: 'auth_verification' },
     // The JWT plugin's session-token endpoint is not an OAuth grant; tokens come from /oauth2/token only.
-    disabledPaths: ['/token'],
+    // Leaving runs no organization hook, so a member leaves only by an admin's removal, which Sanctum sees.
+    // Both list invitations (and so their ids), the first to anyone with an invited address and the second to every member: pending invitations come only through get-full-organization, for owners and admins.
+    disabledPaths: ['/token', '/organization/leave', '/organization/list-user-invitations', '/organization/list-invitations'],
     plugins: [
       jwt({ schema: { jwks: { modelName: 'auth_jwks' } } }),
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
@@ -155,6 +208,27 @@ export const createIssuer = (settings: IssuerSettings, mysql: MysqlOptions, fetc
       cimd({ fetchClientMetadataResource: fetchMetadata }),
       loopbackClientsAreNative,
       scopelessAuthorizeGetsDefaults,
+      invitationsOnlyForManagers,
+      // No email transport: inviters copy the link. Sign-up is open and email unverified, so anyone can register an invited address: the invitation id is the secret, seen only by owners and admins, and no invitation carries `owner`.
+      // Once SMTP exists, send invitations by email and set `requireEmailVerificationOnInvitation: true` (docs/operations.md).
+      organization({
+        schema: { organization: { modelName: 'auth_organization' }, member: { modelName: 'auth_member' }, invitation: { modelName: 'auth_invitation' } },
+        // Sanctum's seat limit applies instead (store.ts `claimSeat`); a workspace is deleted in Sanctum, never through its organization.
+        // Finite, because member lists also use it as their SQL LIMIT.
+        membershipLimit: Number.MAX_SAFE_INTEGER,
+        disableOrganizationDeletion: true,
+        organizationHooks: {
+          beforeCreateInvitation: async ({ invitation }) => {
+            if (invitation.role.split(',').some(role => role.trim() === 'owner')) throw new APIError('FORBIDDEN', { message: 'An owner is made by changing a member\'s role, not by invitation' });
+          },
+          beforeCreateOrganization: sanctum(({ organization, user }) => Effect.map(workspaceOrganization(issuer, organization.slug, user), workspace => ({ data: { ...organization, ...workspace } }))),
+          afterCreateOrganization: sanctum(({ organization, user }) => applyMember(issuer, organization.id, user, 'owner', true)),
+          beforeAcceptInvitation: sanctum(({ invitation, user }) => requireSeat(issuer, invitation.organizationId, user)),
+          afterAcceptInvitation: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role, true)),
+          afterUpdateMemberRole: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role, false)),
+          beforeRemoveMember: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, null, false)),
+        },
+      }),
     ],
   });
   return { auth, pool };
@@ -166,8 +240,9 @@ export const embeddedIssuerLive = (mysql: MysqlOptions) =>
     Effect.gen(function* () {
       const settings = yield* issuerSettings;
       if (Option.isNone(settings)) return;
+      const sql = yield* SqlClient.SqlClient;
       const { auth } = yield* Effect.acquireRelease(
-        Effect.sync(() => createIssuer(settings.value, mysql)),
+        Effect.sync(() => createIssuer(settings.value, mysql, undefined, sql)),
         ({ pool }) => Effect.promise(() => pool.end()),
       );
       const app = HttpApp.fromWebHandler(auth.handler);

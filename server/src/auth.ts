@@ -5,7 +5,7 @@
  * hashed bearer credentials; no login issuer is chosen here (docs/DECISIONS.md), so sessions
  * are opened only for an already verified identity or enrolled device.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { HttpServerRequest } from '@effect/platform';
 import { SqlClient, SqlSchema, type SqlError, type Statement } from '@effect/sql';
 import {
@@ -236,6 +236,20 @@ export const linkIdentity = (input: { readonly issuer: string; readonly subject:
       ON DUPLICATE KEY UPDATE verified_at = IF(principal_identities.principal_id = new.principal_id, new.verified_at, principal_identities.verified_at)`;
     const owner = yield* identityPrincipal(input);
     if (Option.getOrNull(owner) !== input.principal_id) return yield* new Forbidden({ message: 'This sign-in is already linked to another principal' });
+  });
+
+/** A new human principal bound to a verified issuer/subject pair; its display name is the trimmed `name` (200 characters at most), else the subject. */
+export const createHumanPrincipal = (input: { readonly issuer: string; readonly subject: string; readonly name: string | null }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const principal_id = PrincipalId.make(randomUUID());
+    yield* sql.withTransaction(
+      Effect.zipRight(
+        sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.name?.trim().slice(0, 200) || input.subject}, UTC_TIMESTAMP(6))`,
+        linkIdentity({ issuer: input.issuer, subject: input.subject, principal_id }),
+      ),
+    );
+    return principal_id;
   });
 
 type MeetingAccessRow = { visibility: 'restricted' | 'workspace'; access: 'read' | 'write' | 'owner' | null };

@@ -96,7 +96,7 @@ async function authorize(send: Send, cookie: string, client: string, params: Rec
 }
 
 describe('embedded Better Auth issuer', () => {
-  it.scoped('fits migration 011: Better Auth finds no schema drift once Sanctum has migrated', () =>
+  it.scoped('fits migrations 011 and 013: Better Auth finds no schema drift once Sanctum has migrated', () =>
     Effect.gen(function* () {
       const database = yield* freshDatabase;
       // Better Auth caches the result per pool, so each check uses its own issuer.
@@ -150,7 +150,10 @@ describe('embedded Better Auth issuer', () => {
 
       const login = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid profile', nonce: 'fixture-nonce' }));
       const { payload } = yield* Effect.promise(() => jwtVerify(login.id_token!, keys, { issuer: ISSUER, audience: clientId }));
-      expect(payload).toMatchObject({ sub: user, nonce: 'fixture-nonce' });
+      expect(payload).toMatchObject({ sub: user, nonce: 'fixture-nonce', name: 'Fixture Owner' });
+      const other = ((yield* Effect.promise(() => register(send))).body['client_id'] as string);
+      const bare = yield* Effect.promise(() => authorize(send, cookie, other, { scope: 'openid' }));
+      expect(decodeJwt(bare.id_token!)).not.toHaveProperty('name');
     }),
   );
 

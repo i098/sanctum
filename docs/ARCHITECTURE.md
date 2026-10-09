@@ -67,6 +67,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `store.ts`: `workspaceForOrg(input: { issuer; org_id }): Effect<Option<WorkspaceId>, SqlError, R>` and `linkWorkspaceOrg(input: { workspace_id; issuer; org_id }): Effect<void, SqlError, R>` (idempotent; a clash with another link is a defect) over migration `012_workspace_orgs`.
 - `store.ts`: `addMember(input: { workspace_id; principal_id; role; org_issuer? })` stores `workspace_members.org_issuer` (migration `016_member_org_issuer`): the issuer whose organization sync granted the membership, NULL when Sanctum did; org sync revokes only memberships its issuer granted.
+- `store.ts`: `setMembership(issuer, workspace_id, principal_id, role | null): Effect<void, SeatLimitReached | SqlError, R>`, the upsert (through `addMember` and its seat limit) and revoke path that provider organization glue calls; `roleFromSlugs(slugs)` maps organization role slugs to a Sanctum role; `claimSeat(workspace_id, principal_id | null)` checks a seat in its own transaction. `auth.ts` `createHumanPrincipal({ issuer, subject, name })` creates the human principal and its identity link for the same glue.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
 - contracts: `AgentsApi` with `createAgent`, `listAgents`, `revokeCredential`.
 
@@ -186,6 +187,7 @@ Owns `deploy/cloudflare/` (Worker, Container classes, `wrangler.jsonc`) and the 
 Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts`; operation in [operations.md](operations.md#sign-in).
 
 - Mounts `/auth/*` from main.ts; opens sessions through `openSession` and `linkIdentity` in auth.ts.
+- B1 (self-hosted organizations): `server/src/issuer-orgs.ts` (Better Auth organization hooks and the sign-in repair `reconcileMember`), migration `013_issuer_organizations`, `web-app/src/pages/auth/team.tsx` (Team and Profile dialogs) and the `/invite/<id>` page; operation in [operations.md](operations.md#self-hosted-sign-in).
 
 ### organizations (W1)
 
@@ -200,7 +202,7 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 
 - `auth.ts` joins only live workspaces, so a deleted workspace refuses every session, credential and `resolveAccess` at once; `WorkspaceOwnerLive` and `openSession` alone still admit an owner until `purge_after`, so the owner can sign in again and undo.
 - Deleting ends this process's open listener sockets of the workspace with a `rejected` message (`unauthorized`) and close code 1008 (`server/src/media/open-sockets.ts`), and `workspaceIsLive` in store.ts refuses segment, chunk commit and recording-object writes of a deleted workspace in every process; a reconcile or recording job that meets the deletion mid-run fails with the requester refusal, so Undo requeues it; the web app pauses capture after a successful delete.
-- Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first. The purge keeps the deployment-wide `workos.sync` job row, because it is anchored to the oldest workspace.
+- Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first. The purge also deletes the embedded issuer's organization of the workspace (`auth_invitation`, `auth_member`, `auth_organization` with `id = workspace_id`, which hold no `workspace_id` column) and clears `auth_session.activeOrganizationId` that names it. It keeps the deployment-wide `workos.sync` job row, because it is anchored to the oldest workspace.
 
 ### team widgets (W2)
 

@@ -105,6 +105,46 @@ test('Connect sign-in navigates to the issuer URL the server returns', async ({ 
   await expect(page).toHaveURL(/\/fixture-issuer\/authorize\?state=s$/);
 });
 
+test('self-hosted issuer: Team opens over Settings, closes back to it, and capture keeps running', async ({ page }) => {
+  await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await expect(row(settings, 'Profile')).toHaveText('Display name and passwordEdit');
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  // An ended issuer session asks for sign-in instead of showing an empty team.
+  await expect(team.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/');
+  await page.keyboard.press('Escape');
+  await expect(team).toBeHidden();
+  await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
+  await expect(page.getByText('listening', { exact: true })).toBeVisible();
+});
+
+test('self-hosted issuer: a signed-in user outside the workspace team is told to ask an owner', async ({ page }) => {
+  const now = new Date().toISOString();
+  const user = { id: 'u', name: 'Ada Lovelace', email: 'ada@fixture.test', emailVerified: false, createdAt: now, updatedAt: now };
+  await page.route('**/idp/get-session', route => route.fulfill({ json: { session: { id: 's', token: 't', userId: 'u', expiresAt: now, createdAt: now, updatedAt: now }, user } }));
+  await page.route('**/idp/organization/list', route => route.fulfill({ json: [] }));
+  await page.route('**/idp/organization/check-slug', route => route.fulfill({ status: 400, json: { code: 'ORGANIZATION_SLUG_ALREADY_TAKEN', message: 'Slug is taken' } }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  await expect(team).toContainText('This workspace has a team. Ask an owner to invite you.');
+  await expect(team.getByRole('button', { name: 'Set up team' })).toHaveCount(0);
+});
+
+test('self-hosted issuer: on a phone Team covers the whole viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const box = await page.getByRole('dialog', { name: 'Team' }).boundingBox();
+  expect(box).toEqual({ x: 0, y: 0, width: 390, height: 780 });
+});
+
 test('an operator-seeded session without an issuer offers no sign out', async ({ page }) => {
   await openListening(page, { configured: false, access: ACCESS });
   const settings = await openSettings(page);
