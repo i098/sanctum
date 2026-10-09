@@ -230,11 +230,10 @@ const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServer
     return { ...access, scopes: access.scopes.filter(scope => granted.includes(scope)) };
   });
 
-/** The 401 names the configured default scopes, or every MCP scope but the action scopes, so a client that follows it never asks for actions by default. */
+/** Names scopes only when tokens must carry them (no defaults), never the action scopes; with defaults the AS may refuse Sanctum scope names. */
 const challenge = (auth: McpAuthorization, error: Unauthenticated | Forbidden) => {
   const unauthenticated = error._tag === 'Unauthenticated';
-  const named = auth.defaultScopes.length > 0 ? auth.defaultScopes.filter(name => MCP_SCOPES.includes(name)) : MCP_SCOPES.filter(name => !name.startsWith('actions:'));
-  const scope = unauthenticated && named.length > 0 ? `, scope="${named.join(' ')}"` : '';
+  const scope = unauthenticated && auth.defaultScopes.length === 0 ? `, scope="${MCP_SCOPES.filter(name => !name.startsWith('actions:')).join(' ')}"` : '';
   return HttpServerResponse.unsafeJson(error, {
     status: unauthenticated ? 401 : 403,
     headers: {
@@ -282,7 +281,7 @@ export const McpLive = HttpApiBuilder.Router.use(router =>
         HttpServerResponse.unsafeJson({
           resource: auth.resource,
           authorization_servers: [auth.issuer],
-          scopes_supported: MCP_SCOPES,
+          ...(auth.defaultScopes.length === 0 ? { scopes_supported: MCP_SCOPES } : {}),
           bearer_methods_supported: ['header'],
         }),
     });
