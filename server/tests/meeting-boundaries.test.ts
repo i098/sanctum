@@ -5,10 +5,16 @@ import { CaptureEpochId, ListenerId, MeetingId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { listenerFeed } from '../src/actions.ts';
 import { evaluateBoundary, LOW_CONFIDENCE } from '../src/boundaries.ts';
-import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments } from '../src/meetings.ts';
-import { claimed, hear, jobsOf, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
+import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments, sweepIdleMeetings } from '../src/meetings.ts';
+import { claimed, commitChunk, hear, jobsOf, type Listener, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { memoryObjectStore } from './support/object-store.ts';
+
+interface Talked {
+  readonly listener: Listener;
+  readonly epoch: CaptureEpochId;
+}
 
 const setup = Effect.gen(function* () {
   const [owner, device] = yield* seedWorkspace('Boundaries', ['owner', 'device']);
@@ -57,6 +63,28 @@ describe('automatic meeting lifecycle', () => {
         const listener_id = ListenerId.make(listener.listener_id);
         expect(yield* listenerFeed(device, listener_id)).toEqual({ meeting_id: id, actions: [{ action_id, action_key: 'gmail-send-email', state: 'queued', title: 'Email the notes' }] });
         expect(yield* listenerFeed(owner, listener_id)).toEqual({ meeting_id: null, actions: [] });
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('lists only the meetings of the listener asked for, even when the principal can read others', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { device, listener, epoch } = yield* setup;
+        const other = yield* seedListener(device);
+        const otherEpoch = yield* seedEpoch(other);
+        yield* hear(listener, epoch, 0, 30, 'first topic is the launch date');
+        yield* hear(other, otherEpoch, 0, 30, 'second room is talking about hiring');
+        const idsFor = (listener_id: string) => listMeetings(device, { listener: ListenerId.make(listener_id) }).pipe(Effect.map(page => page.meetings.map(meeting => meeting.id)));
+        const all = (yield* listMeetings(device, {})).meetings.map(meeting => meeting.id);
+        expect(all).toHaveLength(2);
+        const first = yield* idsFor(listener.listener_id);
+        const second = yield* idsFor(other.listener_id);
+        expect(first).toHaveLength(1);
+        expect(second).toHaveLength(1);
+        expect([...first, ...second].sort()).toEqual([...all].sort());
+        expect(yield* idsFor(randomUUID())).toEqual([]);
       }),
       { migrated: true },
     ),
@@ -268,6 +296,129 @@ describe('automatic meeting lifecycle', () => {
         expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['provisional']);
         yield* onCaptureEnded({ ...end, epoch_id: resumed, sample_end: 31 * RATE, reason: 'close' });
         expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['closing']);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('End right after the pause still seals at everything accepted, so late finals stay in the meeting', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 0, 30, 'one last thing before we finish the planning');
+        const [meeting] = yield* meetingsOf(listener.workspace_id);
+        const id = MeetingId.make(meeting!.id);
+        // Pause ended the epoch with 40 s accepted; a later archive epoch that ended afterwards holds none of this meeting.
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE}, ended_at = UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE, end_reason = 'pause' WHERE id = ${epoch}`;
+        const archive = yield* seedEpoch(listener, '2026-09-28 17:00:00.000000', 99 * RATE);
+        yield* sql`UPDATE capture_epochs SET ended_at = UTC_TIMESTAMP(6), end_reason = 'pause' WHERE id = ${archive}`;
+        yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE id = ${listener.listener_id}`;
+        expect(yield* closeMeeting(owner, id)).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 40 * RATE }]);
+        yield* hear(listener, epoch, 33, 39, 'and the final segment arrives after the end');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 40 * RATE }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('idle sweep closes true silence and a settled pause, never while ASR or upload lags', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const store = memoryObjectStore();
+        const { device } = yield* setup;
+        const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * MIN * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        /** A listener whose epoch began `began` minutes ago and heard speech over its first 30 seconds. */
+        const talked = (began = 15) =>
+          Effect.gen(function* () {
+            const listener = yield* seedListener(device);
+            const epoch = yield* seedEpoch(listener, minutesAgo(began));
+            yield* hear(listener, epoch, 0, 30, 'reviewing the quarterly roadmap together');
+            return { listener, epoch } satisfies Talked;
+          });
+        /** ASR finished seconds `[from, to)` (silence included) and the server accepted audio through `to`. */
+        const transcribed = ({ listener, epoch }: Talked, from: number, to: number) =>
+          Effect.gen(function* () {
+            yield* sql`INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
+              VALUES (${listener.workspace_id}, ${epoch}, 0, ${from * RATE}, ${to * RATE}, 'live', UTC_TIMESTAMP(6))`;
+            yield* sql`UPDATE capture_epochs SET live_sample_end = GREATEST(live_sample_end, ${to * RATE}) WHERE id = ${epoch}`;
+          });
+        /** The listener paused `ago` minutes back with `accepted` seconds of audio accepted. */
+        const paused = ({ listener, epoch }: Talked, ago: number, accepted: number) =>
+          Effect.gen(function* () {
+            yield* sql`UPDATE capture_epochs SET live_sample_end = ${accepted * RATE}, ended_at = UTC_TIMESTAMP(6) - INTERVAL ${ago * MIN} SECOND, end_reason = 'pause' WHERE id = ${epoch}`;
+            yield* sql`UPDATE listeners SET current_epoch_id = NULL, state = 'paused' WHERE id = ${listener.listener_id}`;
+          });
+        /** Committed 10-second recording chunks with sequence numbers `[from, to)`. */
+        const uploaded = ({ listener, epoch }: Talked, from: number, to: number) =>
+          Effect.forEach(Array.from({ length: to - from }, (_, index) => from + index), sequence => commitChunk(listener, epoch, sequence, store));
+        const stateOf = ({ listener }: Talked) => Effect.map(sql<{ state: string }>`SELECT state FROM meetings WHERE listener_id = ${listener.listener_id}`, rows => rows[0]!.state);
+
+        const silent = yield* talked();
+        yield* transcribed(silent, 30, 700);
+        const briefly = yield* talked();
+        yield* transcribed(briefly, 30, 500);
+        const outage = yield* talked();
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${14 * MIN * RATE} WHERE id = ${outage.epoch}`;
+        const gappy = yield* talked();
+        yield* transcribed(gappy, 30, 120);
+        yield* transcribed(gappy, 300, 840);
+        const settled = yield* talked();
+        yield* transcribed(settled, 30, 60);
+        yield* uploaded(settled, 0, 6);
+        yield* paused(settled, 12, 60);
+        const untranscribed = yield* talked();
+        yield* transcribed(untranscribed, 30, 45);
+        yield* uploaded(untranscribed, 0, 6);
+        yield* paused(untranscribed, 12, 60);
+        const unuploaded = yield* talked();
+        yield* transcribed(unuploaded, 30, 60);
+        yield* uploaded(unuploaded, 0, 3);
+        yield* paused(unuploaded, 12, 60);
+        const recent = yield* talked();
+        yield* transcribed(recent, 30, 60);
+        yield* uploaded(recent, 0, 6);
+        yield* paused(recent, 5, 60);
+        // Speech 2.5 minutes ago, long after the first words, keeps a live listener's meeting open.
+        const talking = yield* talked(20);
+        yield* hear(talking.listener, talking.epoch, 17 * MIN, 17 * MIN + 30, 'one more point on the roadmap before we wrap');
+        // ASR covered 10 minutes past the last speech, but a final inside that coverage is not placed in a meeting yet.
+        const racing = yield* talked();
+        yield* transcribed(racing, 30, 640);
+        const late = yield* speak(racing.listener, racing.epoch, 640, 660, 'sorry about that, back to the roadmap');
+
+        yield* sweepIdleMeetings();
+        expect(yield* Effect.all([silent, briefly, outage, gappy, settled, untranscribed, unuploaded, recent, talking, racing].map(stateOf))).toEqual([
+          'closing', 'provisional', 'provisional', 'provisional', 'closing', 'provisional', 'provisional', 'provisional', 'active', 'provisional',
+        ]);
+        const [closed] = yield* sql<{ id: string }>`SELECT id FROM meetings WHERE listener_id = ${silent.listener.listener_id}`;
+        expect(yield* rangesOf(closed!.id)).toEqual([{ epoch_id: silent.epoch, sample_start: 0, sample_end: 30 * RATE }]);
+        const [event] = yield* sql<{ evidence: string }>`SELECT JSON_EXTRACT(decision, '$.evidence') AS evidence FROM boundary_events WHERE meeting_id = ${closed!.id} AND operation = 'close'`;
+        expect(event!.evidence).toEqual(['idle_close']);
+        // Same final work as an explicit close, scheduled once per meeting even when the sweep runs again.
+        yield* sweepIdleMeetings();
+        expect((yield* jobsOf(device.workspace_id)).filter(job => job.kind !== 'context.refresh')).toHaveLength(2);
+
+        // Once ASR recovers and the backlog uploads, the same meetings are quiet and close.
+        yield* transcribed(outage, 30, 14 * MIN);
+        yield* transcribed(untranscribed, 45, 60);
+        yield* uploaded(unuploaded, 3, 6);
+        yield* sweepIdleMeetings();
+        expect(yield* Effect.all([outage, untranscribed, unuploaded].map(stateOf))).toEqual(['closing', 'closing', 'closing']);
+        expect(yield* Effect.all([briefly, gappy, recent, talking].map(stateOf))).toEqual(['provisional', 'provisional', 'provisional', 'active']);
+        // The threshold decides: lowered to five minutes, the shorter silence closes too.
+        yield* sweepIdleMeetings(5 * MIN * 1000);
+        expect(yield* stateOf(briefly)).toBe('closing');
+        expect(yield* stateOf(talking)).toBe('active');
+        // Coverage and the final landed together but placement was still in flight: neither sweep closes it, and placing the final keeps the meeting open.
+        expect(yield* stateOf(racing)).toBe('provisional');
+        yield* onFinalSegments({ ...racing.listener, segments: [late] });
+        yield* sweepIdleMeetings();
+        // Placed 640 s into the meeting, the final establishes it (promoted to active); it is still open.
+        expect(yield* stateOf(racing)).toBe('active');
       }),
       { migrated: true },
     ),

@@ -18,13 +18,15 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text. While browser captions run, a second helper line, at most 300 px wide, says that live captions use the browser's speech service (in Chrome, Google's).
 - Footer sits approximately 24–32 px from the bottom and sides.
 - Lower left: a tiny state dot and brief capture/context health text.
-- Lower right: Pause, Review, Agents, Fullscreen, Settings.
+- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Review, Agents, Fullscreen, Settings.
 - Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 
 Keep proportions responsive rather than treating these measurements as absolute at every resolution.
 A smaller laptop should retain the same visual hierarchy and avoid scrolling on the main listening screen.
 On phones the status tucks under the waveform, the rails stack full width above a two-row footer, and an empty agent-work feed is hidden.
+End meeting has no room in the phone control row, so it takes its own line above it, and the rails end higher by that line.
+After End meeting, the helper line says that the meeting ended and that its notes are being prepared in Review, until capture starts again.
 
 ## Tokens
 

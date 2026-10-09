@@ -81,6 +81,7 @@ ListMeetingsInput = TypedDict("ListMeetingsInput", {
     "state": "NotRequired[Literal[\"provisional\", \"active\", \"closing\", \"closed\", \"interrupted\"]]",
     "from": "NotRequired[str]",
     "to": "NotRequired[str]",
+    "listener": "NotRequired[str]",
     "participant": "NotRequired[str]",
     "cursor": "NotRequired[str]",
     "limit": "NotRequired[int]",
@@ -639,7 +640,7 @@ OPERATIONS: dict[str, Operation] = {
     # HeartbeatInput -> HeartbeatReceipt
     "listeners.heartbeat": Operation("POST", "/api/v1/listeners/{listener_id}/heartbeat", ("listener_id", ), (), True),
     # ListMeetingsInput -> MeetingPage
-    "meetings.listMeetings": Operation("GET", "/api/v1/meetings", (), ("state", "from", "to", "participant", "cursor", "limit", ), False),
+    "meetings.listMeetings": Operation("GET", "/api/v1/meetings", (), ("state", "from", "to", "listener", "participant", "cursor", "limit", ), False),
     # MergeMeetings -> Meeting
     "meetings.mergeMeetings": Operation("POST", "/api/v1/meetings/merge", (), (), True),
     # GetMeetingInput -> Meeting

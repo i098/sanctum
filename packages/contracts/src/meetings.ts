@@ -5,6 +5,7 @@ import { Authenticated } from './auth.ts';
 import {
   Cursor,
   IanaTimeZone,
+  ListenerId,
   MeetingId,
   ProfileId,
   Revision,
@@ -98,6 +99,8 @@ export const ListMeetingsParams = Schema.Struct({
   state: Schema.optional(MeetingState),
   from: Schema.optional(UtcTimestamp),
   to: Schema.optional(UtcTimestamp),
+  /** Meetings this listener captures, as its agent-work feed names them. */
+  listener: Schema.optional(ListenerId),
   /** Meetings with a speaker mapped to this profile. */
   participant: Schema.optional(ProfileId),
   cursor: Schema.optional(Cursor),

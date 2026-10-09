@@ -13,6 +13,7 @@ import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type 
 import { assembleWav } from './orphans.ts';
 import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
+import { LISTENER_KEY } from './stored-listener.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
 import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
 
@@ -26,7 +27,6 @@ export interface CaptureTiming {
 }
 
 const DEFAULT_TIMING: CaptureTiming = { chunkSeconds: 30, commitSeconds: 2, heartbeatMs: 15_000, gapMs: 3_000 };
-const LISTENER_KEY = 'sanctum.listener';
 /** Server-reported live transcription trouble; audio still reaches the archive either way. */
 const TRANSCRIPTION_ISSUE: Record<DegradedReason, CaptureIssue> = { provider_unavailable: 'transcription_unavailable', asr_backlog: 'transcription_behind' };
 const transcriptionIssue = (...[status, reason]: LiveUpdate): CaptureIssue | null => (status === 'degraded' && reason ? TRANSCRIPTION_ISSUE[reason] : null);

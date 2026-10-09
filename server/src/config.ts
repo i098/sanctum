@@ -13,6 +13,8 @@ export const engineeringDefaults = {
   ownershipLeaseMs: 45_000,
   contextJob: { quietPeriodMs: 25_000, turnThreshold: 4 },
   boundaryEvaluationGapMs: 5 * 60_000,
+  /** An open meeting with no speech for this long (listener paused, stopped or silent) closes as an explicit close would (docs/DECISIONS.md). */
+  meetingIdleCloseMs: 10 * 60_000,
   playbackUrlTtlMs: 5 * 60_000,
   /** Per-workspace external action submissions per window; more pause the job until the window frees up. */
   actionBudget: { perWindow: 30, windowMs: 60_000 },
