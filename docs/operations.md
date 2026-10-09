@@ -32,6 +32,7 @@ Secrets come from the environment only; none are committed.
 
 WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
 The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does not stop startup unless `identity_issuer` is listed, and sign-in then stays off.
+With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
