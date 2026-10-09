@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { PrincipalId, ProfileId, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect } from 'effect';
+import { ConfigProvider, Effect } from 'effect';
 import { ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno } from '../src/db.ts';
 import { addMember, bumpPermissionRevision, createProfile, grantMeetingAccess, nextContextSeq, reviseProfile } from '../src/store.ts';
 import { withDatabase } from './support/database.ts';
@@ -19,6 +19,14 @@ const meeting = (workspace_id: WorkspaceId) =>
     const id = randomUUID() as MeetingId;
     yield* sql`INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
       VALUES (${id}, ${workspace_id}, 'active', 'UTC', UTC_TIMESTAMP(6), '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+    return id;
+  });
+
+const human = () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const id = PrincipalId.make(randomUUID());
+    yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${id}, 'human', 'Person', UTC_TIMESTAMP(6))`;
     return id;
   });
 
@@ -64,6 +72,48 @@ describe('store', () => {
         expect(grants).toEqual([{ access: 'write' }]);
         expect(yield* bumpPermissionRevision(workspace_id)).toBe(5);
       }),
+      migrated,
+    ),
+  );
+
+  it.effect('enforces the seat limit at membership activation; a workspace override beats the default', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [owner, , revoked] = yield* seedWorkspace('Acme', ['owner', 'agent', 'member']);
+        const workspace_id = owner!.workspace_id;
+        yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${revoked!.principal.id}`;
+        // Owner holds 1 of 3 seats; agents and revoked members hold none. Concurrent adds cannot overshoot.
+        const people = yield* Effect.all(Array.from({ length: 4 }, () => human()));
+        const results = yield* Effect.all(people.map(principal_id => Effect.either(addMember({ workspace_id, principal_id, role: 'member' }))), { concurrency: 4 });
+        const refused = results.filter(result => result._tag === 'Left').map(result => result.left);
+        expect(refused).toHaveLength(2);
+        expect(refused[0]).toMatchObject({ _tag: 'SeatLimitReached', limit: 3, message: 'Workspace seat limit of 3 reached' });
+        // A seat holder may change role at the limit; agents need no seat; reactivation needs one.
+        expect(yield* addMember({ workspace_id, principal_id: owner!.principal.id, role: 'admin' })).toBeGreaterThan(1);
+        yield* addMember({ workspace_id, principal_id: yield* human(), role: 'agent' });
+        expect((yield* Effect.flip(addMember({ workspace_id, principal_id: revoked!.principal.id, role: 'member' })))._tag).toBe('SeatLimitReached');
+        // The workspace's own limit overrides the default.
+        yield* sql`UPDATE workspaces SET seat_limit = 4 WHERE id = ${workspace_id}`;
+        yield* addMember({ workspace_id, principal_id: revoked!.principal.id, role: 'member' });
+        expect(yield* Effect.flip(addMember({ workspace_id, principal_id: yield* human(), role: 'admin' }))).toMatchObject({ _tag: 'SeatLimitReached', limit: 4 });
+      }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_DEFAULT_SEAT_LIMIT', '3']])))),
+      migrated,
+    ),
+  );
+
+  it.effect('has no seat limit when the default is unset; a workspace limit still applies', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [owner] = yield* seedWorkspace('Acme');
+        const workspace_id = owner!.workspace_id;
+        const people = yield* Effect.all(Array.from({ length: 7 }, () => human()));
+        yield* Effect.forEach(people, principal_id => addMember({ workspace_id, principal_id, role: 'member' }));
+        yield* sql`UPDATE workspaces SET seat_limit = 8 WHERE id = ${workspace_id}`;
+        expect(yield* Effect.flip(addMember({ workspace_id, principal_id: yield* human(), role: 'member' }))).toMatchObject({ _tag: 'SeatLimitReached', limit: 8 });
+        expect(yield* errno(addMember({ workspace_id: randomUUID() as WorkspaceId, principal_id: yield* human(), role: 'member' }))).toBe(ER_NO_REFERENCED_ROW);
+      }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))),
       migrated,
     ),
   );

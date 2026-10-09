@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { SqlClient, type SqlError } from '@effect/sql';
-import { Effect, Option, Schema } from 'effect';
+import { Data, Effect, Option, Schema } from 'effect';
 import {
   NotFound,
   ProfileId,
@@ -18,6 +18,7 @@ import {
   type WorkspaceId,
   type WorkspaceRole,
 } from '@sanctum/contracts';
+import { defaultSeatLimit } from './config.ts';
 import { DbSafeInt } from './db.ts';
 
 interface WriteResult { readonly affectedRows: number; readonly insertId: number | string }
@@ -45,14 +46,47 @@ export const nextContextSeq: (workspace_id: WorkspaceId) => Effect.Effect<number
 export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> =
   increment('permission_revision');
 
-/** Upsert: adds the member or reactivates a revoked one with the given role. */
+/** Roles that take a seat; agents and devices never count against the limit. */
+const seatRoles: ReadonlyArray<WorkspaceRole> = ['owner', 'admin', 'member'];
+
+class SeatLimitReached extends Data.TaggedError('SeatLimitReached')<{ readonly limit: number; readonly message: string }> {}
+
+const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSafeInt, held: DbSafeInt });
+
+/**
+ * Refuses a new seat once active seats reach the workspace's `seat_limit`, else the configured
+ * default (NULL default: no limit). Holders keep their seat and may change role even over the limit.
+ * Locks the workspace row, so concurrent additions in one workspace cannot overshoot.
+ */
+const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const fallback = yield* Effect.orDie(defaultSeatLimit);
+    const seated = sql`m.workspace_id = w.id AND m.revoked_at IS NULL AND m.role IN ${sql.in(seatRoles)}`;
+    const [row] = yield* sql`SELECT w.seat_limit,
+        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
+        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
+      FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE OF w`;
+    if (row === undefined) return;
+    const seats = Schema.decodeUnknownSync(SeatRow)(row);
+    const limit = seats.seat_limit ?? fallback;
+    if (limit !== null && seats.held === 0 && seats.used >= limit) {
+      return yield* new SeatLimitReached({ limit, message: `Workspace seat limit of ${limit} reached` });
+    }
+  });
+
+/** Upsert: adds the member or reactivates a revoked one with the given role, within the seat limit. */
 export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId; readonly role: WorkspaceRole }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
-      sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
-        VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, UTC_TIMESTAMP(6)) AS new
-        ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
+      Effect.gen(function* () {
+        if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
+          VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, UTC_TIMESTAMP(6)) AS new
+          ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL`;
+        return yield* bumpPermissionRevision(input.workspace_id);
+      }),
     );
   });
 

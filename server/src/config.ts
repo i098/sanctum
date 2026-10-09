@@ -2,7 +2,7 @@
  * Process configuration and the plan section 02 engineering defaults.
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
-import { Config, Effect, Option, Redacted } from 'effect';
+import { Config, Effect, Option, Redacted, Schema } from 'effect';
 import { type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
@@ -76,8 +76,16 @@ const noDecisions: ReadonlyArray<OpenDecision> = [];
 
 const port = (name: string, fallback: number) => Config.port(name).pipe(Config.withDefault(fallback));
 
+/** `SANCTUM_DEFAULT_SEAT_LIMIT`: a positive integer; absent means no limit. A workspace's own `seat_limit` overrides it. */
+export const defaultSeatLimit: Config.Config<number | null> = Schema.Config('SANCTUM_DEFAULT_SEAT_LIMIT', Schema.NumberFromString.pipe(Schema.int(), Schema.positive())).pipe(
+  Config.option,
+  Config.map(Option.getOrNull),
+);
+
 export const serverConfig = Config.all({
   environment: Config.literal('development', 'test', 'production')('SANCTUM_ENV').pipe(Config.withDefault('development')),
+  /** Default seat limit; null is unlimited. Read here so a malformed value fails at startup. */
+  seatLimit: defaultSeatLimit,
   apiPort: port('API_PORT', 7102),
   mysql: Config.all({
     host: Config.string('MYSQL_HOST').pipe(Config.withDefault('127.0.0.1')),
