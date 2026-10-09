@@ -44,6 +44,19 @@ test('signed out: the page and Settings link to sign-in', async ({ page }) => {
   await expect(row(settings, 'Workspace')).toHaveText('Unavailable until you sign in');
 });
 
+for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`signed out at ${viewport.width}x${viewport.height}: the side rails never cover Sign in to listen`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await openListening(page, { configured: true, access: null });
+    const link = page.getByRole('link', { name: 'Sign in to listen' });
+    await expect(link).toBeVisible();
+    const box = (await link.boundingBox())!;
+    const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.textContent, [box.x + box.width / 2, box.y + box.height / 2]);
+    expect(hit).toBe('Sign in to listen');
+    await link.click({ trial: true });
+  });
+}
+
 test('signed in: name, role, keyboard focus, sign out', async ({ page, context }) => {
   const signIn: FakeSignIn = { configured: true, access: ACCESS };
   await context.addCookies([{ name: 'sanctum_csrf', value: 'csrf-fixture', url: 'http://localhost' }]);
