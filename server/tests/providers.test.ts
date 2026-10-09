@@ -89,8 +89,8 @@ const sentAudio = (body: Buffer) => {
 const whisper = (baseUrl: string) =>
   whisperSpeechToText({ workersAi: Option.some({ baseUrl: `${baseUrl}/accounts/acct/ai`, apiToken: Redacted.make('wai-token') }), liveAsr: engineeringDefaults.liveAsr });
 
-/** 20 ms of speech-level audio at 16 kHz. */
-const speech = Int16Array.from({ length: 320 }, (_, i) => (i % 2 === 0 ? 2_000 : -2_000));
+/** 250 ms of speech-level audio at 16 kHz. */
+const speech = Int16Array.from({ length: 4_000 }, (_, i) => (i % 2 === 0 ? 2_000 : -2_000));
 
 describe('Workers AI Whisper', () => {
   it.scoped('transcribes a batch range, keeping segment times relative to its first sample', () =>
@@ -127,12 +127,15 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
-  it.scoped('sends no request for audio below the speech floor and sends quiet speech above it', () =>
+  it.scoped('sends no request for near-silent audio and sends quiet speech', () =>
     Effect.gen(function* () {
       const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'quiet words', segments: [{ start: 0, end: 1, text: 'quiet words' }] } })));
       const stt = whisper(server.url);
       const room = Int16Array.from({ length: 16_000 }, (_, i) => (i % 2 === 0 ? 40 : -40));
       expect(yield* stt.transcribe(16_000, room)).toEqual([]);
+      // A 20 ms click in a quiet room is not speech; Whisper answers such chunks with "You" or "Thank you.".
+      const click = room.slice().fill(4_000, 8_000, 8_320);
+      expect(yield* stt.transcribe(16_000, click)).toEqual([]);
       const stream = yield* stt.openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       for (let at = 0; at < 48_000; at += 1_600) stream.send(room.subarray(0, 1_600));
@@ -143,10 +146,30 @@ describe('Workers AI Whisper', () => {
         { start_s: cut / 16_000, end_s: 3, results: [] },
       ]);
       expect(server.requests).toHaveLength(0);
+      // One quiet syllable: 120 ms just above the floor.
       const quiet = new Int16Array(16_000);
-      quiet.fill(60, 8_000, 8_320);
+      quiet.fill(60, 8_000, 9_920);
       expect(yield* stt.transcribe(16_000, quiet)).toMatchObject([{ text: 'quiet words' }]);
       expect(server.requests).toHaveLength(1);
+    }),
+  );
+
+  it.scoped('drops segments Whisper scores as likely no speech', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) =>
+        response.end(
+          JSON.stringify({
+            result: {
+              text: ' Thank you. Ship it on Friday.',
+              segments: [
+                { start: 0, end: 1, text: ' Thank you.', avg_logprob: -0.4, no_speech_prob: 0.92 },
+                { start: 1, end: 2.5, text: ' Ship it on Friday.', avg_logprob: -0.3, no_speech_prob: 0.05 },
+              ],
+            },
+          }),
+        ),
+      );
+      expect(yield* whisper(server.url).transcribe(16_000, speech)).toMatchObject([{ start_s: 1, text: 'Ship it on Friday.' }]);
     }),
   );
 
