@@ -3,6 +3,7 @@
  * `GET /api/v1/session`. Sign-in always starts with a same-origin navigation, never a cross-origin
  * form post: the page CSP allows only `form-action 'self'`.
  */
+import type { EndMeeting } from '@sanctum/contracts';
 import { type AccessScope, createClient, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
 /** The session opener's script-readable double-submit cookie; its value goes back as `x-csrf-token`. */
@@ -77,11 +78,17 @@ export function takeSignInNotice(location: Location, history: History): SignInNo
 }
 
 /** Same-origin POST with the CSRF header; a refusal throws the error envelope's message, else the status. */
-export async function post(path: string): Promise<Response> {
+export async function post(path: string, body?: unknown): Promise<Response> {
   const token = csrfToken();
-  const response = await fetch(path, { method: 'POST', headers: token === undefined ? {} : { 'x-csrf-token': decodeURIComponent(token) } });
+  const headers: Record<string, string> = { ...(token === undefined ? {} : { 'x-csrf-token': decodeURIComponent(token) }), ...(body === undefined ? {} : { 'content-type': 'application/json' }) };
+  const response = await fetch(path, { method: 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? `HTTP ${response.status}`);
   return response;
+}
+
+/** End meeting with the fence of the audio this page captured; a website-only route, so it is not in the SDK. */
+export async function endMeeting(meeting_id: string, fence: EndMeeting): Promise<void> {
+  await post(`/api/v1/meetings/${meeting_id}/end`, fence);
 }
 
 /** Revokes this browser's session on the server; the issuer's own session is left alone (plan 4.3). */

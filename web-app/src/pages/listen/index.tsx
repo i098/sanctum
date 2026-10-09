@@ -2,7 +2,7 @@ import type { Meeting } from '@sanctum/sdk';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
-import { readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
+import { endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, startCaptions } from './captions.ts';
@@ -183,7 +183,7 @@ function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: 
   const end = (meeting_id: string): void => {
     onFailure(null);
     const fence = engine.getSnapshot().listener === 'starting' ? Promise.resolve(null) : engine.end();
-    fence.then(captured => (captured === null ? client.meetings.closeMeeting({ meeting_id }) : client.meetings.endMeeting({ meeting_id, ...captured }))).then(() => {
+    fence.then(captured => (captured === null ? client.meetings.closeMeeting({ meeting_id }).then(() => undefined) : endMeeting(meeting_id, captured))).then(() => {
       forget();
       setEnded(true);
     }, (error: unknown) => onFailure(`Meeting not ended: ${error instanceof Error ? error.message : String(error)}`));

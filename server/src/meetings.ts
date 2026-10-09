@@ -10,6 +10,7 @@ import {
   type BoundaryDecision,
   type EndMeeting,
   type EpochEndReason,
+  Forbidden,
   type ListMeetingsParams,
   type Meeting,
   MeetingId,
@@ -254,16 +255,20 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
   });
 
 /**
- * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence. It joins the closed
- * meeting while that is closing (when the audio is not from before the meeting started) and is dropped after; it never
- * opens a meeting. Returns whether the segment was such audio.
+ * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence, which never reaches past
+ * what the server holds of that epoch (its watermark, or the last committed chunk). It joins the closed meeting while that
+ * is closing (when the audio is not from before the meeting started) and is dropped after; it never opens a meeting.
+ * Returns whether the segment was such audio.
  */
 const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { source } = segment;
-    const [fenced] = yield* sql<{ id: MeetingId }>`SELECT id FROM meetings
-      WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start} ORDER BY end_fence_sample LIMIT 1`;
+    const [fenced] = yield* sql<{ id: MeetingId }>`SELECT m.id FROM meetings m JOIN capture_epochs e ON e.workspace_id = m.workspace_id AND e.id = m.end_fence_epoch_id
+      WHERE m.workspace_id = ${workspace_id} AND m.end_fence_epoch_id = ${source.epoch_id}
+        AND LEAST(m.end_fence_sample, GREATEST(e.live_sample_end, COALESCE((SELECT MAX(c.sample_start + c.sample_count) FROM recording_chunks c
+          WHERE c.workspace_id = e.workspace_id AND c.epoch_id = e.id AND c.upload_state = 'committed'), 0))) > ${source.sample_start}
+      ORDER BY m.end_fence_sample LIMIT 1`;
     if (fenced === undefined) return false;
     const closed = yield* selectMeeting(workspace_id, fenced.id, true);
     if (closed._tag === 'Some' && closed.value.state === 'closing' && sampleMs(epoch, source.sample_start) >= Date.parse(closed.value.started_at)) {
@@ -509,7 +514,12 @@ export const closeMeeting = (access: AccessScope, meeting_id: MeetingId, fence?:
     yield* sql.withTransaction(
       Effect.gen(function* () {
         const before = yield* selectMeeting(access.workspace_id, meeting_id);
-        if (before._tag === 'None' || !OPEN_STATES.includes(before.value.state) || before.value.listener_id === null) return;
+        if (before._tag === 'None' || before.value.listener_id === null) return;
+        if (fence !== undefined) {
+          const [listener] = yield* sql<{ principal_id: PrincipalId }>`SELECT principal_id FROM listeners WHERE workspace_id = ${access.workspace_id} AND id = ${before.value.listener_id}`;
+          if (listener?.principal_id !== access.principal.id) return yield* new Forbidden({ message: 'Only the principal that owns the listener can end its meeting' });
+        }
+        if (!OPEN_STATES.includes(before.value.state)) return;
         yield* lockCaptureKey({ workspace_id: access.workspace_id, listener_id: before.value.listener_id, capture_group_id: before.value.capture_group_id });
         const row = yield* selectMeeting(access.workspace_id, meeting_id, true);
         if (row._tag === 'None' || !OPEN_STATES.includes(row.value.state)) return;
@@ -527,8 +537,8 @@ export const closeMeeting = (access: AccessScope, meeting_id: MeetingId, fence?:
           actor: access.principal.id,
         });
         if (fence !== undefined) {
-          const [epoch] = yield* sql`SELECT id FROM capture_epochs WHERE workspace_id = ${access.workspace_id} AND id = ${fence.epoch_id} AND listener_id = ${row.value.listener_id}`;
-          if (epoch === undefined) return yield* new NotFound({ message: 'Capture epoch not found' });
+          const [epoch] = yield* sql<{ listener_id: string }>`SELECT listener_id FROM capture_epochs WHERE workspace_id = ${access.workspace_id} AND id = ${fence.epoch_id}`;
+          if (epoch !== undefined && epoch.listener_id !== row.value.listener_id) return yield* new NotFound({ message: 'Capture epoch not found' });
           yield* sql`UPDATE meetings SET end_fence_epoch_id = ${fence.epoch_id}, end_fence_sample = ${fence.sample} WHERE id = ${meeting_id}`;
         }
       }),

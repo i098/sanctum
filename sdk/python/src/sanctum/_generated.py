@@ -136,12 +136,6 @@ class CloseMeetingInput(TypedDict):
     meeting_id: str
 
 
-class EndMeetingInput(TypedDict):
-    epoch_id: str
-    sample: int
-    meeting_id: str
-
-
 class SplitMeetingInput(TypedDict):
     expected_revision: int
     at: EndMeeting
@@ -664,8 +658,6 @@ OPERATIONS: dict[str, Operation] = {
     "meetings.getMeeting": Operation("GET", "/api/v1/meetings/{meeting_id}", ("meeting_id", ), (), False),
     # CloseMeetingInput -> Meeting
     "meetings.closeMeeting": Operation("POST", "/api/v1/meetings/{meeting_id}/close", ("meeting_id", ), (), False),
-    # EndMeetingInput -> Meeting
-    "meetings.endMeeting": Operation("POST", "/api/v1/meetings/{meeting_id}/end", ("meeting_id", ), (), True),
     # SplitMeetingInput -> SplitResult
     "meetings.splitMeeting": Operation("POST", "/api/v1/meetings/{meeting_id}/split", ("meeting_id", ), (), True),
     # GetTranscriptInput -> TranscriptPage

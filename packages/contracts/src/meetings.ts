@@ -1,5 +1,5 @@
 /** Meetings, boundary decisions, source ownership ranges and speaker tracks (plan sections 06 and 09). */
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from '@effect/platform';
 import { Schema } from 'effect';
 import { Authenticated } from './auth.ts';
 import {
@@ -122,8 +122,10 @@ export const SplitResult = Schema.Struct({ earlier: Meeting, later: Meeting });
 export type SplitResult = typeof SplitResult.Type;
 
 /**
- * End meeting: closes like `closeMeeting` and fences the audio the page captured before it paused. A final of `epoch_id`
- * that starts before `sample` joins the closed meeting while it is closing, or is dropped; it never opens a meeting.
+ * End meeting, for the website only (kept out of OpenAPI, the SDKs and MCP): closes like `closeMeeting` and fences the audio
+ * the page captured before it paused. Only the principal that owns the meeting's listener may send it. A final of `epoch_id`
+ * that starts before `sample` (never beyond what the server holds for that epoch) joins the closed meeting while it is
+ * closing, or is dropped; it never opens a meeting.
  */
 export const EndMeeting = Schema.Struct({ epoch_id: CaptureEpochId, sample: SampleIndex });
 export type EndMeeting = typeof EndMeeting.Type;
@@ -166,7 +168,7 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.post('mergeMeetings', '/meetings/merge').setPayload(MergeMeetings).addSuccess(Meeting))
   .add(HttpApiEndpoint.get('getMeeting')`/meetings/${meetingId}`.addSuccess(Meeting))
   .add(HttpApiEndpoint.post('closeMeeting')`/meetings/${meetingId}/close`.addSuccess(Meeting))
-  .add(HttpApiEndpoint.post('endMeeting')`/meetings/${meetingId}/end`.setPayload(EndMeeting).addSuccess(Meeting))
+  .add(HttpApiEndpoint.post('endMeeting')`/meetings/${meetingId}/end`.setPayload(EndMeeting).addSuccess(Meeting).annotate(OpenApi.Exclude, true))
   .add(HttpApiEndpoint.post('splitMeeting')`/meetings/${meetingId}/split`.setPayload(SplitMeeting).addSuccess(SplitResult))
   .add(HttpApiEndpoint.get('getTranscript')`/meetings/${meetingId}/transcript`.setUrlParams(TranscriptParams).addSuccess(TranscriptPage))
   .add(HttpApiEndpoint.post('recordingAccess')`/meetings/${meetingId}/recording-access`.addSuccess(RecordingAccess))
