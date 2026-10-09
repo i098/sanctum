@@ -65,7 +65,7 @@ const WhisperResponse = Schema.Struct({
   result: Schema.Struct({
     text: Schema.String,
     segments: Schema.optional(
-      Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String, no_speech_prob: Schema.optional(Schema.Number) })),
+      Schema.Array(Schema.Struct({ start: Schema.Number, end: Schema.Number, text: Schema.String, no_speech_prob: Schema.optionalWith(Schema.Number, { default: () => 0 }) })),
     ),
   }),
 });
@@ -134,7 +134,7 @@ const toResults = (result: typeof WhisperResponse.Type.result) => {
   return Effect.succeed(
     result.segments.flatMap((segment): Array<AsrResult> => {
       const text = segment.text.trim();
-      return text === '' || (segment.no_speech_prob ?? 0) > NO_SPEECH_PROB
+      return text === '' || segment.no_speech_prob > NO_SPEECH_PROB
         ? []
         : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
     }),
