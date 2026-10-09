@@ -17,8 +17,9 @@ type Overlay = 'review' | 'agents' | 'settings';
 
 const client = sessionClient();
 
-/** Read once per page load: `/auth/callback` lands here with `?signin=<code>` when sign-in ends without a session. */
-const notice = takeSignInNotice(window.location, window.history);
+/** Read once per page load: `/auth/callback` lands here with `?signin=<code>`; `ok` is SIGN_IN_URL's own return. */
+const landing = takeSignInNotice(window.location, window.history);
+const notice = typeof landing === 'object' ? landing : null;
 
 const HELPER: Record<ListenerState, string> = {
   stopped: 'Choose Listen to start the microphone.',
@@ -274,6 +275,18 @@ function Rails({ live, capturing, onCaptions }: RailsProps) {
   );
 }
 
+/** After SIGN_IN_URL's return, names who is signed in for a few seconds; nothing when the session reads otherwise. */
+function SignedInConfirmation({ signIn }: { signIn: SignInState }) {
+  const [shown, setShown] = useState(landing === 'signed_in');
+  useEffect(() => {
+    if (!shown) return;
+    const timer = setTimeout(() => setShown(false), 8000);
+    return () => clearTimeout(timer);
+  }, [shown]);
+  if (!shown || signIn.status !== 'signed_in') return null;
+  return <p className="listen-helper listen-welcome">Signed in as {signIn.access.principal.display_name}</p>;
+}
+
 /** Fullscreen listening view: waveform stage, sparse header, side live updates, quiet footer controls, secondary overlays. */
 export function ListenPage() {
   const engine = getCaptureEngine();
@@ -304,8 +317,9 @@ export function ListenPage() {
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
         {signIn.status === 'signed_out'
-          ? <a className="listen-helper" href={SIGN_IN_URL}>Sign in to listen</a>
+          ? <a href={SIGN_IN_URL} data-primary>Sign in to listen</a>
           : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
+        <SignedInConfirmation signIn={signIn} />
         {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />

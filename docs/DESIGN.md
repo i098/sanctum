@@ -86,7 +86,9 @@ Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (name and role, Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
 On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it opens Team over Settings with the WorkOS profile and members widgets on the same tokens, and full screen on phones.
-Signed out, the helper line under the status becomes a Sign in to listen link. A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
+Signed out, an outlined Sign in to listen button replaces the helper line under the status; the landing page header also has a Sign in link.
+Both sign-in links return to `/?signin=ok`, where a signed-in session shows "Signed in as <name>" under the helper line for a few seconds, even when the issuer redirects back at once; Settings keeps showing the identity.
+A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
 With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open a dialog over Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
 Keep controls keyboard-accessible, trap focus correctly in dialogs, and return focus on close.
 

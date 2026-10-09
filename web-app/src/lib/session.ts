@@ -20,7 +20,8 @@ export function sessionClient(): SanctumClient {
   });
 }
 
-export const SIGN_IN_URL = '/auth/login?return_to=/';
+/** A completed sign-in returns to `/?signin=ok`, so the page can confirm it even when the issuer redirects back instantly. */
+export const SIGN_IN_URL = '/auth/login?return_to=/?signin=ok';
 
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
@@ -83,12 +84,16 @@ export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
 }
 
-/** Clears the query off the address bar so a reload does not repeat the notice; the callback lands on `/`. */
-export function takeSignInNotice(location: Location, history: History): SignInNotice | null {
+/**
+ * Clears the query off the address bar so a reload does not repeat the notice; the callback lands on `/`.
+ * `'signed_in'`: the return of SIGN_IN_URL; the caller confirms it only if the session reads as signed in.
+ */
+export function takeSignInNotice(location: Location, history: History): SignInNotice | 'signed_in' | null {
   const params = new URLSearchParams(location.search);
   const [code, issuer, subject] = ['signin', 'issuer', 'subject'].map(name => params.get(name));
   if (code === null) return null;
   history.replaceState(history.state, '', location.pathname);
+  if (code === 'ok') return 'signed_in';
   if (code === 'not_member') return { code, issuer: issuer ?? '', subject: subject ?? '' };
   return { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
 }
