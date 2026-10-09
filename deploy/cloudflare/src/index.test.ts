@@ -35,7 +35,6 @@ describe('Worker routing', () => {
     expect(forwarded.map(request => new URL(request.url).pathname)).toEqual(['/__login/link-token', '/__login/anything']);
   });
 
-
   it('serves the landing page and its assets on the apex under a same-origin, unframeable policy', async () => {
     const page = await worker.fetch(new Request('https://sanctum.42nights.dev/'), env);
     expect(page.status).toBe(200);
