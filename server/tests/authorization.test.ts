@@ -189,7 +189,7 @@ describe('authorization boundary', () => {
         expect(grace).toBe(7 * 24 * 60 * 60 * 1000);
         for (const headers of [ownerHeaders, memberHeaders, agentHeaders]) expect(yield* status(headers)).toBe(401);
         expect(yield* tagOf(resolveAccess({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
-        expect(yield* tagOf(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
+        expect(yield* tagOf(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
         expect(yield* status(otherHeaders)).toBe(200);
         const [purge] = yield* sql<{ status: string }>`SELECT status FROM jobs WHERE workspace_id = ${owner!.workspace_id} AND kind = 'workspace.purge'`;
         expect(purge?.status).toBe('pending');
@@ -212,10 +212,24 @@ describe('authorization boundary', () => {
         expect(cancelled?.status).toBe('cancelled');
         expect([yield* jobStatus(ran.job.id), yield* jobStatus(failedElsewhere.job.id)]).toEqual(['pending', 'failed']);
 
-        // Once the grace period is over, the purge owns the workspace: not even the owner gets back in.
+        // Day 3 of the grace period, after the deleting session expired: the owner signs in again, a member cannot, and only undo and the status read accept that session.
         yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });
+        yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6) - INTERVAL 3 DAY, purge_after = UTC_TIMESTAMP(6) + INTERVAL 4 DAY WHERE id = ${owner!.workspace_id}`;
+        yield* sql`UPDATE browser_sessions SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE principal_id = ${owner!.principal.id}`;
+        expect(yield* status(ownerHeaders)).toBe(401);
+        expect(yield* tagOf(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
+        const signedIn = yield* sessionHeaders(owner!);
+        expect(yield* status(signedIn)).toBe(401);
+        expect((yield* call(`${base}/api/v1/context/changes`, { headers: signedIn })).status).toBe(401);
+        expect((yield* call(workspace, { headers: signedIn })).body).toMatchObject({ id: owner!.workspace_id, deleted_at: expect.any(String) });
+        expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: signedIn })).status).toBe(200);
+        expect(yield* status(signedIn)).toBe(200);
+
+        // Once the grace period is over, the purge owns the workspace: not even the owner gets back in.
+        yield* call(workspace, { method: 'DELETE', headers: signedIn, body: { confirm_name: 'Acme Studio' } });
         yield* sql`UPDATE workspaces SET purge_after = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${owner!.workspace_id}`;
-        expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: ownerHeaders })).status).toBe(401);
+        expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: signedIn })).status).toBe(401);
+        expect(yield* tagOf(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
       }),
     ),
   );

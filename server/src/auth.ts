@@ -127,6 +127,8 @@ const authenticate = (request: HttpServerRequest.HttpServerRequest) => {
   return bearer ? credentialAccess(bearer) : sessionAccess(request);
 };
 
+const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`;
+
 /**
  * `WorkspaceOwner` middleware: an owner's browser session. Only an owner's session still reaches a
  * deleted workspace, until its purge is due, so the owner can undo; every other session stays refused.
@@ -136,7 +138,7 @@ export const WorkspaceOwnerLive = Layer.effect(
   WorkspaceOwner,
   Effect.map(SqlClient.SqlClient, sql =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, request =>
-      sessionAccess(request, sql => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`).pipe(
+      sessionAccess(request, ownerUntilPurge).pipe(
         Effect.filterOrFail(access => access.role === 'owner', () => new Forbidden({ message: 'Only a workspace owner can manage the workspace' })),
         Effect.catchTag('SqlError', Effect.die),
         Effect.provideService(SqlClient.SqlClient, sql),
@@ -160,10 +162,10 @@ export const KernelAuthenticatorLive = Layer.effect(
  */
 type MemberKey = { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId };
 
-const findMember = (input: MemberKey) =>
+const findMember = (input: MemberKey, workspace?: (sql: SqlClient.SqlClient) => Statement.Fragment) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     findOne(MemberRow, sql`SELECT ${memberColumns(sql)}
-      FROM (SELECT ${input.workspace_id} AS workspace_id, ${input.principal_id} AS principal_id) x ${activeMember(sql)}`),
+      FROM (SELECT ${input.workspace_id} AS workspace_id, ${input.principal_id} AS principal_id) x ${activeMember(sql, workspace?.(sql))}`),
   );
 
 export const resolveAccess = (input: MemberKey) =>
@@ -190,14 +192,16 @@ export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
 
 /**
  * Opens a browser session for an active human or device member, e.g. after the configured
- * login issuer (docs/DECISIONS.md) verified an identity (signin.ts) or after device enrollment. Returns the only plain copies of
+ * login issuer (docs/DECISIONS.md) verified an identity (signin.ts) or after device enrollment. An owner of a deleted workspace
+ * still gets one until its `purge_after`, so the grace-period undo outlives the deleting session.
+ * Returns the only plain copies of
  * the cookie and CSRF tokens; the opener sets them as `sanctum_session` (HttpOnly) and
  * `sanctum_csrf` (script-readable, SameSite=Strict), which the website echoes as `x-csrf-token`.
  */
 export const openSession = (input: MemberKey) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const member = yield* findMember(input);
+    const member = yield* findMember(input, ownerUntilPurge);
     if (Option.isNone(member) || member.value.kind === 'agent') return yield* new Forbidden({ message: 'Not an active human or device member' });
     const token = newToken();
     const csrf_token = newToken();

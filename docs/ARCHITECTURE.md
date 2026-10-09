@@ -196,7 +196,7 @@ Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS s
 
 Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceApi` and the `WorkspaceOwner` middleware in contracts `workspace.ts`, `web-app/src/pages/listen/WorkspaceDeletion.tsx`.
 
-- `auth.ts` joins only live workspaces, so a deleted workspace refuses every session, credential and `resolveAccess` at once; `WorkspaceOwnerLive` alone still admits the owner's session until `purge_after`.
+- `auth.ts` joins only live workspaces, so a deleted workspace refuses every session, credential and `resolveAccess` at once; `WorkspaceOwnerLive` and `openSession` alone still admit an owner until `purge_after`, so the owner can sign in again and undo.
 - Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first.
 
 ## Hot files
