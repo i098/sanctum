@@ -288,9 +288,16 @@ test('not a member: Settings opens with the issuer and subject for the operator'
   await expect(settings.getByRole('button', { name: 'Create workspace' })).toHaveCount(0);
 });
 
-test('not a member with self-serve on: Create workspace signs in again with the name and timezone', async ({ page }) => {
-  await serveListening(page, { configured: true, access: null, selfServe: true });
-  await page.route('**/auth/login?*', route => route.fulfill({ contentType: 'text/html', body: '<title>Issuer</title>' }));
+test('not a member with self-serve on: Create workspace signs in again and the first view confirms it once', async ({ page }) => {
+  const signIn: FakeSignIn = { configured: true, access: null, selfServe: true };
+  await serveListening(page, signIn);
+  let login = '';
+  // The issuer and callback: the membership now exists, and the callback redirects to `return_to`.
+  await page.route('**/auth/login?*', route => {
+    login = route.request().url();
+    signIn.access = ACCESS;
+    return route.fulfill({ status: 302, headers: { location: new URL(login).searchParams.get('return_to')! } });
+  });
   await page.goto('/?signin=not_member&issuer=https%3A%2F%2Fexample.authkit.app&subject=user_01FIXTURE');
   const settings = page.getByRole('dialog', { name: 'Settings' });
   // The browser's zone is the default, even an alias such as `UTC` that the canonical zone list omits.
@@ -298,7 +305,13 @@ test('not a member with self-serve on: Create workspace signs in again with the 
   await settings.getByLabel('Workspace name').fill('  Acme Research ');
   await settings.getByLabel('Timezone').selectOption('Europe/Berlin');
   await settings.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page).toHaveURL('/auth/login?return_to=%2F&workspace_name=Acme+Research&timezone=Europe%2FBerlin');
+  const status = page.locator('.listen-status');
+  await expect(status).toContainText('Signed in as Ada Lovelace');
+  expect(new URL(login).search).toBe('?return_to=%2F%3Fsignin%3Dok&workspace_name=Acme+Research&timezone=Europe%2FBerlin');
+  await expect(page).toHaveURL(/\/$/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
+  await expect(status).not.toContainText('Signed in as');
 });
 
 test('a failed sign-in callback says so', async ({ page }) => {
