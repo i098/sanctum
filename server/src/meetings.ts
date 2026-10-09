@@ -261,13 +261,15 @@ const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 /**
  * Adds late audio to a meeting that is not open. A finalized one moves to the next boundary revision first, with its
  * ranges copied and its processing reset, so the recording cut, speaker refine, notes and memory are rebuilt from the
- * larger meeting; a closing one has not run its first finalize yet. Either way it is finalized (again).
+ * larger meeting; a closing one, or one whose finalize is still pending, joins the revision that finalize will build.
+ * Either way it is finalized (again).
  */
 const joinSealed = (row: MeetingRow, source: SourceRange) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     if (OPEN_STATES.includes(row.state)) return yield* Effect.asVoid(claimSource(row, source));
-    const revision = row.state === 'closing' ? row.boundary_revision : row.boundary_revision + 1;
+    const [unbuilt] = yield* sql`SELECT 1 FROM jobs WHERE workspace_id = ${row.workspace_id} AND kind = 'meeting.finalize' AND work_key = ${`meeting:${row.id}`} AND status = 'pending' LIMIT 1`;
+    const revision = row.state === 'closing' || unbuilt !== undefined ? row.boundary_revision : row.boundary_revision + 1;
     if (revision !== row.boundary_revision) {
       yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)
         SELECT workspace_id, meeting_id, ${revision}, epoch_id, track, sample_start, sample_end FROM meeting_ranges

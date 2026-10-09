@@ -367,6 +367,29 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('several late finals after finalize in one batch move the meeting to one new revision with one change event', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch, id } = yield* endWhileLive;
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
+        yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
+        const segments = [
+          yield* speak(listener, epoch, 41, 46, 'Alice will fish the billing report'),
+          yield* speak(listener, epoch, 47, 49, 'and copy the finance lead on the report'),
+          yield* speak(listener, epoch, 49, 50, 'then we are done for today'),
+        ];
+        yield* onFinalSegments({ workspace_id: listener.workspace_id, listener_id: listener.listener_id, capture_group_id: null, segments });
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closed']);
+        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 50 * RATE }]);
+        expect(yield* sql`SELECT boundary_revision FROM boundary_events WHERE meeting_id = ${id} AND operation = 'close' ORDER BY boundary_revision`).toEqual([{ boundary_revision: 1 }, { boundary_revision: 2 }]);
+        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '1' }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('after End, a final at or past the fence opens a new meeting', () =>
     withDatabase(
       Effect.gen(function* () {
