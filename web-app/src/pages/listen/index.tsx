@@ -1,7 +1,7 @@
-import { createClient, type Meeting } from '@sanctum/sdk';
+import type { Meeting } from '@sanctum/sdk';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
-import { readSignIn, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
+import { readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { browserRecognition, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
@@ -13,8 +13,7 @@ import './listen.css';
 
 type Overlay = 'review' | 'agents' | 'settings';
 
-/** Same-origin v1 client: calls carry the browser session like every other request from this page. */
-const client = createClient({ baseUrl: window.location.origin });
+const client = sessionClient();
 
 /** Read once per page load: `/auth/callback` lands here with `?signin=<code>` when sign-in ends without a session. */
 const notice = takeSignInNotice(window.location, window.history);

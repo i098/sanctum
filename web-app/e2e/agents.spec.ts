@@ -5,14 +5,21 @@ interface Agent {
   credential: { id: string; scopes: string[]; meetings: unknown; expires_at: null; revoked_at: string | null; last_used_at: null; created_at: string };
 }
 
-/** In-page stand-in for the v1 agents routes; records every write the dialog sends. */
+/** The session opener's script-readable CSRF cookie; the server refuses cookie mutations without it as `x-csrf-token`. */
+const CSRF = 'csrf-e2e-token';
+
+/** In-page stand-in for the v1 agents routes over a browser session; records every write the dialog sends. */
 async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
   const agents: Agent[] = [];
   const writes: Array<{ method: string; path: string; body: unknown }> = [];
+  await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route('**/api/v1/agents**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (request.method() === 'GET') return route.fulfill({ json: { items: agents, next_cursor: null } });
+    if (request.headers()['x-csrf-token'] !== CSRF) {
+      return route.fulfill({ status: 403, json: { code: 'forbidden', message: 'CSRF token is missing or invalid', retryable: false } });
+    }
     writes.push({ method: request.method(), path, body: request.postDataJSON() });
     if (request.method() === 'POST') {
       if (options.failCreate) return route.fulfill({ status: 403, json: { code: 'forbidden', message: 'Requires workspace:admin', retryable: false } });
