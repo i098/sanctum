@@ -105,7 +105,7 @@ test('Connect sign-in navigates to the issuer URL the server returns', async ({ 
   await expect(page).toHaveURL(/\/fixture-issuer\/authorize\?state=s$/);
 });
 
-test('a login-link session without an issuer offers no sign out', async ({ page }) => {
+test('an operator-seeded session without an issuer offers no sign out', async ({ page }) => {
   await openListening(page, { configured: false, access: ACCESS });
   const settings = await openSettings(page);
   await expect(row(settings, 'Sign-in')).toHaveText('Signed in as Ada Lovelace (owner)');

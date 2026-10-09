@@ -100,8 +100,8 @@ function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolea
 }
 
 /**
- * Sign out shows only with a configured issuer: without one, the session came from the operator's
- * login link, and revoking it would leave no way back in.
+ * Sign out shows only with a configured issuer: without one, the session is an operator-seeded row,
+ * and revoking it would leave no way back in.
  */
 function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { status: 'signed_in' }>; onSignInChange: () => void }) {
   const [failure, setFailure] = useState<string | null>(null);

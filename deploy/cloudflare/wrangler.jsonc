@@ -1,5 +1,5 @@
 // Deploy from this directory: `npx wrangler deploy` (docs/operations.md, "Cloudflare").
-// MySQL host/user/password/CA, R2 endpoint/keys, WORKERS_AI_API_TOKEN, provider keys, SANCTUM_OIDC_CLIENT_SECRET and the login tokens are Worker secrets.
+// MySQL host/user/password/CA, R2 endpoint/keys, WORKERS_AI_API_TOKEN, provider keys and SANCTUM_OIDC_CLIENT_SECRET are Worker secrets.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "sanctum",
@@ -7,7 +7,7 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   "routes": [{ "pattern": "sanctum.42nights.dev", "custom_domain": true }],
-  // Invocation logs would store the request URL, and /__login/<LOGIN_TOKEN> is a secret.
+  // Invocation logs would store the request URL, and `/auth/callback?code=…` carries one-time authorization codes.
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // Restarts the job worker after a crash or rollout; a running worker is left alone unless its start settings changed (docs/operations.md, "Cloudflare").
   "triggers": { "crons": ["*/5 * * * *"] },

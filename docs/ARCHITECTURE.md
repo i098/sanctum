@@ -178,7 +178,7 @@ Owns `server/Dockerfile`, `docker-compose.yml`, `Caddyfile`, production parts of
 
 ### deploy
 
-Owns `deploy/cloudflare/` (Worker, Container classes, secret login link, `wrangler.jsonc`) and the Cloudflare section of [operations.md](operations.md#cloudflare); runs the `server/Dockerfile` image unchanged.
+Owns `deploy/cloudflare/` (Worker, Container classes, `wrangler.jsonc`) and the Cloudflare section of [operations.md](operations.md#cloudflare); runs the `server/Dockerfile` image unchanged.
 
 ### sign-in (S1)
 

@@ -24,7 +24,7 @@ export const SIGN_IN_URL = '/auth/login?return_to=/';
 
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
- * come from the operator's login link. A server without the route counts as not configured.
+ * come from an operator-seeded `browser_sessions` row. A server without the route counts as not configured.
  * `workosTeam`: WorkOS organizations hold the workspace's team (hosted) and the caller is an owner or admin, so Settings offers Team.
  * `selfServe`: a signed-in user without a membership may create a workspace.
  */
