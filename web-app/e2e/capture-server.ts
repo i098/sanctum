@@ -4,7 +4,7 @@
  * slice's listener API.
  */
 import { createHash } from 'node:crypto';
-import { test, type Page } from '@playwright/test';
+import { test, type Page, type WebSocketRoute } from '@playwright/test';
 import type * as Buffer from '../src/lib/capture/buffer.ts';
 import type * as Controller from '../src/lib/capture/controller.ts';
 import type { CaptureSnapshot, CaptureView } from '../src/lib/capture/view.ts';
@@ -27,6 +27,8 @@ interface FakeServer {
   starts: Array<Record<string, unknown>>;
   frames: number;
   failUploads: boolean;
+  /** The latest stream socket, for frames a test sends later. */
+  socket?: WebSocketRoute;
 }
 
 /** `degraded` makes the fake media server report live ASR trouble right after it accepts a stream, as production does without a Workers AI token. */
@@ -55,6 +57,7 @@ export async function fakeServer(page: Page, failUploads = false, degraded?: 'pr
     return route.fulfill({ json: { chunk_id: manifest.chunk_id, object_key: `audio/${manifest.chunk_id}.wav`, sha256, byte_length: body.length, committed_at: '2026-09-29T09:00:00Z' } });
   });
   await page.routeWebSocket(/\/api\/v1\/listeners\/[^/]+\/stream$/, (ws) => {
+    server.socket = ws;
     ws.onMessage((message) => {
       if (typeof message !== 'string') return void server.frames++;
       const start = JSON.parse(message) as Record<string, unknown>;

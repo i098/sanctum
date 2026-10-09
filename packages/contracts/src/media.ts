@@ -173,6 +173,12 @@ export const DegradedMessage = Schema.TaggedStruct('degraded', {
   from_sample: SampleIndex,
 });
 
+/**
+ * Live ASR answered audio again: after the last `degraded` frame, or first on each socket, since a
+ * reconnect can follow one. Clients that predate this frame ignore it as an unknown tag.
+ */
+export const RecoveredMessage = Schema.TaggedStruct('recovered', {});
+
 /** Transcript text for display; `partial` segments are never committed facts. */
 export const TranscriptMessage = Schema.TaggedStruct('transcript', {
   segment: TranscriptSegment,
@@ -223,6 +229,7 @@ export const ServerControlMessage = Schema.Union(
   RejectedMessage,
   AckMessage,
   DegradedMessage,
+  RecoveredMessage,
   TranscriptMessage,
   SpeechChunkMessage,
   SpeechCancelMessage,

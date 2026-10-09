@@ -39,6 +39,22 @@ test('names lost live transcription while the audio keeps streaming', async ({ p
   await expect.poll(() => server.frames, { timeout: 10_000 }).toBeGreaterThan(frames);
 });
 
+test('names live transcription that is behind until the server reports it recovered', async ({ page }) => {
+  const server = await fakeServer(page, false, 'asr_backlog');
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Listen' }).click();
+  const state = page.locator('.listen-state');
+  const helper = page.locator('.listen-helper');
+  await expect(state).toHaveText('degraded', { timeout: 15_000 });
+  await expect(helper).toHaveText('Live transcription is behind. Audio is still being saved and is transcribed later.');
+  await page.waitForTimeout(1_000);
+  await expect(state).toHaveText('degraded');
+
+  server.socket!.send(JSON.stringify({ _tag: 'recovered' }));
+  await expect(state).toHaveText('listening');
+  await expect(helper).not.toContainText('transcription');
+});
+
 test('End meeting keeps through a pause, then stops capture and closes the meeting with the CSRF header', async ({ page }) => {
   await fakeServer(page);
   const id = '5b0c2d4e-6f70-4a81-92b3-c4d5e6f7a8b9';

@@ -12,6 +12,7 @@ import {
   type AccessScope,
   type ActionId,
   decodePcmFrame,
+  type DegradedMessage,
   type ListenerId,
   type MeetingId,
   type PcmFrame,
@@ -133,6 +134,28 @@ const relayBatch = (
   }).pipe(Effect.catchAll(error => Effect.logWarning('Live final not persisted; batch reconciliation covers the range', error)));
 
 /**
+ * Whether live ASR is behind: `degrade` reports a range, and the first answer for audio at or after
+ * it reports `recovered`. An old lane's late answers start before that sample, so they never count.
+ * It starts behind at 0, because a reconnect can follow a `degraded` frame.
+ */
+const asrHealth = (send: LiveSessionInput['send']) => {
+  let behind: number | null = 0;
+  return {
+    degrade: (reason: (typeof DegradedMessage.Type)['reason'], from_sample: number) =>
+      Effect.suspend(() => {
+        behind = Math.max(behind ?? 0, from_sample);
+        return send({ _tag: 'degraded', reason, from_sample });
+      }),
+    answered: (sample: number) =>
+      Effect.suspend(() => {
+        if (behind === null || sample < behind) return Effect.void;
+        behind = null;
+        return send({ _tag: 'recovered' });
+      }),
+  };
+};
+
+/**
  * The live-ASR lane of one session: at most one provider connection, anchored at the sample it
  * started from. Gaps, overload and failures detach it and report the range as degraded.
  */
@@ -146,6 +169,7 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
     let lane: Lane | null = null;
     let retryAt = 0;
     let providerDown = false;
+    const { degrade, answered } = asrHealth(send);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -172,14 +196,14 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         yield* Effect.logWarning('Live ASR unavailable', message);
         if (providerDown) return;
         providerDown = true;
-        yield* send({ _tag: 'degraded', reason: 'provider_unavailable', from_sample });
+        yield* degrade('provider_unavailable', from_sample);
       });
 
     const open = (anchor: number) =>
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const opened = yield* stt
-          .openStream(rate, offset => send({ _tag: 'degraded', reason: 'asr_backlog', from_sample: anchor + offset }))
+          .openStream(rate, offset => degrade('asr_backlog', anchor + offset))
           .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);
@@ -195,7 +219,9 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         const current: Lane = { connection_id, anchor, next_sample: anchor, stream: opened.right, scope, consumer: null };
         lane = current;
         current.consumer = yield* opened.right.results.pipe(
-          Stream.runForEach(batch => relayBatch({ access, listener, start, send }, stt, current, batch)),
+          Stream.runForEach(batch =>
+            Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)),
+          ),
           Effect.catchAll(error =>
             Effect.gen(function* () {
               if (lane === current) {
@@ -215,7 +241,7 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         if (lane !== null && lane.stream.backlogBytes() + frame.samples.byteLength > liveLimits.asrBacklogBytes) {
           yield* rotate('provider_backlog');
           retryAt = Date.now() + liveLimits.providerRetryMs;
-          yield* send({ _tag: 'degraded', reason: 'asr_backlog', from_sample: frame.sample_start });
+          yield* degrade('asr_backlog', frame.sample_start);
         }
         if (lane === null && Date.now() >= retryAt) yield* open(frame.sample_start);
         if (lane === null) return;
