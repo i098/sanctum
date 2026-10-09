@@ -283,6 +283,8 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   if (options.input) storage.set('sanctum.microphone', options.input);
   /** Streams the recorder was moved to without a restart. */
   const replaced: MediaStream[] = [];
+  /** `replace`: the recorder refuses a new input without a restart, as Firefox does for another sample rate. */
+  const refuse = { replace: false };
   const server = new FakeListenerServer(options);
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const { lives, calls, client } = server;
@@ -299,7 +301,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     openBuffer: async () => buffer,
     startRecorder: async (_stream, callback) => {
       onBlock = callback;
-      return { sampleRate: RATE, levels: { bandCount: 33, read: (bands) => (bands.fill(0.5), 0.5) }, flush: async () => { }, replaceInput: (stream) => void replaced.push(stream), close: async () => { } };
+      return { sampleRate: RATE, levels: { bandCount: 33, read: (bands) => (bands.fill(0.5), 0.5) }, flush: async () => { }, replaceInput: (stream) => { if (refuse.replace) throw new DOMException('sample rate', 'InvalidAccessError'); replaced.push(stream); }, close: async () => { } };
     },
     client,
     openLive: server.openLive,
@@ -330,6 +332,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     gates,
     requests,
     replaced,
+    refuse,
     lives,
     calls,
     feed,
@@ -659,6 +662,25 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'listening', inputId: 'iphone', inputLabel: '萧 Microphone' });
     expect(h.storage.get('sanctum.microphone')).toBe('iphone');
     expect(h.replaced).toHaveLength(1);
+  });
+
+  it('restarts capture in a new epoch on the chosen input when the recorder refuses the switch', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    const { epochId } = h.snapshot();
+    h.refuse.replace = true;
+    await h.engine.chooseInput('iphone');
+    h.feed(0.1);
+    h.accept();
+    await settle();
+    expect(h.replaced).toHaveLength(0);
+    expect(h.requests.at(-1)).toMatchObject({ deviceId: { exact: 'iphone' } });
+    expect(h.lives).toHaveLength(2);
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null, inputId: 'iphone', inputLabel: '萧 Microphone' });
+    expect(h.snapshot().epochId).not.toBe(epochId);
+    expect(h.storage.get('sanctum.microphone')).toBe('iphone');
   });
 
   it('hands capture to the default input when the running input is unplugged while the default is being chosen', async () => {
