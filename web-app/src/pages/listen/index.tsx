@@ -102,13 +102,14 @@ function FullscreenButton() {
 function MeetingLine() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   useEffect(() => {
+    // The meeting read or being read; a failed read clears it so the next update for that meeting reads again.
     let shown: string | null = null;
     return subscribeActions(({ meeting_id }) => {
       if (meeting_id === shown) return;
       shown = meeting_id;
       setMeeting(null);
       // A failed read shows no line rather than a false one; a stale read never replaces a newer meeting.
-      if (meeting_id !== null) client.meetings.getMeeting({ meeting_id }).then(read => read.id === shown && setMeeting(read), () => undefined);
+      if (meeting_id !== null) client.meetings.getMeeting({ meeting_id }).then(read => read.id === shown && setMeeting(read), () => { shown = shown === meeting_id ? null : shown; });
     });
   }, []);
   if (meeting === null) return null;
