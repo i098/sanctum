@@ -38,7 +38,7 @@ x-app: &app
 
 services:
   mysql:
-    image: mysql:8.4
+    image: public.ecr.aws/docker/library/mysql:8.4
     environment:
       MYSQL_DATABASE: sanctum
       MYSQL_USER: sanctum
@@ -66,7 +66,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2.11.4-alpine
+    image: public.ecr.aws/docker/library/caddy:2.11.4-alpine
     environment:
       SANCTUM_SITE_ADDRESS: # passed through when set; the Caddyfile defaults to localhost
     ports:
