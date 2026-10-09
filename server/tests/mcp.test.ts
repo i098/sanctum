@@ -13,7 +13,6 @@ import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.
 import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
 import { addMember, linkWorkspaceOrg } from '../src/store.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
-import { addMember } from '../src/store.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
 
