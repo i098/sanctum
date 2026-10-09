@@ -348,10 +348,12 @@ export const onCaptureEnded = (event: {
     );
   }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
 
+type IdleKey = { readonly workspace_id: WorkspaceId; readonly id: MeetingId; readonly listener_id: string; readonly capture_group_id: string | null };
+
 /** Open meetings whose latest owned audio ended more than `idleMs` ago; `only` narrows the scan to one meeting. */
 const idleMeetings = (idleMs: number, only: MeetingId | null) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
-    sql<{ workspace_id: WorkspaceId; id: MeetingId; listener_id: string; capture_group_id: string | null }>`SELECT m.workspace_id, m.id, m.listener_id, m.capture_group_id FROM meetings m
+    sql<IdleKey>`SELECT m.workspace_id, m.id, m.listener_id, m.capture_group_id FROM meetings m
       JOIN meeting_ranges r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision
       JOIN capture_epochs e ON e.workspace_id = r.workspace_id AND e.id = r.epoch_id
       WHERE m.state IN ${sql.in(OPEN_STATES)} AND m.listener_id IS NOT NULL ${only === null ? sql`` : sql`AND m.id = ${only}`}
@@ -364,54 +366,65 @@ const idleMeetings = (idleMs: number, only: MeetingId | null) =>
 const coveredThrough = (from: number, spans: ReadonlyArray<Span>) =>
   spans.reduce((end, span) => (span.sample_start <= end ? Math.max(end, span.sample_end) : end), from);
 
+interface IdleEpoch {
+  readonly id: string;
+  readonly live: number;
+  readonly settled: number;
+  readonly epoch_end: number;
+}
+
+/**
+ * One epoch's part of `isQuiet` after the meeting's last speech: `null` when it holds finals no meeting placed yet or, once
+ * ended, audio ASR has not finished; otherwise whether ASR heard `idleMs` of silence, and whether it is live, settled and uploaded.
+ */
+const epochQuiet = (meeting: IdleKey, last: TimedRange, epoch: IdleEpoch, clock: EpochClock, idleMs: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const from = Math.max(clock.sample_start, msToSample(clock, last.end_ms));
+    const [unplaced] = yield* sql`SELECT 1 FROM transcript_segments s
+      WHERE s.workspace_id = ${meeting.workspace_id} AND s.epoch_id = ${epoch.id} AND s.status = 'final' AND s.sample_start >= ${from}
+        AND NOT EXISTS (SELECT 1 FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+          WHERE r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start)
+      LIMIT 1`;
+    if (unplaced !== undefined) return null;
+    const through = coveredThrough(from, yield* sql<Span>`SELECT CAST(sample_start AS DOUBLE) AS sample_start, CAST(sample_end AS DOUBLE) AS sample_end
+      FROM transcript_coverage WHERE workspace_id = ${meeting.workspace_id} AND epoch_id = ${epoch.id} AND track = ${last.track} AND sample_end > ${from} ORDER BY sample_start`);
+    const silent = through > from && sampleMs(clock, through) - last.end_ms >= idleMs;
+    if (Number(epoch.live) === 1) return { silent, live: true, settled: true, uploaded: true };
+    if (through < epoch.epoch_end) return null;
+    const chunks = from < epoch.epoch_end
+      ? yield* sql<Span>`SELECT CAST(sample_start AS DOUBLE) AS sample_start, CAST(sample_start + sample_count AS DOUBLE) AS sample_end
+          FROM recording_chunks WHERE workspace_id = ${meeting.workspace_id} AND epoch_id = ${epoch.id} AND track = ${last.track} AND upload_state = 'committed'
+            AND sample_start + sample_count > ${from} ORDER BY sample_start`
+      : null;
+    return { silent, live: false, settled: Number(epoch.settled) === 1, uploaded: chunks === null || coveredThrough(from, chunks) >= epoch.epoch_end };
+  });
+
 /**
  * Whether an idle-candidate meeting is quiet, not lagging: ASR finished `idleMs` of audio past its last speech (silence), or its
  * listeners are all stopped or paused for `idleMs` and every epoch's audio after the last speech is transcribed and uploaded.
  * Audio still waiting for ASR or upload never counts, so an outage or backlog cannot close a meeting that is still talking.
  */
-const isQuiet = (meeting: { readonly workspace_id: WorkspaceId; readonly id: MeetingId; readonly listener_id: string; readonly capture_group_id: string | null }, idleMs: number) =>
+const isQuiet = (meeting: IdleKey, idleMs: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const last = (yield* currentRanges(meeting.workspace_id, meeting.id)).reduce<TimedRange | null>((latest, range) => (latest === null || range.end_ms > latest.end_ms ? range : latest), null);
     if (last === null) return false;
     const epochEnd = sql`GREATEST(e.live_sample_end, COALESCE(e.archive_sample_end, 0))`;
-    const epochs = yield* sql<{ id: string; live: number; settled: number; epoch_end: number }>`SELECT e.id, e.ended_at IS NULL AS live,
+    const epochs = yield* sql<IdleEpoch>`SELECT e.id, e.ended_at IS NULL AS live,
         COALESCE(e.ended_at <= UTC_TIMESTAMP(6) - INTERVAL ${idleMs * 1000} MICROSECOND, 0) AS settled, CAST(${epochEnd} AS DOUBLE) AS epoch_end
       FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
       WHERE e.workspace_id = ${meeting.workspace_id}
         AND ${meeting.capture_group_id === null ? sql`l.id = ${meeting.listener_id}` : sql`l.capture_group_id = ${meeting.capture_group_id}`}
         AND (e.ended_at IS NULL OR e.captured_at + INTERVAL ROUND((${epochEnd} - e.sample_start) * 1000000 / e.sample_rate) MICROSECOND > ${dbTime(last.end_ms)})`;
     const clocks = yield* loadEpochs(meeting.workspace_id, epochs.map(epoch => epoch.id));
-    let silent = false;
-    let live = false;
-    let settled = true;
-    let uploaded = true;
+    const states = [];
     for (const epoch of epochs) {
-      const clock = clocks.get(epoch.id)!;
-      const from = Math.max(clock.sample_start, msToSample(clock, last.end_ms));
-      const [unplaced] = yield* sql`SELECT 1 FROM transcript_segments s
-        WHERE s.workspace_id = ${meeting.workspace_id} AND s.epoch_id = ${epoch.id} AND s.status = 'final' AND s.sample_start >= ${from}
-          AND NOT EXISTS (SELECT 1 FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
-            WHERE r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start)
-        LIMIT 1`;
-      if (unplaced !== undefined) return false;
-      const through = coveredThrough(from, yield* sql<Span>`SELECT CAST(sample_start AS DOUBLE) AS sample_start, CAST(sample_end AS DOUBLE) AS sample_end
-        FROM transcript_coverage WHERE workspace_id = ${meeting.workspace_id} AND epoch_id = ${epoch.id} AND track = ${last.track} AND sample_end > ${from} ORDER BY sample_start`);
-      silent ||= through > from && sampleMs(clock, through) - last.end_ms >= idleMs;
-      if (Number(epoch.live) === 1) {
-        live = true;
-        continue;
-      }
-      if (through < epoch.epoch_end) return false;
-      settled &&= Number(epoch.settled) === 1;
-      if (from < epoch.epoch_end) {
-        const chunks = yield* sql<Span>`SELECT CAST(sample_start AS DOUBLE) AS sample_start, CAST(sample_start + sample_count AS DOUBLE) AS sample_end
-          FROM recording_chunks WHERE workspace_id = ${meeting.workspace_id} AND epoch_id = ${epoch.id} AND track = ${last.track} AND upload_state = 'committed'
-            AND sample_start + sample_count > ${from} ORDER BY sample_start`;
-        uploaded &&= coveredThrough(from, chunks) >= epoch.epoch_end;
-      }
+      const state = yield* epochQuiet(meeting, last, epoch, clocks.get(epoch.id)!, idleMs);
+      if (state === null) return false;
+      states.push(state);
     }
-    return silent || (!live && settled && uploaded);
+    return states.some(state => state.silent) || states.every(state => !state.live && state.settled && state.uploaded);
   });
 
 /**

@@ -378,7 +378,7 @@ describe('automatic meeting lifecycle', () => {
         expect(event!.evidence).toEqual(['idle_close']);
         // Same final work as an explicit close, scheduled once per meeting even when the sweep runs again.
         yield* sweepIdleMeetings();
-        expect(yield* jobsOf(device.workspace_id)).toHaveLength(2);
+        expect((yield* jobsOf(device.workspace_id)).filter(job => job.kind !== 'context.refresh')).toHaveLength(2);
 
         // Once ASR recovers and the backlog uploads, the same meetings are quiet and close.
         yield* transcribed(outage, 30, 14 * MIN);

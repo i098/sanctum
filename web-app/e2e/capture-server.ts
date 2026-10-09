@@ -33,6 +33,9 @@ interface FakeServer {
 export async function fakeServer(page: Page, failUploads = false, degraded?: 'provider_unavailable' | 'asr_backlog'): Promise<FakeServer> {
   const server: FakeServer = { uploads: [], starts: [], frames: 0, failUploads };
   await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
+  // Sign-in stays unconfigured whatever else listens on the dev proxy's API port, so the helper line shows capture state.
+  await page.route('**/auth/config', route => route.fulfill({ json: { sign_in: false, embedded_issuer: null } }));
+  await page.route('**/api/v1/session', route => route.fulfill({ status: 401, json: { _tag: 'Unauthenticated', code: 'unauthenticated', message: 'No credentials' } }));
   await page.route(/\/api\/v1\/listeners(\/|$)/, (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
