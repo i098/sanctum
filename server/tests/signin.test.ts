@@ -169,6 +169,10 @@ const fakeWorkos = () => {
 const withServer = (client: Option.Option<SignIn>, organizations?: Layer.Layer<WorkosOrganizations>) =>
   serveApiWithDb({ overrides: { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }), ...(organizations ? { organizations } : {}) } });
 
+/** Soft-deletes a workspace as `deleteWorkspace` does; a negative `days` puts the purge time in the past. */
+const markDeleted = (db: Layer.Layer<SqlClient.SqlClient, unknown>) => (id: string, days: number) =>
+  Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+
 const configured = () => {
   const issuer = fixtureIssuer();
   const client: SignIn = {
@@ -323,8 +327,7 @@ describe('OIDC sign-in', () => {
           );
           return row!.workspace_id;
         });
-      const mark = (id: string, days: number) =>
-        Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+      const mark = markDeleted(db);
       yield* mark(second!.workspace_id, 7);
       expect(yield* enteredWorkspace({ sub })).toBe(first!.workspace_id);
       yield* mark(first!.workspace_id, 7);
@@ -401,8 +404,7 @@ describe('OIDC sign-in', () => {
       const { db } = yield* withServer(client);
       const owner = (subject: string, workspace: OwnerInput['workspace']) =>
         Effect.provide(createOwner({ issuer: ISSUER, subject, display_name: 'Owner', workspace }), db);
-      const mark = (id: string, days: number) =>
-        Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+      const mark = markDeleted(db);
 
       const first = yield* owner('user_first', { name: 'Acme', timezone: 'UTC' });
       yield* mark(first.workspace_id, 7);
