@@ -61,7 +61,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `auth.ts`: `listVisibleMeetingIds(access): Effect<ReadonlyArray<MeetingId>, SqlError, R>`.
 - `jobs.ts`: `enqueueJob(input: EnqueueJob): Effect<JobId, SqlError, R>`, joining the caller's transaction.
 - `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number; expedite?: boolean }`; an active row with the same key is re-armed (timer restarts; `expedite` makes it due no later than this request).
-- `job-runner.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`, plus claim, lease, fenced completion and deadlock retry; its sweeper also runs media's `sweepLapsedListeners` from listeners.ts. Only worker.ts imports it.
+- `job-runner.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`, plus claim, lease, fenced completion and deadlock retry; its sweeper also runs media's `sweepLapsedListeners` from listeners.ts and meetings' `sweepIdleMeetings` from meetings.ts. Only worker.ts imports it.
 - `jobs.ts` holds only `enqueueJob` and imports no application module, so enqueueing never deepens a caller's import chain.
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
@@ -127,6 +127,7 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 
 - `meetings.ts`: `onFinalSegments(event: { workspace_id; listener_id; capture_group_id: string | null; segments: ReadonlyArray<TranscriptSegment> }): Effect<void, SqlError, R>`.
 - `meetings.ts`: `onCaptureEnded(event: { workspace_id; listener_id; epoch_id; track; sample_end; reason: EpochEndReason }): Effect<void, SqlError, R>`.
+- `meetings.ts`: `sweepIdleMeetings(idleMs?): Effect<void, SqlError, R>` closes open meetings that are quiet for `engineeringDefaults.meetingIdleCloseMs` (see DECISIONS.md, "Meeting end decision").
 - `meetings.ts`: `getMeeting(access, meeting_id): Effect<Meeting, NotFound, R>` and `meetingRanges(access, meeting_id): Effect<ReadonlyArray<MeetingRange>, NotFound, R>`.
 - `playback.ts`: `issueRecordingAccess(access, meeting_id): Effect<RecordingAccess, NotFound | Forbidden | Unavailable, R | ObjectStore>`.
 - Handles job kinds `meeting.finalize`, `recording.assemble`, `speakers.refine`; boundary corrections call context's `appendContextEvent`.
