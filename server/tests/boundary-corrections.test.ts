@@ -58,7 +58,7 @@ describe('split and merge', () => {
     ),
   );
 
-  it.effect('a meeting merged away after End keeps its fence but is never revived by late audio', () =>
+  it.effect('after End then merge, late audio before the fence joins the merge target and opens no meeting', () =>
     withDatabase(
       Effect.gen(function* () {
         const { owner, device, listener, epoch, first, second } = yield* twoMeetings;
@@ -66,7 +66,26 @@ describe('split and merge', () => {
         yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
         yield* hear(listener, epoch, 170 + 6 * MIN, 175 + 6 * MIN, 'next slide shows the mobile layout');
         expect(yield* rangesOf(second)).toEqual([]);
-        expect((yield* listMeetings(owner, {})).meetings.map(meeting => meeting.id)).not.toContain(second);
+        expect((yield* rangesOf(first)).at(-1)!.sample_end).toBe((175 + 6 * MIN) * RATE);
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.id)).toEqual([first, second]);
+        expect((yield* listMeetings(owner, {})).meetings.map(meeting => meeting.id)).toEqual([first]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('after End then split, late audio before the fence joins the later piece and opens no meeting', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, device, listener, epoch, second } = yield* twoMeetings;
+        yield* closeMeeting(device, second, { epoch_id: epoch, sample: (200 + 6 * MIN) * RATE });
+        const { earlier, later } = yield* splitMeeting(owner, second, { expected_revision: 1, at: { epoch_id: epoch, sample: (130 + 6 * MIN) * RATE } });
+        const before = yield* rangesOf(earlier.id);
+        yield* hear(listener, epoch, 170 + 6 * MIN, 175 + 6 * MIN, 'next slide shows the mobile layout');
+        expect(yield* rangesOf(earlier.id)).toEqual(before);
+        expect((yield* rangesOf(later.id)).at(-1)!.sample_end).toBe((175 + 6 * MIN) * RATE);
+        expect(yield* meetingsOf(listener.workspace_id)).toHaveLength(3);
+        expect(yield* getMeeting(owner, earlier.id)).toMatchObject({ ended_at: '2026-09-28T16:08:10Z' });
       }),
       { migrated: true },
     ),
