@@ -18,8 +18,10 @@ type Overlay = 'review' | 'agents' | 'settings';
 
 const client = sessionClient();
 
-/** Read once per page load: `/auth/callback` lands here with `?signin=<code>` when sign-in ends without a session. */
-const notice = takeSignInNotice(window.location, window.history);
+/** Read once per page load: `/auth/callback` lands here with `?signin=<code>`; `ok` is SIGN_IN_URL's own return. */
+const landing = takeSignInNotice(window.location, window.history);
+const notice = typeof landing === 'object' ? landing : null;
+const firstOverlay: Overlay | null = notice ? 'settings' : null;
 
 const HELPER: Record<ListenerState, string> = {
   stopped: 'Choose Listen to start the microphone.',
@@ -309,12 +311,24 @@ function Rails({ live, capturing, onCaptions }: RailsProps) {
   );
 }
 
+/** Signed out: the sign-in link; else the status line, then who is signed in on the return from SIGN_IN_URL. */
+function SignInLine({ signIn, message }: { signIn: SignInState; message: { text: string; warning: boolean } }) {
+  return signIn.status === 'signed_out'
+    ? <a href={SIGN_IN_URL} data-primary>Sign in to listen</a>
+    : (
+      <>
+        <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
+        {landing === 'signed_in' && signIn.status === 'signed_in' && <p className="listen-helper listen-welcome">Signed in as {signIn.access.principal.display_name}</p>}
+      </>
+    );
+}
+
 /** Fullscreen listening view: waveform stage, sparse header, side live updates, quiet footer controls, secondary overlays. */
 export function ListenPage() {
   const engine = getCaptureEngine();
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [overlay, setOverlay] = useState<Overlay | null>(notice ? 'settings' : null);
+  const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
   const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
   const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
   // A capture issue may mean the session ended, so each new issue reads the session again.
@@ -339,9 +353,7 @@ export function ListenPage() {
       </header>
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
-        {signIn.status === 'signed_out'
-          ? <a className="listen-helper" href={SIGN_IN_URL}>Sign in to listen</a>
-          : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
+        <SignInLine signIn={signIn} message={message} />
         <InputHelp engine={engine} issue={snapshot.issue}>
           <CaptionNote state={captions} capturing={capturing} />
         </InputHelp>

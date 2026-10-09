@@ -30,6 +30,9 @@ for (const viewport of [
     await expect(open).toHaveAttribute('href', 'https://app.sanctum.42nights.dev/');
     await expect(selfHost).toBeInViewport();
     await expect(selfHost).toHaveAttribute('href', 'https://github.com/i098/sanctum');
+    const signIn = page.getByRole('navigation', { name: 'Sanctum' }).getByRole('link', { name: 'Sign in' });
+    await expect(signIn).toBeInViewport({ ratio: 1 });
+    await expect(signIn).toHaveAttribute('href', 'https://app.sanctum.42nights.dev/auth/login?return_to=/?signin=ok');
     // The waveform draws: some canvas pixel is no longer transparent.
     await expect.poll(() => hero.locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
       const { data } = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);

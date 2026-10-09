@@ -111,6 +111,14 @@ pre:focus-visible {
   color: var(--ink);
 }
 
+/* Outlined like the app's primary link; its outline, not its text, meets the gutter. */
+.links .signin {
+  margin-right: 8px;
+  border-radius: 3px;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--idle);
+}
+
 /* Hero: the listening screen, with the pitch where its status sits. */
 .hero {
   display: grid;
@@ -443,6 +451,11 @@ h2 {
   }
 
   .clock {
+    display: none;
+  }
+
+  /* No room for three header links; the hero's Self-host button links GitHub. */
+  .links a:first-child {
     display: none;
   }
 
