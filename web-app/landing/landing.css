@@ -1,0 +1,498 @@
+/* Landing page on the listening view's tokens (docs/DESIGN.md); the hero is its listening screen. */
+:root {
+  --room: #0a0c10;
+  --overlay: #12161e;
+  --rule: #222936;
+  --ink: #e7ecf3;
+  --ink-2: #a7adb8;
+  --ink-3: #8b919c;
+  --idle: #3d7dff;
+  --listening: #22d3c5;
+  --listening-ink: #9fe5e3;
+  --live: #c6f24e;
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --gutter: 32px;
+
+  color-scheme: dark;
+  background: var(--room);
+  color: var(--ink-2);
+  font-family: var(--sans);
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+a:focus-visible,
+pre:focus-visible {
+  outline: 2px solid var(--idle);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+/* Code blocks clip to their rounded frame, so their ring sits inside it. */
+pre:focus-visible {
+  outline-offset: -2px;
+}
+
+.skip {
+  position: absolute;
+  z-index: 2;
+  top: -48px;
+  left: 16px;
+  padding: 8px 12px;
+  background: var(--ink);
+  color: var(--room);
+  font: 12px var(--mono);
+}
+
+.skip:focus {
+  top: 16px;
+}
+
+/* Header: the listening view's wordmark and clock; links in its control style. */
+.top {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 30px var(--gutter);
+  color: var(--ink-3);
+  font: 10px var(--mono);
+}
+
+.brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px;
+}
+
+.wordmark {
+  margin-top: 7px;
+  color: var(--ink-2);
+  font-size: 14px;
+  letter-spacing: 1.2px;
+  white-space: nowrap;
+}
+
+.clock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.links {
+  display: flex;
+  gap: 8px;
+  margin: 5px -8px 0 0;
+}
+
+.links a {
+  padding: 4px 8px;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.links a:hover {
+  color: var(--ink);
+}
+
+/* Hero: the listening screen, with the pitch where its status sits. */
+.hero {
+  display: grid;
+  /* Tall screens center the composition instead of opening a void between the line and the pitch. */
+  grid-template-rows: minmax(220px, 460px) auto auto;
+  align-content: center;
+  height: 100svh;
+  min-height: min-content;
+  padding-top: 84px;
+  box-sizing: border-box;
+}
+
+.stage {
+  position: relative;
+}
+
+/*
+ * waveform.ts puts the baseline at 44% of its canvas; a canvas 140% of the stage puts it at 61%,
+ * nearer the pitch, and leaves the underside room above it. The pitch paints on top.
+ */
+.wave {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 140%;
+  pointer-events: none;
+}
+
+.pitch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 var(--gutter);
+  text-align: center;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  color: var(--ink-3);
+  font: 12px var(--mono);
+  letter-spacing: 1.4px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 6px rgb(198 242 78 / 0.5);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+h1 {
+  margin: 20px 0 0;
+  color: var(--ink);
+  font-size: clamp(42px, 6.4vw, 80px);
+  font-weight: 500;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+h1 .stop {
+  color: var(--listening);
+}
+
+.lede {
+  max-width: 36em;
+  margin: 22px 0 0;
+  font-size: clamp(16px, 1.35vw, 18px);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 34px;
+}
+
+.button {
+  padding: 14px 22px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  font: 12px var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.button:hover {
+  border-color: var(--ink-3);
+}
+
+.button.primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--room);
+}
+
+.button.primary:hover {
+  border-color: #fff;
+  background: #fff;
+}
+
+.note {
+  margin: 44px 0 28px;
+  padding: 0 var(--gutter);
+  color: var(--ink-3);
+  font: 10px var(--mono);
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+/* Sections read like a ledger: a quiet label column, hairline rules, no cards. */
+.ledger {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 32px;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 96px var(--gutter);
+  border-top: 1px solid var(--rule);
+}
+
+.label {
+  margin: 12px 0 0;
+  color: var(--ink-3);
+  font: 10px var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h2 {
+  max-width: 22em;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.body {
+  max-width: 38em;
+  margin: 18px 0 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.steps {
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 24px;
+  padding: 22px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.steps h3 {
+  margin: 0;
+  color: var(--listening-ink);
+  font: 13px/1.85 var(--mono);
+  letter-spacing: 1.4px;
+}
+
+.steps p {
+  max-width: 40em;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.code {
+  margin: 28px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--overlay);
+}
+
+.code + .code {
+  margin-top: 12px;
+}
+
+.code figcaption {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-3);
+  font: 10px var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.code pre {
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto;
+  color: var(--ink-2);
+  font: 13px/1.65 var(--mono);
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 20px 0 0;
+}
+
+.tools code {
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink-3);
+  font: 12px var(--mono);
+}
+
+.options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 40px;
+  border-top: 1px solid var(--rule);
+}
+
+.option {
+  padding: 28px 32px 0 0;
+}
+
+.option + .option {
+  padding: 28px 0 0 32px;
+  border-left: 1px solid var(--rule);
+}
+
+.option h3 {
+  margin: 0;
+  color: var(--ink);
+  font: 12px var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.option ul {
+  margin: 18px 0 24px;
+  padding-left: 20px;
+  list-style: '–  ';
+}
+
+.option li {
+  margin-top: 10px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.more {
+  display: inline-block;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--idle);
+  color: var(--ink);
+  font: 11px var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.bottom {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 32px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-3);
+  font: 10px var(--mono);
+  letter-spacing: 0.04em;
+}
+
+.bottom p {
+  margin: 0;
+}
+
+.health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.health .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--listening);
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --gutter: 20px;
+  }
+
+  .top {
+    padding-top: 24px;
+  }
+
+  .clock {
+    display: none;
+  }
+
+  .hero {
+    padding-top: 72px;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-self: stretch;
+  }
+
+  .ledger {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 64px var(--gutter);
+  }
+
+  .label {
+    margin: 0;
+  }
+
+  .steps li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .code pre {
+    font-size: 12px;
+  }
+
+  .options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .option + .option {
+    margin-top: 32px;
+    padding: 28px 0 0;
+    border-top: 1px solid var(--rule);
+    border-left: 0;
+  }
+
+  .bottom {
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
+}

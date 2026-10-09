@@ -6,11 +6,15 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
-  // The app host serves the app, API and MCP; the apex redirects to it (src/index.ts).
+  // The app host serves the app, API and MCP; the apex serves the landing page and redirects the rest to the app host (src/index.ts).
   "routes": [
     { "pattern": "app.sanctum.42nights.dev", "custom_domain": true },
     { "pattern": "sanctum.42nights.dev", "custom_domain": true }
   ],
+  // The landing page (web-app/landing) is built on every deploy from this directory; the Worker runs first and
+  // serves it only on the apex GET and HEAD (src/index.ts), so the app host never sees it.
+  "build": { "command": "npm run build:landing", "cwd": "../../web-app" },
+  "assets": { "directory": "../../web-app/landing/dist", "binding": "LANDING", "run_worker_first": true },
   // Invocation logs would store the request URL, and `/auth/callback?code=…` carries one-time authorization codes.
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // Restarts the job worker after a crash or rollout; a running worker is left alone unless its start settings changed (docs/operations.md, "Cloudflare").

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0c10" />
+    <title>Sanctum: the room remembers</title>
+    <meta name="description" content="An open-source meeting listener that runs in a browser tab. It stays silent, keeps the full transcript and a private recording, and turns what you decide into memory your agents read through MCP." />
+    <link rel="canonical" href="https://sanctum.42nights.dev/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Sanctum" />
+    <meta property="og:url" content="https://sanctum.42nights.dev/" />
+    <meta property="og:title" content="Sanctum: the room remembers" />
+    <meta property="og:description" content="An open-source meeting listener that runs in a browser tab and gives your agents a shared, source-linked memory." />
+    <meta property="og:image" content="https://sanctum.42nights.dev/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Sanctum waveform, a thin pale line with sharp needles on a near-black background." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 4Q17.5 14.5 28 16Q17.5 17.5 16 28Q14.5 17.5 4 16Q14.5 14.5 16 4Z' fill='%23a7adb8'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./landing.css" />
+    <script type="module" src="./main.ts"></script>
+  </head>
+  <body>
+    <a class="skip" href="#how">Skip to content</a>
+    <header class="top">
+      <div class="brand">
+        <span class="wordmark">✦ SANCTUM</span>
+        <time class="clock" aria-hidden="true"><span></span><span></span></time>
+      </div>
+      <nav class="links" aria-label="Sanctum">
+        <a href="https://github.com/i098/sanctum">GitHub</a>
+        <a href="https://app.sanctum.42nights.dev/">Open Sanctum</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="stage"><canvas class="wave" aria-hidden="true"></canvas></div>
+        <div class="pitch">
+          <p class="state"><span class="dot"></span>listening</p>
+          <h1 id="hero-title">The room remembers<span class="stop">.</span></h1>
+          <p class="lede">
+            Sanctum is an open-source meeting listener that sits quietly in a browser tab. It keeps the full transcript and a private
+            recording, and turns what you decide into memory your agents can read.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="https://app.sanctum.42nights.dev/">Open Sanctum</a>
+            <a class="button" href="https://github.com/i098/sanctum">Self-host from GitHub</a>
+          </div>
+        </div>
+        <p class="note">Simulated audio. This page never asks for your microphone.</p>
+      </section>
+
+      <section class="ledger" id="how" aria-labelledby="how-title">
+        <p class="label">How it works</p>
+        <div>
+          <h2 id="how-title">From the room to your agents.</h2>
+          <ol class="steps">
+            <li>
+              <h3>listen</h3>
+              <p>
+                Open Sanctum in a browser tab on a room computer or laptop and allow the microphone. There is nothing to install. It
+                listens only while the tab is open and the device is awake, and it never speaks up on its own.
+              </p>
+            </li>
+            <li>
+              <h3>separate</h3>
+              <p>Sanctum finds where one meeting ends and the next begins. End a meeting yourself, or split and merge meetings later through the API.</p>
+            </li>
+            <li>
+              <h3>keep</h3>
+              <p>Every meeting keeps its full transcript and a private recording, whatever its notes and memory leave out.</p>
+            </li>
+            <li>
+              <h3>remember</h3>
+              <p>
+                Notes, decisions and commitments become memory that knows when it was true. Each item is versioned, linked to the
+                transcript passage it came from, and visible only to people who may see that meeting.
+              </p>
+            </li>
+            <li>
+              <h3>share</h3>
+              <p>Agents read and add context through remote MCP and the TypeScript and Python SDKs, with the same permission checks as the website.</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="agents-title">
+        <p class="label">For agents</p>
+        <div>
+          <h2 id="agents-title">Connect any MCP client.</h2>
+          <p class="body">
+            Sign in once through OAuth. An agent never gets more access than the person who connects it, and each item carries its
+            revision and sources, so an agent can check what it reads and add to it without overwriting.
+          </p>
+          <figure class="code">
+            <figcaption>Claude Code</figcaption>
+            <pre tabindex="0"><code><span class="muted">$</span> claude mcp add --transport http sanctum https://app.sanctum.42nights.dev/mcp</code></pre>
+          </figure>
+          <figure class="code">
+            <figcaption>get_context, abridged</figcaption>
+            <pre tabindex="0"><code>{
+  "revision": 42,
+  "as_of": "2026-09-26T17:24:00Z",
+  "items": [{
+    "kind": "decision",
+    "text": "Keep pilot access limited to the current test group.",
+    "event_at": "2026-09-26T17:08:16Z",
+    "sources": [{ "segment_id": "…", "start_ms": 496000, "end_ms": 501000 }]
+  }]
+}</code></pre>
+          </figure>
+          <p class="tools">
+            <code>list_meetings</code> <code>get_context</code> <code>search_context</code> <code>get_source</code> <code>get_context_changes</code>
+            <code>add_context</code> <code>revise_context</code>
+          </p>
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="run-title">
+        <p class="label">Run it</p>
+        <div>
+          <h2 id="run-title">Use the hosted preview, or run your own.</h2>
+          <div class="options">
+            <div class="option">
+              <h3>Hosted preview</h3>
+              <ul>
+                <li>Sign in and create a workspace for your team.</li>
+                <li>Speech-to-text, notes and memory run on Cloudflare Workers AI.</li>
+                <li>Recordings stay in a private bucket.</li>
+              </ul>
+              <a class="more" href="https://app.sanctum.42nights.dev/">Open Sanctum</a>
+            </div>
+            <div class="option">
+              <h3>Self-host</h3>
+              <ul>
+                <li>Docker Compose: MySQL 8.4, the API and job worker from one Node image, and Caddy for HTTPS.</li>
+                <li>Your own Cloudflare R2 bucket for recordings, and your own Workers AI token for speech-to-text, notes and memory.</li>
+                <li>Built-in sign-in, or your own OIDC issuer.</li>
+                <li>Bring your own keys for speaker labels, spoken replies and integration actions.</li>
+              </ul>
+              <a class="more" href="https://github.com/i098/sanctum">GitHub</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="bottom">
+      <p class="health"><span class="dot"></span>Silent · context shared with your agents</p>
+      <p>Open source under the MIT license</p>
+    </footer>
+  </body>
+</html>

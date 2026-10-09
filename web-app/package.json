@@ -5,7 +5,8 @@
   "description": "Fullscreen Sanctum listening website",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run build:landing",
+    "build:landing": "vite build landing",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:e2e": "playwright test"
