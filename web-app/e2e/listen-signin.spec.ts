@@ -106,6 +106,20 @@ test('not a member: Settings opens with the issuer and subject for the operator'
   await expect(settings.getByRole('status')).toContainText('not a member of a workspace');
   await expect(settings.getByRole('status').getByRole('definition')).toHaveText(['https://example.authkit.app', 'user_01FIXTURE']);
   await expect(page).toHaveURL(/\/$/);
+  await expect(settings.getByRole('button', { name: 'Create workspace' })).toHaveCount(0);
+});
+
+test('not a member with self-serve on: Create workspace signs in again with the name and timezone', async ({ page }) => {
+  await serveListening(page, { configured: true, access: null, selfServe: true });
+  await page.route('**/auth/login?*', route => route.fulfill({ contentType: 'text/html', body: '<title>Issuer</title>' }));
+  await page.goto('/?signin=not_member&issuer=https%3A%2F%2Fexample.authkit.app&subject=user_01FIXTURE');
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  // The browser's zone is the default, even an alias such as `UTC` that the canonical zone list omits.
+  await expect(settings.getByLabel('Timezone')).toHaveValue(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone));
+  await settings.getByLabel('Workspace name').fill('  Acme Research ');
+  await settings.getByLabel('Timezone').selectOption('Europe/Berlin');
+  await settings.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page).toHaveURL('/auth/login?return_to=%2F&workspace_name=Acme+Research&timezone=Europe%2FBerlin');
 });
 
 test('a failed sign-in callback says so', async ({ page }) => {

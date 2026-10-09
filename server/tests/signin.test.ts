@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import type { AccessScope } from '@sanctum/contracts';
-import { Effect, Layer, Option } from 'effect';
+import { type AccessScope, JobId, type WorkspaceId } from '@sanctum/contracts';
+import { Effect, Layer, Option, Redacted } from 'effect';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { CustomFetch } from 'openid-client';
 import { linkIdentity, openSession } from '../src/auth.ts';
+import { armWorkosSync, syncWorkosEvents, WorkosOrganizations, workosSettings } from '../src/org-sync.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
+import { linkWorkspaceOrg } from '../src/store.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -76,9 +78,91 @@ const fixtureIssuer = (): FixtureIssuer => {
   return { fetch, authorize };
 };
 
+type Status = 'active' | 'inactive' | 'pending';
+interface Membership {
+  user_id: string;
+  organization_id: string;
+  status: Status;
+  role: { slug: string };
+}
+
+const API_KEY = 'sk_test_fixture';
+
+/** In-memory WorkOS behind the client's fetch (organizations, memberships, the event log); no request leaves the process. */
+const fakeWorkos = () => {
+  const organizations: Array<{ id: string; name: string; external_id: string | null }> = [];
+  const memberships: Array<Membership> = [];
+  const events: Array<{ id: string; event: string; data: unknown }> = [];
+  /** `METHOD /path?query` of every request, in order. */
+  const requests: Array<string> = [];
+  /** `METHOD /path` answered once with a 500 before the call is made. */
+  const failOnce = new Set<string>();
+  const emit = (event: string, data: unknown) => events.push({ id: `event_${String(events.length + 1).padStart(4, '0')}`, event, data: structuredClone(data) });
+
+  /** A change made at WorkOS (dashboard, widget, accepted invitation) with its event. */
+  const setMembership = (user_id: string, organization_id: string, status: Status, role = 'member') => {
+    const existing = memberships.find(m => m.user_id === user_id && m.organization_id === organization_id);
+    const membership = existing ?? { user_id, organization_id, status, role: { slug: role } };
+    Object.assign(membership, { status, role: { slug: role } });
+    if (!existing) memberships.push(membership);
+    emit(existing ? 'organization_membership.updated' : 'organization_membership.created', membership);
+  };
+  const deleteMembership = (user_id: string, organization_id: string) => {
+    const index = memberships.findIndex(m => m.user_id === user_id && m.organization_id === organization_id);
+    emit('organization_membership.deleted', memberships.splice(index, 1)[0]);
+  };
+
+  type Body = Record<'name' | 'external_id' | 'user_id' | 'organization_id' | 'role_slug', string>;
+  /** Handlers by `METHOD /path`; the external-id lookup is keyed by its prefix. */
+  const routes: Record<string, (query: URLSearchParams, body: Body, path: string) => Response> = {
+    'GET /organizations/external_id': (_query, _body, path) => {
+      const found = organizations.find(org => org.external_id === decodeURIComponent(path.split('/').pop()!));
+      return found ? Response.json(found) : Response.json({ message: 'Not found' }, { status: 404 });
+    },
+    'POST /organizations': (_query, body) => {
+      if (organizations.some(org => org.external_id === body.external_id)) return Response.json({ message: 'external_id taken' }, { status: 409 });
+      const organization = { id: `org_${organizations.length + 1}`, name: body.name, external_id: body.external_id };
+      organizations.push(organization);
+      return Response.json(organization, { status: 201 });
+    },
+    'POST /user_management/organization_memberships': (_query, body) => {
+      setMembership(body.user_id, body.organization_id, 'active', body.role_slug);
+      return Response.json(memberships.find(m => m.user_id === body.user_id && m.organization_id === body.organization_id), { status: 201 });
+    },
+    'GET /user_management/organization_memberships': query => {
+      const statuses = query.get('statuses')?.split(',') ?? ['active'];
+      return Response.json({ data: memberships.filter(m => m.user_id === query.get('user_id') && statuses.includes(m.status)), list_metadata: { after: null } });
+    },
+    'GET /events': query => {
+      const types = query.get('events')!.split(',');
+      const start = query.has('after') ? events.findIndex(event => event.id === query.get('after')) + 1 : 0;
+      const page = events.slice(start).filter(event => types.includes(event.event)).slice(0, Number(query.get('limit')));
+      return Response.json({ object: 'list', data: page.map(event => ({ object: 'event', ...event, created_at: '2026-10-09T00:00:00.000Z' })), list_metadata: { after: page.at(-1)?.id ?? null } });
+    },
+  };
+
+  /** The client always sends a method, the bearer key and (for POST) a JSON body. */
+  const fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    const key = `${init.method} ${url.pathname}`;
+    requests.push(`${key}${url.search}`);
+    const authorized = url.origin === 'https://api.workos.com' && new Headers(init.headers).get('authorization') === `Bearer ${API_KEY}`;
+    if (!authorized) return Response.json({}, { status: 401 });
+    if (failOnce.delete(key)) return Response.json({ message: 'fixture outage' }, { status: 500 });
+    const route = routes[key.replace(/^(GET \/organizations\/external_id)\/.*/, '$1')] ?? (() => Response.json({ message: 'unexpected request' }, { status: 400 }));
+    return route(url.searchParams, JSON.parse(String(init.body ?? '{}')), url.pathname);
+  }) as typeof globalThis.fetch;
+
+  /** `WorkosOrganizations` over this fake, under `issuer`. */
+  const layer = (issuer: string, selfServe: boolean) =>
+    Layer.succeed(WorkosOrganizations, Option.some(workosSettings({ apiKey: Redacted.make(API_KEY), timeoutMs: 5_000, fetch, issuer, selfServe })));
+
+  return { organizations, memberships, events, requests, failOnce, emit, setMembership, deleteMembership, layer };
+};
+
 /** The real API with the kernel authenticator, plus SQL on the same disposable database. */
-const withServer = (client: Option.Option<SignIn>) =>
-  serveApiWithDb({ overrides: { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }) } });
+const withServer = (client: Option.Option<SignIn>, organizations?: Layer.Layer<WorkosOrganizations>) =>
+  serveApiWithDb({ overrides: { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }), ...(organizations ? { organizations } : {}) } });
 
 const configured = () => {
   const issuer = fixtureIssuer();
@@ -289,11 +373,163 @@ describe('OIDC sign-in', () => {
   it.scoped('reports sign-in as unavailable while no issuer is configured', () =>
     Effect.gen(function* () {
       const { base } = yield* withServer(Option.none());
-      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toEqual({ sign_in: false, embedded_issuer: null });
+      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toEqual({ sign_in: false, embedded_issuer: null, self_serve_workspaces: false });
       const login = yield* Effect.promise(() => get(`${base}/auth/login`));
       expect(login.status).toBe(503);
       expect(yield* Effect.promise(() => login.json())).toMatchObject({ code: 'unavailable', retryable: false });
       expect((yield* Effect.promise(() => get(`${base}/auth/callback?code=x&state=y`))).headers.get('location')).toBe('/?signin=unconfigured');
+    }),
+  );
+});
+
+describe('WorkOS organizations at sign-in', () => {
+  const sessionOf = (base: string, response: Response) => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(response, 'sanctum_session')}`);
+  const workosWrites = (requests: ReadonlyArray<string>) => requests.filter(request => !request.startsWith('GET '));
+
+  it.scoped('makes a WorkOS member of a linked organization a member, follows its role and leaves unlinked workspaces alone', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const workos = fakeWorkos();
+      const { base, db } = yield* withServer(client, workos.layer(ISSUER, false));
+      const [acme] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const [unlinked] = yield* Effect.provide(seedWorkspace('Unlinked', ['owner']), db);
+      yield* Effect.provide(linkWorkspaceOrg({ workspace_id: acme!.workspace_id, issuer: ISSUER, org_id: 'org_acme' }), db);
+      workos.setMembership('user_grace', 'org_acme', 'active', 'member');
+      workos.setMembership('user_grace', 'org_elsewhere', 'active', 'owner');
+
+      const first = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_grace', name: 'Grace Hopper' }));
+      expect(first.headers.get('location')).toBe('/');
+      expect(yield* Effect.promise(() => sessionOf(base, first).then(r => r.json()))).toMatchObject({
+        workspace_id: acme!.workspace_id,
+        role: 'member',
+        principal: { kind: 'human', display_name: 'Grace Hopper' },
+      });
+
+      // A role change at WorkOS applies at the next sign-in; a custom role is a plain member.
+      workos.setMembership('user_grace', 'org_acme', 'active', 'admin');
+      const promoted = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_grace' }));
+      expect(yield* Effect.promise(() => sessionOf(base, promoted).then(r => r.json()))).toMatchObject({ role: 'admin' });
+      workos.setMembership('user_grace', 'org_acme', 'active', 'billing');
+      const custom = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_grace' }));
+      expect(yield* Effect.promise(() => sessionOf(base, custom).then(r => r.json()))).toMatchObject({ role: 'member' });
+
+      // Deactivated at WorkOS: the membership ends, and so do the sessions it opened.
+      workos.setMembership('user_grace', 'org_acme', 'inactive', 'member');
+      expect((yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_grace' }))).headers.get('location')).toMatch(/^\/\?signin=not_member&/);
+      expect((yield* Effect.promise(() => sessionOf(base, first))).status).toBe(401);
+
+      // The owner of an unlinked workspace has no WorkOS membership and keeps theirs.
+      const owner = yield* Effect.provide(identify(unlinked!), db);
+      const kept = yield* Effect.promise(() => signIn(base, issuer, { sub: owner }));
+      expect(yield* Effect.promise(() => sessionOf(base, kept).then(r => r.json()))).toMatchObject({ workspace_id: unlinked!.workspace_id, role: 'owner' });
+      expect(workosWrites(workos.requests)).toEqual([]);
+    }),
+  );
+
+  it.scoped('self-serve off leaves not_member; on, it creates the organization, workspace and owner once even across a retry', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const create = `/auth/login?${new URLSearchParams({ workspace_name: ' Acme Research ', timezone: 'Europe/Berlin' })}`;
+
+      const off = fakeWorkos();
+      const closed = yield* withServer(client, off.layer(ISSUER, false));
+      expect((yield* Effect.promise(() => get(`${closed.base}${create}`))).status).toBe(403);
+      expect((yield* Effect.promise(() => signIn(closed.base, issuer, { sub: 'user_ada' }))).headers.get('location')).toMatch(/^\/\?signin=not_member&/);
+      expect(workosWrites(off.requests)).toEqual([]);
+
+      const workos = fakeWorkos();
+      const { base, db } = yield* withServer(client, workos.layer(ISSUER, true));
+      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toMatchObject({ sign_in: true, self_serve_workspaces: true });
+      expect((yield* Effect.promise(() => get(`${base}/auth/login?workspace_name=Acme&timezone=Mars%2FOlympus`))).status).toBe(400);
+      const counts = Effect.flatMap(SqlClient.SqlClient, sql =>
+        sql<{ w: number; o: number; p: number; m: number; j: number }>`SELECT (SELECT COUNT(*) FROM workspaces) AS w, (SELECT COUNT(*) FROM workspace_orgs) AS o,
+          (SELECT COUNT(*) FROM principals) AS p, (SELECT COUNT(*) FROM workspace_members) AS m, (SELECT COUNT(*) FROM jobs WHERE kind = 'workos.sync') AS j`,
+      ).pipe(Effect.map(([row]) => [row!.w, row!.o, row!.p, row!.m, row!.j].map(Number)));
+
+      // WorkOS fails after creating the organization: the sign-in fails and Sanctum creates nothing.
+      workos.failOnce.add('POST /user_management/organization_memberships');
+      expect((yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_ada', name: 'Ada' }, create))).headers.get('location')).toBe('/?signin=failed');
+      expect(workos.organizations).toHaveLength(1);
+      expect(yield* Effect.provide(counts, db)).toEqual([0, 0, 0, 0, 0]);
+
+      // The retry reuses that organization and finishes every step once.
+      const created = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_ada', name: 'Ada' }, create));
+      expect(created.headers.get('location')).toBe('/');
+      const access = yield* Effect.promise(() => sessionOf(base, created).then(r => r.json() as Promise<AccessScope>));
+      expect(access).toMatchObject({ role: 'owner', principal: { display_name: 'Ada' } });
+      expect(workos.organizations).toEqual([{ id: 'org_1', name: 'Acme Research', external_id: 'sanctum-self-serve:user_ada' }]);
+      expect(workos.memberships).toEqual([{ user_id: 'user_ada', organization_id: 'org_1', status: 'active', role: { slug: 'owner' } }]);
+      const [workspace] = yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`SELECT w.name, w.timezone, w.seat_limit, o.org_id FROM workspaces w JOIN workspace_orgs o ON o.workspace_id = w.id WHERE w.id = ${access.workspace_id}`),
+        db,
+      );
+      // A null seat limit is the hosted default (`SANCTUM_DEFAULT_SEAT_LIMIT`).
+      expect(workspace).toEqual({ name: 'Acme Research', timezone: 'Europe/Berlin', seat_limit: null, org_id: 'org_1' });
+      expect(yield* Effect.provide(counts, db)).toEqual([1, 1, 1, 1, 1]);
+
+      // Asking again once a member: an ordinary sign-in to the same workspace, nothing new.
+      const again = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_ada' }, create));
+      expect(yield* Effect.promise(() => sessionOf(base, again).then(r => r.json()))).toMatchObject({ workspace_id: access.workspace_id, role: 'owner' });
+      expect(yield* Effect.provide(counts, db)).toEqual([1, 1, 1, 1, 1]);
+      expect(workosWrites(workos.requests)).toEqual(['POST /organizations', 'POST /user_management/organization_memberships', 'POST /user_management/organization_memberships']);
+    }),
+  );
+});
+
+describe('workos.sync events job', () => {
+  it.scoped('applies membership events, ends sessions on removal, only detaches deleted organizations and resumes from its cursor', () =>
+    Effect.gen(function* () {
+      const { base, db } = yield* serveApiWithDb();
+      const workos = fakeWorkos();
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const count = (table: string) => Effect.map(sql<{ n: number }>`SELECT COUNT(*) AS n FROM ${sql(table)}`, ([row]) => Number(row!.n));
+        const [owner, member] = yield* seedWorkspace('Acme', ['owner', 'member']);
+        const workspace_id = owner!.workspace_id;
+        yield* linkWorkspaceOrg({ workspace_id, issuer: ISSUER, org_id: 'org_acme' });
+        yield* linkIdentity({ issuer: ISSUER, subject: 'user_owner', principal_id: owner!.principal.id });
+        yield* linkIdentity({ issuer: ISSUER, subject: 'user_member', principal_id: member!.principal.id });
+        const opened = yield* openSession({ workspace_id, principal_id: member!.principal.id });
+        const sessionStatus = Effect.promise(() => get(`${base}/api/v1/session`, `sanctum_session=${opened.token}`).then(r => r.status));
+        const role = (principal_id: string) =>
+          Effect.map(sql<{ role: string; active: number }>`SELECT role, revoked_at IS NULL AS active FROM workspace_members WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id}`, ([row]) =>
+            Number(row!.active) === 1 ? row!.role : 'revoked',
+          );
+
+        /** One worker pass on the scheduled row with a new WorkOS client, as after a restart: only MySQL carries state between passes. */
+        const run = Effect.gen(function* () {
+          const [job] = yield* sql<{ id: string; workspace_id: WorkspaceId }>`SELECT id, workspace_id FROM jobs WHERE kind = 'workos.sync' AND status = 'pending'`;
+          const claimed = { id: JobId.make(job!.id), workspace_id: job!.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null, source_revision: null, attempt: 1, lease_generation: 1 } as const;
+          return yield* syncWorkosEvents(claimed).pipe(Effect.provide(workos.layer(ISSUER, true)));
+        });
+
+        yield* armWorkosSync.pipe(Effect.provide(workos.layer(ISSUER, true)));
+        workos.setMembership('user_member', 'org_acme', 'active', 'admin');
+        workos.setMembership('user_stranger', 'org_acme', 'active', 'owner');
+        expect(yield* run).toMatchObject({ status: 'succeeded', result: { applied: 2, cursor: 'event_0002' } });
+        expect(yield* role(member!.principal.id)).toBe('admin');
+        // An identity that never signed in gets no principal until its first sign-in.
+        expect(yield* count('principals')).toBe(2);
+        // The pass scheduled the next one a minute out.
+        const next = yield* sql<{ later: number }>`SELECT available_at > UTC_TIMESTAMP(6) + INTERVAL 30 SECOND AS later FROM jobs WHERE kind = 'workos.sync' AND status = 'pending'`;
+        expect(next.map(job => Number(job.later))).toEqual([1]);
+
+        workos.deleteMembership('user_member', 'org_acme');
+        expect(yield* run).toMatchObject({ result: { applied: 1, cursor: 'event_0003' } });
+        expect(yield* role(member!.principal.id)).toBe('revoked');
+        expect(yield* sessionStatus).toBe(401);
+
+        workos.emit('organization.deleted', { id: 'org_acme', object: 'organization', name: 'Acme' });
+        expect(yield* run).toMatchObject({ result: { applied: 1, cursor: 'event_0004' } });
+        expect(yield* count('workspace_orgs')).toBe(0);
+        expect(yield* count('workspaces')).toBe(1);
+        expect(yield* role(owner!.principal.id)).toBe('owner');
+
+        // Each pass asked WorkOS only for events after the saved cursor, and no pass wrote to WorkOS.
+        expect(workos.requests.every(request => request.startsWith('GET /events?'))).toBe(true);
+        expect(workos.requests.map(request => new URLSearchParams(request.split('?')[1]).get('after'))).toEqual([null, 'event_0002', 'event_0003']);
+        expect(yield* sql`SELECT \`cursor\` FROM sync_cursors WHERE name = 'workos.events'`).toEqual([{ cursor: 'event_0004' }]);
+      }).pipe(Effect.provide(db));
     }),
   );
 });

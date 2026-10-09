@@ -26,6 +26,8 @@
     "SANCTUM_MCP_RESOURCE": "https://sanctum.42nights.dev/mcp",
     // WorkOS DCR and CIMD clients get only OIDC scopes; these apply to such tokens, narrowed by role.
     "SANCTUM_MCP_DEFAULT_SCOPES": "context:read,context:write,recordings:read",
+    // A signed-in user with no membership may create a workspace and its WorkOS organization; needs the WORKOS_API_KEY secret (docs/operations.md).
+    "SANCTUM_SELF_SERVE_WORKSPACES": "true",
     "MYSQL_DATABASE": "sanctum",
     // API and worker pools together stay well under the managed server's connection limit.
     "MYSQL_POOL_SIZE": "8",

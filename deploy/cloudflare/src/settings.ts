@@ -46,6 +46,8 @@ const APP_SETTINGS = [
   'SANCTUM_MCP_JWKS_URL',
   'SANCTUM_MCP_RESOURCE',
   'SANCTUM_MCP_DEFAULT_SCOPES',
+  'WORKOS_API_KEY',
+  'SANCTUM_SELF_SERVE_WORKSPACES',
 ] as const;
 
 export type AppSettings = Partial<Record<(typeof APP_SETTINGS)[number], string>>;
