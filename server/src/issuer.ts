@@ -128,14 +128,16 @@ export const createIssuer = (
   });
   const resource = settings.resource.href;
   const issuer = settings.issuer.href;
-  /** Sanctum's side of one organization change: a refusal answers 403 with its message and stops the change; a database error answers 500. */
-  const sanctum = async <A, E extends { readonly _tag: string; readonly message: string }>(change: Effect.Effect<A, E, SqlClient.SqlClient>) => {
-    if (sql === undefined) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Organizations change only through the API process' });
-    const result = await Effect.runPromise(Effect.either(Effect.provideService(change, SqlClient.SqlClient, sql)));
-    if (Either.isRight(result)) return result.right;
-    if (result.left._tag === 'SqlError') throw result.left;
-    throw new APIError('FORBIDDEN', { message: result.left.message });
-  };
+  /** Makes the hook of one organization change that runs Sanctum's side: a refusal answers 403 with its message and stops the change; a database error answers 500. */
+  const sanctum =
+    <D, A, E extends { readonly _tag: string; readonly message: string }>(change: (data: D) => Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    async (data: D) => {
+      if (sql === undefined) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Organizations change only through the API process' });
+      const result = await Effect.runPromise(Effect.either(Effect.provideService(change(data), SqlClient.SqlClient, sql)));
+      if (Either.isRight(result)) return result.right;
+      if (result.left._tag === 'SqlError') throw result.left;
+      throw new APIError('FORBIDDEN', { message: result.left.message });
+    };
   const provider = oauthProvider({
     loginPage: '/sign-in',
     consentPage: '/consent',
@@ -192,11 +194,11 @@ export const createIssuer = (
         membershipLimit: Number.MAX_SAFE_INTEGER,
         disableOrganizationDeletion: true,
         organizationHooks: {
-          beforeCreateOrganization: async ({ organization, user }) => ({ data: { ...organization, ...(await sanctum(workspaceOrganization(issuer, organization.slug, user))) } }),
-          beforeAcceptInvitation: ({ invitation, user }) => sanctum(requireSeat(issuer, invitation.organizationId, user)),
-          afterAcceptInvitation: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, member.role)),
-          afterUpdateMemberRole: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, member.role)),
-          beforeRemoveMember: ({ member, user }) => sanctum(applyMember(issuer, member.organizationId, user, null)),
+          beforeCreateOrganization: sanctum(({ organization, user }) => Effect.map(workspaceOrganization(issuer, organization.slug, user), workspace => ({ data: { ...organization, ...workspace } }))),
+          beforeAcceptInvitation: sanctum(({ invitation, user }) => requireSeat(issuer, invitation.organizationId, user)),
+          afterAcceptInvitation: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role)),
+          afterUpdateMemberRole: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role)),
+          beforeRemoveMember: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, null)),
         },
       }),
     ],

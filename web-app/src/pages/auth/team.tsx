@@ -253,17 +253,9 @@ function ProfileForms({ name, onNotice }: { name: string; onNotice: (notice: Not
       onNotice(error ? { text: `${error.message ?? 'The change failed'}.`, failed: true } : { text: done, failed: false });
     });
   };
-  const rename = (form: HTMLFormElement) => auth.updateUser({ name: String(new FormData(form).get('name')).trim() });
-  /** Empties the password fields once the change is saved. */
-  const changePassword = async (form: HTMLFormElement) => {
-    const fields = new FormData(form);
-    const result = await auth.changePassword({ currentPassword: String(fields.get('current')), newPassword: String(fields.get('new')), revokeOtherSessions: true });
-    if (!result.error) form.reset();
-    return result;
-  };
   return (
     <div className="listen-panel grid gap-2">
-      <form onSubmit={submit(rename, 'Name saved. Sanctum shows it after your next sign-in.')}>
+      <form onSubmit={submit(form => auth.updateUser({ name: String(new FormData(form).get('name')).trim() }), 'Name saved. Sanctum shows it after your next sign-in.')}>
         <label className="grid gap-1">
           <span className="text-xs text-ink-muted">Display name</span>
           <span className="flex gap-2">
@@ -273,7 +265,13 @@ function ProfileForms({ name, onNotice }: { name: string; onNotice: (notice: Not
         </label>
       </form>
       <h3>Password</h3>
-      <form onSubmit={submit(changePassword, 'Password changed. Other browsers must sign in to the issuer again.')} className="flex flex-wrap gap-2">
+      <form onSubmit={submit(async form => {
+          // Empties the password fields once the change is saved.
+          const fields = new FormData(form);
+          const result = await auth.changePassword({ currentPassword: String(fields.get('current')), newPassword: String(fields.get('new')), revokeOtherSessions: true });
+          if (!result.error) form.reset();
+          return result;
+        }, 'Password changed. Other browsers must sign in to the issuer again.')} className="flex flex-wrap gap-2">
         <input name="current" type="password" required autoComplete="current-password" placeholder="Current password" aria-label="Current password" className={`${field} flex-1 basis-40`} />
         <input name="new" type="password" required minLength={8} autoComplete="new-password" placeholder="New password" aria-label="New password" className={`${field} flex-1 basis-40`} />
         <button type="submit" data-primary disabled={busy}>Change password</button>

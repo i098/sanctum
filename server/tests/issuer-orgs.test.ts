@@ -5,14 +5,11 @@ import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Context, Effect, Layer, Option, Redacted } from 'effect';
 import { createRemoteJWKSet, decodeJwt, type JWTVerifyGetKey } from 'jose';
 import type { CustomFetch } from 'openid-client';
-import { dbLayer } from '../src/db.ts';
 import { registerSanctumClient } from '../src/issuer.ts';
 import { serverLayer } from '../src/main.ts';
 import { McpAuthorizationServer } from '../src/mcp.ts';
-import { createOwner } from '../src/owner.ts';
 import { SignInSettings } from '../src/signin.ts';
-import { addMember } from '../src/store.ts';
-import { freshDatabase, migrateDatabase } from './support/database.ts';
+import { freshDatabase, migrateDatabase, runSql } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const ORIGIN = 'https://sanctum.fixture.test';
@@ -44,8 +41,7 @@ const selfHosted = Effect.gen(function* () {
   const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
   if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
   served.base = `http://127.0.0.1:${address.port}`;
-  const db = dbLayer(database.mysql);
-  return { base: served.base, sql: <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.runPromise(Effect.provide(effect, db)) };
+  return { base: served.base, sql: <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) => runSql(database, effect) };
 }).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env))).pipe(ConfigProvider.orElse(ConfigProvider.fromEnv))));
 
 type Server = Effect.Effect.Success<typeof selfHosted>;
@@ -119,10 +115,16 @@ const mcpStatus = (server: Server, token: string) =>
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '1' } } }),
   }).then(response => response.status);
 
+/** Gives the issuer account `userId` the identity of a Sanctum principal. */
+const linkIdentity = (server: Server, userId: string, principalId: string) =>
+  server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${userId}, ${principalId}, UTC_TIMESTAMP(6))`));
+
 /** An owner with a Sanctum workspace and its organization, ready to invite. */
 async function ownerWithTeam(server: Server) {
   const owner = await signUp(server, 'Owner');
-  const { workspace_id } = await server.sql(createOwner({ issuer: ISSUER, subject: owner.id, display_name: 'Owner', workspace: { name: 'Acme', timezone: 'UTC' } }));
+  const [seeded] = await server.sql(seedWorkspace('Acme', ['owner']));
+  const { workspace_id } = seeded!;
+  await linkIdentity(server, owner.id, seeded!.principal.id);
   const created = await idp(server, '/organization/create', owner.cookie, { name: 'Team', slug: workspace_id });
   expect(created.status).toBe(200);
   return { owner, workspace_id, org: created.body };
@@ -170,7 +172,7 @@ describe('self-hosted organizations', () => {
       yield* Effect.promise(async () => {
         const user = await signUp(server, 'Member');
         const [member] = await server.sql(seedWorkspace('Acme', ['member']));
-        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${user.id}, ${member!.principal.id}, UTC_TIMESTAMP(6))`));
+        await linkIdentity(server, user.id, member!.principal.id);
         for (const slug of [member!.workspace_id, 'any-new-team']) {
           const refused = await idp(server, '/organization/create', user.cookie, { name: 'Team', slug });
           expect(refused, slug).toMatchObject({ status: 403, body: { message: 'Only an owner of this Sanctum workspace can set up its team' } });
@@ -211,7 +213,7 @@ describe('self-hosted organizations', () => {
         // A second membership: only the token's `org_id` (the accept made the organization active) picks one.
         const principal = (await session(server, signedIn.cookie)).body['principal'].id;
         const [other] = await server.sql(seedWorkspace('Other', ['owner']));
-        await server.sql(addMember({ workspace_id: other!.workspace_id, principal_id: principal, role: 'member' }));
+        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${other!.workspace_id}, ${principal}, 'member', UTC_TIMESTAMP(6))`));
         const selected = await mcpToken(server, invitee.cookie);
         expect(decodeJwt(selected)['org_id']).toBe(team.workspace_id);
         expect(await mcpStatus(server, selected)).toBe(200);
