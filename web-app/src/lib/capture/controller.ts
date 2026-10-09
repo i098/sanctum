@@ -420,9 +420,11 @@ class CaptureController implements CaptureView {
     session.stopping = true;
     session.epoch?.live?.stop(reason);
     await session.recorder.flush();
-    if (session.epoch !== null) this.captured = { epoch_id: session.epoch.id, sample: session.epoch.lastEnd - session.epoch.base };
     this.session = null;
-    if (session.epoch) void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
+    if (session.epoch) {
+      this.captured = { epoch_id: session.epoch.id, sample: session.epoch.lastEnd - session.epoch.base };
+      void session.buffer.endEpoch(session.epoch.id, reason).catch(() => { });
+    }
     await session.epoch?.assembler.close();
     await session.recorder.close().catch(() => { });
     session.stream.getTracks().forEach((track) => track.stop());

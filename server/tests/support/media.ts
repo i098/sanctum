@@ -110,7 +110,7 @@ export function fakeSpeech() {
           results: Mailbox.toStream(mailbox),
           finish: Effect.sync(() => {
             stream.finished = true;
-            for (const result of stream.pending) stream.emit(result);
+            stream.pending.forEach(stream.emit);
             mailbox.unsafeDone(Exit.void);
           }),
         };
