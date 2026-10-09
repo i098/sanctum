@@ -219,6 +219,7 @@ const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServer
       execute: subject => sql`
         SELECT i.principal_id, m.workspace_id FROM principal_identities i
         JOIN workspace_members m ON m.principal_id = i.principal_id AND m.revoked_at IS NULL
+        JOIN workspaces w ON w.id = m.workspace_id AND w.deleted_at IS NULL
         WHERE i.issuer = ${auth.issuer} AND i.subject = ${subject}`,
     })(payload.sub!).pipe(Effect.orDie);
     const wanted = yield* selectedWorkspace(auth.issuer, payload);

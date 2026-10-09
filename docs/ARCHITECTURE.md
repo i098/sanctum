@@ -31,7 +31,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
 | Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`, `list`, `delete`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
 | Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
-| Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `WorkerServices`, `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
+| Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
 | Analyser levels | [levels.ts](../web-app/src/lib/capture/levels.ts) | `createAnalyserLevels(analyser, bandCount)` for the waveform. |
 | Server tests | [server/tests/support](../server/tests/support/database.ts) | `withDatabase`, `seedWorkspace`, `fixtureAccess`, `memoryObjectStore`; one MySQL 8.4 per run. |
@@ -207,7 +207,7 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 | `server/src/api.ts` | every slice with REST | One handler layer in the `ApiLive` list. |
 | `server/src/main.ts` | kernel, media, interfaces, serve, sign-in | Authenticator swap; upgrade handler; `/mcp` mount; `/auth/*` mount; static assets. |
 | `server/src/worker.ts` | slices with provider layers | Provide the layer next to `dbLayer`. |
-| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; add provider tags to `WorkerServices`. Handler modules import `job-types.ts`, never this file. |
+| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; the services a handler needs come from its type, and worker.ts provides their layers. Handler modules import `job-types.ts`, never this file. |
 | `server/src/config.ts` | models, media, actions, pipedream | Own key inside `serverConfig`; defaults stay in `engineeringDefaults`. |
 | `server/src/media/session.ts` | media, meetings, actions | Media owns it; siblings expose functions it calls. |
 | `web-app/src/pages/listen/engine.ts` | capture, listen-ui, actions | Capture owns it; actions adds playback registration. |

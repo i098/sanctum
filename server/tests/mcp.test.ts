@@ -13,6 +13,7 @@ import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.
 import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
 import { addMember, linkWorkspaceOrg } from '../src/store.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
+import { addMember } from '../src/store.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
 
@@ -192,6 +193,23 @@ describe('MCP over Streamable HTTP', () => {
       expect(missing.headers.get('www-authenticate')).not.toContain('scope=');
       expect((yield* send(yield* Effect.promise(() => sign(`sub-${member!.principal.id}`, 'openid', { aud: 'https://other.test/mcp' })))).status).toBe(401);
       expect((yield* send(yield* Effect.promise(() => sign('sub-unknown', 'openid')))).status).toBe(403);
+    }),
+  );
+
+  it.scoped('selects the live membership of a person whose other workspace is deleted', () =>
+    Effect.gen(function* () {
+      const { url, db } = yield* serveFake(configured);
+      const [owner] = yield* Effect.provide(seedWorkspace('Deleted soon', ['owner']), db);
+      const [member] = yield* Effect.provide(seedWorkspace('Kept', ['owner']), db);
+      const subject = yield* Effect.provide(identify(member!), db);
+      yield* Effect.provide(addMember({ workspace_id: owner!.workspace_id, principal_id: member!.principal.id, role: 'member' }), db);
+      const send = Effect.flatMap(Effect.promise(() => sign(subject, 'context:read')), token => Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION))));
+      expect((yield* send).status).toBe(403);
+      yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${owner!.workspace_id}`),
+        db,
+      );
+      expect((yield* send).status).toBe(200);
     }),
   );
 
