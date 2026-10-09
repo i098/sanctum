@@ -11,7 +11,12 @@ class CaptureLockHeld extends Error { }
 
 const CAPTURE_LOCK = 'sanctum-capture';
 
-/** Raw mono speech: browser echo cancellation on, no gain or noise processing on the archive. */
+/**
+ * Raw mono speech: browser echo cancellation on, no gain or noise processing on the archive.
+ * Whisper reads the same PCM: on a speech + room-noise test, Chrome's noise suppression and gain
+ * control changed "Sanctum, add a" to "Sanctum had a" at 5 dB SNR, and gain control would shift
+ * the levels the server's speech gate is set for. The waveform removes steady noise on its own.
+ */
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   channelCount: 1,
   echoCancellation: true,
