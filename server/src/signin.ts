@@ -13,6 +13,7 @@ import * as oidc from 'openid-client';
 import { Authenticator, identityPrincipal, linkIdentity, openSession, ownerUntilPurge, revokeSession, SESSION_COOKIE } from './auth.ts';
 import { serverConfig } from './config.ts';
 import { reconcileSignIn, SelfServeRequest, WorkosOrganizations } from './org-sync.ts';
+import { DbSafeInt } from './db.ts';
 
 /** Relying-party settings: the `SANCTUM_OIDC_*` group, all set or not configured. */
 export interface SignIn {
@@ -153,7 +154,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         if (Option.isNone(principal)) return yield* notMember('unknown identity');
         const found = yield* SqlSchema.findAll({
           Request: Schema.Void,
-          Result: Schema.Struct({ workspace_id: WorkspaceId, live: Schema.Number }),
+          Result: Schema.Struct({ workspace_id: WorkspaceId, live: DbSafeInt }),
           execute: () => sql`SELECT m.workspace_id, w.deleted_at IS NULL AS live FROM workspace_members m
             JOIN principals p ON p.id = m.principal_id JOIN workspaces w ON w.id = m.workspace_id
             WHERE m.principal_id = ${principal.value} AND m.revoked_at IS NULL AND p.disabled_at IS NULL AND p.kind = 'human' AND ${ownerUntilPurge(sql)}
