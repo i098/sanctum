@@ -5,14 +5,14 @@ import { expect, test } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
 
 /**
- * Review against the real API server and database (server/tests/support/review-server.ts). The
- * page's same-origin `/api/v1` calls are forwarded to it with a bearer token standing in for the
- * browser session, and the signed recording URL is read from its object store.
+ * Review against the real API server and database (server/tests/support/review-server.ts) with a
+ * real browser session: the page holds the script-readable CSRF cookie, its same-origin `/api/v1`
+ * calls are forwarded with the session cookie, and the signed recording URL is read from its object store.
  */
 test.use({ locale: 'en-US', timezoneId: 'UTC' });
 
 let child: ChildProcess;
-let server: { url: string; objects: string; token: string };
+let server: { url: string; objects: string; session: string; csrf: string };
 test.beforeAll(async () => {
   const script = fileURLToPath(new URL('../../server/tests/support/review-server.ts', import.meta.url));
   child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -27,9 +27,10 @@ test.afterAll(async () => {
 });
 
 test('Review reads the real meeting, and a decision\'s source plays its authorized audio', async ({ page }) => {
+  await page.context().addCookies([{ name: 'sanctum_csrf', value: server.csrf, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route('**/api/v1/**', async route => {
     const { pathname, search } = new URL(route.request().url());
-    const headers = { ...route.request().headers(), authorization: `Bearer ${server.token}` };
+    const headers = { ...route.request().headers(), cookie: `sanctum_session=${server.session}` };
     await route.fulfill({ response: await route.fetch({ url: `${server.url}${pathname}${search}`, headers }) });
   });
   await page.route('https://objects.test/**', async route => {

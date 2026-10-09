@@ -3,16 +3,17 @@
  * port over a disposable migrated database on `SANCTUM_TEST_MYSQL_URL`, seeded with one closed
  * meeting whose recording was assembled with a gap, context items, a committed memory revision
  * and an action receipt. A second port serves the in-memory object store behind the URLs the API
- * signs, refusing expired or unsigned ones. Prints `{ url, objects, token }` as one JSON line,
- * serves until SIGTERM, then drops its database.
+ * signs, refusing expired or unsigned ones. The owner signs in with a real browser session, so
+ * cookie mutations need the CSRF header. Prints `{ url, objects, session, csrf }` as one JSON
+ * line, serves until SIGTERM, then drops its database.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, MeetingId, Unauthenticated } from '@sanctum/contracts';
+import { MeetingId } from '@sanctum/contracts';
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
-import { Authenticator } from '../../src/auth.ts';
+import { KernelAuthenticatorLive, openSession } from '../../src/auth.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem } from '../../src/context.ts';
 import { dbLayer } from '../../src/db.ts';
 import { serverLayer } from '../../src/main.ts';
@@ -85,18 +86,15 @@ const stop = async () => {
 };
 process.once('SIGTERM', () => void stop());
 try {
-  const owner = await Effect.runPromise(Effect.provide(seed(store), Layer.merge(dbLayer(mysql), store.layer)));
-  const token = randomUUID();
-  const authenticator = Layer.succeed(Authenticator, {
-    authenticate: request =>
-      request.headers.authorization === `Bearer ${token}` ? Effect.succeed<AccessScope>(owner) : Effect.fail(new Unauthenticated({ message: 'no credentials' })),
-  });
-  const layer = serverLayer({ apiPort: 0, mysql }, authenticator, { media: Layer.merge(SpeechToTextLive, store.layer) });
+  const db = Layer.merge(dbLayer(mysql), store.layer);
+  const owner = seed(store).pipe(Effect.flatMap(({ workspace_id, principal }) => openSession({ workspace_id, principal_id: principal.id })));
+  const { token: session, csrf_token: csrf } = await Effect.runPromise(Effect.provide(owner, db));
+  const layer = serverLayer({ apiPort: 0, mysql }, KernelAuthenticatorLive, { media: Layer.merge(SpeechToTextLive, store.layer) });
   const address = Context.get(await Effect.runPromise(Scope.extend(Layer.build(layer), scope)), HttpServer.HttpServer).address;
   if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
   await new Promise<void>(resolve => objects.listen(0, '127.0.0.1', resolve));
   const objectsPort = (objects.address() as { port: number }).port;
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${address.port}`, objects: `http://127.0.0.1:${objectsPort}`, token }));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${address.port}`, objects: `http://127.0.0.1:${objectsPort}`, session, csrf }));
 } catch (error) {
   console.error(error);
   await stop();

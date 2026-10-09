@@ -3,11 +3,22 @@
  * `GET /api/v1/session`. Sign-in always starts with a same-origin navigation, never a cross-origin
  * form post: the page CSP allows only `form-action 'self'`.
  */
-import { type AccessScope, type SanctumClient, SanctumError } from '@sanctum/sdk';
+import { type AccessScope, createClient, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
 /** The session opener's script-readable double-submit cookie; its value goes back as `x-csrf-token`. */
 export const csrfToken = (): string | undefined =>
   globalThis.document?.cookie.split('; ').find((pair) => pair.startsWith('sanctum_csrf='))?.slice('sanctum_csrf='.length);
+
+/** Same-origin v1 client: the session cookie authenticates every call, and mutations carry the CSRF header. */
+export function sessionClient(): SanctumClient {
+  return createClient({
+    baseUrl: window.location.origin,
+    fetch: (input, init) => {
+      const csrf = csrfToken();
+      return fetch(input, csrf === undefined ? init : { ...init, headers: { ...init?.headers, 'x-csrf-token': decodeURIComponent(csrf) } });
+    },
+  });
+}
 
 export const SIGN_IN_URL = '/auth/login?return_to=/';
 

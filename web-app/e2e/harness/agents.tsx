@@ -1,11 +1,11 @@
 /** Test-only page: the Agents dialog against same-origin v1 routes that the spec intercepts. */
-import { createClient } from '@sanctum/sdk';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../../src/styles.css';
 import { AgentsDialog } from '../../src/pages/listen/AgentsDialog.tsx';
+import { sessionClient } from '../../src/lib/session.ts';
 
-const client = createClient({ baseUrl: window.location.origin, maxAttempts: 1 });
+const client = sessionClient();
 
 function Harness() {
   const [open, setOpen] = useState(false);

@@ -5,10 +5,14 @@ interface Agent {
   credential: { id: string; scopes: string[]; meetings: unknown; expires_at: null; revoked_at: string | null; last_used_at: null; created_at: string };
 }
 
-/** In-page stand-in for the v1 agents routes; records every write the dialog sends. */
+/** The server refuses cookie-session mutations unless the script-readable `sanctum_csrf` cookie comes back as `x-csrf-token`. */
+const CSRF = 'csrf-e2e-token';
+
+/** In-page stand-in for the v1 agents routes over a browser session; records every write the dialog sends. */
 async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
   const agents: Agent[] = [];
   const writes: Array<{ method: string; path: string; body: unknown }> = [];
+  await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route('**/api/v1/agents**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -29,6 +33,7 @@ async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
     credential.revoked_at = '2026-09-29T00:05:00Z';
     return route.fulfill({ status: 204 });
   });
+  await page.route('**/api/v1/agents**', route => route.request().headers()['x-csrf-token'] === CSRF ? route.fallback() : route.fulfill({ status: 403, json: { code: 'forbidden', message: 'CSRF token is missing or invalid', retryable: false } }));
   return { agents, writes };
 }
 
