@@ -82,7 +82,7 @@ describe('migrate against MySQL 8.4', () => {
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* migrate(migrations.slice(0, -1));
+        yield* migrate(migrations.filter(migration => migration.version < 16));
         yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES ('w-linked', 'Linked', 'UTC', UTC_TIMESTAMP(6)), ('w-free', 'Free', 'UTC', UTC_TIMESTAMP(6))`;
         yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES ('p-1', 'human', 'One', UTC_TIMESTAMP(6)), ('p-2', 'human', 'Two', UTC_TIMESTAMP(6))`;
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at, revoked_at) VALUES
