@@ -54,8 +54,8 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 
 /**
- * Whisper's own `no_speech_threshold` default. The provider skips such a segment only when its
- * `avg_logprob` is also below -1, so confident filler like "Thank you." on silence still arrives.
+ * Whisper's own `no_speech_threshold` default. The provider drops any segment whose `no_speech_prob`
+ * is above it, whatever its `avg_logprob`, because confident filler like "Thank you." on silence must not arrive.
  */
 const NO_SPEECH_PROB = 0.6;
 /** Sound must stay at the speech floor this long; a click, tap or breath in a quiet chunk is shorter than one word. */

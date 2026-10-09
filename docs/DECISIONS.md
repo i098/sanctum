@@ -95,7 +95,7 @@ Requests take about 1.5–3 s with peaks near 9 s, so up to three chunks are in 
 Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
 In production, `vad_filter` still let "You" and "Thank you." through on near-silent audio.
 Sanctum therefore also drops a segment whose `no_speech_prob` is above 0.6, Whisper's `no_speech_threshold`.
-The provider drops such a segment only when its `avg_logprob` is also below -1, so confident filler arrived.
+The provider ignores `avg_logprob`, so confident filler on silence is dropped too.
 A direct request can end in a later chunk, so the speech gate waits `turnWaitMs` for the next chunk's results before it ends a turn.
 
 Cost control: the free allocation covers about 200 audio minutes a day, and an always-on listener sends up to 1,440, so silence must not be sent.
