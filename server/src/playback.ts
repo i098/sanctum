@@ -62,6 +62,20 @@ const cutRange = (workspace_id: string, range: TimedRange) =>
     return { pieces, parts };
   });
 
+// ponytail: whole cut in worker memory and ranges at another sample rate become gaps; stream a multipart upload and add verified resampling when meetings outgrow this.
+const cutRanges = (workspace_id: string, ranges: ReadonlyArray<TimedRange>, rate: number) =>
+  Effect.gen(function* () {
+    const pieces: Array<SourceRange> = [];
+    const parts: Array<Uint8Array> = [];
+    for (const range of ranges.filter(candidate => candidate.epoch.sample_rate === rate)) {
+      const cut = yield* cutRange(workspace_id, range);
+      pieces.push(...cut.pieces);
+      parts.push(...cut.parts);
+    }
+    const status = parts.length === 0 ? 'failed' : gapsOf(ranges, pieces).length === 0 ? 'complete' : 'partial';
+    return { pieces, parts, status };
+  });
+
 /**
  * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>.wav` for a sealed
  * meeting's current boundary revision, then queues speaker refinement over that cut.
@@ -79,15 +93,7 @@ export const assembleRecording = (job: MeetingJob) =>
       if (existing !== undefined) return { object_key: existing.object_key, boundary_revision: revision };
       const ranges = yield* currentRanges(job.workspace_id, meeting_id);
       const rate = ranges[0]?.epoch.sample_rate ?? 0;
-      const pieces: Array<SourceRange> = [];
-      const parts: Array<Uint8Array> = [];
-      // ponytail: whole cut in worker memory and ranges at another sample rate become gaps; stream a multipart upload and add verified resampling when meetings outgrow this.
-      for (const range of ranges.filter(candidate => candidate.epoch.sample_rate === rate)) {
-        const cut = yield* cutRange(job.workspace_id, range);
-        pieces.push(...cut.pieces);
-        parts.push(...cut.parts);
-      }
-      const status = parts.length === 0 ? 'failed' : gapsOf(ranges, pieces).length === 0 ? 'complete' : 'partial';
+      const { pieces, parts, status } = yield* cutRanges(job.workspace_id, ranges, rate);
       const setStatus = sql`UPDATE meetings SET processing = JSON_SET(processing, '$.recording', ${status}), updated_at = UTC_TIMESTAMP(6)
         WHERE id = ${meeting_id} AND boundary_revision = ${revision}`;
       if (parts.length === 0) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
