@@ -129,8 +129,10 @@ class CaptureController implements CaptureView {
   /** The input has sent nothing above `SILENT_PEAK` for `silentSeconds`; `silentSamples` counts the dead run. */
   private silent = false;
   private silentSamples = 0;
-  /** A lower-priority note than `issue`: the chosen input was gone, so the default one is used. */
+  /** A lower-priority note than `issue`: the chosen input was gone, so the default one is used, until real sound arrives from it. */
   private notice: CaptureIssue | null = null;
+  /** Why the last live input switch failed while capture stayed on the earlier input; it outranks the silent warning until the next choice or the sound that ends the silence. */
+  private switchFailure: CaptureIssue | null = null;
   private input: string | null;
   private leaseLost = false;
   private interrupted = false;
@@ -180,7 +182,7 @@ class CaptureController implements CaptureView {
       return this.publish();
     }
     const before = this.permission;
-    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, notice: null, cancelStart: null });
+    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, notice: null, switchFailure: null, cancelStart: null });
     this.publish();
     try {
       const session = await this.openSession();
@@ -218,7 +220,7 @@ class CaptureController implements CaptureView {
 
   readonly chooseInput = async (deviceId: string | null): Promise<void> => {
     const previous = this.input;
-    this.notice = null;
+    Object.assign(this, { notice: null, switchFailure: null });
     this.remember(deviceId);
     if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId))) this.remember(previous);
   };
@@ -347,12 +349,12 @@ class CaptureController implements CaptureView {
       session.stream.getTracks().forEach((track) => track.stop());
       session.stream = stream;
       this.watchTrack(stream);
-      Object.assign(this, { muted: false, silent: false, silentSamples: 0 });
+      Object.assign(this, { muted: false, silent: false, silentSamples: 0, switchFailure: null });
       if (this.issue === 'input_lost') this.issue = null;
       this.publish();
       return true;
     } catch (error) {
-      this.notice = captureIssue(error);
+      this.switchFailure = captureIssue(error);
       this.publish();
       return false;
     }
@@ -422,7 +424,10 @@ class CaptureController implements CaptureView {
     for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
     this.silentSamples = deadRun(this.silentSamples, peak, samples.length);
     const silent = this.silentSamples >= rate * this.timing.silentSeconds;
-    if (silent !== this.silent) {
+    const wasSilent = this.silent;
+    const stale = this.silentSamples === 0 && (this.notice !== null || (wasSilent && this.switchFailure !== null));
+    if (stale) Object.assign(this, { notice: null, switchFailure: wasSilent ? null : this.switchFailure });
+    if (silent !== wasSilent || stale) {
       this.silent = silent;
       this.publish();
     }
@@ -511,7 +516,7 @@ class CaptureController implements CaptureView {
     session.stream.getTracks().forEach((track) => track.stop());
     await session.releaseLock();
     void this.sentinel?.release();
-    Object.assign(this, { phase, live: null, silent: false, silentSamples: 0, notice: null });
+    Object.assign(this, { phase, live: null, silent: false, silentSamples: 0, notice: null, switchFailure: null });
     await this.refreshPending();
     this.startDrain();
   }
@@ -767,7 +772,7 @@ class CaptureController implements CaptureView {
       listener,
       permission: this.permission,
       archive: this.archiveState(),
-      issue: this.issue ?? (this.silent ? 'silent_input' : (this.notice ?? transcription)),
+      issue: this.issue ?? this.switchFailure ?? (this.silent ? 'silent_input' : (this.notice ?? transcription)),
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,

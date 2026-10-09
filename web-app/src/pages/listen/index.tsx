@@ -80,9 +80,12 @@ function statusMessage(snapshot: CaptureSnapshot, failure: string | null, helper
   return problem ? { text: problem, warning: true } : { text: helper, warning: false };
 }
 
-/** A silent or missing input gets the picker right under the warning (and, when silent, one line of help); otherwise `children` show. */
+/** The picker belongs to every issue an input choice can cure: a silent, missing or unopenable input. */
+const INPUT_ISSUES: ReadonlyArray<CaptureIssue> = ['silent_input', 'input_unavailable', 'no_input', 'hardware_error', 'unsupported_constraints'];
+
+/** An input issue gets the picker right under the warning (and, when silent, one line of help); otherwise `children` show. */
 function InputHelp({ engine, issue, children }: { engine: CaptureView; issue: CaptureIssue | null; children: ReactNode }) {
-  if (issue !== 'silent_input' && issue !== 'input_unavailable') return children;
+  if (issue === null || !INPUT_ISSUES.includes(issue)) return children;
   return (
     <>
       {issue === 'silent_input' && <p className="listen-helper listen-input-help">A Mac with its lid closed turns off its built-in microphone. Choose another input:</p>}

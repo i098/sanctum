@@ -43,6 +43,11 @@ export function useInputLevel(deviceId: string | null): InputLevel {
       let last = performance.now();
       let shown = -LEVEL_MS;
       const tick = (now: number): void => {
+        if (context.state !== 'running') {
+          last = now;
+          frame = requestAnimationFrame(tick);
+          return;
+        }
         analyser.getFloatTimeDomainData(samples);
         const peak = samples.reduce((max, sample) => Math.max(max, Math.abs(sample)), 0) * 0x8000;
         dead = deadRun(dead, peak, now - last);
