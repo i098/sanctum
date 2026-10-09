@@ -2,7 +2,7 @@
 import { SqlClient } from '@effect/sql';
 import type { ContextChangeKind, ContextItemId, MeetingId, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import { nextContextSeq } from './store.ts';
+import { nextContextSeq } from './db.ts';
 
 /**
  * Appends one committed-order event inside the caller's transaction and returns its sequence.
@@ -28,3 +28,7 @@ export const appendContextEvent = (input: {
       FROM workspaces WHERE id = ${input.workspace_id}`;
   return seq;
  });
+
+/** A boundary revision of a meeting entering the committed-order context feed; shared by split, merge and late joins. */
+export const boundaryChanged = (meeting: { readonly id: MeetingId; readonly workspace_id: WorkspaceId }, revision: number, actor: PrincipalId) =>
+ appendContextEvent({ workspace_id: meeting.workspace_id, meeting_id: meeting.id, item: null, change: 'meeting_boundary_changed', actor, source_revision: revision });

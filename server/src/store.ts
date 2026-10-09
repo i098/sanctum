@@ -19,28 +19,13 @@ import {
   type WorkspaceRole,
 } from '@sanctum/contracts';
 import { defaultSeatLimit } from './config.ts';
-import { DbSafeInt } from './db.ts';
+import { DbSafeInt, increment } from './db.ts';
 
 interface WriteResult { readonly affectedRows: number; readonly insertId: number | string }
 
 /** Runs DML and returns mysql2's result header (affected rows, LAST_INSERT_ID). */
 export const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
   Effect.map(statement.raw, result => result as WriteResult);
-
-/**
- * `LAST_INSERT_ID(expr)` makes the increment and its read one statement; the row lock it takes
- * lasts until the caller's transaction commits, which serializes allocation per workspace.
- */
-const increment = (column: 'context_seq' | 'permission_revision') => (workspace_id: WorkspaceId) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const result = yield* write(sql`UPDATE workspaces SET ${sql(column)} = LAST_INSERT_ID(${sql(column)} + 1) WHERE id = ${workspace_id}`);
-    if (result.affectedRows !== 1) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
-    return Schema.decodeUnknownSync(DbSafeInt)(result.insertId);
-  });
-
-/** Next committed-order context sequence number; call inside the change's transaction. */
-export const nextContextSeq: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> = increment('context_seq');
 
 /** Invalidates every access-derived cache entry of the workspace; returns the new revision. */
 export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> =

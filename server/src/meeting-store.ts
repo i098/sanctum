@@ -17,7 +17,6 @@ import {
   WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Option, ParseResult, Schema } from 'effect';
-import { appendContextEvent } from './context-events.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 
@@ -168,10 +167,6 @@ export const recordBoundary = (input: {
     sql`INSERT INTO boundary_events (id, workspace_id, meeting_id, boundary_revision, operation, decision, actor_principal_id, created_at)
       VALUES (${randomUUID()}, ${input.meeting.workspace_id}, ${input.meeting.id}, ${input.revision}, ${input.operation}, ${JSON.stringify(input.decision)}, ${input.actor}, UTC_TIMESTAMP(6))`,
   );
-
-/** A boundary revision of a meeting entering the committed-order context feed; shared by split, merge and late joins. */
-export const boundaryChanged = (meeting: Pick<MeetingRow, 'id' | 'workspace_id'>, revision: number, actor: PrincipalId) =>
-  appendContextEvent({ workspace_id: meeting.workspace_id, meeting_id: meeting.id, item: null, change: 'meeting_boundary_changed', actor, source_revision: revision });
 
 /** Sealed meetings get their final work as durable jobs; nothing waits on actions or on the listener. */
 export const scheduleFinalize = (meeting: Pick<MeetingRow, 'id' | 'workspace_id'>, requested_by: PrincipalId | null) =>

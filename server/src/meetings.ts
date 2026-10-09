@@ -27,12 +27,12 @@ import { Effect, Schema } from 'effect';
 import { authorizeMeeting, listVisibleMeetingIds, requireScope } from './auth.ts';
 import { evaluateBoundary, LOW_CONFIDENCE, PROMOTE_AFTER_MS, type Utterance } from './boundaries.ts';
 import { engineeringDefaults } from './config.ts';
+import { boundaryChanged } from './context-events.ts';
 import { requestLiveContextRefresh } from './context-schedule.ts';
 import { DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
   asJobResult,
-  boundaryChanged,
   currentRanges,
   dbFailures,
   dbTime,
@@ -269,8 +269,9 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
     const sql = yield* SqlClient.SqlClient;
     if (OPEN_STATES.includes(row.state)) return yield* Effect.asVoid(claimSource(row, source));
     const [unbuilt] = yield* sql`SELECT 1 FROM jobs WHERE workspace_id = ${row.workspace_id} AND kind = 'meeting.finalize' AND work_key = ${`meeting:${row.id}`} AND status = 'pending' LIMIT 1`;
-    const revision = row.state === 'closing' || unbuilt !== undefined ? row.boundary_revision : row.boundary_revision + 1;
-    if (revision !== row.boundary_revision) {
+    const bump = row.state !== 'closing' && unbuilt === undefined;
+    const revision = row.boundary_revision + Number(bump);
+    if (bump) {
       yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)
         SELECT workspace_id, meeting_id, ${revision}, epoch_id, track, sample_start, sample_end FROM meeting_ranges
         WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision}`;
@@ -278,7 +279,7 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
     }
     const joined = { ...row, boundary_revision: revision };
     const end = yield* claimSource(joined, source);
-    if (revision !== row.boundary_revision) {
+    if (bump) {
       yield* recordBoundary({
         meeting: row,
         revision,
@@ -589,8 +590,8 @@ const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeet
     const sql = yield* SqlClient.SqlClient;
     const elapsed = sql`GREATEST(0, TIMESTAMPDIFF(MICROSECOND, e.started_at, UTC_TIMESTAMP(6))) + ${END_FENCE_CLOCK_SLACK_SECONDS * 1_000_000}`;
     const { epoch_id, fence_sample } = fence;
-    const [epoch] = epoch_id === undefined || fence_sample === undefined ? [] : yield* sql<{ in_meeting: number | null; owned: number; overlaps: number; from_sample: string; sample: string }>`SELECT
-        (e.listener_id = m.listener_id OR l.capture_group_id = m.capture_group_id) AS in_meeting, l.principal_id = ${access.principal.id} AS owned,
+    const [epoch] = epoch_id === undefined || fence_sample === undefined ? [] : yield* sql<{ epoch_id: string; in_meeting: number | null; owned: number; overlaps: number; from_sample: string; sample: string }>`SELECT
+        e.id AS epoch_id, (e.listener_id = m.listener_id OR l.capture_group_id = m.capture_group_id) AS in_meeting, l.principal_id = ${access.principal.id} AS owned,
         (e.ended_at IS NULL OR e.ended_at >= m.started_at) AS overlaps,
         COALESCE((SELECT MIN(r.sample_start) FROM meeting_ranges r WHERE r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision AND r.epoch_id = e.id),
           e.sample_start + FLOOR(GREATEST(0, TIMESTAMPDIFF(MICROSECOND, e.started_at, m.started_at)) * e.sample_rate / 1000000)) AS from_sample,
@@ -605,7 +606,7 @@ const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeet
     }
     if (Number(epoch.in_meeting) !== 1) return yield* new NotFound({ message: 'Capture epoch not found' });
     if (Number(epoch.owned) !== 1) return yield* forbidden;
-    return epoch_id !== undefined && Number(epoch.overlaps) === 1 ? { epoch_id, from: Number(epoch.from_sample), sample: Number(epoch.sample) } : null;
+    return Number(epoch.overlaps) === 1 ? { epoch_id: epoch.epoch_id, from: Number(epoch.from_sample), sample: Number(epoch.sample) } : null;
   });
 
 /**

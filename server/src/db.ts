@@ -6,7 +6,7 @@
 import { MysqlClient } from '@effect/sql-mysql2';
 import { SqlClient, type SqlError } from '@effect/sql';
 import { Effect, Layer, ParseResult, type Redacted, Schema } from 'effect';
-import { Sha256Hex, UtcTimestamp, Unavailable } from '@sanctum/contracts';
+import { Sha256Hex, UtcTimestamp, Unavailable, type WorkspaceId } from '@sanctum/contracts';
 
 /** Connection settings; config.ts reads them from the environment. */
 export interface MysqlOptions {
@@ -110,3 +110,18 @@ export const mysqlErrno = (error: SqlError.SqlError): number | undefined => {
 export const ER_DUP_ENTRY = 1062;
 export const ER_NO_REFERENCED_ROW = 1452;
 export const ER_CHECK_CONSTRAINT_VIOLATED = 3819;
+
+/**
+ * `LAST_INSERT_ID(expr)` makes the increment and its read one statement; the row lock it takes
+ * lasts until the caller's transaction commits, which serializes allocation per workspace.
+ */
+export const increment = (column: 'context_seq' | 'permission_revision') => (workspace_id: WorkspaceId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const result = (yield* sql`UPDATE workspaces SET ${sql(column)} = LAST_INSERT_ID(${sql(column)} + 1) WHERE id = ${workspace_id}`.raw) as { readonly affectedRows: number; readonly insertId: number | string };
+    if (result.affectedRows !== 1) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
+    return Schema.decodeUnknownSync(DbSafeInt)(result.insertId);
+  });
+
+/** Next committed-order context sequence number; call inside the change's transaction. */
+export const nextContextSeq: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> = increment('context_seq');

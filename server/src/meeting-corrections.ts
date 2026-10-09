@@ -19,8 +19,8 @@ import {
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
+import { boundaryChanged } from './context-events.ts';
 import {
-  boundaryChanged,
   currentRanges,
   dbFailures,
   dbTime,
