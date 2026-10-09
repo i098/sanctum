@@ -302,6 +302,21 @@ export const onFinalSegments = (event: {
   }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
 
 /**
+ * A transcript window inside a meeting that was sealed before its transcript was complete (a live answer
+ * that outlived the close, or batch reconciliation of a gap) finalizes that meeting again.
+ */
+export const refinalizeSealed = (workspace_id: WorkspaceId, epoch_id: string, track: number, window: { readonly sample_start: number; readonly sample_end: number }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const sealed = yield* sql<{ id: MeetingId }>`SELECT DISTINCT m.id FROM meetings m
+      JOIN meeting_ranges r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision
+      WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${epoch_id} AND r.track = ${track}
+        AND r.sample_start < ${window.sample_end} AND r.sample_end > ${window.sample_start}
+        AND m.state NOT IN ${sql.in(OPEN_STATES)} AND m.processing->>'$.transcript' <> 'complete'`;
+    for (const meeting of sealed) yield* scheduleFinalize({ id: meeting.id, workspace_id }, null);
+  });
+
+/**
  * Media hook: a capture epoch ended. Closing or an interruption seals the open meeting at the capture end;
  * pauses leave it open. A meeting holding audio captured after the ended epoch (a late archive epoch) stays open.
  */
@@ -569,7 +584,10 @@ export const finalizeMeeting = (job: MeetingJob) =>
           const found = yield* selectMeeting(job.workspace_id, meeting_id, true);
           if (found._tag === 'None' || OPEN_STATES.includes(found.value.state)) return { skipped: 'meeting is open or missing' };
           const row = found.value;
-          const processing = { ...PENDING_PROCESSING, transcript: yield* transcriptProgress(row) };
+          // A revision that already has its cut keeps that cut's status: assembly returns the stored cut without restating it.
+          const [cut] = yield* sql<{ recording: string }>`SELECT m.processing->>'$.recording' AS recording FROM meetings m
+            JOIN meeting_recordings r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision WHERE m.id = ${row.id}`;
+          const processing = { ...PENDING_PROCESSING, transcript: yield* transcriptProgress(row), ...cut };
           const state = row.state === 'closing' ? 'closed' : row.state;
           yield* sql`UPDATE meetings SET state = ${state}, processing = ${JSON.stringify(processing)}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${row.id}`;
           const derived = { workspace_id: row.workspace_id, work_key: `meeting:${row.id}`, payload: { meeting_id: row.id }, requested_by: job.requested_by, source_revision: row.boundary_revision };

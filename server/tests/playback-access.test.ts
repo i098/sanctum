@@ -63,6 +63,9 @@ describe('meeting recording playback', () => {
         expect((yield* jobsOf(listener.workspace_id)).map(job => job.kind)).toContain('speakers.refine');
         const again = yield* assemble(listener.workspace_id, meeting);
         expect(again).toMatchObject({ result: { object_key: `meetings/${listener.workspace_id}/${meeting}/r1.wav` } });
+        // Finalizing the same revision again keeps its cut's status instead of resetting it to pending.
+        const refinalized = yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        expect(refinalized).toMatchObject({ result: { processing: { recording: 'partial' } } });
       }).pipe(Effect.provide(store.layer)),
       { migrated: true },
     );

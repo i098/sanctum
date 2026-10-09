@@ -14,13 +14,13 @@ import {
   Unauthenticated,
   Unavailable,
 } from '@sanctum/contracts';
-import { Clock, Context, Effect, Exit, Layer, Mailbox, Schedule } from 'effect';
+import { Clock, Context, Effect, Exit, Layer, Mailbox, Option, Redacted, Schedule } from 'effect';
 import { Authenticator } from '../../src/auth.ts';
 import { dbLayer } from '../../src/db.ts';
 import type { serverLayer } from '../../src/main.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 import type { ObjectStore } from '../../src/providers/object-store.ts';
-import { type AsrBatch, type AsrResult, SpeechToText } from '../../src/providers/whisper.ts';
+import { type AsrBatch, type AsrResult, SpeechToText, whisperSpeechToText } from '../../src/providers/whisper.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
 
@@ -62,6 +62,10 @@ interface FakeStream {
   /** The provider drops the connection unexpectedly. */
   readonly drop: () => void;
 }
+
+/** The real Workers AI Whisper adapter, pointed at a local stand-in server. */
+export const workersAiWhisper = (baseUrl: string, liveAsr: Parameters<typeof whisperSpeechToText>[0]['liveAsr']) =>
+  Layer.succeed(SpeechToText, whisperSpeechToText({ workersAi: Option.some({ baseUrl, apiToken: Redacted.make('wai-token') }), liveAsr }));
 
 /** Scriptable speech provider: live streams record audio and emit what the test pushes; batch answers via `batch`. */
 export function fakeSpeech() {
