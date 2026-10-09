@@ -554,7 +554,7 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: 'unsupported_constraints', inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
   });
 
-  it('shows a failed input switch at once while the input is silent, and never again once sound returns', async () => {
+  it('shows a failed input switch for 8 seconds over the silent warning, then the warning returns', async () => {
     const h = harness();
     await h.engine.start();
     h.feed(0.1);
@@ -563,23 +563,37 @@ describe('capture lifecycle', () => {
     expect(h.snapshot().issue).toBe('silent_input');
     await h.engine.chooseInput('iphone-gone');
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'unsupported_constraints', inputId: null });
-    h.feed(0.05, 2);
-    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null });
-    h.feed(1, 0);
+    vi.advanceTimersByTime(7_999);
+    expect(h.snapshot().issue).toBe('unsupported_constraints');
+    vi.advanceTimersByTime(1);
     expect(h.snapshot().issue).toBe('silent_input');
     await h.engine.chooseInput('iphone');
     expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null, inputId: 'iphone' });
   });
 
-  it('drops the fallback input note once sound arrives, so transcription trouble shows', async () => {
+  it('drops a failed input switch after 8 seconds on a working input, and at the next choice', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    await h.engine.chooseInput('iphone-gone');
+    expect(h.snapshot().issue).toBe('unsupported_constraints');
+    await h.engine.chooseInput(null);
+    expect(h.snapshot().issue).toBeNull();
+    await h.engine.chooseInput('iphone-gone');
+    vi.advanceTimersByTime(8_000);
+    expect(h.snapshot().issue).toBeNull();
+  });
+
+  it('shows the fallback input note for 8 seconds, then lets transcription trouble show', async () => {
     const h = harness({ input: 'iphone' });
     delete h.inputs['iphone'];
     await h.engine.start();
-    expect(h.snapshot().issue).toBe('input_unavailable');
     h.feed(0.1);
     h.accept();
-    expect(h.snapshot().issue).toBeNull();
     h.lives[0]!.options.onStatus('degraded', 'provider_unavailable');
+    expect(h.snapshot().issue).toBe('input_unavailable');
+    vi.advanceTimersByTime(8_000);
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'transcription_unavailable' });
   });
 

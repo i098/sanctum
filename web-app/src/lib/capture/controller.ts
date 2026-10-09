@@ -32,6 +32,8 @@ export interface CaptureTiming {
 const DEFAULT_TIMING: CaptureTiming = { chunkSeconds: 30, commitSeconds: 2, heartbeatMs: 15_000, gapMs: 3_000, silentSeconds: SILENT_SECONDS };
 /** The chosen input's `deviceId` in `localStorage`; absent means the browser's default input. */
 const INPUT_KEY = 'sanctum.microphone';
+/** How long an input note (a failed switch, or the chosen input being gone) shows, unless the next input choice comes first. */
+const NOTICE_MS = 8_000;
 /** Server-reported live transcription trouble; audio still reaches the archive either way. */
 const TRANSCRIPTION_ISSUE: Record<DegradedReason, CaptureIssue> = { provider_unavailable: 'transcription_unavailable', asr_backlog: 'transcription_behind' };
 const transcriptionIssue = (...[status, reason]: LiveUpdate): CaptureIssue | null => (status === 'degraded' && reason ? TRANSCRIPTION_ISSUE[reason] : null);
@@ -129,10 +131,9 @@ class CaptureController implements CaptureView {
   /** The input has sent nothing above `SILENT_PEAK` for `silentSeconds`; `silentSamples` counts the dead run. */
   private silent = false;
   private silentSamples = 0;
-  /** A lower-priority note than `issue`: the chosen input was gone, so the default one is used, until real sound arrives from it. */
+  /** An input note (a failed switch, or the chosen input being gone) outranks the silent warning for `NOTICE_MS` or until the next input choice. */
   private notice: CaptureIssue | null = null;
-  /** Why the last live input switch failed while capture stayed on the earlier input; it outranks the silent warning until the next choice or the sound that ends the silence. */
-  private switchFailure: CaptureIssue | null = null;
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
   private input: string | null;
   private leaseLost = false;
   private interrupted = false;
@@ -182,7 +183,8 @@ class CaptureController implements CaptureView {
       return this.publish();
     }
     const before = this.permission;
-    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, notice: null, switchFailure: null, cancelStart: null });
+    Object.assign(this, { phase: 'starting', permission: 'pending', issue: null, cancelStart: null });
+    this.note(null);
     this.publish();
     try {
       const session = await this.openSession();
@@ -220,7 +222,7 @@ class CaptureController implements CaptureView {
 
   readonly chooseInput = async (deviceId: string | null): Promise<void> => {
     const previous = this.input;
-    Object.assign(this, { notice: null, switchFailure: null });
+    this.note(null);
     this.remember(deviceId);
     if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId))) this.remember(previous);
   };
@@ -251,6 +253,7 @@ class CaptureController implements CaptureView {
 
   dispose(): void {
     clearInterval(this.heartbeat);
+    clearTimeout(this.noticeTimer);
     this.unlisten.forEach((remove) => remove());
     this.endPage();
     if (this.drain !== null) Effect.runFork(Fiber.interrupt(this.drain));
@@ -326,7 +329,7 @@ class CaptureController implements CaptureView {
       const issue = captureIssue(error);
       if (this.input === null || (issue !== 'no_input' && issue !== 'unsupported_constraints')) throw error;
       this.remember(null);
-      this.notice = 'input_unavailable';
+      this.note('input_unavailable');
       return acquireMicrophone(this.nav.mediaDevices);
     }
   }
@@ -349,14 +352,26 @@ class CaptureController implements CaptureView {
       session.stream.getTracks().forEach((track) => track.stop());
       session.stream = stream;
       this.watchTrack(stream);
-      Object.assign(this, { muted: false, silent: false, silentSamples: 0, switchFailure: null });
+      Object.assign(this, { muted: false, silent: false, silentSamples: 0 });
       if (this.issue === 'input_lost') this.issue = null;
       this.publish();
       return true;
     } catch (error) {
-      this.switchFailure = captureIssue(error);
+      this.note(captureIssue(error));
       this.publish();
       return false;
+    }
+  }
+
+  /** Sets the input note for `NOTICE_MS`, replacing any earlier one; null clears it. The caller publishes. */
+  private note(issue: CaptureIssue | null): void {
+    clearTimeout(this.noticeTimer);
+    this.notice = issue;
+    if (issue !== null) {
+      this.noticeTimer = setTimeout(() => {
+        this.notice = null;
+        this.publish();
+      }, NOTICE_MS);
     }
   }
 
@@ -424,10 +439,7 @@ class CaptureController implements CaptureView {
     for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
     this.silentSamples = deadRun(this.silentSamples, peak, samples.length);
     const silent = this.silentSamples >= rate * this.timing.silentSeconds;
-    const wasSilent = this.silent;
-    const stale = this.silentSamples === 0 && (this.notice !== null || (wasSilent && this.switchFailure !== null));
-    if (stale) Object.assign(this, { notice: null, switchFailure: wasSilent ? null : this.switchFailure });
-    if (silent !== wasSilent || stale) {
+    if (silent !== this.silent) {
       this.silent = silent;
       this.publish();
     }
@@ -516,7 +528,8 @@ class CaptureController implements CaptureView {
     session.stream.getTracks().forEach((track) => track.stop());
     await session.releaseLock();
     void this.sentinel?.release();
-    Object.assign(this, { phase, live: null, silent: false, silentSamples: 0, notice: null, switchFailure: null });
+    Object.assign(this, { phase, live: null, silent: false, silentSamples: 0 });
+    this.note(null);
     await this.refreshPending();
     this.startDrain();
   }
@@ -548,7 +561,7 @@ class CaptureController implements CaptureView {
     if (this.input === null) return this.halt('input_lost', true);
     this.remember(null);
     if (!(await this.switchInput(null))) return this.halt('input_lost', true);
-    this.notice = 'input_unavailable';
+    this.note('input_unavailable');
     this.publish();
   }
 
@@ -772,7 +785,7 @@ class CaptureController implements CaptureView {
       listener,
       permission: this.permission,
       archive: this.archiveState(),
-      issue: this.issue ?? this.switchFailure ?? (this.silent ? 'silent_input' : (this.notice ?? transcription)),
+      issue: this.issue ?? this.notice ?? (this.silent ? 'silent_input' : transcription),
       epochId: this.session?.epoch?.id ?? null,
       bufferedChunks: this.pending,
       strandedChunks: this.stranded,
