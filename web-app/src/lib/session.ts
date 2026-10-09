@@ -3,7 +3,6 @@
  * `GET /api/v1/session`. Sign-in always starts with a same-origin navigation, never a cross-origin
  * form post: the page CSP allows only `form-action 'self'`.
  */
-import type { EndMeeting } from '@sanctum/contracts';
 import { type AccessScope, createClient, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
 /** The session opener's script-readable double-submit cookie; its value goes back as `x-csrf-token`. */
@@ -87,7 +86,7 @@ export async function post(path: string, body?: unknown): Promise<Response> {
 }
 
 /** End meeting with the fence of the audio this page captured; a website-only route, so it is not in the SDK. */
-export async function endMeeting(meeting_id: string, fence: EndMeeting): Promise<void> {
+export async function endMeeting(meeting_id: string, fence: { readonly epoch_id: string; readonly sample: number }): Promise<void> {
   await post(`/api/v1/meetings/${meeting_id}/end`, fence);
 }
 
