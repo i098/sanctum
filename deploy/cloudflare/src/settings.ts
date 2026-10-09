@@ -53,3 +53,29 @@ export type AppSettings = Partial<Record<(typeof APP_SETTINGS)[number], string>>
 /** The container environment: every app setting the Worker has, and nothing else. */
 export const containerEnv = (env: AppSettings): Record<string, string> =>
   Object.fromEntries(APP_SETTINGS.flatMap(name => (env[name] === undefined ? [] : [[name, env[name]]])));
+
+/** The parts of a container Durable Object's state that the start-environment check uses. */
+interface ContainerObjectState {
+  readonly container?: { readonly running: boolean; destroy(): Promise<void> };
+  readonly storage: { get(key: string): Promise<unknown>; put(key: string, value: string): Promise<void> };
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+}
+
+const START_ENV_KEY = 'startEnvHash';
+
+/**
+ * A running container keeps the environment it started with; a deploy or secret change does not
+ * restart it. Record the SHA-256 of `env` (no values), which the caller's next start passes, then
+ * destroy a running container that started with other settings (or before this record existed).
+ * The record comes first, so each hash allows at most one destroy even if `running` stays true.
+ * Other requests wait.
+ */
+export const retireStaleContainer = async (state: ContainerObjectState, env: Record<string, string>): Promise<void> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(env)));
+  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  await state.blockConcurrencyWhile(async () => {
+    if ((await state.storage.get(START_ENV_KEY)) === hash) return;
+    await state.storage.put(START_ENV_KEY, hash);
+    if (state.container?.running) await state.container.destroy();
+  });
+};

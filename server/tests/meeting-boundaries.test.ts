@@ -88,6 +88,25 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('schedules live context refresh after the quiet period, and at once after four new turns', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { listener, epoch } = yield* setup;
+        const refresh = sql<{ work_key: string; due: string }>`SELECT work_key, CAST(available_at <= UTC_TIMESTAMP(6) AS CHAR) AS due
+          FROM jobs WHERE workspace_id = ${listener.workspace_id} AND kind = 'context.refresh'`;
+        yield* hear(listener, epoch, 0, 5, 'we should review the budget numbers today');
+        yield* hear(listener, epoch, 5, 10, 'the travel line is over by ten percent');
+        yield* hear(listener, epoch, 10, 15, 'Dana will send the revised sheet');
+        const [meeting] = yield* meetingsOf(listener.workspace_id);
+        expect(yield* refresh).toEqual([{ work_key: meeting!.id, due: '0' }]);
+        yield* hear(listener, epoch, 15, 20, 'by Friday at the latest');
+        expect(yield* refresh).toEqual([{ work_key: meeting!.id, due: '1' }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('starts a new meeting at a true boundary and seals the previous one at its last speech', () =>
     withDatabase(
       Effect.gen(function* () {
@@ -100,7 +119,8 @@ describe('automatic meeting lifecycle', () => {
         expect(second).toMatchObject({ state: 'active', ended_at: null });
         expect(yield* rangesOf(first!.id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 100 * RATE }]);
         expect(yield* rangesOf(second!.id)).toEqual([{ epoch_id: epoch, sample_start: (100 + 6 * MIN) * RATE, sample_end: (105 + 6 * MIN) * RATE }]);
-        expect(yield* jobsOf(listener.workspace_id)).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${first!.id}`, status: 'pending' }]);
+        const lifecycle = (yield* jobsOf(listener.workspace_id)).filter(job => job.kind !== 'context.refresh');
+        expect(lifecycle).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${first!.id}`, status: 'pending' }]);
       }),
       { migrated: true },
     ),
@@ -150,7 +170,8 @@ describe('automatic meeting lifecycle', () => {
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 40 * RATE }]);
         const [actionRow] = yield* sql<{ state: string }>`SELECT state FROM actions WHERE id = ${action}`;
         expect(actionRow!.state).toBe('running');
-        expect(yield* jobsOf(listener.workspace_id)).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${id}`, status: 'pending' }]);
+        const lifecycle = (yield* jobsOf(listener.workspace_id)).filter(job => job.kind !== 'context.refresh');
+        expect(lifecycle).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${id}`, status: 'pending' }]);
         // Late ASR for audio before the watermark stays with the closed meeting; later speech opens the next one.
         yield* hear(listener, epoch, 35, 39, 'and copy the finance lead on it');
         expect(yield* meetingsOf(listener.workspace_id)).toHaveLength(1);
@@ -198,7 +219,7 @@ describe('automatic meeting lifecycle', () => {
         expect(current!.state).toBe('provisional');
         expect(yield* rangesOf(old!.id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 30 * RATE }]);
         expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 31 * RATE, sample_end: 36 * RATE }]);
-        const kinds = (yield* jobsOf(listener.workspace_id)).map(job => `${job.kind}:${job.status}`);
+        const kinds = (yield* jobsOf(listener.workspace_id)).filter(job => job.kind !== 'context.refresh').map(job => `${job.kind}:${job.status}`);
         expect(kinds).toEqual(['meeting.finalize:pending', 'memory.commit:pending', 'notes.summarize:pending', 'recording.assemble:pending']);
         // Replayed segments (reconnect or batch reconciliation) are already owned and change nothing.
         yield* onFinalSegments({ ...listener, segments: [early] });

@@ -25,6 +25,7 @@ import { Effect, Schema } from 'effect';
 import { authorizeMeeting, listVisibleMeetingIds, requireScope } from './auth.ts';
 import { evaluateBoundary, LOW_CONFIDENCE, PROMOTE_AFTER_MS, type Utterance } from './boundaries.ts';
 import { engineeringDefaults } from './config.ts';
+import { requestLiveContextRefresh } from './context-schedule.ts';
 import { DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
@@ -267,7 +268,10 @@ const placeSegment = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSeg
     owner._tag === 'Some' ? extendOwned(open, owner.value, epoch, segment) : placeUnowned(key, epoch, segment, open),
   );
 
-/** Media hook: final transcript segments for one listener, in any order; replays of owned sources are no-ops. */
+/**
+ * Media hook: final transcript segments for one listener, in any order; replays of owned sources are no-ops.
+ * New speech in the open meeting schedules its live context refresh (plan section 02's context job cadence).
+ */
 export const onFinalSegments = (event: {
   readonly workspace_id: WorkspaceId;
   readonly listener_id: string;
@@ -285,9 +289,14 @@ export const onFinalSegments = (event: {
         const known = finals.filter(segment => epochs.has(segment.source.epoch_id));
         const at = (segment: TranscriptSegment) => sampleMs(epochs.get(segment.source.epoch_id)!, segment.source.sample_start);
         let open: OpenMeeting | null = yield* loadOpen(event);
+        let claimed = false;
         for (const segment of known.sort((a, b) => at(a) - at(b))) {
-          open = yield* placeSegment(event, epochs.get(segment.source.epoch_id)!, segment, open);
+          const placed = yield* placeSegment(event, epochs.get(segment.source.epoch_id)!, segment, open);
+          // Placement returns a new open meeting exactly when it claimed the segment.
+          claimed ||= placed !== open;
+          open = placed;
         }
+        if (open !== null && claimed) yield* requestLiveContextRefresh(event.workspace_id, open.row.id);
       }),
     );
   }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));

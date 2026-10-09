@@ -9,7 +9,7 @@
   "routes": [{ "pattern": "sanctum.42nights.dev", "custom_domain": true }],
   // Invocation logs would store the request URL, and /__login/<LOGIN_TOKEN> is a secret.
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
-  // Restarts the job worker after a crash or rollout; a running worker is left alone.
+  // Restarts the job worker after a crash or rollout; a running worker is left alone unless its start settings changed (docs/operations.md, "Cloudflare").
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     // Production refuses to start until the open decisions in docs/DECISIONS.md are selected.
