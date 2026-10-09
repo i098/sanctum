@@ -34,4 +34,15 @@ describe('Worker routing', () => {
     expect(await response.text()).toBe('app');
     expect(forwarded.map(request => request.url)).toEqual(['https://app.sanctum.42nights.dev/api/v1/session?x=1']);
   });
+
+  it('does not treat lookalike hosts as the apex', async () => {
+    forwarded.length = 0;
+    const urls = ['https://evil.sanctum.42nights.dev/mcp', 'https://sanctum.42nights.dev.evil.com/listen?x=1'];
+    for (const url of urls) {
+      const response = await worker.fetch(new Request(url), {} as never);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('app');
+    }
+    expect(forwarded.map(request => request.url)).toEqual(urls);
+  });
 });
