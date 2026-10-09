@@ -7,6 +7,8 @@ import { ConfigProvider, Effect, Option } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { authorizeMeeting, identityPrincipal, listVisibleMeetingIds, openSession, resolveAccess } from '../src/auth.ts';
 import { scopedCacheKey } from '../src/cache.ts';
+import { claimJob, runJob } from '../src/job-runner.ts';
+import { enqueueJob } from '../src/jobs.ts';
 import { grantMeetingAccess } from '../src/store.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { withDatabase } from './support/database.ts';
@@ -178,6 +180,9 @@ describe('authorization boundary', () => {
         expect((yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'acme studio' } })).status).toBe(403);
         expect(yield* status(agentHeaders)).toBe(200);
 
+        const queued = (work_key: string) => enqueueJob({ workspace_id: owner!.workspace_id, kind: 'notes.summarize', work_key, payload: {}, requested_by: member!.principal.id });
+        yield* queued('refused');
+        yield* queued('broken');
         const deleted = yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });
         expect(deleted).toMatchObject({ status: 200, body: { id: owner!.workspace_id, name: 'Acme Studio', deleted_at: expect.any(String) } });
         const grace = Date.parse(deleted.body.purge_after) - Date.parse(deleted.body.deleted_at);
@@ -189,6 +194,13 @@ describe('authorization boundary', () => {
         const [purge] = yield* sql<{ status: string }>`SELECT status FROM jobs WHERE workspace_id = ${owner!.workspace_id} AND kind = 'workspace.purge'`;
         expect(purge?.status).toBe('pending');
 
+        const ran = yield* Effect.map(claimJob(['notes.summarize'], 60_000), Option.getOrThrow);
+        yield* runJob({ 'notes.summarize': () => Effect.succeed({ status: 'succeeded', result: null }) }, ran, 60_000, 60_000);
+        const failedElsewhere = yield* Effect.map(claimJob(['notes.summarize'], 60_000), Option.getOrThrow);
+        yield* sql`UPDATE jobs SET status = 'failed', lease_token = NULL, last_error = ${JSON.stringify({ message: 'Provider rejected the request', retryable: false })} WHERE id = ${failedElsewhere.job.id}`;
+        const jobStatus = (id: string) => Effect.map(sql<{ status: string }>`SELECT status FROM jobs WHERE id = ${id}`, rows => rows[0]?.status);
+        expect([yield* jobStatus(ran.job.id), yield* jobStatus(failedElsewhere.job.id)]).toEqual(['failed', 'failed']);
+
         // Only the owner still sees the pending deletion, and undo needs the CSRF token like every mutation.
         expect((yield* call(workspace, { headers: ownerHeaders })).body).toEqual(deleted.body);
         expect((yield* call(workspace, { headers: memberHeaders })).status).toBe(401);
@@ -198,6 +210,7 @@ describe('authorization boundary', () => {
         for (const headers of [ownerHeaders, memberHeaders, agentHeaders]) expect(yield* status(headers)).toBe(200);
         const [cancelled] = yield* sql<{ status: string }>`SELECT status FROM jobs WHERE workspace_id = ${owner!.workspace_id} AND kind = 'workspace.purge'`;
         expect(cancelled?.status).toBe('cancelled');
+        expect([yield* jobStatus(ran.job.id), yield* jobStatus(failedElsewhere.job.id)]).toEqual(['pending', 'failed']);
 
         // Once the grace period is over, the purge owns the workspace: not even the owner gets back in.
         yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });

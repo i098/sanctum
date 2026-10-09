@@ -91,7 +91,7 @@ const copy = ({ name, purge_after }: Workspace) =>
     }
     : {
       title: 'Workspace deleted',
-      text: `${name} is deleted, and members, sessions and agents have no access. Its recordings, transcripts and memory are purged permanently after ${new Date(purge_after).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Until then you can undo.`,
+      text: `${name} is deleted, and members, sessions and agents have no access. Its recordings, transcripts and memory are purged permanently after ${new Date(purge_after).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Until then you can undo; undo does not run agent actions that were queued, so request them again.`,
     };
 
 /** Returns `request()`: focuses `ref` after the next render, when a closed dialog has already returned focus to its now-gone opener. */

@@ -106,6 +106,12 @@ Past the allocation, requests cost about $0.0005 per audio minute (about $0.62 a
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
 A live chunk Whisper answered or the gate skipped records coverage for its whole span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
 
+## Workspace deletion decision — 2026-10-09
+
+Accepted (plan 10.1 option A): a workspace owner deleting the workspace deletes all its data, including meetings restricted to other principals; one owner suffices.
+The grace-period undo protects against mistakes; after it, a durable `workspace.purge` job deletes the recordings, transcripts, memory and rows.
+This is not a retention policy: no recording expires automatically.
+
 ## Deployment decision — 2026-10-02
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.

@@ -35,8 +35,8 @@ export const engineeringDefaults = {
       /** Object deletes are idempotent, so a hit keeps its progress and the next attempt continues. */
       'workspace.purge': 30 * 60_000,
     } as Partial<Record<JobKind, number>>,
-    /** A purge outlasts an R2 outage of hours instead of failing after five quick retries. */
-    purgeMaxAttempts: 50,
+    /** A purge retries every retryable error at the capped backoff until it succeeds: the INT UNSIGNED maximum of `jobs.max_attempts`. */
+    purgeMaxAttempts: 2 ** 32 - 1,
   },
   /**
    * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks cut at the

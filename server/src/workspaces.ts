@@ -14,7 +14,7 @@ import { Effect, Schema } from 'effect';
 import { engineeringDefaults, workspacePurgeGraceDays } from './config.ts';
 import { DbJson, DbUtc } from './db.ts';
 import type { JobHandler } from './job-types.ts';
-import { enqueueJob } from './jobs.ts';
+import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { bumpPermissionRevision, write } from './store.ts';
 
@@ -92,16 +92,25 @@ const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
     return yield* getWorkspace(access.workspace_id);
   });
 
-/** Undo while the grace period runs; after it the purge owns the workspace and restoring changes nothing. */
+/**
+ * Undo while the grace period runs; after it the purge owns the workspace and restoring changes nothing.
+ * Jobs the worker failed because the deletion refused their requester run again; queued actions the
+ * executor cancelled for the same reason stay cancelled, and so does every other failed job.
+ */
 const restoreWorkspace = (access: AccessScope) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const restored = yield* write(sql`UPDATE workspaces SET deleted_at = NULL, purge_after = NULL
-            WHERE id = ${access.workspace_id} AND deleted_at IS NOT NULL AND purge_after > UTC_TIMESTAMP(6)`);
-          if (restored.affectedRows === 0) return;
+          const [due] = yield* sql`SELECT id FROM workspaces
+            WHERE id = ${access.workspace_id} AND deleted_at IS NOT NULL AND purge_after > UTC_TIMESTAMP(6) FOR UPDATE`;
+          if (due === undefined) return;
+          // IGNORE: a newer active job with the same work key already covers the work.
+          yield* sql`UPDATE IGNORE jobs SET status = 'pending', attempts = 0, available_at = UTC_TIMESTAMP(6), last_error = NULL, updated_at = UTC_TIMESTAMP(6)
+            WHERE workspace_id = ${access.workspace_id} AND status = 'failed' AND last_error->>'$.message' = ${REQUESTER_REFUSED}
+              AND updated_at >= (SELECT deleted_at FROM workspaces WHERE id = ${access.workspace_id})`;
+          yield* sql`UPDATE workspaces SET deleted_at = NULL, purge_after = NULL WHERE id = ${access.workspace_id}`;
           yield* bumpPermissionRevision(access.workspace_id);
           yield* sql`UPDATE jobs SET status = 'cancelled', updated_at = UTC_TIMESTAMP(6)
             WHERE workspace_id = ${access.workspace_id} AND kind = 'workspace.purge' AND status = 'pending'`;
