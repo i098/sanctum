@@ -47,6 +47,10 @@ const SLOTS = 33;
 const TWEEN_MS = 900;
 const REDUCED_FRAME_MS = 250;
 const REDUCED_SCALE = 0.45;
+/** Noise floor: rises toward a band's level with this time constant and falls to a quieter level at once. */
+const FLOOR_RISE_S = 2;
+/** Band level above the floor that still draws nothing: the frame-to-frame flutter of steady noise. */
+const FLOOR_MARGIN = 0.08;
 
 interface Slot {
   /** Centre as a fraction of the line. */
@@ -102,6 +106,24 @@ function spectrumLevel(bands: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < bands.length; i++) sum += bands[i]! * bands[i]!;
   return Math.sqrt(sum / bands.length);
+}
+
+/**
+ * Steady room noise draws a calm line. Each band keeps a floor that drops to the band's quietest
+ * level at once and rises over FLOOR_RISE_S, so hum, fans and hiss become the floor within a few
+ * seconds while speech, which comes and goes, stays above it. Only the level above floor + margin,
+ * rescaled to 0..1, reaches the needles.
+ */
+export function createNoiseFloor(bandCount: number): (bands: Float32Array, seconds: number) => void {
+  const floor = new Float32Array(bandCount);
+  return (bands, seconds) => {
+    const rise = 1 - Math.exp(-seconds / FLOOR_RISE_S);
+    for (let i = 0; i < bandCount; i++) {
+      const value = bands[i]!;
+      const gate = (floor[i] = Math.min(value, floor[i]! + (value - floor[i]!) * rise)) + FLOOR_MARGIN;
+      bands[i] = value > gate ? (value - gate) / (1 - gate) : 0;
+    }
+  };
 }
 
 /** Per-slot targets: idle breathing plus the slot's spectrum band; fast attack, slow decay. */
@@ -180,6 +202,7 @@ export function startWaveform(canvas: HTMLCanvasElement, levels: LevelSource, li
   const current = new Float32Array(SLOTS);
   const bands = new Float32Array(levels.bandCount);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const calm = createNoiseFloor(levels.bandCount);
   const look: Look = { ...IDLE };
   let from: Look = { ...IDLE };
   let to = IDLE;
@@ -198,18 +221,21 @@ export function startWaveform(canvas: HTMLCanvasElement, levels: LevelSource, li
     tweenStart = now;
   };
   /** Only the listening look reads the microphone; every other state hears silence. */
-  const hear = (): void => {
+  const hear = (seconds: number): void => {
     if (to !== LISTENING) return void bands.fill(0);
     levels.read(bands);
+    calm(bands, seconds);
     levelTarget = Math.max(levelTarget, Math.min(1, spectrumLevel(bands) * 1.6));
   };
   const draw = (now: number): void => {
     frame = requestAnimationFrame(draw);
     if (reduced.matches && now - last < REDUCED_FRAME_MS) return;
+    // A frame after a hidden stretch counts as one reduced-motion frame.
+    const seconds = Math.min(now - last, REDUCED_FRAME_MS) / 1000;
     last = now;
     retarget(now);
     tween(look, from, to, (now - tweenStart) / TWEEN_MS);
-    hear();
+    hear(seconds);
     t += 0.016;
     level += (levelTarget - level) * 0.18;
     levelTarget *= 0.92;

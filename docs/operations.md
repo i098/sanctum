@@ -5,6 +5,8 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 
 ## Processes
 
+Base images (`node`, `mysql`, `caddy`) come from the Docker Hub library mirror at `public.ecr.aws/docker/library/` with unchanged tags, because anonymous Docker Hub pulls hit its rate limit on shared CI runners.
+
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
 - `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade, the built website and, when [self-hosted sign-in](#self-hosted-sign-in) is on, the embedded issuer at `/idp`, all on one port behind Caddy.

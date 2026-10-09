@@ -377,6 +377,13 @@ describe('capture lifecycle', () => {
     }
   });
 
+  it('asks for one raw mono stream: echo cancellation on, no noise suppression or gain control', async () => {
+    // Whisper and the archive get the unprocessed microphone; the waveform filters noise itself.
+    const getUserMedia = vi.fn(() => Promise.reject(new DOMException('no', 'NotFoundError')));
+    await harness({ getUserMedia }).engine.start();
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  });
+
   it('reports a missing session as signed out, not as a server connection failure', async () => {
     const h = harness({ signedOut: true });
     await h.engine.start();

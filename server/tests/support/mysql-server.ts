@@ -15,7 +15,7 @@ declare module 'vitest' {
   }
 }
 
-const IMAGE = 'mysql:8.4';
+const IMAGE = 'public.ecr.aws/docker/library/mysql:8.4';
 const LOW_MEMORY = [
   '--innodb-buffer-pool-size=32M',
   '--innodb-log-buffer-size=4M',
