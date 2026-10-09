@@ -97,8 +97,8 @@ A direct request can end in a later chunk, so the speech gate waits `turnWaitMs`
 
 Cost control: the free allocation covers about 200 audio minutes a day, and an always-on listener sends up to 1,440, so silence must not be sent.
 Before every Whisper request, live and `transcript.reconcile`, the adapter finds the loudest 20 ms window of the audio; below `speechFloorRms` (`engineeringDefaults.liveAsr`, default 50 PCM16 RMS, about -56 dBFS, under quiet speech and above room noise) no request is made.
-A skipped live chunk emits nothing, and a skipped batch range stays an empty transcript window.
-Past the allocation, requests cost about $0.0005 per audio minute (about $0.72 a day for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
+A skipped live chunk emits no text but still records coverage (see below), and a skipped batch range stays an empty transcript window.
+Past the allocation, requests cost about $0.0005 per audio minute (about $0.62 a day for the 1,240 minutes beyond it, for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
 A live chunk Whisper answered or the gate skipped records coverage for its whole span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
 
