@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { describe, expect, it } from '@effect/vitest';
-import { ConfigProvider, Effect, Layer, Option, Redacted, Stream } from 'effect';
+import { ConfigProvider, Effect, Layer, Option, Queue, Redacted, Stream } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
 import { SpeechToTextLive } from '../src/media/providers.ts';
 import { ObjectStore } from '../src/providers/object-store.ts';
@@ -89,6 +89,9 @@ const sentAudio = (body: Buffer) => {
 const whisper = (baseUrl: string) =>
   whisperSpeechToText({ workersAi: Option.some({ baseUrl: `${baseUrl}/accounts/acct/ai`, apiToken: Redacted.make('wai-token') }), liveAsr: engineeringDefaults.liveAsr });
 
+/** 20 ms of speech-level audio at 16 kHz. */
+const speech = Int16Array.from({ length: 320 }, (_, i) => (i % 2 === 0 ? 2_000 : -2_000));
+
 describe('Workers AI Whisper', () => {
   it.scoped('transcribes a batch range, keeping segment times relative to its first sample', () =>
     Effect.gen(function* () {
@@ -98,16 +101,16 @@ describe('Workers AI Whisper', () => {
         response.end(JSON.stringify({ success: true, result: { text: 'batch words', segments: [{ start: 0.25, end: 1, text: ' batch words ' }, { start: 1, end: 1.5, text: ' ' }] } }));
       });
       const stt = whisper(server.url);
-      expect(yield* stt.transcribe(16_000, new Int16Array([1, -1]))).toEqual([{ start_s: 0.25, end_s: 1, is_final: true, text: 'batch words', confidence: null, speaker: null }]);
+      expect(yield* stt.transcribe(16_000, speech)).toEqual([{ start_s: 0.25, end_s: 1, is_final: true, text: 'batch words', confidence: null, speaker: null }]);
       const request = server.requests[0]!;
       expect(request.url).toBe('/accounts/acct/ai/run/@cf/openai/whisper-large-v3-turbo');
       expect(request.headers.authorization).toBe('Bearer wai-token');
       expect(JSON.parse(request.body.toString())).toMatchObject({ vad_filter: true });
-      expect(sentAudio(request.body)).toEqual({ rate: 16_000, samples: new Int16Array([1, -1]) });
+      expect(sentAudio(request.body)).toEqual({ rate: 16_000, samples: speech });
       status = 503;
-      expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: true });
+      expect(yield* Effect.flip(stt.transcribe(16_000, speech))).toMatchObject({ _tag: 'Unavailable', retryable: true });
       status = 401;
-      expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ retryable: false });
+      expect(yield* Effect.flip(stt.transcribe(16_000, speech))).toMatchObject({ retryable: false });
     }),
   );
 
@@ -116,11 +119,50 @@ describe('Workers AI Whisper', () => {
       let result: object = { text: '' };
       const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ success: true, result })));
       const stt = whisper(server.url);
-      expect(yield* stt.transcribe(16_000, new Int16Array(1))).toEqual([]);
+      expect(yield* stt.transcribe(16_000, speech)).toEqual([]);
       result = { text: ' ', vtt: '', word_count: 0 };
-      expect(yield* stt.transcribe(16_000, new Int16Array(1))).toEqual([]);
+      expect(yield* stt.transcribe(16_000, speech)).toEqual([]);
       result = { text: 'spoken' };
-      expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: false });
+      expect(yield* Effect.flip(stt.transcribe(16_000, speech))).toMatchObject({ _tag: 'Unavailable', retryable: false });
+    }),
+  );
+
+  it.scoped('sends no request for audio below the speech floor and sends quiet speech above it', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'quiet words', segments: [{ start: 0, end: 1, text: 'quiet words' }] } })));
+      const stt = whisper(server.url);
+      const room = Int16Array.from({ length: 16_000 }, (_, i) => (i % 2 === 0 ? 40 : -40));
+      expect(yield* stt.transcribe(16_000, room)).toEqual([]);
+      const stream = yield* stt.openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      for (let at = 0; at < 48_000; at += 1_600) stream.send(room.subarray(0, 1_600));
+      yield* stream.finish;
+      expect([...(yield* Effect.flatten(collected.await))]).toEqual([]);
+      expect(server.requests).toHaveLength(0);
+      const quiet = new Int16Array(16_000);
+      quiet.fill(60, 8_000, 8_320);
+      expect(yield* stt.transcribe(16_000, quiet)).toMatchObject([{ text: 'quiet words' }]);
+      expect(server.requests).toHaveLength(1);
+    }),
+  );
+
+  it.scopedLive('backs off on 429 and skips the chunks, reporting them behind, without ending the stream', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) => response.writeHead(429, { 'retry-after': '60' }).end());
+      const stt = whisper(server.url);
+      const behind = yield* Queue.unbounded<number>();
+      const stream = yield* stt.openStream(16_000, offset => Queue.offer(behind, offset));
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      const feed = () => {
+        for (let at = 0; at < 25; at++) stream.send(new Int16Array(1_600).fill(8_000));
+      };
+      feed();
+      expect(yield* Queue.take(behind)).toBe(0);
+      feed();
+      yield* stream.finish;
+      expect([...(yield* Effect.flatten(collected.await))]).toEqual([]);
+      expect([...(yield* Queue.takeAll(behind))]).toEqual([24_160, 48_320]);
+      expect(server.requests).toHaveLength(1);
     }),
   );
 
@@ -141,7 +183,7 @@ describe('Workers AI Whisper', () => {
         else held = reply;
       });
       const stt = whisper(server.url);
-      const stream = yield* stt.openStream(16_000);
+      const stream = yield* stt.openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       // 2.5 s of loud audio with a pause at 1.6-1.7 s, then 0.5 s more.
       const audio = new Int16Array(48_000).fill(8_000).fill(0, 25_600, 27_200);
@@ -162,7 +204,7 @@ describe('Workers AI Whisper', () => {
     Effect.gen(function* () {
       const stt = yield* Effect.provide(SpeechToText, SpeechToTextLive.pipe(Layer.provide(withConfig({ WORKERS_AI_ACCOUNT_ID: 'acct' }))));
       expect(yield* Effect.flip(stt.transcribe(16_000, new Int16Array(1)))).toMatchObject({ _tag: 'Unavailable', retryable: false });
-      expect(yield* Effect.flip(Effect.scoped(stt.openStream(16_000)))).toMatchObject({
+      expect(yield* Effect.flip(Effect.scoped(stt.openStream(16_000, () => Effect.void)))).toMatchObject({
         message: 'Workers AI: WORKERS_AI_ACCOUNT_ID and WORKERS_AI_API_TOKEN are not configured',
       });
     }),

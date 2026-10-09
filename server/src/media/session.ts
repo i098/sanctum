@@ -167,7 +167,9 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
     const open = (anchor: number) =>
       Effect.gen(function* () {
         const scope = yield* Scope.make();
-        const opened = yield* stt.openStream(rate).pipe(Scope.extend(scope), Effect.either);
+        const opened = yield* stt
+          .openStream(rate, offset => send({ _tag: 'degraded', reason: 'asr_backlog', from_sample: anchor + offset }))
+          .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);
           return yield* providerUnavailable(anchor, opened.left.message);

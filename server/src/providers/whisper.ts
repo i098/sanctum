@@ -38,7 +38,7 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
   {
     readonly provider: string;
     readonly model: string;
-    readonly openStream: (sample_rate: number) => Effect.Effect<AsrStream, Unavailable, Scope.Scope>;
+    readonly openStream: (sample_rate: number, behind: (offset: number) => Effect.Effect<void>) => Effect.Effect<AsrStream, Unavailable, Scope.Scope>;
     readonly transcribe: (sample_rate: number, samples: Int16Array) => Effect.Effect<ReadonlyArray<AsrResult>, Unavailable>;
   }
 >() {}
@@ -52,21 +52,35 @@ const WhisperResponse = Schema.Struct({
   }),
 });
 
-const unavailable = (message: string, retryable = true) => new Unavailable({ message: `Workers AI: ${message}`, retryable });
+const unavailable = (message: string, retryable = true, retry_after_ms?: number) =>
+  new Unavailable({ message: `Workers AI: ${message}`, retryable, ...(retry_after_ms === undefined ? {} : { retry_after_ms }) });
+
+const meanSquare = (samples: Int16Array, from: number, to: number) => {
+  let energy = 0;
+  for (let i = from; i < to; i++) energy += samples[i]! * samples[i]!;
+  return energy / (to - from);
+};
 
 /** Middle of the quietest 20 ms window in `[min, max)`, so a chunk boundary falls between words. */
 function quietestCut(samples: Int16Array, min: number, max: number, frame: number): number {
   let cut = max;
   let lowest = Infinity;
   for (let start = min; start + frame <= max; start += frame) {
-    let energy = 0;
-    for (let i = start; i < start + frame; i++) energy += samples[i]! * samples[i]!;
+    const energy = meanSquare(samples, start, start + frame);
     if (energy < lowest) {
       lowest = energy;
       cut = start + (frame >> 1);
     }
   }
   return cut;
+}
+
+/** True when some 20 ms window reaches `floorRms`; audio below it is never sent, so silence costs no allocation. */
+function hasSound(samples: Int16Array, frame: number, floorRms: number): boolean {
+  for (let start = 0; start < samples.length; start += frame) {
+    if (meanSquare(samples, start, Math.min(start + frame, samples.length)) >= floorRms * floorRms) return true;
+  }
+  return false;
 }
 
 interface Chunk {
@@ -78,7 +92,14 @@ interface WhisperConfig {
   /** `serverConfig.workersAi`: the account's REST base URL (`.../accounts/<id>/ai`) and a Workers AI token. */
   readonly workersAi: Option.Option<{ readonly baseUrl: string; readonly apiToken: Redacted.Redacted }>;
   /** `engineeringDefaults.liveAsr`. */
-  readonly liveAsr: { readonly minMs: number; readonly maxMs: number; readonly concurrency: number; readonly requestTimeoutMs: number };
+  readonly liveAsr: {
+    readonly minMs: number;
+    readonly maxMs: number;
+    readonly concurrency: number;
+    readonly requestTimeoutMs: number;
+    readonly speechFloorRms: number;
+    readonly rateLimitBackoffMs: number;
+  };
 }
 
 /** Missing settings are not a startup error: every call fails as `Unavailable`, and sessions report degraded ASR. */
@@ -96,6 +117,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
   const transcribe = (sample_rate: number, samples: Int16Array) =>
     Effect.gen(function* () {
       const { url, token } = yield* configured;
+      if (!hasSound(samples, Math.round((20 * sample_rate) / 1000), limits.speechFloorRms)) return [];
       const wav = wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]);
       const response = yield* Effect.tryPromise(signal =>
         fetch(url, {
@@ -105,7 +127,11 @@ export function whisperSpeechToText(config: WhisperConfig) {
           signal: AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)]),
         }),
       ).pipe(Effect.mapError(error => unavailable(`request failed: ${String(error.cause)}`)));
-      if (!response.ok) return yield* unavailable(`responded ${response.status}`, response.status === 429 || response.status >= 500);
+      if (!response.ok) {
+        const rateLimited = response.status === 429;
+        const retryAfter = Number(response.headers.get('retry-after'));
+        return yield* unavailable(`responded ${response.status}`, rateLimited || response.status >= 500, rateLimited ? (retryAfter > 0 ? retryAfter * 1000 : limits.rateLimitBackoffMs) : undefined);
+      }
       const body = yield* Effect.tryPromise(() => response.json()).pipe(Effect.mapError(() => unavailable('response was not JSON')));
       const { result } = yield* Schema.decodeUnknown(WhisperResponse)(body).pipe(Effect.mapError(() => unavailable('unexpected response shape', false)));
       if (result.segments === undefined) return result.text.trim() === '' ? [] : yield* unavailable('response has text without segments', false);
@@ -115,7 +141,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
       });
     });
 
-  const openStream = (sample_rate: number) =>
+  const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
@@ -126,6 +152,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
       let filled = 0;
       let offset = 0;
       let queued = 0;
+      let pausedUntil = 0;
       let open = true;
       const enqueue = (length: number) => {
         const samples = buffer.slice(0, length);
@@ -135,10 +162,21 @@ export function whisperSpeechToText(config: WhisperConfig) {
         offset += length;
         queued += samples.byteLength;
       };
-      const transcribeChunk = ({ offset, samples }: Chunk) => {
+      const transcribeChunk = ({ offset, samples }: Chunk): Effect.Effect<ReadonlyArray<AsrResult>, Unavailable> => {
         queued -= samples.byteLength;
         const shift = offset / sample_rate;
-        return Effect.map(transcribe(sample_rate, samples), results => results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })));
+        const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrResult>);
+        if (Date.now() < pausedUntil) return skipped;
+        return transcribe(sample_rate, samples).pipe(
+          Effect.map(results => results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift }))),
+          Effect.catchIf(
+            error => error.retry_after_ms !== undefined,
+            error => {
+              pausedUntil = Date.now() + error.retry_after_ms!;
+              return skipped;
+            },
+          ),
+        );
       };
       return {
         send: samples => {
