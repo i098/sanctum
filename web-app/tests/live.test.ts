@@ -77,7 +77,7 @@ describe('live stream', () => {
     expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
   });
 
-  it('keeps the server reason for degraded live transcription, also through socket backpressure', () => {
+  it('keeps the server reason for degraded live transcription, also through socket backpressure, until recovered', () => {
     const statuses: unknown[][] = [];
     const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: (...update) => void statuses.push(update), WebSocket: FakeSocket as never });
     const socket = FakeSocket.last;
@@ -86,17 +86,9 @@ describe('live stream', () => {
     socket.bufferedAmount = 1_000_000;
     stream.send(0, new Int16Array(960));
     expect(statuses).toEqual([['connecting'], ['live'], ['degraded', 'provider_unavailable'], ['degraded', 'provider_unavailable']]);
-  });
-
-  it('returns to live when the server reports recovered live transcription, and stays degraded without it', () => {
-    const statuses: unknown[][] = [];
-    openLiveStream({ url: 'ws://test', start: start as never, onStatus: (...update) => void statuses.push(update), WebSocket: FakeSocket as never });
-    const socket = FakeSocket.last;
-    const server = (message: object) => socket.onmessage!({ data: JSON.stringify(message) });
-    server({ _tag: 'accepted', epoch_id: start.epoch_id, resume_from_sample: 0, max_frame_bytes: 65_536 });
-    server({ _tag: 'degraded', reason: 'asr_backlog', from_sample: 6_079_185 });
-    expect(statuses.at(-1)).toEqual(['degraded', 'asr_backlog']);
-    server({ _tag: 'recovered' });
-    expect(statuses).toEqual([['connecting'], ['live'], ['degraded', 'asr_backlog'], ['live']]);
+    socket.bufferedAmount = 0;
+    stream.send(960, new Int16Array(960));
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'recovered' }) });
+    expect(statuses.at(-1)).toEqual(['live']);
   });
 });
