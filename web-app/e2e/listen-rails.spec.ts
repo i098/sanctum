@@ -75,8 +75,9 @@ test('a browser caption taller than the rail shows its tail after an ellipsis an
 });
 
 const UNAVAILABLE = 'Word-by-word captions are not available in this browser. Lines appear after each phrase.';
+const LANGUAGE = 'Word-by-word captions are not available for this language. Lines appear after each phrase.';
 
-test('a permanent recognition error (as in Dia) stops captions for the page, says so once, and keeps server lines', async ({ page }) => {
+test('a permanent recognition error (as in Dia) stops captions for the session, says so once, keeps server lines and retries on the next start', async ({ page }) => {
   const warnings: string[] = [];
   page.on('console', message => message.type() === 'warning' && warnings.push(message.text()));
   await openListening(page, { speech: true });
@@ -89,13 +90,26 @@ test('a permanent recognition error (as in Dia) stops captions for the page, say
   await expect(page.getByText(UNAVAILABLE)).toHaveCount(1);
   await page.evaluate(() => window.__capture.transcript('we keep the pilot small', '0'));
   await expect(rail.getByText('S0: we keep the pilot small')).toBeVisible();
-  // No retry, now or after the next capture start; the note shows only while capturing.
+  expect(await page.evaluate(() => window.__speech.starts)).toBe(1);
+  // The note shows only while capturing; the next start tries once more and fails the same way.
   await page.getByRole('button', { name: 'Pause' }).click();
   await expect(page.getByText(UNAVAILABLE)).toHaveCount(0);
   await page.getByRole('button', { name: 'Resume' }).click();
+  await expect.poll(() => page.evaluate(() => window.__speech.starts)).toBe(2);
+  await expect(page.getByText(NOTE)).toBeVisible();
+  await page.evaluate(() => window.__speech.end('network'));
   await expect(page.getByText(UNAVAILABLE)).toHaveCount(1);
+  expect(await page.evaluate(() => window.__speech.starts)).toBe(2);
+  expect(warnings).toEqual(['Browser captions stopped: network', 'Browser captions stopped: network']);
+});
+
+test('an unsupported caption language says so, not that the browser lacks captions', async ({ page }) => {
+  await openListening(page, { speech: true });
+  await page.evaluate(() => window.__speech.end('language-not-supported'));
+  await expect(page.getByText(LANGUAGE)).toHaveCount(1);
+  await expect(page.getByText(UNAVAILABLE)).toHaveCount(0);
+  await expect(page.getByText(NOTE)).toHaveCount(0);
   expect(await page.evaluate(() => window.__speech.starts)).toBe(1);
-  expect(warnings).toEqual(['Browser captions stopped: network']);
 });
 
 test('a transient recognition error (no-speech) restarts captions without a note', async ({ page }) => {

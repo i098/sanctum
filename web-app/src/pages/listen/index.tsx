@@ -241,10 +241,16 @@ function Footer({ engine, snapshot, onOpen, onFailure, children }: FooterProps) 
   );
 }
 
-/** The browser-captions line under the status while capture runs: whose speech service runs them, or that none can. */
+/** The browser-captions line under the status while capture runs: whose speech service runs them, or why none can. */
+const CAPTION_NOTE: Record<Exclude<CaptionState, 'off'>, string> = {
+  on: "Live captions use your browser's speech service (in Chrome, Google's).",
+  unavailable: 'Word-by-word captions are not available in this browser. Lines appear after each phrase.',
+  language: 'Word-by-word captions are not available for this language. Lines appear after each phrase.',
+};
+
 function CaptionNote({ state, capturing }: { state: CaptionState; capturing: boolean }) {
   if (!capturing || state === 'off') return null;
-  return <p className="listen-helper listen-note">{state === 'on' ? "Live captions use your browser's speech service (in Chrome, Google's)." : 'Word-by-word captions are not available in this browser. Lines appear after each phrase.'}</p>;
+  return <p className="listen-helper listen-note">{CAPTION_NOTE[state]}</p>;
 }
 
 interface RailsProps {

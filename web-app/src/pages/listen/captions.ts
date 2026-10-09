@@ -38,21 +38,17 @@ interface SpeechWindow {
   webkitSpeechRecognition?: RecognitionConstructor;
 }
 
-/** Errors after which the browser's recognition never works on this page (Dia and other Chromium builds without Google's speech service report `network`). */
-const PERMANENT = ['network', 'service-not-allowed', 'not-allowed', 'language-not-supported'];
+/** Errors after which the browser's recognition cannot work in this capture session (Dia and other Chromium builds without Google's speech service report `network`). */
+const UNAVAILABLE = ['network', 'service-not-allowed', 'not-allowed'];
 
-/** Set by a permanent error: captions stay off until the page reloads. */
-let unavailable = false;
-
-/** The browser's recognition, if it has one (Firefox has none) and it has not failed for good. TypeScript's DOM types lack it; Chrome ships it prefixed. */
+/** The browser's recognition, if it has one (Firefox has none). TypeScript's DOM types lack it; Chrome ships it prefixed. */
 export function browserRecognition(): RecognitionConstructor | undefined {
-  if (unavailable) return undefined;
   const scope = window as SpeechWindow;
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
 }
 
-/** `on` while captions run; `unavailable` once a permanent error stopped them for this page. */
-export type CaptionState = 'on' | 'off' | 'unavailable';
+/** `on` while captions run; `unavailable` (no recognition service) or `language` (none for this language) once an error stopped them for this capture session. */
+export type CaptionState = 'on' | 'off' | 'unavailable' | 'language';
 
 /**
  * Runs captions into `rail` until the returned cleanup, restarting each time the browser ends a
@@ -111,8 +107,7 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
     // The browser ends the session after these and it restarts.
     if (event.error === 'no-speech' || event.error === 'aborted') return;
     console.warn('Browser captions stopped:', event.error);
-    unavailable ||= PERMANENT.includes(event.error);
-    stop(unavailable ? 'unavailable' : 'off');
+    stop(UNAVAILABLE.includes(event.error) ? 'unavailable' : event.error === 'language-not-supported' ? 'language' : 'off');
   };
   recognition.onend = () => {
     interim = '';
@@ -138,5 +133,6 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   return () => {
     unsubscribe();
     stop();
+    onState('off');
   };
 }
