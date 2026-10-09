@@ -227,7 +227,7 @@ class CaptureController implements CaptureView {
 
   readonly chooseInput = async (deviceId: string | null): Promise<void> => {
     const choice = ++this.choice;
-    const previous = this.session?.input ?? this.input;
+    const previous = this.session ? this.session.input : this.input;
     this.note(null);
     this.remember(deviceId);
     if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId, choice))) this.remember(previous);
@@ -312,15 +312,15 @@ class CaptureController implements CaptureView {
       const buffer = await this.openBuffer();
       if ((await buffer.recoverOrphans()) > 0) void this.refreshPending().then(() => this.startDrain());
       const listener = await this.claimListener(buffer);
-      stream = await this.openMicrophone();
-      const input = this.input;
+      const opened = await this.openMicrophone();
+      ({ stream } = opened);
       const recorder = await (this.deps.startRecorder ?? startRecorder)(stream, (start, samples) => this.onBlock(start, samples));
       if (!isSampleRate(recorder.sampleRate)) {
         await recorder.close();
         throw new DOMException(`unsupported sample rate ${recorder.sampleRate}`, 'NotSupportedError');
       }
       this.watchTrack(stream);
-      return { stream, recorder, buffer, listener, releaseLock, epoch: null, stopping: false, input };
+      return { stream, recorder, buffer, listener, releaseLock, epoch: null, stopping: false, input: opened.input };
     } catch (error) {
       stream?.getTracks().forEach((track) => track.stop());
       await releaseLock();
@@ -328,16 +328,19 @@ class CaptureController implements CaptureView {
     }
   }
 
-  /** The chosen input, else the default one; a chosen input that is gone is forgotten and the default used, and the page says so. */
-  private async openMicrophone(): Promise<MediaStream> {
+  /** The chosen input, else the default one, with the input it opened; a chosen input that is gone is dropped and the default used, and the page says so. */
+  private async openMicrophone(): Promise<{ stream: MediaStream; input: string | null }> {
+    const input = this.input;
     try {
-      return await acquireMicrophone(this.nav.mediaDevices, this.input);
+      return { stream: await acquireMicrophone(this.nav.mediaDevices, input), input };
     } catch (error) {
       const issue = captureIssue(error);
-      if (this.input === null || (issue !== 'no_input' && issue !== 'unsupported_constraints')) throw error;
-      this.remember(null);
-      this.note('input_unavailable');
-      return acquireMicrophone(this.nav.mediaDevices);
+      if (input === null || (issue !== 'no_input' && issue !== 'unsupported_constraints')) throw error;
+      if (this.input === input) {
+        this.remember(null);
+        this.note('input_unavailable');
+      }
+      return { stream: await acquireMicrophone(this.nav.mediaDevices), input: null };
     }
   }
 

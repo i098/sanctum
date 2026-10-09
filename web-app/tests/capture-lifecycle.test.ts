@@ -627,6 +627,40 @@ describe('capture lifecycle', () => {
     expect(h.storage.has('sanctum.microphone')).toBe(false);
   });
 
+  it('keeps the captured input when a later choice fails while an earlier one is still opening', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    let open!: () => void;
+    h.gates['iphone'] = new Promise<void>((resolve) => (open = resolve));
+    delete h.inputs['loom'];
+    const slow = h.engine.chooseInput('iphone');
+    await h.engine.chooseInput('loom');
+    open();
+    await slow;
+    expect(h.snapshot()).toMatchObject({ inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
+    expect(h.storage.has('sanctum.microphone')).toBe(false);
+    expect(h.replaced).toHaveLength(0);
+  });
+
+  it('moves capture to an input chosen while the microphone was still opening', async () => {
+    const h = harness();
+    let open!: () => void;
+    h.gates['default'] = new Promise<void>((resolve) => (open = resolve));
+    const starting = h.engine.start();
+    await settle();
+    await h.engine.chooseInput('iphone');
+    open();
+    await starting;
+    await settle();
+    h.feed(0.1);
+    h.accept();
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', inputId: 'iphone', inputLabel: '萧 Microphone' });
+    expect(h.storage.get('sanctum.microphone')).toBe('iphone');
+    expect(h.replaced).toHaveLength(1);
+  });
+
   it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {
     const h = harness();
     await h.engine.start();
