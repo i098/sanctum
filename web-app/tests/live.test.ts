@@ -77,7 +77,7 @@ describe('live stream', () => {
     expect(updates).toEqual([{ _tag: 'action_update', meeting_id: null, actions: [] }]);
   });
 
-  it('keeps the server reason for degraded live transcription, also through socket backpressure', () => {
+  it('keeps the server reason for degraded live transcription, also through socket backpressure, until recovered', () => {
     const statuses: unknown[][] = [];
     const stream = openLiveStream({ url: 'ws://test', start: start as never, onStatus: (...update) => void statuses.push(update), WebSocket: FakeSocket as never });
     const socket = FakeSocket.last;
@@ -86,5 +86,9 @@ describe('live stream', () => {
     socket.bufferedAmount = 1_000_000;
     stream.send(0, new Int16Array(960));
     expect(statuses).toEqual([['connecting'], ['live'], ['degraded', 'provider_unavailable'], ['degraded', 'provider_unavailable']]);
+    socket.bufferedAmount = 0;
+    stream.send(960, new Int16Array(960));
+    socket.onmessage!({ data: JSON.stringify({ _tag: 'recovered' }) });
+    expect(statuses.at(-1)).toEqual(['live']);
   });
 });

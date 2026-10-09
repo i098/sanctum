@@ -116,6 +116,7 @@ One loud 20 ms window is not enough: a click or tap in a quiet chunk is shorter 
 A skipped live chunk emits no text but still records coverage (see below), and a skipped batch range stays an empty transcript window.
 Past the allocation, requests cost about $0.0005 per audio minute (about $0.62 a day for the 1,240 minutes beyond it, for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
+After any `degraded` frame, the first live answer for audio at or after its `from_sample` (also an empty answer for silence) sends `recovered`, and the page clears the warning; an old lane's late answers do not count.
 A live chunk Whisper answered or the gate skipped records coverage for its whole span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
 A final window inside a meeting that closed before its transcript was complete (a live answer after the close, or reconciliation) finalizes that meeting again, so its transcript status, notes and memory include that text.
 

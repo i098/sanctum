@@ -73,8 +73,11 @@ const NO_FEED: ActionUpdateMessage = { _tag: 'action_update', meeting_id: null, 
 /** The server message in a frame, or null when it is malformed or the stream already stopped (a late frame must not refill the feed). */
 const decodeOpen = (data: unknown, stopped: boolean): ServerControlMessage | null => (stopped ? null : Either.getOrNull(decodeServer(data)));
 
-/** The status of an accepted stream: degraded with the last reason the server sent, else live. */
-const resumed = (reason: DegradedReason | null): LiveUpdate => (reason === null ? ['live'] : ['degraded', reason]);
+/** The status of an accepted stream: degraded with the last reason the server sent or while frames back up, else live. */
+const resumed = (reason: DegradedReason | null, backedUp = false): LiveUpdate => (reason === null && !backedUp ? ['live'] : ['degraded', reason]);
+
+/** The live-ASR trouble a frame reports: its reason for `degraded`, null for `recovered`, undefined for any other frame. */
+const asrTrouble = (message: ServerControlMessage): DegradedReason | null | undefined => (message._tag === 'degraded' ? message.reason : message._tag === 'recovered' ? null : undefined);
 
 export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSocket, ...listeners }: LiveOptions): LiveStream {
   let socket: WebSocket | null = null;
@@ -96,9 +99,11 @@ export function openLiveStream({ url, start, onStatus, WebSocket: Socket = WebSo
       clearFeed();
       ws.close(1000);
       onStatus('rejected', message.reason);
-    } else if (message._tag === 'degraded') {
-      serverDegraded = message.reason;
-      onStatus('degraded', message.reason);
+    } else {
+      const trouble = asrTrouble(message);
+      if (trouble === undefined) return;
+      serverDegraded = trouble;
+      onStatus(...resumed(trouble, backedUp));
     }
   };
 

@@ -200,11 +200,15 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
-  it.scoped('skips live ASR under provider backpressure instead of queueing without bound', () =>
+  it.scoped('skips live ASR under provider backpressure, then reports recovered once the next lane answers', () =>
     Effect.gen(function* () {
       const { speech, socket } = yield* setup;
       socket.send(pcmFrame(0, 0));
       const slow = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
+      slow!.emitBatch({ start_s: 0, end_s: 0.05, results: [] });
+      expect(yield* socket.take('recovered')).toEqual({ _tag: 'recovered' }); // first answer on each socket
+      // A late answer the old lane flushes after the rotation is for audio before the backlog.
+      slow!.pending.push({ start_s: 0.05, end_s: 0.1, is_final: false, text: 'late', confidence: null, speaker: null });
       slow!.backlog = liveLimits.asrBacklogBytes;
       socket.send(pcmFrame(1, 1_600));
       expect(yield* socket.take('degraded')).toEqual({ _tag: 'degraded', reason: 'asr_backlog', from_sample: 1_600 });
@@ -212,6 +216,17 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       expect(yield* socket.take('ack')).toMatchObject({ sequence: 1, sample_end: 3_200 });
       expect(slow!.received).toBe(1_600);
       yield* eventually(Effect.sync(() => slow!.finished), finished => finished);
+      yield* socket.take('transcript');
+
+      yield* pause(liveLimits.providerRetryMs);
+      socket.send(pcmFrame(2, 3_200));
+      const next = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream?.received === 1_600);
+      expect(socket.messages.filter(message => message._tag === 'recovered')).toEqual([]);
+      next!.emitBatch({ start_s: 0, end_s: 0.05, results: [] });
+      next!.emitBatch({ start_s: 0.05, end_s: 0.1, results: [] });
+      expect(yield* socket.take('recovered')).toEqual({ _tag: 'recovered' });
+      yield* pause(200);
+      expect(socket.messages.filter(message => message._tag === 'recovered')).toEqual([]);
     }),
   );
 
