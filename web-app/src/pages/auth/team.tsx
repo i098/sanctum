@@ -17,6 +17,7 @@ type Result = { readonly error: { readonly message?: string | undefined } | null
 type Change = (action: () => Promise<Result>) => void;
 
 const ROLES: ReadonlyArray<Role> = ['member', 'admin', 'owner'];
+const INVITABLE = ROLES.filter(role => role !== 'owner');
 const field = 'min-w-0 rounded border border-divider bg-surface px-3 py-2 text-ink outline-none focus-visible:border-accent';
 const row = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5';
 const inviteLink = (id: string) => `${location.origin}/invite/${id}`;
@@ -127,10 +128,10 @@ function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
       <h3>Invite someone</h3>
       <form onSubmit={invite} className="flex flex-wrap gap-2">
         <input name="email" type="email" required placeholder="name@example.com" aria-label="Email" className={`${field} flex-1 basis-56`} />
-        <RoleSelect roles={assignable(access.role)} name="role" aria-label="Role" defaultValue="member" className={field} />
+        <RoleSelect roles={INVITABLE} name="role" aria-label="Role" defaultValue="member" className={field} />
         <button type="submit" data-primary disabled={busy}>Invite</button>
       </form>
-      <p className="mt-2 text-xs text-ink-muted">Only someone who has the link and signs up with that email address can join, so share it only with that person.</p>
+      <p className="mt-2 text-xs text-ink-muted">Whoever has the link and signs up with that email address joins, so share it only with that person. Only owners and admins see pending invitations. An owner is made by changing a member's role.</p>
       {invited && (
         <div role="status" className="mt-3 rounded bg-surface px-3 py-2.5">
           <p className="text-xs text-ink-secondary">
@@ -146,7 +147,7 @@ function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
   );
 }
 
-function PendingRow({ invitation, manage, busy, change }: { invitation: Invitation; manage: boolean; busy: boolean; change: Change }) {
+function PendingRow({ invitation, busy, change }: { invitation: Invitation; busy: boolean; change: Change }) {
   const expires = new Date(invitation.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   return (
     <li className={row}>
@@ -154,14 +155,12 @@ function PendingRow({ invitation, manage, busy, change }: { invitation: Invitati
         <span className="text-ink">{invitation.email}</span>
         <span className="block text-xs text-ink-muted">{invitation.role} · expires {expires}</span>
       </span>
-      {manage && (
-        <span className="flex shrink-0 items-center gap-1">
-          <CopyLink id={invitation.id} />
-          <button type="button" disabled={busy} onClick={() => change(() => auth.organization.cancelInvitation({ invitationId: invitation.id }))}>
-            Cancel
-          </button>
-        </span>
-      )}
+      <span className="flex shrink-0 items-center gap-1">
+        <CopyLink id={invitation.id} />
+        <button type="button" disabled={busy} onClick={() => change(() => auth.organization.cancelInvitation({ invitationId: invitation.id }))}>
+          Cancel
+        </button>
+      </span>
     </li>
   );
 }
@@ -175,11 +174,11 @@ function TeamList(props: RowProps) {
         {team.members.map(member => <MemberRow key={member.id} member={member} {...props} />)}
       </ul>
       {manage && <InviteForm {...props} />}
-      {team.invitations.length > 0 && (
+      {manage && team.invitations.length > 0 && (
         <>
           <h3>Pending invitations</h3>
           <ul aria-label="Pending invitations" className="divide-y divide-divider">
-            {team.invitations.map(invitation => <PendingRow key={invitation.id} invitation={invitation} manage={manage} busy={props.busy} change={props.change} />)}
+            {team.invitations.map(invitation => <PendingRow key={invitation.id} invitation={invitation} busy={props.busy} change={props.change} />)}
           </ul>
         </>
       )}

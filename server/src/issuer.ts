@@ -14,7 +14,7 @@ import { NodeRuntime } from '@effect/platform-node';
 import { SqlClient } from '@effect/sql';
 import { type BetterAuthPlugin, betterAuth } from 'better-auth';
 // `better-auth/api` through the `imports` alias in package.json: Sentrux resolves that specifier to server/src/api.ts.
-import { APIError, createAuthMiddleware } from '#better-auth-api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from '#better-auth-api';
 import { jwt, organization } from 'better-auth/plugins';
 import { Config, Effect, Either, Option, Redacted } from 'effect';
 import { createPool } from 'mysql2/promise';
@@ -106,6 +106,26 @@ const scopelessAuthorizeGetsDefaults = rewritesRequest('sanctum-default-scopes',
   return { [field]: { ...params, scope: DEFAULT_CLIENT_SCOPES.join(' ') } };
 });
 
+/** Pending invitations carry the ids that accept them, so only an owner or admin of the organization gets them back from `get-full-organization`; for anyone else the list is empty. */
+const invitationsOnlyForManagers = {
+  id: 'sanctum-invitations-for-managers',
+  hooks: {
+    after: [
+      {
+        matcher: (ctx: { path?: string }) => ctx.path === '/organization/get-full-organization',
+        handler: createAuthMiddleware(async ctx => {
+          const returned = ctx.context.returned as { members?: ReadonlyArray<{ userId: string; role: string }> } | null;
+          if (!returned?.members) return;
+          const session = await getSessionFromCtx(ctx);
+          const mine = returned.members.find(member => member.userId === session?.user.id);
+          if (mine?.role.split(',').some(role => ['owner', 'admin'].includes(role.trim()))) return;
+          ctx.context.returned = { ...returned, invitations: [] };
+        }),
+      },
+    ],
+  },
+} satisfies BetterAuthPlugin;
+
 /**
  * Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it.
  * `sql` is the API's database client, which organization changes need for Sanctum's side; without it they fail.
@@ -177,8 +197,8 @@ export const createIssuer = (
     verification: { modelName: 'auth_verification' },
     // The JWT plugin's session-token endpoint is not an OAuth grant; tokens come from /oauth2/token only.
     // Leaving runs no organization hook, so a member leaves only by an admin's removal, which Sanctum sees.
-    // Listing one's invitations would hand their ids to anyone who registers an invited address, so the link stays the only way to learn an id.
-    disabledPaths: ['/token', '/organization/leave', '/organization/list-user-invitations'],
+    // Both list invitations (and so their ids), the first to anyone with an invited address and the second to every member: pending invitations come only through get-full-organization, for owners and admins.
+    disabledPaths: ['/token', '/organization/leave', '/organization/list-user-invitations', '/organization/list-invitations'],
     plugins: [
       jwt({ schema: { jwks: { modelName: 'auth_jwks' } } }),
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
@@ -186,7 +206,8 @@ export const createIssuer = (
       cimd({ fetchClientMetadataResource: fetchMetadata }),
       loopbackClientsAreNative,
       scopelessAuthorizeGetsDefaults,
-      // No email transport: inviters copy the link. Sign-up is open and email unverified, so anyone can register an invited address; the invitation id in the link is the secret.
+      invitationsOnlyForManagers,
+      // No email transport: inviters copy the link. Sign-up is open and email unverified, so anyone can register an invited address: the invitation id is the secret, seen only by owners and admins, and no invitation carries `owner`.
       // Once SMTP exists, send invitations by email and set `requireEmailVerificationOnInvitation: true` (docs/operations.md).
       organization({
         schema: { organization: { modelName: 'auth_organization' }, member: { modelName: 'auth_member' }, invitation: { modelName: 'auth_invitation' } },
@@ -195,6 +216,9 @@ export const createIssuer = (
         membershipLimit: Number.MAX_SAFE_INTEGER,
         disableOrganizationDeletion: true,
         organizationHooks: {
+          beforeCreateInvitation: async ({ invitation }) => {
+            if (invitation.role.split(',').some(role => role.trim() === 'owner')) throw new APIError('FORBIDDEN', { message: 'An owner is made by changing a member\'s role, not by invitation' });
+          },
           beforeCreateOrganization: sanctum(({ organization, user }) => Effect.map(workspaceOrganization(issuer, organization.slug, user), workspace => ({ data: { ...organization, ...workspace } }))),
           beforeAcceptInvitation: sanctum(({ invitation, user }) => requireSeat(issuer, invitation.organizationId, user)),
           afterAcceptInvitation: sanctum(({ member, user }) => applyMember(issuer, member.organizationId, user, member.role)),

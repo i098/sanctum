@@ -215,6 +215,30 @@ describe('self-hosted organizations', () => {
     }),
   );
 
+  it.scoped('only owners and admins see pending invitations, and none can name the owner role', () =>
+    Effect.gen(function* () {
+      const server = yield* selfHosted;
+      yield* Effect.promise(async () => {
+        const team = await ownerWithTeam(server);
+        const member = (await join(server, team, 'Mia')).invitee;
+        const admin = (await join(server, team, 'Ava', 'admin')).invitee;
+        const pending = await idp(server, '/organization/invite-member', team.owner.cookie, { email: `pending-${randomBytes(4).toString('hex')}@fixture.test`, role: 'admin', organizationId: team.workspace_id });
+        const full = `/organization/get-full-organization?organizationId=${team.workspace_id}`;
+        for (const manager of [team.owner, admin]) expect((await idp(server, full, manager.cookie)).body['invitations']).toEqual([expect.objectContaining({ id: pending.body['id'] })]);
+        const seen = await idp(server, full, member.cookie);
+        expect(seen.body['members']).toHaveLength(3);
+        expect(seen.body['invitations']).toEqual([]);
+        for (const person of [team.owner, admin, member]) {
+          const listed = await fetch(`${server.base}/idp/organization/list-invitations?organizationId=${team.workspace_id}`, { headers: { origin: ORIGIN, cookie: person.cookie } });
+          expect(listed.status).toBe(404);
+        }
+        const owner = await idp(server, '/organization/invite-member', team.owner.cookie, { email: 'boss@fixture.test', role: 'owner', organizationId: team.workspace_id });
+        expect(owner.status).toBe(403);
+        expect(owner.body).toMatchObject({ message: expect.stringContaining('changing a member') });
+      });
+    }),
+  );
+
   it.scoped('sign-in repairs a membership whose Sanctum side failed, and MCP org_id selects the workspace', () =>
     Effect.gen(function* () {
       const server = yield* selfHosted;
