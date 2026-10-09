@@ -94,6 +94,8 @@ interface Session {
   readonly releaseLock: () => Promise<void>;
   epoch: Epoch | null;
   stopping: boolean;
+  /** The input this session captures from; `chooseInput` restores it when a switch fails. */
+  input: string | null;
 }
 
 type Phase = 'stopped' | 'starting' | 'capturing' | 'paused';
@@ -135,6 +137,8 @@ class CaptureController implements CaptureView {
   private notice: CaptureIssue | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
   private input: string | null;
+  /** Counts input choices; a switch whose number is no longer current changes nothing. */
+  private choice = 0;
   private leaseLost = false;
   private interrupted = false;
   private missing = false;
@@ -197,6 +201,7 @@ class CaptureController implements CaptureView {
       }
       this.session = session;
       Object.assign(this, { phase: 'capturing', permission: 'granted', claimed: true, interrupted: false, missing: false, muted: false });
+      if (session.input !== this.input) void this.chooseInput(this.input);
       void this.requestWakeLock();
     } catch (error) {
       this.phase = 'stopped';
@@ -221,10 +226,11 @@ class CaptureController implements CaptureView {
   readonly resume = (): Promise<void> => this.start();
 
   readonly chooseInput = async (deviceId: string | null): Promise<void> => {
-    const previous = this.input;
+    const choice = ++this.choice;
+    const previous = this.session?.input ?? this.input;
     this.note(null);
     this.remember(deviceId);
-    if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId))) this.remember(previous);
+    if (this.session !== null && !this.session.stopping && !(await this.switchInput(deviceId, choice))) this.remember(previous);
   };
 
   async orphanedRecordings(): Promise<readonly OrphanedRecording[] | null> {
@@ -307,13 +313,14 @@ class CaptureController implements CaptureView {
       if ((await buffer.recoverOrphans()) > 0) void this.refreshPending().then(() => this.startDrain());
       const listener = await this.claimListener(buffer);
       stream = await this.openMicrophone();
+      const input = this.input;
       const recorder = await (this.deps.startRecorder ?? startRecorder)(stream, (start, samples) => this.onBlock(start, samples));
       if (!isSampleRate(recorder.sampleRate)) {
         await recorder.close();
         throw new DOMException(`unsupported sample rate ${recorder.sampleRate}`, 'NotSupportedError');
       }
       this.watchTrack(stream);
-      return { stream, recorder, buffer, listener, releaseLock, epoch: null, stopping: false };
+      return { stream, recorder, buffer, listener, releaseLock, epoch: null, stopping: false, input };
     } catch (error) {
       stream?.getTracks().forEach((track) => track.stop());
       await releaseLock();
@@ -334,12 +341,12 @@ class CaptureController implements CaptureView {
     }
   }
 
-  /** Moves the running capture to `deviceId` in the same epoch; false, with `issue` set, keeps the earlier input. */
-  private async switchInput(deviceId: string | null): Promise<boolean> {
+  /** Moves the running capture to `deviceId` in the same epoch; false, with a note set, keeps the earlier input. A switch that is no longer the latest choice changes nothing and counts as done. */
+  private async switchInput(deviceId: string | null, choice: number): Promise<boolean> {
     const session = this.session!;
     try {
       const stream = await acquireMicrophone(this.nav.mediaDevices, deviceId);
-      if (this.session !== session) return (stream.getTracks().forEach((track) => track.stop()), true);
+      if (this.session !== session || this.choice !== choice) return (stream.getTracks().forEach((track) => track.stop()), true);
       try {
         session.recorder.replaceInput(stream);
       } catch {
@@ -351,12 +358,14 @@ class CaptureController implements CaptureView {
       }
       session.stream.getTracks().forEach((track) => track.stop());
       session.stream = stream;
+      session.input = deviceId;
       this.watchTrack(stream);
       Object.assign(this, { muted: false, silent: false, silentSamples: 0 });
       if (this.issue === 'input_lost') this.issue = null;
       this.publish();
       return true;
     } catch (error) {
+      if (this.choice !== choice) return true;
       this.note(captureIssue(error));
       this.publish();
       return false;
@@ -559,8 +568,10 @@ class CaptureController implements CaptureView {
   /** A chosen input that disappears hands capture to the default input and says so; the default disappearing stops capture. */
   private async onInputEnded(): Promise<void> {
     if (this.input === null) return this.halt('input_lost', true);
+    const choice = ++this.choice;
     this.remember(null);
-    if (!(await this.switchInput(null))) return this.halt('input_lost', true);
+    if (!(await this.switchInput(null, choice))) return this.halt('input_lost', true);
+    if (this.choice !== choice) return;
     this.note('input_unavailable');
     this.publish();
   }

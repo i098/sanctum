@@ -265,9 +265,12 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   const inputs = { ...INPUTS };
   /** Every `getUserMedia` audio request, in order. */
   const requests: MediaTrackConstraints[] = [];
+  /** A request for an input here waits for its promise before it opens. */
+  const gates: Record<string, Promise<void>> = {};
   const microphone = async (constraints: MediaStreamConstraints) => {
     const audio = constraints.audio as MediaTrackConstraints;
     requests.push(audio);
+    await gates[((audio.deviceId as ConstrainDOMStringParameters | undefined)?.exact as string | undefined) ?? 'default'];
     const label = inputs[((audio.deviceId as ConstrainDOMStringParameters | undefined)?.exact as string | undefined) ?? 'default'];
     if (label === undefined) throw new DOMException('no such input', 'OverconstrainedError');
     const track = tracks[tracks.push(Object.assign(new FakeTrack(), { label })) - 1];
@@ -324,6 +327,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     buffer,
     storage,
     inputs,
+    gates,
     requests,
     replaced,
     lives,
@@ -595,6 +599,32 @@ describe('capture lifecycle', () => {
     expect(h.snapshot().issue).toBe('input_unavailable');
     vi.advanceTimersByTime(8_000);
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'transcription_unavailable' });
+  });
+
+  it('lets only the latest input choice change the capture, the choice and the stored input', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    let open!: () => void;
+    h.gates['iphone'] = new Promise<void>((resolve) => (open = resolve));
+    const slow = h.engine.chooseInput('iphone');
+    await h.engine.chooseInput('loom');
+    open();
+    await slow;
+    expect(h.snapshot()).toMatchObject({ inputId: 'loom', inputLabel: 'LoomAudioDevice' });
+    expect(h.storage.get('sanctum.microphone')).toBe('loom');
+    expect(h.replaced).toHaveLength(1);
+
+    delete h.inputs['iphone'];
+    let fail!: () => void;
+    h.gates['iphone'] = new Promise<void>((resolve) => (fail = resolve));
+    const failing = h.engine.chooseInput('iphone');
+    await h.engine.chooseInput(null);
+    fail();
+    await failing;
+    expect(h.snapshot()).toMatchObject({ inputId: null, issue: null, inputLabel: 'Default - MacBook Pro Microphone' });
+    expect(h.storage.has('sanctum.microphone')).toBe(false);
   });
 
   it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {
