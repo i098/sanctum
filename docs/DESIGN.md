@@ -82,6 +82,8 @@ Review, Agents, and Settings open only on request.
 Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
+Settings shows the website sign-in state: signed in (name and role, Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
+Signed out, the helper line under the status becomes a Sign in to listen link. A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
 Keep controls keyboard-accessible, trap focus correctly in dialogs, and return focus on close.
 
 ## Acceptance
