@@ -5,20 +5,17 @@
  */
 import { type AccessScope, createClient, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
-/** The session opener's script-readable double-submit cookie, echoed as `x-csrf-token`; none before sign-in. */
-export function csrfHeader(): Record<string, string> {
-  const token = globalThis.document?.cookie.split('; ').find((pair) => pair.startsWith('sanctum_csrf='))?.slice('sanctum_csrf='.length);
-  return token === undefined ? {} : { 'x-csrf-token': decodeURIComponent(token) };
-}
+/** The session opener's script-readable double-submit cookie; its value goes back as `x-csrf-token`. */
+export const csrfToken = (): string | undefined =>
+  globalThis.document?.cookie.split('; ').find((pair) => pair.startsWith('sanctum_csrf='))?.slice('sanctum_csrf='.length);
 
 /** Same-origin v1 client: the session cookie authenticates every call, and mutations carry the CSRF header. */
 export function sessionClient(): SanctumClient {
   return createClient({
     baseUrl: window.location.origin,
     fetch: (input, init) => {
-      const headers = new Headers(init?.headers);
-      for (const [name, value] of Object.entries(csrfHeader())) headers.set(name, value);
-      return fetch(input, { ...init, headers });
+      const csrf = csrfToken();
+      return fetch(input, csrf === undefined ? init : { ...init, headers: { ...init?.headers, 'x-csrf-token': decodeURIComponent(csrf) } });
     },
   });
 }
@@ -73,7 +70,8 @@ export function takeSignInNotice(location: Location, history: History): SignInNo
 }
 
 async function post(path: string): Promise<Response> {
-  const response = await fetch(path, { method: 'POST', headers: csrfHeader() });
+  const token = csrfToken();
+  const response = await fetch(path, { method: 'POST', headers: token === undefined ? {} : { 'x-csrf-token': decodeURIComponent(token) } });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response;
 }

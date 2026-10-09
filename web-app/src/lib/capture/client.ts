@@ -2,7 +2,7 @@
 import { FetchHttpClient, HttpApi, HttpApiClient, HttpClient, HttpClientRequest, type HttpApiError } from '@effect/platform';
 import { Forbidden, HashConflict, ListenersApi, NotFound, Unauthenticated, Unavailable } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import { csrfHeader } from '../session.ts';
+import { csrfToken } from '../session.ts';
 
 /** The listeners group with the API-wide error envelope `SanctumApi` serves. */
 class CaptureApi extends HttpApi.make('sanctum')
@@ -19,6 +19,9 @@ export type ListenersClient = HttpApiClient.Client<typeof ListenersApi, ApiError
 
 /** Same-origin by default: the secure session cookie authenticates every call, and mutations carry the CSRF header. */
 export function makeListenersClient(baseUrl = globalThis.location?.origin ?? ''): ListenersClient {
-    const transformClient = HttpClient.mapRequest((request) => HttpClientRequest.setHeaders(request, csrfHeader()));
+    const transformClient = HttpClient.mapRequest((request) => {
+        const token = csrfToken();
+        return token === undefined ? request : HttpClientRequest.setHeader(request, 'x-csrf-token', decodeURIComponent(token));
+    });
     return Effect.runSync(HttpApiClient.make(CaptureApi, { baseUrl, transformClient }).pipe(Effect.provide(FetchHttpClient.layer))).listeners;
 }

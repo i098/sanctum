@@ -5,7 +5,7 @@ interface Agent {
   credential: { id: string; scopes: string[]; meetings: unknown; expires_at: null; revoked_at: string | null; last_used_at: null; created_at: string };
 }
 
-/** The session opener's script-readable CSRF cookie; the server refuses cookie mutations without it as `x-csrf-token`. */
+/** The server refuses cookie-session mutations unless the script-readable `sanctum_csrf` cookie comes back as `x-csrf-token`. */
 const CSRF = 'csrf-e2e-token';
 
 /** In-page stand-in for the v1 agents routes over a browser session; records every write the dialog sends. */
@@ -17,9 +17,6 @@ async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (request.method() === 'GET') return route.fulfill({ json: { items: agents, next_cursor: null } });
-    if (request.headers()['x-csrf-token'] !== CSRF) {
-      return route.fulfill({ status: 403, json: { code: 'forbidden', message: 'CSRF token is missing or invalid', retryable: false } });
-    }
     writes.push({ method: request.method(), path, body: request.postDataJSON() });
     if (request.method() === 'POST') {
       if (options.failCreate) return route.fulfill({ status: 403, json: { code: 'forbidden', message: 'Requires workspace:admin', retryable: false } });
@@ -36,6 +33,7 @@ async function agentsApi(page: Page, options: { failCreate?: boolean } = {}) {
     credential.revoked_at = '2026-09-29T00:05:00Z';
     return route.fulfill({ status: 204 });
   });
+  await page.route('**/api/v1/agents**', route => route.request().headers()['x-csrf-token'] === CSRF ? route.fallback() : route.fulfill({ status: 403, json: { code: 'forbidden', message: 'CSRF token is missing or invalid', retryable: false } }));
   return { agents, writes };
 }
 
