@@ -51,7 +51,7 @@ export class SanctumJobs extends SanctumContainer {
 const APP_HOST = 'app.sanctum.42nights.dev';
 const APEX_HOST = 'sanctum.42nights.dev';
 
-/** The apex: 308 to the same path and query on the app host, so old links and the old MCP address keep working. */
+/** The apex: 308 to the same path and query on the app host, so old links keep working. MCP tokens issued for the apex resource no longer match the audience, so MCP clients must authorize again. */
 const apex = (request: Request) => {
   const url = new URL(request.url);
   url.host = APP_HOST;
