@@ -182,8 +182,7 @@ function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: 
   }, [listener]);
   const end = (meeting_id: string): void => {
     onFailure(null);
-    const fence = engine.getSnapshot().listener === 'starting' ? Promise.resolve(null) : engine.end();
-    fence.then(captured => endMeeting(meeting_id, captured)).then(() => {
+    engine.end().then(captured => endMeeting(meeting_id, captured)).then(() => {
       forget();
       setEnded(true);
     }, (error: unknown) => onFailure(`Meeting not ended: ${error instanceof Error ? error.message : String(error)}`));

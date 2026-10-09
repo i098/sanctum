@@ -105,6 +105,7 @@ describe('MeetingsApi over HTTP', () => {
       const base = `http://127.0.0.1:${address.port}`;
       const { meeting, epoch } = fixture;
 
+      expect((yield* call(base, 'device', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch })).status).toBe(400);
       expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, {})).status).toBe(403);
       expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch, fence_sample: 40 * RATE })).status).toBe(403);
       expect((yield* call(base, 'device', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch, fence_sample: 40 * RATE })).body).toMatchObject({ id: meeting, state: 'closing' });

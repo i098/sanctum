@@ -1014,6 +1014,30 @@ describe('capture lifecycle', () => {
     expect(h.buffer.chunks.size).toBe(2); // never deleted
   });
 
+  it('End stops a capture whose live socket is not accepted yet, so it never records past the closed meeting', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.3);
+    expect(h.snapshot().listener).toBe('starting');
+    await h.engine.end();
+    expect(h.snapshot().listener).toBe('paused');
+    expect(h.lives[0]!.stopped).toBe('pause');
+  });
+
+  it('End pressed while the microphone prompt is open cancels the start', async () => {
+    let grant: (stream: MediaStream) => void = () => { };
+    const track = new FakeTrack();
+    const h = harness({ getUserMedia: () => new Promise<MediaStream>((resolve) => (grant = resolve)) });
+    const starting = h.engine.start();
+    await settle();
+    expect(h.snapshot().listener).toBe('starting');
+    expect(await h.engine.end()).toBeNull();
+    grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+    await starting;
+    expect(h.snapshot().listener).toBe('paused');
+    expect(track.readyState).toBe('ended');
+  });
+
   it('honours a pause pressed while the microphone prompt is open', async () => {
     let grant: (stream: MediaStream) => void = () => { };
     const track = new FakeTrack();

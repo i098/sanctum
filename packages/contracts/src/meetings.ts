@@ -132,7 +132,9 @@ export type SplitResult = typeof SplitResult.Type;
  * range of that epoch within the window, which is finalized again if it was sealed. The field is not `sample` so that the
  * payload shares no shape with a public schema, which would name that schema after this route in the SDKs.
  */
-export const EndMeeting = Schema.Struct({ epoch_id: Schema.optional(CaptureEpochId), fence_sample: Schema.optional(SampleIndex) });
+export const EndMeeting = Schema.Struct({ epoch_id: Schema.optional(CaptureEpochId), fence_sample: Schema.optional(SampleIndex) }).pipe(
+  Schema.filter(end => (end.epoch_id === undefined) === (end.fence_sample === undefined), { message: () => 'epoch_id and fence_sample are sent together or not at all' }),
+);
 export type EndMeeting = typeof EndMeeting.Type;
 
 const RevisionedMeeting = Schema.Struct({ meeting_id: MeetingId, expected_revision: Revision });
