@@ -268,7 +268,9 @@ const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: Transc
     const { source } = segment;
     const [fenced] = yield* sql<{ id: MeetingId }>`SELECT id FROM meetings
       WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start}
-        AND started_at <= ${dbTime(sampleMs(epoch, source.sample_start))} ORDER BY end_fence_sample LIMIT 1`;
+        AND started_at <= ${dbTime(sampleMs(epoch, source.sample_start))}
+        AND EXISTS (SELECT 1 FROM meeting_ranges r WHERE r.meeting_id = meetings.id AND r.boundary_revision = meetings.boundary_revision)
+      ORDER BY end_fence_sample LIMIT 1`;
     const closed = fenced === undefined ? null : yield* selectMeeting(workspace_id, fenced.id, true);
     if (closed?._tag !== 'Some') return false;
     const end = yield* claimSource(closed.value, source);

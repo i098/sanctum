@@ -58,6 +58,20 @@ describe('split and merge', () => {
     ),
   );
 
+  it.effect('a meeting merged away after End keeps its fence but is never revived by late audio', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { owner, device, listener, epoch, first, second } = yield* twoMeetings;
+        yield* closeMeeting(device, second, { epoch_id: epoch, sample: (200 + 6 * MIN) * RATE });
+        yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
+        yield* hear(listener, epoch, 170 + 6 * MIN, 175 + 6 * MIN, 'next slide shows the mobile layout');
+        expect(yield* rangesOf(second)).toEqual([]);
+        expect((yield* listMeetings(owner, {})).meetings.map(meeting => meeting.id)).not.toContain(second);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('rejects stale revisions and split points outside the meeting', () =>
     withDatabase(
       Effect.gen(function* () {
