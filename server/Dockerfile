@@ -5,7 +5,7 @@
 # operator invokes `node server/dist/migrate.js`; the API and worker never apply DDL.
 # The shared contracts and SDK packages stay TypeScript and run through Node's type stripping.
 
-FROM node:24.19.0-bookworm-slim AS build
+FROM public.ecr.aws/docker/library/node:24.19.0-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/contracts/package.json packages/contracts/
@@ -19,7 +19,7 @@ COPY web-app web-app
 COPY sdk/typescript/src sdk/typescript/src
 RUN npm run build --workspace web-app && npm run build --workspace server
 
-FROM node:24.19.0-bookworm-slim
+FROM public.ecr.aws/docker/library/node:24.19.0-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
