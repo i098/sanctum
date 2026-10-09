@@ -39,12 +39,12 @@ const setup = Effect.gen(function* () {
 const epochRow = (epoch_id: string) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql<{ live_sample_end: string; end_reason: string | null }>`SELECT live_sample_end, end_reason FROM capture_epochs WHERE id = ${epoch_id}`);
 
-/** Starts a live epoch, streams 4 800 samples and drops the socket without a `stop`, as a killed browser would. */
+/** Starts a live epoch captured now (a meeting it opens is not idle), streams 4 800 samples and drops the socket without a `stop`, as a killed browser would. */
 const streamThenDrop = (host: string, listener_id: string, lease_generation: number) =>
   Effect.gen(function* () {
     const epoch_id = newEpochId();
     const socket = yield* openSocket(host, listener_id, 'device');
-    socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
+    socket.send(startMessage({ listener_id, epoch_id, lease_generation, captured_at: new Date().toISOString() }));
     yield* socket.take('accepted');
     for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
     for (let sequence = 0; sequence < 3; sequence++) yield* socket.take('ack');

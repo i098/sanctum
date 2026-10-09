@@ -5,8 +5,8 @@ import { CaptureEpochId, ListenerId, MeetingId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { listenerFeed } from '../src/actions.ts';
 import { evaluateBoundary, LOW_CONFIDENCE } from '../src/boundaries.ts';
-import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments } from '../src/meetings.ts';
-import { claimed, hear, jobsOf, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
+import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments, sweepIdleMeetings } from '../src/meetings.ts';
+import { claimed, hear, jobsOf, type Listener, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -247,6 +247,54 @@ describe('automatic meeting lifecycle', () => {
         expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['provisional']);
         yield* onCaptureEnded({ ...end, epoch_id: resumed, sample_end: 31 * RATE, reason: 'close' });
         expect((yield* meetingsOf(listener.workspace_id)).map(meeting => meeting.state)).toEqual(['closing']);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('closes a paused or silent meeting after ten minutes without speech, and not before', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { device } = yield* setup;
+        const ago = (minutes: number) => new Date(Date.now() - minutes * MIN * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        /** A listener whose epoch began `minutes` ago and heard speech over its first 30 seconds. */
+        const spoke = (minutes: number) =>
+          Effect.gen(function* () {
+            const listener = yield* seedListener(device);
+            const epoch = yield* seedEpoch(listener, ago(minutes));
+            yield* hear(listener, epoch, 0, 30, 'reviewing the quarterly roadmap together');
+            return { listener, epoch };
+          });
+        const pause = ({ listener, epoch }: { listener: Listener; epoch: CaptureEpochId }) =>
+          onCaptureEnded({ workspace_id: listener.workspace_id, listener_id: listener.listener_id, epoch_id: epoch, track: 0, sample_end: 40 * RATE, reason: 'pause' });
+        const meetingOf = (listener: Listener) =>
+          Effect.map(sql<{ id: string; state: string }>`SELECT id, state FROM meetings WHERE listener_id = ${listener.listener_id}`, rows => rows[0]!);
+
+        const long = yield* spoke(15);
+        yield* pause(long);
+        const recent = yield* spoke(6);
+        yield* pause(recent);
+        // Speech 2.5 minutes ago, long after the first words, keeps a live listener's meeting open.
+        const talking = yield* spoke(20);
+        yield* hear(talking.listener, talking.epoch, 17 * MIN, 17 * MIN + 30, 'one more point on the roadmap before we wrap');
+
+        yield* sweepIdleMeetings();
+        const closed = yield* meetingOf(long.listener);
+        expect(closed.state).toBe('closing');
+        expect(yield* rangesOf(closed.id)).toEqual([{ epoch_id: long.epoch, sample_start: 0, sample_end: 30 * RATE }]);
+        expect((yield* meetingOf(recent.listener)).state).toBe('provisional');
+        expect((yield* meetingOf(talking.listener)).state).toBe('active');
+        // Same final work as an explicit close, scheduled once even when the sweep runs again.
+        yield* sweepIdleMeetings();
+        expect(yield* jobsOf(device.workspace_id)).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${closed.id}`, status: 'pending' }]);
+        const [event] = yield* sql<{ evidence: string }>`SELECT JSON_EXTRACT(decision, '$.evidence') AS evidence FROM boundary_events WHERE meeting_id = ${closed.id} AND operation = 'close'`;
+        expect(event!.evidence).toEqual(['idle_close']);
+
+        // The threshold decides: past it the recently paused meeting closes; speech inside it still keeps the other open.
+        yield* sweepIdleMeetings(5 * MIN * 1000);
+        expect((yield* meetingOf(recent.listener)).state).toBe('closing');
+        expect((yield* meetingOf(talking.listener)).state).toBe('active');
       }),
       { migrated: true },
     ),

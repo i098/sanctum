@@ -35,7 +35,8 @@ The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does n
 With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
-Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
+Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime, meeting idle close) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
+The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech, whether its listener is paused, stopped or silent; the close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only MySQL ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
 
 ## Local stack
 

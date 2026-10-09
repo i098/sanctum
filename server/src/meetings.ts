@@ -24,6 +24,7 @@ import {
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, listVisibleMeetingIds, requireScope } from './auth.ts';
 import { evaluateBoundary, LOW_CONFIDENCE, PROMOTE_AFTER_MS, type Utterance } from './boundaries.ts';
+import { engineeringDefaults } from './config.ts';
 import { DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
@@ -335,6 +336,45 @@ export const onCaptureEnded = (event: {
         });
       }),
     );
+  }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
+
+/** Open meetings whose latest owned audio ended more than `idleMs` ago; `only` narrows the scan to one meeting. */
+const idleMeetings = (idleMs: number, only: MeetingId | null) =>
+  Effect.flatMap(SqlClient.SqlClient, sql =>
+    sql<{ workspace_id: WorkspaceId; id: MeetingId; listener_id: string; capture_group_id: string | null }>`SELECT m.workspace_id, m.id, m.listener_id, m.capture_group_id FROM meetings m
+      JOIN meeting_ranges r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision
+      JOIN capture_epochs e ON e.workspace_id = r.workspace_id AND e.id = r.epoch_id
+      WHERE m.state IN ${sql.in(OPEN_STATES)} AND m.listener_id IS NOT NULL ${only === null ? sql`` : sql`AND m.id = ${only}`}
+      GROUP BY m.workspace_id, m.id, m.listener_id, m.capture_group_id
+      HAVING MAX(e.captured_at + INTERVAL ROUND((r.sample_end - e.sample_start) * 1000000 / e.sample_rate) MICROSECOND)
+        < UTC_TIMESTAMP(6) - INTERVAL ${idleMs * 1000} MICROSECOND`,
+  );
+
+/**
+ * Worker sweep: an open meeting with no speech for `idleMs` (its listener paused, stopped or silent)
+ * seals at its last speech and schedules the same final work as an explicit close.
+ * ponytail: scans `meetings` by state every sweep; add a state index if the table grows large.
+ */
+export const sweepIdleMeetings = (idleMs: number = engineeringDefaults.meetingIdleCloseMs) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const meeting of yield* idleMeetings(idleMs, null)) {
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* lockCaptureKey(meeting);
+          // Speech placed since the scan keeps the meeting open.
+          if ((yield* idleMeetings(idleMs, meeting.id)).length === 0) return;
+          const row = yield* selectMeeting(meeting.workspace_id, meeting.id, true);
+          if (row._tag === 'None') return;
+          yield* sealMeeting(row.value, {
+            watermark: null,
+            state: 'closing',
+            cue: { evidence: ['idle_close'], reason: `no speech for ${Math.round(idleMs / 60_000)} minutes`, uncertainty: 0 },
+            actor: null,
+          });
+        }),
+      );
+    }
   }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
 
 export const getMeeting = (access: AccessScope, meeting_id: MeetingId) =>

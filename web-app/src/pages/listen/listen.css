@@ -546,6 +546,14 @@
   margin: 6px 0 4px;
 }
 
+/* A confirmation's answer sits apart from its question, the confirming action last. */
+.listen-end-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+
 .listen-dialog button[data-primary] {
   color: #e7ecf3;
   box-shadow: inset 0 0 0 1px #3d7dff;
@@ -615,9 +623,22 @@
   }
 
   .listen-controls {
+    flex-wrap: wrap;
     justify-content: space-between;
-    gap: 0;
+    gap: 4px 0;
     margin: 0 -8px;
+  }
+
+  /* No room beside the other five: End meeting takes the line above them, so their row stays as it is. */
+  .listen-end {
+    order: -1;
+    flex: 0 0 100%;
+    text-align: left;
+  }
+
+  /* That line and its gap (27 px) lift the footer, so the rails end higher too. */
+  .listen:has(.listen-end) .listen-rails {
+    bottom: 123px;
   }
 
   /* Settings: the term sits above its value, so values and sign-in controls get the full width. */

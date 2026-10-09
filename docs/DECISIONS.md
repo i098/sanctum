@@ -37,6 +37,15 @@ This unassigned-speech buffer is different from the browser queue of recordings 
 An actual deployment also needs a timezone, identity configuration, MySQL/R2/provider credentials, approved audio fixtures, and an authorized hosting target.
 These secrets and production resources do not belong in this repository.
 
+## Meeting end decision — 2026-10-09
+
+Accepted: a meeting ends in one of two ways, and both run the same close as `POST /api/v1/meetings/{id}/close` (finalize, recording, notes and memory).
+
+- **End meeting control:** the listening page shows End meeting in its control row while a meeting is open, also while paused. After one confirmation it stops capture and closes the meeting.
+- **Automatic close:** the worker closes an open meeting after 10 minutes with no speech, whether its listener is paused, stopped or silent. The meeting ends at its last speech. The setting is `engineeringDefaults.meetingIdleCloseMs` (default 10 minutes).
+
+Before this decision, Pause kept a meeting open and the page had no way to close it, so notes, memory and the recording never ran for a page user.
+
 ## Detected-meeting ownership decision — 2026-10-08
 
 Accepted: when Sanctum detects a meeting, the principal of the capturing listener gets `owner` access to it in the same transaction.

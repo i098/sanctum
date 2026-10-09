@@ -1,8 +1,9 @@
 import type { Meeting } from '@sanctum/sdk';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
+import { Dialog } from './Dialog.tsx';
 import { browserRecognition, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
@@ -63,9 +64,10 @@ function health(snapshot: CaptureSnapshot): string {
   return `Silent · ${archive}${pending}${stranded}${refused}`;
 }
 
-function statusMessage(snapshot: CaptureSnapshot, failure: string | null): { text: string; warning: boolean } {
+/** `helper`: the quiet line shown when nothing is wrong. */
+function statusMessage(snapshot: CaptureSnapshot, failure: string | null, helper: string): { text: string; warning: boolean } {
   const problem = failure ?? (snapshot.issue && ISSUE[snapshot.issue]);
-  return problem ? { text: problem, warning: true } : { text: HELPER[snapshot.listener], warning: false };
+  return problem ? { text: problem, warning: true } : { text: helper, warning: false };
 }
 
 const CAPTURING: ReadonlyArray<ListenerState> = ['listening', 'degraded', 'reconnecting'];
@@ -123,14 +125,80 @@ function MeetingLine() {
   return <p className="listen-meeting">{meeting.title ?? <>Meeting since <time dateTime={meeting.started_at}>{started}</time></>}</p>;
 }
 
+const OPEN: ReadonlyArray<Meeting['state']> = ['provisional', 'active'];
+
+/**
+ * The listener's open meeting that End meeting closes, named by the stream's `action_update`. A pause
+ * ends the stream with an update naming no meeting, so a null update keeps the meeting while the
+ * server still reports it open. The returned function forgets it once closed.
+ */
+function useOpenMeeting(): [string | null, () => void] {
+  const shown = useRef<string | null>(null);
+  const [meeting, setMeeting] = useState<string | null>(null);
+  const show = useCallback((id: string | null) => {
+    shown.current = id;
+    setMeeting(id);
+  }, []);
+  useEffect(() => subscribeActions(({ meeting_id }) => {
+    const previous = shown.current;
+    if (meeting_id !== null || previous === null) show(meeting_id);
+    // A failed read keeps the control: closing is idempotent. A newer update or a close wins over this read.
+    else client.meetings.getMeeting({ meeting_id: previous }).then(read => shown.current === previous && !OPEN.includes(read.state) && show(null), () => {});
+  }), [show]);
+  return [meeting, () => show(null)];
+}
+
+/**
+ * End meeting: capture stops first, so the server places the last final segments before the meeting
+ * seals, then the meeting closes. `helper` says so until capture starts again, else names the listener state.
+ */
+function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: (message: string | null) => void) {
+  const [meeting, forget] = useOpenMeeting();
+  const [ended, setEnded] = useState(false);
+  useEffect(() => {
+    if (CAPTURING.includes(listener)) setEnded(false);
+  }, [listener]);
+  const end = (meeting_id: string): void => {
+    onFailure(null);
+    const stopped = CAPTURING.includes(engine.getSnapshot().listener) ? engine.pause() : Promise.resolve();
+    stopped.then(() => client.meetings.closeMeeting({ meeting_id })).then(() => {
+      forget();
+      setEnded(true);
+    }, (error: unknown) => onFailure(`Meeting not ended: ${error instanceof Error ? error.message : String(error)}`));
+  };
+  return { meeting, helper: ended ? 'Meeting ended. Its notes are being prepared in Review.' : HELPER[listener], end };
+}
+
+/** The End meeting control and its one confirmation; nothing while no meeting is open. Keyed by meeting, so a confirmation never carries over to the next one. */
+function EndMeeting({ meeting, onEnd }: { meeting: string | null; onEnd: (meeting_id: string) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  if (meeting === null) return null;
+  return (
+    <>
+      <button type="button" className="listen-end" onClick={() => setConfirming(true)}>End meeting</button>
+      <Dialog title="End this meeting?" open={confirming} onClose={() => setConfirming(false)}>
+        <div className="listen-panel">
+          <p>Listening stops, and Sanctum prepares the meeting's notes, memory and recording. Resume starts a new meeting.</p>
+          <div className="listen-end-actions">
+            <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
+            <button type="button" data-primary onClick={() => (setConfirming(false), onEnd(meeting))}>End meeting</button>
+          </div>
+        </div>
+      </Dialog>
+    </>
+  );
+}
+
 interface FooterProps {
   engine: CaptureView;
   snapshot: CaptureSnapshot;
   onOpen: (overlay: Overlay) => void;
   onFailure: (message: string | null) => void;
+  /** Controls shown right after Pause or Resume. */
+  children: ReactNode;
 }
 
-function Footer({ engine, snapshot, onOpen, onFailure }: FooterProps) {
+function Footer({ engine, snapshot, onOpen, onFailure, children }: FooterProps) {
   const control = toggle(engine, snapshot.listener);
   const run = (): void => {
     onFailure(null);
@@ -142,6 +210,7 @@ function Footer({ engine, snapshot, onOpen, onFailure }: FooterProps) {
       <p className="listen-health" data-tone={warning ? 'warning' : snapshot.listener}>{health(snapshot)}</p>
       <nav aria-label="Listening controls" className="listen-controls">
         <button type="button" onClick={run} disabled={snapshot.listener === 'starting'}>{control.label}</button>
+        {children}
         <button type="button" onClick={() => onOpen('review')}>Review</button>
         <button type="button" onClick={() => onOpen('agents')}>Agents</button>
         {document.fullscreenEnabled && <FullscreenButton />}
@@ -197,7 +266,8 @@ export function ListenPage() {
   const [failure, setFailure] = useState<string | null>(null);
   const [captions, setCaptions] = useState(false);
   useEffect(() => startWaveform(canvas.current!, engine.levels, () => engine.getSnapshot().listener), [engine]);
-  const message = statusMessage(snapshot, failure);
+  const { meeting, helper, end } = useEndMeeting(engine, snapshot.listener, setFailure);
+  const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
 
   return (
@@ -218,7 +288,9 @@ export function ListenPage() {
         {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />
-      <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure} />
+      <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure}>
+        <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
+      </Footer>
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
       <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} />
