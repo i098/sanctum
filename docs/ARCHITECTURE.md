@@ -90,7 +90,7 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,listen.css,Dialog
 
 ### models (T04, T15)
 
-Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{cerebras,anthropic}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
+Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{workers-ai,anthropic}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
 
 - `llm.ts`: `LlmClient` tag, `LlmLive: Layer<LlmClient, ConfigError>`, `fixtureLlm(responses)` for tests; missing keys fail with `Unavailable`.
 - `extraction.ts`: `extractCandidates(input: { meeting: Meeting; segments: ReadonlyArray<TranscriptSegment>; snapshot: ReadonlyArray<ContextItem>; epochs?: ReadonlyArray<EpochAnchor> }): Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient>`; fails `Unavailable` when a segment's epoch has no anchor (pass `capture_epochs` anchors).

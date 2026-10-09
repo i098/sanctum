@@ -1,5 +1,5 @@
 /**
- * Provider clients against a local HTTP server replaying recorded-shape Cerebras and Anthropic
+ * Provider clients against a local HTTP server replaying recorded-shape Workers AI and Anthropic
  * responses; no live provider or real credential is used. Tests run on the live clock because
  * provider timeouts and retry backoff are real timers.
  */
@@ -7,10 +7,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Effect, Exit, Fiber, Layer, Schema, Stream } from 'effect';
+import { vi } from 'vitest';
 import { engineeringDefaults } from '../src/config.ts';
 import { LlmClient, LlmLive, makeLlm } from '../src/llm.ts';
 import { anthropic } from '../src/providers/anthropic.ts';
-import { cerebras } from '../src/providers/cerebras.ts';
+import { workersAi } from '../src/providers/workers-ai.ts';
 
 interface Seen {
   readonly path: string;
@@ -56,7 +57,7 @@ const sse = (events: ReadonlyArray<string>): Reply => response => {
 };
 const hang: Reply = () => {};
 
-const completion = (content: string, finish_reason = 'stop') => json(200, { id: 'chatcmpl-1', object: 'chat.completion', model: 'qwen-3.8-27b', choices: [{ index: 0, finish_reason, message: { role: 'assistant', content } }] });
+const completion = (content: string, finish_reason = 'stop') => json(200, { id: 'chatcmpl-1', object: 'chat.completion', model: '@cf/qwen/qwen3.8-27b', choices: [{ index: 0, finish_reason, message: { role: 'assistant', content } }] });
 const message = (content: unknown[], stop_reason = 'end_turn') =>
   json(200, { id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content, stop_reason, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } });
 
@@ -64,20 +65,19 @@ const Answer = Schema.Struct({ kind: Schema.Literal('decision', 'commitment'), t
 const ask = { system: 'Extract.', prompt: 'Transcript', name: 'answer', output: Answer };
 const budget = { ...engineeringDefaults.modelRequest, timeoutMs: 400 };
 const roles = engineeringDefaults.modelRoles;
-const withCerebras = (url: string) => makeLlm(roles, { cerebras: cerebras({ apiKey: 'test-key', baseUrl: url }) }, budget);
+const withWorkersAi = (url: string) => makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: `${url}/accounts/acct/ai`, apiToken: 'test-key' }) }, budget);
 const withAnthropic = (url: string) => makeLlm(roles, { anthropic: anthropic({ apiKey: 'test-key', baseUrl: url }) }, budget);
 
-describe('Cerebras client', () => {
+describe('Workers AI client', () => {
   it.scopedLive('sends the role model, reasoning effort and a strict schema, then decodes the JSON answer', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([completion('{"kind":"decision","text":"Ship Friday","quote":"we ship Friday"}')]);
-      const result = yield* withCerebras(server.url).generate('extraction', ask);
-      expect(result).toEqual({ model: 'qwen-3.8-27b', value: { kind: 'decision', text: 'Ship Friday', quote: 'we ship Friday' } });
+      const result = yield* withWorkersAi(server.url).generate('extraction', ask);
+      expect(result).toEqual({ model: '@cf/qwen/qwen3.8-27b', value: { kind: 'decision', text: 'Ship Friday', quote: 'we ship Friday' } });
       const [request] = server.seen;
-      expect(request!.path).toBe('/v1/chat/completions');
+      expect(request!.path).toBe('/accounts/acct/ai/v1/chat/completions');
       expect(request!.headers.authorization).toBe('Bearer test-key');
-      expect(request!.headers['x-cerebras-version-patch']).toBe('2');
-      expect(request!.body).toMatchObject({ model: 'qwen-3.8-27b', reasoning_effort: 'low', stream: false, max_completion_tokens: 4_096 });
+      expect(request!.body).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', reasoning_effort: 'low', stream: false, max_completion_tokens: 4_096 });
       expect(request!.body.response_format).toEqual({
         type: 'json_schema',
         json_schema: {
@@ -96,11 +96,11 @@ describe('Cerebras client', () => {
   it.scopedLive('retries rate limits and server errors a bounded number of times', () =>
     Effect.gen(function* () {
       const recovered = yield* replayServer([json(429, { error: 'slow down' }, { 'retry-after': '0' }), completion('{"kind":"commitment","text":"Send notes","quote":null}')]);
-      expect((yield* withCerebras(recovered.url).generate('extraction', ask)).value.kind).toBe('commitment');
+      expect((yield* withWorkersAi(recovered.url).generate('extraction', ask)).value.kind).toBe('commitment');
       expect(recovered.seen).toHaveLength(2);
 
       const down = yield* replayServer([json(503, {}), json(500, {}), json(502, {}, { 'retry-after': '7' }), completion('{}')]);
-      const failure = yield* Effect.flip(withCerebras(down.url).generate('extraction', ask));
+      const failure = yield* Effect.flip(withWorkersAi(down.url).generate('extraction', ask));
       expect(failure).toMatchObject({ _tag: 'Unavailable', retryable: true, retry_after_ms: 7_000 });
       expect(down.seen).toHaveLength(budget.maxAttempts);
     }));
@@ -113,7 +113,7 @@ describe('Cerebras client', () => {
         completion('{"kind":"rumour","text":"x","quote":null}'),
         completion('not json'),
       ]);
-      const llm = withCerebras(server.url);
+      const llm = withWorkersAi(server.url);
       const messages = [];
       for (let i = 0; i < 4; i++) {
         const failure = yield* Effect.flip(llm.generate('extraction', ask));
@@ -130,7 +130,7 @@ describe('Cerebras client', () => {
   it.scopedLive('times out each attempt, aborting the HTTP request, and cancels on interruption', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([hang, hang, hang, hang]);
-      const llm = makeLlm(roles, { cerebras: cerebras({ apiKey: 'test-key', baseUrl: server.url }) }, { ...budget, maxAttempts: 1 });
+      const llm = makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: server.url, apiToken: 'test-key' }) }, { ...budget, maxAttempts: 1 });
       const timedOut = yield* Effect.flip(llm.generate('extraction', ask));
       expect(timedOut).toMatchObject({ _tag: 'Unavailable', retryable: true, message: 'extraction model timed out after 400 ms' });
       const fiber = yield* Effect.fork(llm.generate('extraction', ask));
@@ -148,10 +148,11 @@ describe('Cerebras client', () => {
         response.writeHead(200, { 'content-type': 'text/event-stream' });
         response.write(`${chunk('First')}\n\n`);
       }, sse([chunk('cut off')])]);
-      const llm = withCerebras(server.url);
+      const llm = withWorkersAi(server.url);
       const request = { system: 'Answer briefly.', prompt: 'When?' };
       expect((yield* Stream.runCollect(llm.stream('voice', request))).pipe(chunks => [...chunks].join(''))).toBe('It is on Friday.');
-      expect(server.seen[0]!.body).toMatchObject({ model: 'qwen-3.8-27b', stream: true, reasoning_effort: 'none' });
+      expect(server.seen[0]!.body).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', stream: true, chat_template_kwargs: { enable_thinking: false } });
+      expect(server.seen[0]!.body).not.toHaveProperty('reasoning_effort');
       expect([...(yield* Stream.runCollect(Stream.take(llm.stream('voice', request), 1)))]).toEqual(['First']);
       yield* Effect.sleep('100 millis');
       expect(server.aborted()).toBe(1);
@@ -163,8 +164,8 @@ describe('Cerebras client', () => {
     Effect.gen(function* () {
       const llm = makeLlm(roles, { anthropic: anthropic({ apiKey: 'unused', baseUrl: 'http://127.0.0.1:9' }) });
       const failure = yield* Effect.flip(llm.generate('extraction', ask));
-      expect(failure).toMatchObject({ retryable: false, message: 'extraction model provider cerebras is not configured (CEREBRAS_API_KEY)' });
-      expect((yield* Effect.flip(Stream.runDrain(llm.stream('voice', { system: '', prompt: '' })))).message).toMatch(/CEREBRAS_API_KEY/);
+      expect(failure).toMatchObject({ retryable: false, message: 'extraction model provider workers-ai is not configured (WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN)' });
+      expect((yield* Effect.flip(Stream.runDrain(llm.stream('voice', { system: '', prompt: '' })))).message).toMatch(/WORKERS_AI_API_TOKEN/);
     }));
 });
 
@@ -234,11 +235,27 @@ describe('Anthropic client', () => {
 describe('LlmLive', () => {
   it.effect('reads explicit role overrides and treats absent keys as unconfigured', () =>
     Effect.gen(function* () {
-      const env = new Map([['EXTRACTION_MODEL_PROVIDER', 'anthropic'], ['EXTRACTION_MODEL', 'claude-haiku-4-5']]);
+      const env = new Map([['EXTRACTION_MODEL_PROVIDER', 'anthropic'], ['EXTRACTION_MODEL', 'claude-haiku-4-5'], ['WORKERS_AI_ACCOUNT_ID', 'acct']]);
       const llm = yield* Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(env)))));
       const failure = yield* Effect.flip(llm.generate('extraction', ask));
       expect(failure.message).toBe('extraction model provider anthropic is not configured (ANTHROPIC_API_KEY)');
-      const invalid = yield* Effect.exit(Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map([['RESEARCH_MODEL_PROVIDER', 'cerebras']])))))));
+      // An account ID without its token leaves Workers AI unconfigured instead of sending an unauthenticated request.
+      expect((yield* Effect.flip(Stream.runDrain(llm.stream('voice', { system: '', prompt: '' })))).message).toMatch(/workers-ai is not configured/);
+      const invalid = yield* Effect.exit(Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map([['RESEARCH_MODEL_PROVIDER', 'workers-ai']])))))));
       expect(Exit.isFailure(invalid)).toBe(true);
     }));
+
+  it.effect('calls the account chat endpoint with the token and the configured model', () =>
+    Effect.gen(function* () {
+      const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"kind":"decision","text":"Ship","quote":null}' } }] })));
+      vi.stubGlobal('fetch', fetch);
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllGlobals()));
+      const env = new Map([['WORKERS_AI_ACCOUNT_ID', 'acct'], ['WORKERS_AI_API_TOKEN', 'test-token'], ['EXTRACTION_MODEL', '@cf/test/model']]);
+      const llm = yield* Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(env)))));
+      expect((yield* llm.generate('extraction', ask)).value.text).toBe('Ship');
+      const [url, init] = fetch.mock.calls[0]!;
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions');
+      expect(init.headers).toMatchObject({ authorization: 'Bearer test-token' });
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: '@cf/test/model' });
+    }).pipe(Effect.scoped));
 });

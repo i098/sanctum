@@ -1,12 +1,13 @@
 /**
- * Cerebras chat completions over its documented HTTP API (https://inference-docs.cerebras.ai),
- * checked 2026-09-29: `POST /v1/chat/completions`, `reasoning_effort` (`none` disables Qwen
- * reasoning), strict `json_schema` response format, and SSE streaming ending in `[DONE]`.
- * API version 2 is pinned with `X-Cerebras-Version-Patch`.
+ * Cloudflare Workers AI chat completions through its OpenAI-compatible endpoint, checked
+ * 2026-10-08 (https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/):
+ * `POST <base>/v1/chat/completions` with a Bearer API token, strict `json_schema` response format
+ * (https://developers.cloudflare.com/workers-ai/features/json-mode/; the model input schema of
+ * `@cf/qwen/qwen3.8-27b` lists `response_format`), and SSE streaming ending in `[DONE]`.
+ * Qwen 3.8 takes `reasoning_effort` `low`/`medium`/`xhigh`; `chat_template_kwargs.enable_thinking`
+ * `false` disables reasoning.
  */
 import { type ModelProvider, ProviderError, type ProviderRequest, retryableStatus, retryAfterMs } from './types.ts';
-
-const DEFAULT_BASE_URL = 'https://api.cerebras.ai';
 
 interface Completion {
   readonly choices?: ReadonlyArray<{ readonly finish_reason?: string | null; readonly message?: { readonly content?: string | null }; readonly delta?: { readonly content?: string | null } }>;
@@ -21,26 +22,26 @@ const body = (request: ProviderRequest, stream: boolean) => ({
   ],
   max_completion_tokens: request.maxOutputTokens,
   stream,
-  ...(request.reasoning ? { reasoning_effort: request.reasoning } : {}),
+  ...(request.reasoning === 'none' ? { chat_template_kwargs: { enable_thinking: false } } : request.reasoning ? { reasoning_effort: request.reasoning } : {}),
   ...(request.json ? { response_format: { type: 'json_schema', json_schema: { name: request.json.name, strict: true, schema: request.json.schema } } } : {}),
 });
 
-async function post(options: CerebrasOptions, payload: object, signal: AbortSignal): Promise<Response> {
+async function post(options: WorkersAiOptions, payload: object, signal: AbortSignal): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(`${options.baseUrl ?? DEFAULT_BASE_URL}/v1/chat/completions`, {
+    response = await fetch(`${options.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${options.apiKey}`, 'content-type': 'application/json', 'x-cerebras-version-patch': '2' },
+      headers: { authorization: `Bearer ${options.apiToken}`, 'content-type': 'application/json' },
       body: JSON.stringify(payload),
       signal,
     });
   } catch (error) {
     if (signal.aborted) throw error;
-    throw new ProviderError(`Cerebras request failed: ${String(error)}`, true);
+    throw new ProviderError(`Workers AI request failed: ${String(error)}`, true);
   }
   if (!response.ok) {
     const detail = (await response.text().catch(() => '')).slice(0, 300);
-    throw new ProviderError(`Cerebras HTTP ${response.status}: ${detail}`, retryableStatus(response.status), retryAfterMs(response.headers.get('retry-after')));
+    throw new ProviderError(`Workers AI HTTP ${response.status}: ${detail}`, retryableStatus(response.status), retryAfterMs(response.headers.get('retry-after')));
   }
   return response;
 }
@@ -58,17 +59,18 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
   }
 }
 
-export interface CerebrasOptions {
-  readonly apiKey: string;
-  readonly baseUrl?: string;
+export interface WorkersAiOptions {
+  /** `https://api.cloudflare.com/client/v4/accounts/<account id>/ai` (`serverConfig.workersAi`). */
+  readonly baseUrl: string;
+  readonly apiToken: string;
 }
 
-export const cerebras = (options: CerebrasOptions): ModelProvider => ({
+export const workersAi = (options: WorkersAiOptions): ModelProvider => ({
   complete: async (request, signal) => {
     const completion = (await (await post(options, body(request, false), signal)).json()) as Completion;
     const choice = completion.choices?.[0];
-    if (choice?.finish_reason === 'length') throw new ProviderError('Cerebras output was truncated at max_completion_tokens', false);
-    if (typeof choice?.message?.content !== 'string') throw new ProviderError('Cerebras response had no message content', false);
+    if (choice?.finish_reason === 'length') throw new ProviderError('Workers AI output was truncated at max_completion_tokens', false);
+    if (typeof choice?.message?.content !== 'string') throw new ProviderError('Workers AI response had no message content', false);
     return choice.message.content;
   },
   stream: async function* (request, signal) {
@@ -76,10 +78,10 @@ export const cerebras = (options: CerebrasOptions): ModelProvider => ({
     for await (const data of sseData(response.body!)) {
       if (data === '[DONE]') return;
       const chunk = JSON.parse(data) as Completion;
-      if (chunk.error) throw new ProviderError(`Cerebras stream error: ${chunk.error.message ?? 'unknown'}`, false);
+      if (chunk.error) throw new ProviderError(`Workers AI stream error: ${chunk.error.message ?? 'unknown'}`, false);
       const text = chunk.choices?.[0]?.delta?.content;
       if (text) yield text;
     }
-    throw new ProviderError('Cerebras stream ended before [DONE]', false);
+    throw new ProviderError('Workers AI stream ended before [DONE]', false);
   },
 });

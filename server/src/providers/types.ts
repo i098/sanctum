@@ -5,7 +5,7 @@ export interface ProviderRequest {
   readonly system: string;
   readonly prompt: string;
   readonly maxOutputTokens: number;
-  /** Cerebras `reasoning_effort`; `null` leaves the provider default. */
+  /** Reasoning effort; `none` disables reasoning and `null` leaves the provider default. */
   readonly reasoning: 'none' | 'low' | 'medium' | 'high' | null;
   /** Strict JSON Schema output; absent means plain text. */
   readonly json?: { readonly name: string; readonly schema: Record<string, unknown> };

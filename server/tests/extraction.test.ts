@@ -139,7 +139,7 @@ describe('extractCandidates', () => {
       const candidates = yield* Effect.provide(extractCandidates({ meeting, segments, snapshot, epochs: anchors }), fixtureLlm([modelAnswer], requests));
       expect(candidates).toEqual(labeled);
       const [request] = requests;
-      expect(request).toMatchObject({ model: 'qwen-3.8-27b', reasoning: 'low', json: { name: 'context_candidates' } });
+      expect(request).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', reasoning: 'low', json: { name: 'context_candidates' } });
       expect(request!.prompt).toContain('S1 [Sat 2026-10-31 17:00:00] speaker_0: Okay, we decided');
       expect(request!.prompt).toContain("S3 [Sat 2026-10-31 17:05:00] speaker_0: Let's ship the beta tomorrow at 10.");
       expect(request!.prompt).toContain('- decision: Use MySQL for storage.');
@@ -165,7 +165,7 @@ describe('extractCandidates', () => {
   it.live('surfaces an unavailable provider and invalid output as failures, never as empty or demo results', () =>
     Effect.gen(function* () {
       const input = { meeting, segments, snapshot, epochs: anchors };
-      const down = new Unavailable({ message: 'Cerebras HTTP 503', retryable: true });
+      const down = new Unavailable({ message: 'Workers AI HTTP 503', retryable: true });
       const requests: ProviderRequest[] = [];
       expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([down, down, down, modelAnswer], requests)))).toMatchObject({ _tag: 'Unavailable', retryable: true });
       expect(requests).toHaveLength(3);
@@ -189,7 +189,7 @@ describe('summarizeMeeting', () => {
       const notes = yield* Effect.provide(summarizeMeeting({ meeting, segments, epochs: anchors }), fixtureLlm([answer]));
       expect(notes).toEqual({
         meeting_id: meeting.id,
-        model: 'qwen-3.8-27b',
+        model: '@cf/qwen/qwen3.8-27b',
         title: 'Beta rollout',
         summary: 'The team limited pilot access and scheduled the beta.',
         sections: [

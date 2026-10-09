@@ -39,12 +39,12 @@ export const engineeringDefaults = {
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
   /**
-   * Plan section 09 initial model per role, checked against provider docs on 2026-09-29, plus
-   * the Cerebras reasoning effort per role. `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override.
+   * Plan section 09 initial model per role, checked against provider docs on 2026-10-08, plus
+   * the reasoning effort per role (`none` disables it). `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override.
    */
   modelRoles: {
-    voice: { provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'none' },
-    extraction: { provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'low' },
+    voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
+    extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     planner: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
     research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
   },
@@ -59,7 +59,7 @@ export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
 /** Research needs Anthropic's hosted web search, so only its model is configurable. */
 const modelRole = (role: ModelRoleName) => {
   const fallback = engineeringDefaults.modelRoles[role];
-  const providers = role === 'research' ? (['anthropic'] as const) : (['cerebras', 'anthropic'] as const);
+  const providers = role === 'research' ? (['anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
   const prefix = role.toUpperCase();
   return Config.all({
     provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
@@ -99,7 +99,14 @@ export const serverConfig = Config.all({
   selectedDecisions: Config.array(Config.literal(...openDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
-  modelKeys: Config.all({ cerebras: Config.option(Config.redacted('CEREBRAS_API_KEY')), anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
+  modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
+  /** Cloudflare Workers AI REST base for this account and a token with only Workers AI permission. */
+  workersAi: Config.option(
+    Config.all({
+      baseUrl: Config.string('WORKERS_AI_ACCOUNT_ID').pipe(Config.map(account => `https://api.cloudflare.com/client/v4/accounts/${account}/ai`)),
+      apiToken: Config.redacted('WORKERS_AI_API_TOKEN'),
+    }),
+  ),
   /** Pipedream Connect; without credentials every integration call fails as `Unavailable`. */
   pipedream: Config.all({
     apiUrl: Config.string('PIPEDREAM_API_URL').pipe(Config.withDefault('https://api.pipedream.com')),

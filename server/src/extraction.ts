@@ -147,7 +147,7 @@ Never guess names, dates or facts that the transcript does not support.`;
 
 const NOTES_SYSTEM = `You write the canonical notes for a meeting from its transcript.
 Give a short title, a summary paragraph, and sections of discussion points.
-Every point cites the transcript refs (S1, S2, ...) that support it. Leave out anything the transcript does not support.`;
+Every point lists in segments the transcript refs (for example ["S1", "S3"]) that support it; segments holds only refs, never text. Leave out anything the transcript does not support.`;
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
