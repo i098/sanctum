@@ -268,9 +268,9 @@ MySQL is the only structured production database.
 
 Implement concrete TypeScript adapters for Workers AI Whisper, Cartesia and optional pyannote cloud APIs.
 A socket connection ID identifies a transport attempt, never a meeting or speaker identity.
-For each provider connection, persist the source epoch/track/sample anchor and connection offset used to align returned timestamps.
-Reconnect starts a new provider offset mapping, while the application capture epoch can remain unchanged.
-Use provider keepalive/rotation rules from current documentation and release provider sockets when capture stops.
+For each provider request or connection, persist the source epoch/track/sample anchor and offset used to align returned timestamps.
+Whisper has no connection: each live chunk is one request anchored at its first sample, and its segment times are relative to the chunk.
+A provider socket (Cartesia, pyannote) starts a new offset mapping on reconnect, while the application capture epoch can remain unchanged; apply provider keepalive/rotation rules from current documentation and release the socket when capture stops.
 Business work enters the durable job ledger; closing a socket never discards accepted work.
 
 Replacing the earlier media framework requires explicit tests for end-of-turn detection, output interruption, echo protection, bounded playback queues and reconnect.

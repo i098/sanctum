@@ -74,7 +74,7 @@ export function startTranscriptRail(lines: HTMLElement, subscribeTranscript: Sub
   resized.observe(lines);
   const unsubscribe = subscribeTranscript(segment => {
     if (segment.status !== 'final' || segment.text.trim() === '') return;
-    // Live ASR labels speakers 0, 1, …; the kiosk showed them as S0, S1.
+    // Whisper returns no speaker labels, so lines are plain text until a diarization source sets one (shown as S0, S1).
     appendLine(lines, segment.speaker_label === null ? segment.text.trim() : `S${segment.speaker_label}: ${segment.text.trim()}`);
     trimLines(lines);
   });
