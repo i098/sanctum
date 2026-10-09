@@ -43,6 +43,12 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   // The real server issues the widget token here.
   await page.unroute('**/api/v1/workspace/widget-token');
   await page.goto(server.url);
+  // The seeded owner has not seen the welcome; Skip stores that with the real CSRF-checked POST.
+  const welcome = page.getByRole('dialog', { name: 'Welcome to Sanctum' });
+  const stored = page.waitForResponse(response => response.url().endsWith('/api/v1/onboarding') && response.request().method() === 'POST');
+  await welcome.getByRole('button', { name: 'Skip' }).click();
+  await expect(welcome).toBeHidden();
+  expect((await stored).status()).toBe(200);
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('dialog', { name: 'Settings' }).getByRole('button', { name: 'Team' }).click();
   const team = page.getByRole('dialog', { name: 'Team' });

@@ -14,8 +14,6 @@ const SetUpTeam = lazy(() => import('./WorkosTeam.tsx').then(module => ({ defaul
 const TeamDialog = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.TeamDialog })));
 const ProfileDialog = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.ProfileDialog })));
 
-type Manage = 'team' | 'profile';
-
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
   prompt: 'The browser will ask when listening starts',
@@ -55,6 +53,8 @@ interface SettingsProps {
   notice: SignInNotice | null;
   onSignInChange: () => void;
   client: SanctumClient;
+  /** Reopens the first-run welcome; null (signed out, or no answer from the server) offers no Welcome row. */
+  onWelcome: (() => void) | null;
 }
 
 /** Self-serve: signs in again, and the server creates the workspace with this user as owner when it still finds no membership. */
@@ -172,52 +172,66 @@ function WithAction({ text, label, onClick }: { text: string; label: string; onC
   );
 }
 
-/** Hosted owners and admins open Team (the WorkOS widgets) from here; the dialog shows over Settings. */
-function WorkspaceRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInChange: () => void }) {
-  const [team, setTeam] = useState(false);
-  if (signIn.status !== 'signed_in' || !signIn.workosTeam) return WORKSPACE[signIn.status];
+/** The WorkOS widgets, or Set up team for the owner of a hosted workspace created before WorkOS. */
+function WorkosTeamDialog({ setup, open, onClose, onLinked }: { setup: boolean; open: boolean; onClose: () => void; onLinked: () => void }) {
+  return (
+    <Dialog title="Team" open={open} onClose={onClose}>
+      <Suspense>{setup ? <SetUpTeam onLinked={onLinked} /> : <TeamWidgets />}</Suspense>
+    </Dialog>
+  );
+}
+
+/**
+ * Team for this server's provider, in a dialog over the one holding the button: the self-hosted
+ * issuer's Team, else the WorkOS widgets. Nothing where the server holds no team this person can open.
+ */
+export function TeamButton({ signIn, onSignInChange, label }: { signIn: Extract<SignInState, { status: 'signed_in' }>; onSignInChange: () => void; label: string }) {
+  const [open, setOpen] = useState(false);
+  if (!signIn.team && !signIn.workosTeam) return null;
+  const close = () => setOpen(false);
   return (
     <>
-      <span>{WORKSPACE.signed_in}</span>
-      <span className="listen-signin-actions"><button type="button" onClick={() => setTeam(true)}>Team</button></span>
-      <Dialog title="Team" open={team} onClose={() => setTeam(false)}>
-        <Suspense>{signIn.workosTeam === 'setup' ? <SetUpTeam onLinked={onSignInChange} /> : <TeamWidgets />}</Suspense>
-      </Dialog>
+      <button type="button" onClick={() => setOpen(true)}>{label}</button>
+      {signIn.team
+        ? <Suspense><TeamDialog access={signIn.access} open={open} onClose={close} /></Suspense>
+        : <WorkosTeamDialog setup={signIn.workosTeam === 'setup'} open={open} onClose={close} onLinked={onSignInChange} />}
     </>
   );
 }
 
-/** The self-hosted issuer adds a Profile row and a Team action on the Workspace row. */
-function accountRows(signIn: SignInState, open: (view: Manage) => void, onSignInChange: () => void): ReadonlyArray<Row> {
-  const workspace = WORKSPACE[signIn.status];
-  if (signIn.status !== 'signed_in' || !signIn.team) return [['Workspace', <WorkspaceRow signIn={signIn} onSignInChange={onSignInChange} />]];
-  return [
-    ['Profile', <WithAction text="Display name and password" label="Edit" onClick={() => open('profile')} />],
-    ['Workspace', <WithAction text={workspace} label="Team" onClick={() => open('team')} />],
-  ];
-}
-
-/** Team and Profile open over Settings; their code loads only with the self-hosted issuer. */
-function ManageDialogs({ signIn, manage, onClose }: { signIn: SignInState; manage: Manage | null; onClose: () => void }) {
-  if (signIn.status !== 'signed_in' || !signIn.team) return null;
+/** Display name and password at the self-hosted issuer, in a dialog over Settings; its code loads only with that issuer. */
+function ProfileEdit() {
+  const [open, setOpen] = useState(false);
   return (
-    <Suspense>
-      <TeamDialog access={signIn.access} open={manage === 'team'} onClose={onClose} />
-      <ProfileDialog open={manage === 'profile'} onClose={onClose} />
-    </Suspense>
+    <>
+      <WithAction text="Display name and password" label="Edit" onClick={() => setOpen(true)} />
+      <Suspense><ProfileDialog open={open} onClose={() => setOpen(false)} /></Suspense>
+    </>
   );
 }
 
+/** The self-hosted issuer adds a Profile row. Team shows on the Workspace row. */
+function accountRows(signIn: SignInState, onSignInChange: () => void): ReadonlyArray<Row> {
+  const workspace: Row = ['Workspace', (
+    <>
+      <span>{WORKSPACE[signIn.status]}</span>
+      <span className="listen-signin-actions">{signIn.status === 'signed_in' && <TeamButton signIn={signIn} onSignInChange={onSignInChange} label="Team" />}</span>
+    </>
+  )];
+  if (signIn.status !== 'signed_in' || !signIn.team) return [workspace];
+  return [['Profile', <ProfileEdit />], workspace];
+}
+
 /** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
-export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange }: SettingsProps) {
-  const [manage, setManage] = useState<Manage | null>(null);
+export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
   const rows: ReadonlyArray<Row> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
-    ...accountRows(signIn, setManage, onSignInChange),
+    ...accountRows(signIn, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
     ['Integrations', 'Unavailable: integrations are not connected yet'],
     ['Retention', 'Not selected: nothing is deleted automatically'],
+    ...(onWelcome ? [['Welcome', <WithAction text="What Sanctum records and how to set it up" label="Show welcome again" onClick={onWelcome} />] as const] : []),
   ];
   return (
     <Dialog title="Settings" open={open} onClose={onClose}>
@@ -232,7 +246,6 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
       </dl>
       <LocalRecordings engine={engine} />
       <WorkspaceDeletion client={client} onDeleted={() => void engine.pause()} />
-      <ManageDialogs signIn={signIn} manage={manage} onClose={() => setManage(null)} />
     </Dialog>
   );
 }

@@ -3,6 +3,7 @@
  * `GET /api/v1/session`. Sign-in always starts with a same-origin navigation, never a cross-origin
  * form post: the page CSP allows only `form-action 'self'`.
  */
+import type { Onboarding } from '@sanctum/contracts';
 import { type AccessScope, createClient, type SanctumClient, SanctumError } from '@sanctum/sdk';
 
 /** The session opener's script-readable double-submit cookie; its value goes back as `x-csrf-token`. */
@@ -116,6 +117,22 @@ export async function post(path: string, body?: unknown): Promise<Response> {
 export async function endMeeting(meeting_id: string, fence: { readonly epoch_id: string; readonly sample: number } | null): Promise<void> {
   await post(`/api/v1/meetings/${meeting_id}/end`, fence === null ? {} : { epoch_id: fence.epoch_id, fence_sample: fence.sample });
 }
+
+/** The first-run welcome's state (website-only routes, not in the SDK); null when the server does not answer it, so nothing opens. */
+export async function readOnboarding(): Promise<Onboarding | null> {
+  try {
+    const response = await fetch('/api/v1/onboarding', { headers: { accept: 'application/json' } });
+    return response.ok ? ((await response.json()) as Onboarding) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Finishing or skipping the welcome; it then stays closed on every device of this person. */
+export const completeOnboarding = async (): Promise<Onboarding> => (await post('/api/v1/onboarding')).json();
+
+/** Owners and admins only; the server trims the name. */
+export const renameWorkspace = async (name: string): Promise<Onboarding> => (await post('/api/v1/workspace/name', { name })).json();
 
 /** Revokes this browser's session on the server; the issuer's own session is left alone (plan 4.3). */
 export async function signOut(): Promise<void> {

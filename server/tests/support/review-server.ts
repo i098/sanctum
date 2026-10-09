@@ -56,6 +56,8 @@ const seed = (store: MemoryObjectStore) =>
     yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, attempts, created_at, updated_at)
       VALUES (${randomUUID()}, ${owner!.workspace_id}, ${meeting_id}, ${owner!.principal.id}, 'gmail-send-email', 'notes-email', '{}', ${randomBytes(32)}, '0.1.4', 'succeeded', 1,
         UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+    // A returning person: the first-run welcome was done before, so it does not cover Review.
+    yield* sql`UPDATE principals SET onboarded_at = UTC_TIMESTAMP(6) WHERE id = ${owner!.principal.id}`;
     return owner!;
   });
 

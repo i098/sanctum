@@ -5,6 +5,8 @@ interface DialogProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  /** The header's close control; a flow the person may leave at any step says Skip. */
+  closeLabel?: string;
 }
 
 /**
@@ -25,9 +27,11 @@ function wrapFocus(event: KeyboardEvent<HTMLDialogElement>): void {
 
 /**
  * Secondary overlay on the native modal `<dialog>`: the page behind is inert, Tab wraps inside,
- * Escape closes it, and closing returns focus to the control that opened it.
+ * Escape closes it, and closing returns focus to the control that opened it. Only the person's
+ * close (Escape) reports `onClose`: a close because `open` turned false (one overlay replacing
+ * another) must not close what replaced it.
  */
-export function Dialog({ title, open, onClose, children }: DialogProps) {
+export function Dialog({ title, open, onClose, children, closeLabel = 'Close' }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -37,10 +41,10 @@ export function Dialog({ title, open, onClose, children }: DialogProps) {
     else dialog.close();
   }, [open]);
   return (
-    <dialog ref={ref} className="listen-dialog" aria-labelledby={titleId} onClose={event => event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
+    <dialog ref={ref} className="listen-dialog" aria-labelledby={titleId} onClose={event => open && event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
       <header className="listen-dialog-header">
         <h2 id={titleId}>{title}</h2>
-        <button type="button" onClick={onClose}>Close</button>
+        <button type="button" onClick={onClose}>{closeLabel}</button>
       </header>
       {open && children}
     </dialog>

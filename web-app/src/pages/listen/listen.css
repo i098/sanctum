@@ -719,12 +719,22 @@
   color: #8b919c;
 }
 
-.listen-confirm strong {
+/* The welcome's field follows its step heading directly. */
+.listen-onboarding-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: #8b919c;
+}
+
+.listen-confirm strong,
+.listen-onboarding strong {
   color: #e7ecf3;
   font-weight: 500;
 }
 
-.listen-confirm input {
+.listen-confirm input,
+.listen-onboarding-field input {
   padding: 8px 10px;
   border: 1px solid #222936;
   border-radius: 4px;
@@ -733,7 +743,8 @@
   font: inherit;
 }
 
-.listen-confirm input:focus-visible {
+.listen-confirm input:focus-visible,
+.listen-onboarding-field input:focus-visible {
   outline: 1px solid #3d7dff;
   border-color: #3d7dff;
 }
@@ -744,6 +755,98 @@
 }
 
 .listen-local-gap {
+  color: #f2a23b;
+}
+
+/* First-run welcome: narrower than Settings, one step at a time, on Settings' rows, fields and actions. */
+.listen-dialog:has(.listen-onboarding) {
+  width: min(560px, calc(100vw - 64px));
+}
+
+.listen-onboarding p {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
+.listen-onboarding .listen-onboarding-step {
+  margin-bottom: 6px;
+  color: #8b919c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.listen-onboarding h3 {
+  margin: 0 0 12px;
+  color: #e7ecf3;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Focus moves to the heading only so a screen reader reads the new step; it is not a control. */
+.listen-onboarding h3:focus {
+  outline: none;
+}
+
+/* The picker's select, the level bar and the sound check in one column; the picker's wrapper steps aside. */
+.listen-onboarding-mic {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+
+.listen-onboarding-mic .listen-input-picker {
+  display: contents;
+}
+
+.listen-onboarding-mic .listen-input {
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: inherit;
+}
+
+.listen-onboarding-mic .listen-input-check {
+  font-size: inherit;
+}
+
+.listen-meter {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #222936;
+}
+
+/* `useInputLevel` shows a new level every 100 ms; the bar glides between them. */
+.listen-meter i {
+  display: block;
+  height: 100%;
+  background: #22d3c5;
+  transform-origin: left;
+  transition: transform 100ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .listen-meter i {
+    transition: none;
+  }
+}
+
+.listen-onboarding-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.listen-onboarding .listen-onboarding-check p {
+  margin: 0;
+}
+
+.listen-onboarding-check p:is([data-access='denied'], [data-access='failed']) {
   color: #f2a23b;
 }
 

@@ -491,9 +491,12 @@ const listenersGroup = HttpApiBuilder.group(SanctumApi, 'listeners', handlers =>
   handlers.handle('registerListener', () => unmodeled).handle('heartbeat', () => unmodeled).handle('putChunk', () => unmodeled),
 );
 
-/** Workspace deletion is an owner surface over MySQL rows, not an adapter surface; modeled only so the API layer is complete. */
+/** Workspace deletion and the website's welcome are surfaces over MySQL rows, not adapter surfaces; modeled only so the API layer is complete. */
 const workspaceGroup = HttpApiBuilder.group(SanctumApi, 'workspace', handlers =>
   handlers.handle('getWorkspace', () => unmodeled).handle('deleteWorkspace', () => unmodeled).handle('restoreWorkspace', () => unmodeled),
+);
+const onboardingGroup = HttpApiBuilder.group(SanctumApi, 'onboarding', handlers =>
+  handlers.handle('getOnboarding', () => unmodeled).handle('completeOnboarding', () => unmodeled).handle('renameWorkspace', () => unmodeled),
 );
 const FakeWorkspaceOwner = Layer.effect(WorkspaceOwner, Effect.map(Authenticator, authenticator => Effect.flatMap(HttpServerRequest.HttpServerRequest, authenticator.authenticate)));
 
@@ -562,6 +565,6 @@ export const fakeApi = <R = SqlClient.SqlClient>(
   domain: ReturnType<typeof fakeDomain>,
   health: Layer.Layer<HttpApiGroup.ApiGroup<'sanctum', 'health'>, never, R> = HealthLive(loadMigrations()) as never,
 ) =>
-  HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, workspaceGroup, domain.groups]), Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]));
+  HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, workspaceGroup, onboardingGroup, domain.groups]), Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]));
 
 const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));
