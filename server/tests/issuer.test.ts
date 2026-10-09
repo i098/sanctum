@@ -205,13 +205,31 @@ describe('embedded Better Auth issuer', () => {
       const settings = { issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) };
       const clientId = yield* registerSanctumClient(settings, database.mysql, redirect);
       const rows = yield* Effect.provide(
-        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ clientId: string; clientSecret: string | null; skipConsent: number; requirePKCE: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>`SELECT clientId, clientSecret, skipConsent, requirePKCE, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client`),
+        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ clientId: string; clientSecret: string | null; skipConsent: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>`SELECT clientId, clientSecret, skipConsent, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client`),
         dbLayer(database.mysql),
       );
       expect(rows).toHaveLength(1);
       const [row] = rows;
-      expect(row).toMatchObject({ clientId, clientSecret: null, skipConsent: 1, requirePKCE: 1, tokenEndpointAuthMethod: 'none' });
+      expect(row).toMatchObject({ clientId, clientSecret: null, skipConsent: 1, tokenEndpointAuthMethod: 'none' });
       expect(typeof row!.redirectUris === 'string' ? JSON.parse(row!.redirectUris) : row!.redirectUris).toEqual([redirect.href]);
+
+      // Behavior, not columns: the client signs in without a consent screen, and PKCE stays mandatory.
+      const { auth, pool } = createIssuer(settings, database.mysql);
+      yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
+      const send: Send = (path, init) => auth.handler(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...(init?.headers as Record<string, string>), 'sec-fetch-mode': 'cors' } }));
+      const { cookie } = yield* Effect.promise(() => signUp(send));
+      const start = (pkce: Record<string, string>) =>
+        Effect.promise(async () => {
+          const query = new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: redirect.href, scope: 'openid', state: 's', ...pkce });
+          const response = await send(`/idp/oauth2/authorize?${query}`, { headers: { cookie } });
+          return new URL(((await response.json()) as { url: string }).url, ORIGIN);
+        });
+      const signedIn = yield* start({ code_challenge: createHash('sha256').update('verifier').digest('base64url'), code_challenge_method: 'S256' });
+      expect(`${signedIn.origin}${signedIn.pathname}`).toBe(redirect.href);
+      expect(signedIn.searchParams.get('code')).toBeTruthy();
+      const withoutPkce = yield* start({});
+      expect(withoutPkce.searchParams.get('code')).toBeNull();
+      expect(withoutPkce.searchParams.get('error')).toBeTruthy();
     }),
   );
 
