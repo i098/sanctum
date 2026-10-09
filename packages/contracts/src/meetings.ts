@@ -125,8 +125,8 @@ export type SplitResult = typeof SplitResult.Type;
  * End meeting, for the website only (kept out of OpenAPI, the SDKs and MCP): closes like `closeMeeting` and fences the audio
  * the page captured before it paused. Only the principal that owns the listener of `epoch_id` may send it; that listener is
  * the meeting's own or one of its capture group. A final of `epoch_id` that starts before `sample` (stored clamped to real
- * time since the server recorded the epoch's start, plus a short allowance) joins the closed meeting while it is closing, or is
- * dropped; it never opens a meeting.
+ * time since the server recorded the epoch's start, plus a short allowance) joins the closed meeting, which is finalized again
+ * if it was already finalized; it never opens a meeting.
  */
 export const EndMeeting = Schema.Struct({ epoch_id: CaptureEpochId, sample: SampleIndex });
 export type EndMeeting = typeof EndMeeting.Type;

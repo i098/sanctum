@@ -259,8 +259,8 @@ const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 
 /**
  * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence and not before the
- * closed meeting started. It joins the closed meeting while that is closing and is dropped after; it never opens a
- * meeting. Returns whether the segment was such audio.
+ * closed meeting started. It joins the closed meeting, and a meeting already finalized is finalized again with it; it
+ * never opens a meeting. Returns whether the segment was such audio.
  */
 const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
   Effect.gen(function* () {
@@ -271,17 +271,16 @@ const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: Transc
     if (fenced === undefined) return false;
     const closed = yield* selectMeeting(workspace_id, fenced.id, true);
     if (closed._tag === 'None' || sampleMs(epoch, source.sample_start) < Date.parse(closed.value.started_at)) return false;
-    if (closed.value.state === 'closing') {
-      const end = yield* claimSource(closed.value, source);
-      yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
-    }
+    const end = yield* claimSource(closed.value, source);
+    yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
+    if (closed.value.state !== 'closing') yield* scheduleFinalize(closed.value, null);
     return true;
   });
 
 /**
  * Late audio just before the first range of a meeting that is closing or closed (batch reconciliation after End): within
- * the boundary gap of that range it joins the meeting while that is closing, extending its start, and is dropped once the
- * meeting is finalized; it never opens a meeting. Returns whether the segment was such audio.
+ * the boundary gap of that range it joins the meeting, extending its start, and a meeting already finalized is finalized
+ * again with it; it never opens a meeting. Returns whether the segment was such audio.
  */
 const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
   Effect.gen(function* () {
@@ -298,10 +297,9 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
     if (distance > engineeringDefaults.boundaryEvaluationGapMs) return false;
     const closed = yield* selectMeeting(workspace_id, next.meeting_id, true);
     if (closed._tag === 'None' || (closed.value.state !== 'closing' && closed.value.state !== 'closed')) return false;
-    if (closed.value.state === 'closing') {
-      yield* claimSource(closed.value, source);
-      yield* sql`UPDATE meetings SET started_at = LEAST(started_at, ${dbTime(sampleMs(epoch, source.sample_start))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
-    }
+    yield* claimSource(closed.value, source);
+    yield* sql`UPDATE meetings SET started_at = LEAST(started_at, ${dbTime(sampleMs(epoch, source.sample_start))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
+    if (closed.value.state === 'closed') yield* scheduleFinalize(closed.value, null);
     return true;
   });
 
@@ -357,6 +355,21 @@ export const onFinalSegments = (event: {
       }),
     );
   }).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
+
+/**
+ * A transcript window inside a meeting that was sealed before its transcript was complete (a live answer
+ * that outlived the close, or batch reconciliation of a gap) finalizes that meeting again.
+ */
+export const refinalizeSealed = (workspace_id: WorkspaceId, epoch_id: string, track: number, window: { readonly sample_start: number; readonly sample_end: number }) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const sealed = yield* sql<{ id: MeetingId }>`SELECT DISTINCT m.id FROM meetings m
+      JOIN meeting_ranges r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision
+      WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${epoch_id} AND r.track = ${track}
+        AND r.sample_start < ${window.sample_end} AND r.sample_end > ${window.sample_start}
+        AND m.state NOT IN ${sql.in(OPEN_STATES)} AND m.processing->>'$.transcript' <> 'complete'`;
+    for (const meeting of sealed) yield* scheduleFinalize({ id: meeting.id, workspace_id }, null);
+  });
 
 /**
  * Media hook: a capture epoch ended. Closing or an interruption seals the open meeting at the capture end;
@@ -667,7 +680,10 @@ export const finalizeMeeting = (job: MeetingJob) =>
           const found = yield* selectMeeting(job.workspace_id, meeting_id, true);
           if (found._tag === 'None' || OPEN_STATES.includes(found.value.state)) return { skipped: 'meeting is open or missing' };
           const row = found.value;
-          const processing = { ...PENDING_PROCESSING, transcript: yield* transcriptProgress(row) };
+          // A revision that already has its cut keeps that cut's status: assembly returns the stored cut without restating it.
+          const [cut] = yield* sql<{ recording: string }>`SELECT m.processing->>'$.recording' AS recording FROM meetings m
+            JOIN meeting_recordings r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision WHERE m.id = ${row.id}`;
+          const processing = { ...PENDING_PROCESSING, transcript: yield* transcriptProgress(row), ...cut };
           const state = row.state === 'closing' ? 'closed' : row.state;
           yield* sql`UPDATE meetings SET state = ${state}, processing = ${JSON.stringify(processing)}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${row.id}`;
           const derived = { workspace_id: row.workspace_id, work_key: `meeting:${row.id}`, payload: { meeting_id: row.id }, requested_by: job.requested_by, source_revision: row.boundary_revision };
