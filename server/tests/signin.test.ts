@@ -471,6 +471,13 @@ describe('WorkOS organizations at sign-in', () => {
       const again = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_ada' }, create));
       expect(yield* Effect.promise(() => sessionOf(base, again).then(r => r.json()))).toMatchObject({ workspace_id: access.workspace_id, role: 'owner' });
       expect(yield* Effect.provide(counts, db)).toEqual([1, 1, 1, 1, 1]);
+
+      // The owner is removed at WorkOS: asking again must not re-add the owner to the linked organization.
+      workos.deleteMembership('user_ada', 'org_1');
+      const removed = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_ada' }, create));
+      expect(removed.headers.get('location')).toMatch(/^\/\?signin=not_member&/);
+      expect(workos.memberships).toEqual([]);
+      expect(yield* Effect.provide(counts, db)).toEqual([1, 1, 1, 1, 1]);
       expect(workosWrites(workos.requests)).toEqual(['POST /organizations', 'POST /user_management/organization_memberships', 'POST /user_management/organization_memberships']);
     }),
   );

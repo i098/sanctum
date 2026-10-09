@@ -153,9 +153,10 @@ const reconcileMemberships = ({ client, issuer }: WorkosOrganizationSettings, id
 
 /**
  * Idempotent per WorkOS user: the organization carries `external_id` `sanctum-self-serve:<user>`, the
- * owner membership is created only when missing, and the workspace only while that organization has
- * no link; the owner membership itself comes from reconciliation. A retry after any failed step
- * resumes without a second organization or workspace. The workspace keeps the default seat limit.
+ * owner membership is created only while the organization has no link and the membership is missing,
+ * and the workspace only while that organization has no link; the owner membership itself comes from
+ * reconciliation. A retry after any failed step resumes without a second organization or workspace,
+ * and never re-adds an owner removed at WorkOS. The workspace keeps the default seat limit.
  */
 const createSelfServeWorkspace = (settings: WorkosOrganizationSettings, identity: Identity, name: string | null, request: SelfServeRequest) =>
   Effect.gen(function* () {
@@ -164,9 +165,12 @@ const createSelfServeWorkspace = (settings: WorkosOrganizationSettings, identity
     const external_id = `sanctum-self-serve:${identity.subject}`;
     const found = yield* client.organizationByExternalId(external_id);
     const organization = Option.isSome(found) ? found.value : yield* client.createOrganization({ name: request.name, external_id });
-    const memberships = yield* client.listMemberships(identity.subject);
-    if (!memberships.some(membership => membership.organization_id === organization.id && membership.status === 'active')) {
-      yield* client.createMembership({ user_id: identity.subject, organization_id: organization.id, role_slug: 'owner' });
+    const linked = yield* workspaceForOrg({ issuer, org_id: organization.id });
+    if (Option.isNone(linked)) {
+      const memberships = yield* client.listMemberships(identity.subject);
+      if (!memberships.some(membership => membership.organization_id === organization.id && membership.status === 'active')) {
+        yield* client.createMembership({ user_id: identity.subject, organization_id: organization.id, role_slug: 'owner' });
+      }
     }
     yield* sql.withTransaction(
       Effect.gen(function* () {
