@@ -6,11 +6,15 @@ import { Effect, Layer, Option, Redacted } from 'effect';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { CustomFetch } from 'openid-client';
 import { linkIdentity, openSession } from '../src/auth.ts';
+import { claimJob } from '../src/job-runner.ts';
+import { enqueueJob } from '../src/jobs.ts';
 import { armWorkosSync, syncWorkosEvents, WorkosOrganizations, workosSettings } from '../src/org-sync.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
+import { purgeWorkspace } from '../src/workspaces.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { memoryObjectStore } from './support/object-store.ts';
 
 const ISSUER = 'https://issuer.fixture.test';
 const CLIENT_ID = 'sanctum-fixture';
@@ -404,13 +408,29 @@ describe('OIDC sign-in', () => {
       yield* mark(first.workspace_id, 7);
       const refused = yield* Effect.flip(owner('user_cofounder', { id: first.workspace_id }));
       expect(refused).toMatchObject({ _tag: 'OwnerRefused', message: expect.stringContaining('was deleted at') });
-      const second = yield* owner('user_second', { name: 'Again', timezone: 'UTC' });
+      const second = yield* owner('user_first', { name: 'Again', timezone: 'UTC' });
       expect(second.workspace_id).not.toBe(first.workspace_id);
+      expect(second.principal_id).toBe(first.principal_id);
+      expect(yield* Effect.flip(owner('user_other', { name: 'Third', timezone: 'UTC' }))).toMatchObject({ _tag: 'OwnerRefused' });
 
-      yield* mark(second.workspace_id, -1);
-      expect(yield* Effect.flip(owner('user_late', { id: second.workspace_id }))).toMatchObject({ _tag: 'OwnerRefused' });
-      const third = yield* owner('user_third', { name: 'Third', timezone: 'UTC' });
+      const purge = (workspace_id: WorkspaceId) =>
+        Effect.gen(function* () {
+          yield* mark(workspace_id, -1);
+          yield* enqueueJob({ workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: first.principal_id }, requested_by: null });
+          const lease = Option.getOrThrow(yield* claimJob(['workspace.purge'], 60_000));
+          yield* Effect.provide(purgeWorkspace(lease.job), memoryObjectStore().layer);
+        }).pipe(Effect.provide(db));
+      yield* mark(second.workspace_id, 7);
+      yield* purge(first.workspace_id);
+      yield* purge(second.workspace_id);
+      const third = yield* owner('user_first', { name: 'Third', timezone: 'UTC' });
       expect(third.workspace_id).not.toBe(second.workspace_id);
+      expect(third.principal_id).not.toBe(first.principal_id);
+      const [row] = yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ n: number }>`SELECT COUNT(*) AS n FROM principal_identities WHERE subject = 'user_first'`),
+        db,
+      );
+      expect(Number(row!.n)).toBe(1);
     }),
   );
 

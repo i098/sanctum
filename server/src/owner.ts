@@ -30,6 +30,7 @@ export const createOwner = (input: OwnerInput) =>
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         let workspace_id: WorkspaceId;
+        let known: PrincipalId | undefined;
         if ('id' in input.workspace) {
           workspace_id = input.workspace.id;
           const [found] = yield* sql<{ deleted_at: string | null; purge_after: string | null }>`SELECT DATE_FORMAT(deleted_at, '%Y-%m-%d %H:%i:%s') AS deleted_at,
@@ -43,12 +44,18 @@ export const createOwner = (input: OwnerInput) =>
           yield* Effect.try({ try: () => new Intl.DateTimeFormat('en-US', { timeZone: timezone }), catch: () => new OwnerRefused({ message: `Unknown IANA time zone ${timezone}` }) });
           const [existing] = yield* sql`SELECT id FROM workspaces WHERE deleted_at IS NULL LIMIT 1 FOR UPDATE`;
           if (existing !== undefined) return yield* new OwnerRefused({ message: 'A workspace already exists; pass --workspace-id to add an owner to it' });
+          const [identity] = yield* sql<{ principal_id: PrincipalId; usable: number }>`SELECT i.principal_id, (p.kind = 'human' AND p.disabled_at IS NULL) AS usable
+            FROM principal_identities i JOIN principals p ON p.id = i.principal_id WHERE i.issuer = ${input.issuer} AND i.subject = ${input.subject} FOR UPDATE`;
+          if (identity !== undefined && Number(identity.usable) !== 1) return yield* new OwnerRefused({ message: 'This identity belongs to a disabled or non-human principal' });
+          known = identity?.principal_id;
           workspace_id = WorkspaceId.make(randomUUID());
           yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${name}, ${timezone}, UTC_TIMESTAMP(6))`;
         }
-        const principal_id = PrincipalId.make(randomUUID());
-        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.display_name}, UTC_TIMESTAMP(6))`;
-        yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${input.issuer}, ${input.subject}, ${principal_id}, UTC_TIMESTAMP(6))`;
+        const principal_id = known ?? PrincipalId.make(randomUUID());
+        if (known === undefined) {
+          yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.display_name}, UTC_TIMESTAMP(6))`;
+          yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${input.issuer}, ${input.subject}, ${principal_id}, UTC_TIMESTAMP(6))`;
+        }
         yield* addMember({ workspace_id, principal_id, role: 'owner' });
         return { workspace_id, principal_id };
       }),
