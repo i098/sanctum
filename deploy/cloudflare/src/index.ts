@@ -6,16 +6,34 @@
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import { type LoginSecrets, loginResponse } from './login.ts';
-import { type AppSettings, containerEnv } from './settings.ts';
+import { type AppSettings, containerEnv, retireStaleContainer } from './settings.ts';
 
 interface Env extends LoginSecrets, AppSettings {
   readonly API: DurableObjectNamespace<SanctumApi>;
   readonly JOBS: DurableObjectNamespace<SanctumJobs>;
 }
 
-/** Both processes run the same image with the same settings. */
+/** Both processes run the same image with the same settings, restarted when those settings change. */
 class SanctumContainer extends Container<Env> {
   override envVars = containerEnv(this.env);
+  #envChecked = false;
+
+  /** Once per object instance: a deploy or secret change starts a new instance with no open socket. */
+  async #useCurrentEnv() {
+    if (this.#envChecked) return;
+    await retireStaleContainer(this.ctx, this.envVars);
+    this.#envChecked = true;
+  }
+
+  override async fetch(request: Request) {
+    await this.#useCurrentEnv();
+    return super.fetch(request);
+  }
+
+  override async start(...args: Parameters<Container<Env>['start']>) {
+    await this.#useCurrentEnv();
+    return super.start(...args);
+  }
 }
 
 /** `node server/dist/main.js` on its port; sleeps after the default idle period and starts on the next request. */
