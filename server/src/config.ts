@@ -64,6 +64,8 @@ export const engineeringDefaults = {
   modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
   /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
   pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
+  /** WorkOS Events API polling (`workos.sync`): time between runs, pages read per run, request timeout. */
+  workosSync: { intervalMs: 60_000, pagesPerRun: 10, requestTimeoutMs: 30_000 },
 } as const;
 
 export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
@@ -142,6 +144,12 @@ export const serverConfig = Config.all({
   /** `better-auth` serves the OIDC issuer and MCP authorization server in-process at `/idp`. */
   embeddedIssuer: Config.option(Config.literal('better-auth')('SANCTUM_EMBEDDED_ISSUER')),
   betterAuthSecret: Config.option(Config.redacted('BETTER_AUTH_SECRET')),
+  /** WorkOS Organizations sync (hosted): server-only API key; without it no organization is read or created. */
+  workos: Config.all({
+    apiKey: Config.option(Config.redacted('WORKOS_API_KEY')),
+    /** A signed-in user with no membership may create a workspace (with a WorkOS organization). */
+    selfServeWorkspaces: Config.boolean('SANCTUM_SELF_SERVE_WORKSPACES').pipe(Config.withDefault(false)),
+  }),
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),

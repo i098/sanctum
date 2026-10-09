@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
@@ -44,7 +44,39 @@ interface SettingsProps {
   onSignInChange: () => void;
 }
 
-function Notice({ notice }: { notice: SignInNotice }) {
+/** Self-serve: signs in again, and the server creates the workspace with this user as owner when it still finds no membership. */
+function CreateWorkspace() {
+  // The browser's own zone may be an alias (such as `UTC`) that the canonical list leaves out.
+  const current = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const zones = Intl.supportedValuesOf('timeZone');
+  const create = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const query = new URLSearchParams({ return_to: '/', workspace_name: String(form.get('name')).trim(), timezone: String(form.get('timezone')) });
+    // A navigation, not a form submission: the issuer redirect leaves the origin, and the CSP allows only `form-action 'self'`.
+    window.location.assign(`/auth/login?${query}`);
+  };
+  return (
+    <form onSubmit={create} className="mt-3 grid gap-3">
+      <p>Or create your own workspace:</p>
+      <label className="grid gap-1">
+        <span className="text-sm text-ink-secondary">Workspace name</span>
+        <input name="name" required maxLength={200} pattern=".*\S.*" className="rounded bg-surface px-3 py-2" />
+      </label>
+      <label className="grid gap-1">
+        <span className="text-sm text-ink-secondary">Timezone</span>
+        <select name="timezone" defaultValue={current} className="rounded bg-surface px-3 py-2">
+          {(zones.includes(current) ? zones : [current, ...zones]).map(zone => <option key={zone}>{zone}</option>)}
+        </select>
+      </label>
+      <div className="flex justify-end">
+        <button type="submit" data-primary>Create workspace</button>
+      </div>
+    </form>
+  );
+}
+
+function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolean }) {
   return (
     <div role="status" className="listen-signin-notice">
       <p>{NOTICE[notice.code]}</p>
@@ -56,6 +88,7 @@ function Notice({ notice }: { notice: SignInNotice }) {
           <dd>{notice.subject}</dd>
         </dl>
       )}
+      {notice.code === 'not_member' && selfServe && <CreateWorkspace />}
     </div>
   );
 }
@@ -106,7 +139,7 @@ export function SettingsDialog({ open, onClose, permission, engine, signIn, noti
   ];
   return (
     <Dialog title="Settings" open={open} onClose={onClose}>
-      {notice && <Notice notice={notice} />}
+      {notice && <Notice notice={notice} selfServe={signIn.status === 'signed_out' && signIn.selfServe} />}
       <dl className="listen-panel listen-settings">
         {rows.map(([term, value]) => (
           <div key={term}>

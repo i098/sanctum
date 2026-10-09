@@ -22,6 +22,7 @@ import { SpeechRepliesLive } from './media/speech-reply.ts';
 import { LlmLive } from './llm.ts';
 import { SignInFromEnv, type SignInSettings, SignInLive } from './signin.ts';
 import { loadMigrations } from './migrate.ts';
+import { type WorkosOrganizations, WorkosOrganizationsFromEnv } from './org-sync.ts';
 import type { ObjectStore } from './providers/object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
 
@@ -41,6 +42,7 @@ export const serverLayer = (
     readonly api?: Layer.Layer<HttpApi.Api, never, SqlClient.SqlClient | Authenticator>;
     readonly mcp?: Layer.Layer<McpAuthorizationServer>;
     readonly signIn?: Layer.Layer<SignInSettings>;
+    readonly organizations?: Layer.Layer<WorkosOrganizations>;
   } = {},
 ) =>
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
@@ -53,6 +55,7 @@ export const serverLayer = (
     Layer.provide(withMcpDelegation(authenticator)),
     Layer.provide(overrides.mcp ?? McpAuthorizationFromEnv),
     Layer.provide(overrides.signIn ?? SignInFromEnv),
+    Layer.provide(overrides.organizations ?? WorkosOrganizationsFromEnv),
     Layer.provide(dbLayer(config.mysql)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),
   );

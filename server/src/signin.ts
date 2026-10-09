@@ -12,6 +12,7 @@ import { ConfigError, Context, Data, Effect, Layer, Option, Redacted, Schema } f
 import * as oidc from 'openid-client';
 import { Authenticator, identityPrincipal, linkIdentity, openSession, revokeSession, SESSION_COOKIE } from './auth.ts';
 import { serverConfig } from './config.ts';
+import { reconcileSignIn, SelfServeRequest, WorkosOrganizations } from './org-sync.ts';
 
 /** Relying-party settings: the `SANCTUM_OIDC_*` group, all set or not configured. */
 export interface SignIn {
@@ -63,6 +64,8 @@ const Flow = Schema.Struct({
   intent: Schema.Literal('login', 'link'),
   return_to: Schema.String,
   workspace: Schema.optional(Schema.String),
+  /** Self-serve workspace to create when this sign-in finds no membership. */
+  create: Schema.optional(SelfServeRequest),
 });
 type Flow = typeof Flow.Type;
 const FlowCookie = Schema.compose(Schema.StringFromBase64Url, Schema.parseJson(Flow));
@@ -111,13 +114,15 @@ const flowCookie = (flow: Flow) =>
 export const SignInLive = HttpApiBuilder.Router.use(router =>
   Effect.gen(function* () {
     const { client, embeddedIssuer } = yield* SignInSettings;
+    const organizations = yield* WorkosOrganizations;
+    const selfServe = Option.isSome(client) && Option.exists(organizations, settings => settings.selfServe);
     const authenticator = yield* Authenticator;
     const sql = yield* SqlClient.SqlClient;
     const party = Option.map(client, settings => ({ settings, configuration: relyingParty(settings) }));
     type Party = Option.Option.Value<typeof party>;
 
     /** Authorization URL plus the flow it must come back with. */
-    const start = ({ settings, configuration }: Party, intent: Flow['intent'], request: HttpServerRequest.HttpServerRequest) =>
+    const start = ({ settings, configuration }: Party, intent: Flow['intent'], request: HttpServerRequest.HttpServerRequest, create?: SelfServeRequest) =>
       Effect.gen(function* () {
         const config = yield* configuration;
         const query = new URL(request.url, 'http://local').searchParams;
@@ -130,6 +135,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return_to: localPath(query.get('return_to')),
           ...(verifier === undefined ? {} : { verifier }),
           ...(workspace === null ? {} : { workspace }),
+          ...(create === undefined ? {} : { create }),
         };
         const pkce = verifier === undefined ? {} : { code_challenge: yield* Effect.promise(() => oidc.calculatePKCECodeChallenge(verifier)), code_challenge_method: 'S256' };
         const url = oidc.buildAuthorizationUrl(config, { redirect_uri: settings.redirectUri.href, scope: settings.scopes, state: flow.state, nonce: flow.nonce, ...pkce });
@@ -139,6 +145,10 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
     const login = (identity: { issuer: string; subject: string }, flow: Flow, name: unknown) =>
       Effect.gen(function* () {
         const notMember = (reason: string) => new SignInFailed({ code: 'not_member', reason, params: [['issuer', identity.issuer], ['subject', identity.subject]] });
+        yield* reconcileSignIn(identity, typeof name === 'string' ? name : null, flow.create).pipe(
+          Effect.provideService(WorkosOrganizations, organizations),
+          Effect.catchTag('WorkosFailure', error => new SignInFailed({ code: 'failed', reason: error.message })),
+        );
         const principal = yield* identityPrincipal(identity);
         if (Option.isNone(principal)) return yield* notMember('unknown identity');
         const memberships = yield* SqlSchema.findAll({
@@ -201,14 +211,27 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
     const answer = (error: Unauthenticated | Forbidden | Unavailable) => Effect.succeed(errorResponse(error));
     const unconfigured = errorResponse(new Unavailable({ message: 'No sign-in issuer is configured', retryable: false }));
 
-    yield* router.get('/auth/config', Effect.succeed(HttpServerResponse.unsafeJson({ sign_in: Option.isSome(client), embedded_issuer: embeddedIssuer })));
+    yield* router.get(
+      '/auth/config',
+      Effect.succeed(HttpServerResponse.unsafeJson({ sign_in: Option.isSome(client), embedded_issuer: embeddedIssuer, self_serve_workspaces: selfServe })),
+    );
 
     yield* router.get(
       '/auth/login',
       Effect.gen(function* () {
         if (Option.isNone(party)) return unconfigured;
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const { url, flow } = yield* start(party.value, 'login', request);
+        // `workspace_name` and `timezone` ask for a self-serve workspace if the sign-in finds no membership.
+        const query = new URL(request.url, 'http://local').searchParams;
+        const name = query.get('workspace_name');
+        let create: SelfServeRequest | undefined;
+        if (name !== null) {
+          if (!selfServe) return errorResponse(new Forbidden({ message: 'Self-serve workspaces are off' }));
+          const decoded = Schema.decodeUnknownOption(SelfServeRequest)({ name, timezone: query.get('timezone') });
+          if (Option.isNone(decoded)) return HttpServerResponse.unsafeJson({ message: 'A workspace needs a name of 1 to 200 characters and an IANA time zone' }, { status: 400 });
+          create = decoded.value;
+        }
+        const { url, flow } = yield* start(party.value, 'login', request, create);
         return HttpServerResponse.redirect(url, { status: 302 }).pipe(flowCookie(flow));
       }).pipe(Effect.catchAll(answer)),
     );

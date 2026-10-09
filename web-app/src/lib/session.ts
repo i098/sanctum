@@ -25,20 +25,23 @@ export const SIGN_IN_URL = '/auth/login?return_to=/';
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
  * come from the operator's login link. A server without the route counts as not configured.
+ * `selfServe`: a signed-in user without a membership may create a workspace.
  */
 export type SignInState =
   | { status: 'signed_in'; access: AccessScope; issuer: boolean }
-  | { status: 'checking' | 'unconfigured' | 'signed_out' | 'unavailable' };
+  | { status: 'signed_out'; selfServe: boolean }
+  | { status: 'checking' | 'unconfigured' | 'unavailable' };
 
 /** How the last sign-in redirect ended (`/?signin=<code>`), read once from the landing URL. */
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
 
 /** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. */
-async function configured(): Promise<boolean | 'unavailable'> {
+async function configured(): Promise<false | 'unavailable' | { selfServe: boolean }> {
   try {
     const response = await fetch('/auth/config', { headers: { accept: 'application/json' } });
     if (response.status >= 500) return 'unavailable';
-    return response.ok && (await response.json()).sign_in === true;
+    const config = response.ok ? await response.json() : {};
+    return config.sign_in === true && { selfServe: config.self_serve_workspaces === true };
   } catch (error) {
     return error instanceof SyntaxError ? false : 'unavailable';
   }
@@ -56,7 +59,7 @@ export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   const [issuer, current] = await Promise.all([configured(), session(client)]);
   if (typeof current === 'object') return { status: 'signed_in', access: current, issuer: issuer !== false };
   if (current === 'unavailable' || issuer === 'unavailable') return { status: 'unavailable' };
-  return { status: issuer ? current : 'unconfigured' };
+  return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
 }
 
 /** Clears the query off the address bar so a reload does not repeat the notice; the callback lands on `/`. */

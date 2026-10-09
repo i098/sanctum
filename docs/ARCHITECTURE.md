@@ -185,6 +185,13 @@ Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts
 
 - Mounts `/auth/*` from main.ts; opens sessions through `openSession` and `linkIdentity` in auth.ts.
 
+### organizations (W1)
+
+Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS suites in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
+
+- `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
+- `WorkosOrganizations` tag (`WorkosOrganizationsFromEnv`), provided by main.ts and worker.ts.
+
 ## Hot files
 
 | File | Who touches it | How |

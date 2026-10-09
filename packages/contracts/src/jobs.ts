@@ -15,6 +15,7 @@ export const JobKind = Schema.Literal(
   'research.run',
   'action.execute',
   'action.reconcile',
+  'workos.sync',
 );
 export type JobKind = typeof JobKind.Type;
 
