@@ -2,8 +2,8 @@
  * Remote MCP (plan section 13): eleven explicit tools over Streamable HTTP at `/mcp`.
  * A tool runs the same v1 REST handler the SDKs and website call, in-process, as the principal
  * its delegated OAuth token maps to, so validation, authorization and errors cannot drift.
- * The authorization server is unselected (docs/DECISIONS.md): tokens are verified against the
- * configured issuer, audience-bound to this resource; with no issuer configured MCP refuses.
+ * The authorization server is chosen in docs/DECISIONS.md and set by configuration: tokens are
+ * verified against the configured issuer, audience-bound to this resource; with none MCP refuses.
  */
 import { randomUUID } from 'node:crypto';
 import { HttpApi, HttpApiBuilder, HttpApp, type HttpRouter, HttpServerRequest, HttpServerResponse } from '@effect/platform';
@@ -21,10 +21,11 @@ import {
   WorkspaceId,
 } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
-import { Config, Context, Effect, Either, JSONSchema, Layer, Option, ParseResult, Schema, SchemaAST } from 'effect';
+import { Context, Effect, Either, JSONSchema, Layer, Option, ParseResult, Schema, SchemaAST } from 'effect';
 import { createClient, type OperationId, SanctumError } from '@sanctum/sdk';
 import { createRemoteJWKSet, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from 'jose';
 import { Authenticator, resolveAccess } from './auth.ts';
+import { mcpAuthorizationConfig } from './config.ts';
 import { workspaceForOrg } from './store.ts';
 
 /** Tool name, v1 operation it runs, and the description agents see. Nothing else is exposed. */
@@ -160,7 +161,7 @@ function mcpServer(routes: ReadonlyArray<ToolRoute>, dispatch: Dispatch) {
   return server;
 }
 
-/** Delegated-token verification settings; `None` while the authorization server is unselected. */
+/** Delegated-token verification settings; `None` while the authorization server is not configured. */
 export interface McpAuthorization {
   /** Canonical URL of `/mcp`, the only audience accepted. */
   readonly resource: string;
@@ -180,17 +181,10 @@ export class McpAuthorizationServer extends Context.Tag('sanctum/McpAuthorizatio
  */
 export const McpAuthorizationFromEnv = Layer.effect(
   McpAuthorizationServer,
-  Effect.map(
-    Config.all([
-      Config.option(Config.url('SANCTUM_MCP_RESOURCE')),
-      Config.option(Config.string('SANCTUM_MCP_ISSUER')),
-      Config.option(Config.url('SANCTUM_MCP_JWKS_URL')),
-      Config.array(Config.literal(...AccessScopeName.literals)(), 'SANCTUM_MCP_DEFAULT_SCOPES').pipe(Config.withDefault([])),
-    ]),
-    ([resource, issuer, jwks, defaultScopes]) =>
-      Option.all({ resource, issuer, jwks }).pipe(
-        Option.map(value => ({ resource: value.resource.href, issuer: value.issuer, keys: createRemoteJWKSet(value.jwks), defaultScopes })),
-      ),
+  Effect.map(mcpAuthorizationConfig, ({ defaultScopes, ...settings }) =>
+    Option.all(settings).pipe(
+      Option.map(value => ({ resource: value.resource.href, issuer: value.issuer, keys: createRemoteJWKSet(value.jwksUrl), defaultScopes })),
+    ),
   ),
 );
 

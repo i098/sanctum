@@ -3,7 +3,7 @@
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
 import { Config, Effect, Option, Redacted, Schema } from 'effect';
-import { type JobKind, Unavailable } from '@sanctum/contracts';
+import { AccessScopeName, type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
 export const engineeringDefaults = {
@@ -68,11 +68,22 @@ const modelRole = (role: ModelRoleName) => {
   });
 };
 
-/** Decisions still open in docs/DECISIONS.md; each blocks production activation until selected. */
-const openDecisions = ['identity_issuer', 'mcp_authorization_server', 'meeting_retention', 'outside_meeting_speech'] as const;
-type OpenDecision = (typeof openDecisions)[number];
+/** Decisions in docs/DECISIONS.md an operator lists in `SANCTUM_SELECTED_DECISIONS`; each unlisted one blocks production. */
+const activationDecisions = ['identity_issuer', 'mcp_authorization_server', 'meeting_retention', 'outside_meeting_speech'] as const;
+type ActivationDecision = (typeof activationDecisions)[number];
 
-const noDecisions: ReadonlyArray<OpenDecision> = [];
+const noDecisions: ReadonlyArray<ActivationDecision> = [];
+
+/** Delegated MCP tokens; the issuer is compared with the token `iss` exactly, so kept as written. */
+export const mcpAuthorizationConfig = Config.all({
+  resource: Config.option(Config.url('SANCTUM_MCP_RESOURCE')),
+  issuer: Config.option(Config.string('SANCTUM_MCP_ISSUER')),
+  jwksUrl: Config.option(Config.url('SANCTUM_MCP_JWKS_URL')),
+  /** Granted only to verified tokens that carry no Sanctum scope name; empty fails closed. */
+  defaultScopes: Config.array(Config.literal(...AccessScopeName.literals)(), 'SANCTUM_MCP_DEFAULT_SCOPES').pipe(
+    Config.withDefault([] as ReadonlyArray<AccessScopeName>),
+  ),
+});
 
 const port = (name: string, fallback: number) => Config.port(name).pipe(Config.withDefault(fallback));
 
@@ -103,8 +114,22 @@ export const serverConfig = Config.all({
     apiKey: Config.option(Config.redacted('CARTESIA_API_KEY')),
     voiceId: Config.option(Config.string('CARTESIA_VOICE_ID')),
   }),
-  /** Open decisions an operator has explicitly selected and configured, comma-separated. */
-  selectedDecisions: Config.array(Config.literal(...openDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
+  /** Decisions an operator has explicitly selected and configured, comma-separated. */
+  selectedDecisions: Config.array(Config.literal(...activationDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
+  /** Human login with any standard OIDC issuer: WorkOS AuthKit hosted, embedded Better Auth self-hosted. */
+  signIn: Config.all({
+    /** Compared with the ID token `iss` exactly, so kept as written. */
+    issuer: Config.option(Config.string('SANCTUM_OIDC_ISSUER')),
+    clientId: Config.option(Config.string('SANCTUM_OIDC_CLIENT_ID')),
+    /** Unset means a public client, which must use PKCE. */
+    clientSecret: Config.option(Config.redacted('SANCTUM_OIDC_CLIENT_SECRET')),
+    redirectUri: Config.option(Config.url('SANCTUM_OIDC_REDIRECT_URI')),
+    scopes: Config.string('SANCTUM_OIDC_SCOPES').pipe(Config.withDefault('openid profile email')),
+  }),
+  mcpAuthorization: mcpAuthorizationConfig,
+  /** `better-auth` serves the OIDC issuer and MCP authorization server in-process at `/idp`. */
+  embeddedIssuer: Config.option(Config.literal('better-auth')('SANCTUM_EMBEDDED_ISSUER')),
+  betterAuthSecret: Config.option(Config.redacted('BETTER_AUTH_SECRET')),
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
@@ -131,11 +156,33 @@ export const serverConfig = Config.all({
 export type ServerConfig = Config.Config.Success<typeof serverConfig>;
 
 /**
- * Production refuses to start while any open decision is unselected; development and tests
- * run with fixtures. Selecting a decision is an operator action, never a code default.
+ * A listed decision with missing settings is an operator error in every environment. Production
+ * also refuses to start while any decision is unlisted; development and tests run with fixtures.
+ * Selecting a decision is an operator action, never a code default.
  */
-export const requireActivation = (config: Pick<ServerConfig, 'environment' | 'selectedDecisions'>) => {
-  const missing = openDecisions.filter(decision => !config.selectedDecisions.includes(decision));
+export const requireActivation = (
+  config: Pick<ServerConfig, 'environment' | 'selectedDecisions' | 'signIn' | 'mcpAuthorization' | 'embeddedIssuer' | 'betterAuthSecret'>,
+) => {
+  /** Settings a listed decision needs before it counts as selected; the other decisions have none. */
+  const settings: Partial<Record<ActivationDecision, Record<string, Option.Option<unknown>>>> = {
+    identity_issuer: {
+      SANCTUM_OIDC_ISSUER: config.signIn.issuer,
+      SANCTUM_OIDC_CLIENT_ID: config.signIn.clientId,
+      SANCTUM_OIDC_REDIRECT_URI: config.signIn.redirectUri,
+      ...(Option.isSome(config.embeddedIssuer) ? { BETTER_AUTH_SECRET: config.betterAuthSecret } : {}),
+    },
+    mcp_authorization_server: {
+      SANCTUM_MCP_RESOURCE: config.mcpAuthorization.resource,
+      SANCTUM_MCP_ISSUER: config.mcpAuthorization.issuer,
+      SANCTUM_MCP_JWKS_URL: config.mcpAuthorization.jwksUrl,
+    },
+  };
+  const incomplete = config.selectedDecisions.flatMap(decision => {
+    const unset = Object.entries(settings[decision] ?? {}).flatMap(([name, value]) => (Option.isNone(value) ? [name] : []));
+    return unset.length === 0 ? [] : [`${decision} needs ${unset.join(', ')}`];
+  });
+  if (incomplete.length > 0) return Effect.fail(new Unavailable({ message: `Selected decisions are not configured: ${incomplete.join('; ')}`, retryable: false }));
+  const missing = activationDecisions.filter(decision => !config.selectedDecisions.includes(decision));
   return config.environment !== 'production' || missing.length === 0
     ? Effect.void
     : Effect.fail(new Unavailable({ message: `Production activation blocked; unselected: ${missing.join(', ')}`, retryable: false }));

@@ -10,7 +10,8 @@ One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile)
 - `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade and the built website, all on one port behind Caddy.
 - `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions).
 
-Both refuse to start in `SANCTUM_ENV=production` until every open decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
+Both refuse to start in `SANCTUM_ENV=production` until every decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
+In every environment, both refuse to start when a listed decision lacks its settings, and the error names each missing variable: `identity_issuer` needs `SANCTUM_OIDC_ISSUER`, `SANCTUM_OIDC_CLIENT_ID` and `SANCTUM_OIDC_REDIRECT_URI` (plus `BETTER_AUTH_SECRET` with the embedded issuer); `mcp_authorization_server` needs the three `SANCTUM_MCP_*` URLs.
 The worker also refuses to start while migrations are pending; `/readyz` reports pending migrations as not ready.
 
 ## Configuration
@@ -26,7 +27,11 @@ Secrets come from the environment only; none are committed.
 | Speech | `DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `DEEPGRAM_URL`, `DEEPGRAM_BATCH_TIMEOUT_MS`, `PYANNOTE_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` |
 | Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (Cloudflare API token with only Workers AI permission; voice and extraction by default), `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, research |
 | Integrations | `PIPEDREAM_API_URL`, `PIPEDREAM_ENVIRONMENT`, `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` |
+| Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_CLIENT_SECRET` (unset means a public client with PKCE), `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth` serves the self-hosted issuer at `/idp`), `BETTER_AUTH_SECRET` (at least 32 random bytes) |
 | Remote MCP | `SANCTUM_MCP_ISSUER`, `SANCTUM_MCP_JWKS_URL`, `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_DEFAULT_SCOPES` (comma list granted only to tokens that name no Sanctum scope, such as WorkOS DCR/CIMD clients; always narrowed by role and never `workspace:admin` or `capture:ingest`; empty by default; when set, metadata and challenges stop naming scopes) |
+
+WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
+The sign-in routes and the embedded issuer read these settings as they ship; until then they only gate activation.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
@@ -46,7 +51,7 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL on Aiven over verified TLS (database `sanctum`), recordings in the private R2 bucket `sanctum-recordings`.
 It serves only `https://sanctum.42nights.dev` (a Workers custom domain declared in `wrangler.jsonc`, attached on deploy); `workers_dev` is off.
 
-- **Routing**: the Worker answers `/__login/<LOGIN_TOKEN>` itself and sends every other request, including the listener WebSocket, to the API container. No sign-in issuer is selected, so that link sets the pre-seeded owner session (`sanctum_session`, HttpOnly) and `sanctum_csrf`; anyone without it reaches the app with no session.
+- **Routing**: the Worker answers `/__login/<LOGIN_TOKEN>` itself and sends every other request, including the listener WebSocket, to the API container. Sign-in is not configured yet, so that link sets the pre-seeded owner session (`sanctum_session`, HttpOnly) and `sanctum_csrf`; anyone without it reaches the app with no session. The Worker forwards only the settings listed in [settings.ts](../deploy/cloudflare/src/settings.ts) and never the login tokens.
 - **Job worker**: has no port and is never stopped for inactivity; a cron every five minutes starts it again after a crash or rollout. State lives in MySQL and R2; container disk is disposable.
 - **Mode**: `SANCTUM_ENV=development` (production refuses to start while decisions are open); no speech-to-text key, so transcription reports unavailable. Notes and voice report unavailable until `WORKERS_AI_API_TOKEN` is set.
 - **Deploy** (Docker must be usable by the deploying user, or set `WRANGLER_DOCKER_BIN` to a wrapper): from `deploy/cloudflare`, `npx wrangler deploy`. Wrangler builds `server/Dockerfile`, pushes it to the account registry and rolls out both containers.
@@ -86,5 +91,6 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 
 ## Not yet selected
 
-The sign-in issuer, MCP authorization server, saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
+The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted) but not configured on any deployment yet.
+Saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
 Until they are selected, production activation is refused and no recording expires automatically.

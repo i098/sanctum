@@ -57,7 +57,7 @@ Give your coding agent this instruction:
 | [Implementation plan](tasks/plan.md) | Architecture, storage, APIs, MCP, SDKs, auth, recovery, and deployment. |
 | [26-task checklist](tasks/todo.md) | Ordered work with acceptance criteria and verification. |
 | [Design contract](docs/DESIGN.md) | Layout, colors, waveform shape, motion, and accessibility. |
-| [Decisions](docs/DECISIONS.md) | Confirmed scope and remaining sign-in/recording policies. |
+| [Decisions](docs/DECISIONS.md) | Confirmed scope, the sign-in decision and remaining recording policies. |
 | [EXECUTE.txt](EXECUTE.txt) | Combined handoff, plan, and checklist. |
 
 ## Planned technology stack

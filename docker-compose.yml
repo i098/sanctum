@@ -17,6 +17,17 @@ x-app: &app
     SANCTUM_ENV: ${SANCTUM_ENV:-production}
     # Passed through only when set: comma-separated decisions an operator has selected.
     SANCTUM_SELECTED_DECISIONS:
+    SANCTUM_OIDC_ISSUER:
+    SANCTUM_OIDC_CLIENT_ID:
+    SANCTUM_OIDC_CLIENT_SECRET:
+    SANCTUM_OIDC_REDIRECT_URI:
+    SANCTUM_OIDC_SCOPES:
+    SANCTUM_MCP_ISSUER:
+    SANCTUM_MCP_JWKS_URL:
+    SANCTUM_MCP_RESOURCE:
+    SANCTUM_MCP_DEFAULT_SCOPES:
+    SANCTUM_EMBEDDED_ISSUER:
+    BETTER_AUTH_SECRET:
     MYSQL_HOST: mysql
     MYSQL_DATABASE: sanctum
     MYSQL_USER: sanctum

@@ -20,14 +20,6 @@
 
 ## Still open
 
-### Sign-in provider
-
-This means how people log in and prove who they are.
-Google OIDC is a proposed default, not an approved choice.
-Pipedream app connections do not establish membership in a Sanctum team.
-Remote MCP also needs a maintained authorization server with resource-audience support; human OIDC login alone does not supply that server.
-Select and configure both roles before enabling production delegated access.
-
 ### Saved-meeting retention
 
 How long should saved recordings and transcripts remain before automatic deletion?
@@ -60,12 +52,30 @@ On the synthetic extraction, notes and voice fixtures it grounded the notes, res
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
 The Cerebras client is removed; Anthropic stays selectable with `<ROLE>_MODEL_PROVIDER=anthropic`, and planner and research stay on Anthropic.
 
+## Sign-in and workspace management decision — 2026-10-08
+
+Accepted: sign-in uses standard OIDC for human login and a JWT-issuing OAuth authorization server for MCP, both selected by configuration ([operations.md](operations.md#configuration)).
+Both providers below use one `iss` and one `sub` for the login ID token and the MCP access token, so one `principal_identities` row serves both.
+
+- **Hosted (the self-serve offering):** WorkOS AuthKit is the login issuer and the MCP authorization server. The hosted site uses the WorkOS production environment, which needs a payment method on file and costs nothing under 1M monthly active users. Development uses the WorkOS staging environment only, with no customer traffic.
+- **Self-hosted:** Better Auth runs embedded in the server on the existing MySQL. It is the OIDC issuer and, through its OAuth provider plugin, the MCP authorization server.
+- **MCP default scopes on WorkOS:** WorkOS gives MCP clients no Sanctum scope names, so `SANCTUM_MCP_DEFAULT_SCOPES` is `context:read,context:write,recordings:read`. No actions scope is granted by default.
+- **Account and workspace management:** use the providers, do not build it. Hosted uses the WorkOS AuthKit profile and WorkOS Organizations; self-hosted uses the Better Auth organization plugin. Glue maps provider organizations, members and roles onto Sanctum workspaces, principals and `workspace_members`, which stay the only input to authorization. Membership never comes from an email domain.
+- **Self-serve workspace creation (hosted):** on, but only after the Sanctum-side seat limit ships.
+- **Seat limits:** none while self-serve is off. Before self-serve opens, Sanctum enforces a seat limit per workspace at membership creation, configurable per workspace with a default.
+- **Workspace deletion:** a soft delete revokes all memberships, sessions and agent credentials at once; a durable purge job later deletes the R2 objects and rows and writes a receipt. Nothing is purged automatically while meeting retention is open. Deleting a provider organization only detaches its link and never starts a purge.
+- **Billing:** none now. Use Stripe Billing when paid plans exist.
+
+Rejected: Logto and ZITADEL need PostgreSQL; Keycloak is a separate Java service outside the one Node image.
+Meeting retention and speech outside detected meetings stay open, so production activation still refuses to start.
+The hosted secret login link stays until WorkOS sign-in replaces it.
+
 ## Deployment decision — 2026-10-02
 
 Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights account and serves `sanctum.42nights.dev`; the 42nights.dev domain moves into that account.
 MySQL is an Aiven MySQL 8.4 service reached only over TLS verified with its project CA; recordings stay in a private R2 bucket in the same account.
-Anyone may open the site; until a sign-in issuer is selected, a secret login link hands the browser a pre-seeded owner session, and visitors without it have no session.
-This does not select the sign-in issuer or any other open decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
+Anyone may open the site; until sign-in is configured on the deployment, a secret login link hands the browser a pre-seeded owner session, and visitors without it have no session.
+This selects no sign-in issuer or any other decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
 
 ## Runtime decision — 2026-09-28
 

@@ -80,7 +80,8 @@ Total: 24 calls.
 | 24-hour staging soak | Needs a staging environment and 24 hours of wall-clock time; the accelerated replay covers one synthetic day of source time only. |
 | Rust/TypeScript parity | Needs a controlled benchmark host named in the manifest (T01); the matched harness and one uncontrolled-host run exist, and the steps a controlled run must take are in [benchmarks/README.md](../benchmarks/README.md). |
 | Production activation, package publication, recording activation | Each needs its own authorization (plan section 16, [DECISIONS.md](DECISIONS.md)); the Cloudflare deployment runs in development mode. |
-| Sign-in issuer, MCP authorization server, retention, outside-meeting speech | Open decisions; production activation refuses to start until they are selected. |
+| Sign-in issuer, MCP authorization server | Decided ([DECISIONS.md](DECISIONS.md), 2026-10-08) but not configured: hosted needs the WorkOS setup and self-hosted needs the embedded Better Auth issuer. |
+| Retention, outside-meeting speech | Open decisions; production activation refuses to start until they are selected. |
 
 ## Open implementation items
 

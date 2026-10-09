@@ -37,5 +37,5 @@ Each reads a meeting, cites a transcript segment, appends research, recovers fro
 
 Remote MCP clients connect to `/mcp` (Streamable HTTP, protocol baseline `2025-11-25`) with a delegated OAuth access token whose audience is the `/mcp` resource URL.
 Discovery starts at `/.well-known/oauth-protected-resource/mcp`.
-The authorization server is not selected yet (docs/DECISIONS.md); until `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_ISSUER` and `SANCTUM_MCP_JWKS_URL` are configured, `/mcp` answers `503`.
+The authorization server is WorkOS AuthKit on the hosted site and embedded Better Auth when self-hosted (docs/DECISIONS.md); until `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_ISSUER` and `SANCTUM_MCP_JWKS_URL` are configured, `/mcp` answers `503`.
 A verified token's `sub` must map to one active workspace membership through `principal_identities`; the scopes it names narrow that member's scopes, and a token naming none gets `SANCTUM_MCP_DEFAULT_SCOPES` (see [operations](../docs/operations.md)).
