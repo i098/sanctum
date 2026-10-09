@@ -100,7 +100,10 @@ Chunk measurement on 2026-10-08, with a 22 s synthetic speech clip at normal lev
 
 Fixed cuts split words, and the 2 s cut lost the word "Sanctum" from the direct request; overlap repeats words.
 Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2.5 s (`engineeringDefaults.liveAsr`).
-Requests take about 1.5–3 s with peaks near 9 s, so up to three chunks are in flight, and results keep audio order.
+Results keep audio order, so one slow answer holds back every later chunk.
+Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
+With three chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
+Up to eight chunks are therefore in flight, and a chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins.
 Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
 In production, `vad_filter` still let "You" and "Thank you." through on near-silent audio.
 Sanctum therefore also drops a segment whose `no_speech_prob` is above 0.6, Whisper's `no_speech_threshold`.
@@ -114,6 +117,7 @@ A skipped live chunk emits no text but still records coverage (see below), and a
 Past the allocation, requests cost about $0.0005 per audio minute (about $0.62 a day for the 1,240 minutes beyond it, for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
 A live chunk Whisper answered or the gate skipped records coverage for its whole span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
+A final window inside a meeting that closed before its transcript was complete (a live answer after the close, or reconciliation) finalizes that meeting again, so its transcript status, notes and memory include that text.
 
 ## Workspace deletion decision — 2026-10-09
 

@@ -281,6 +281,7 @@ export const startMessage = (input: {
   readonly epoch_id: string;
   readonly lease_generation: number;
   readonly sample_start?: number;
+  readonly sample_rate?: number;
   readonly archive_only?: boolean;
   readonly captured_at?: string;
   readonly end_reason?: string;
@@ -291,7 +292,7 @@ export const startMessage = (input: {
     listener_id: input.listener_id,
     epoch_id: input.epoch_id,
     track: 0,
-    clock: { sample_rate: 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: input.captured_at ?? '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
+    clock: { sample_rate: input.sample_rate ?? 16_000, channels: 1, encoding: 'pcm_s16le', sample_start: input.sample_start ?? 0, captured_at: input.captured_at ?? '2026-09-26T17:00:00Z', timezone: 'America/Los_Angeles' },
     lease_generation: input.lease_generation,
     ...(input.archive_only === undefined ? {} : { archive_only: input.archive_only }),
     ...(input.end_reason === undefined ? {} : { end_reason: input.end_reason }),

@@ -10,6 +10,7 @@ import {
   type AccessScope,
   CaptureEpochId,
   ListenerId,
+  type MeetingId,
   ProviderConnectionId,
   type SourceRange,
   TranscriptSegment,
@@ -18,6 +19,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbUtc } from './db.ts';
+import { OPEN_STATES, scheduleFinalize } from './meeting-store.ts';
 import { onFinalSegments } from './meetings.ts';
 import { workspaceIsLive } from './store.ts';
 
@@ -125,6 +127,8 @@ const LatestText = Schema.Struct({ text: Schema.String, revision: DbSafeInt });
 
 /**
  * Records one finalized window atomically (serialized per epoch) and returns the inserted segments.
+ * A window inside a meeting that was sealed before its transcript was complete (a live answer that
+ * outlived the close, or batch reconciliation of a gap) finalizes that meeting again.
  */
 export const recordFinalWindow = (input: FinalWindow) =>
   Effect.gen(function* () {
@@ -167,6 +171,12 @@ export const recordFinalWindow = (input: FinalWindow) =>
           INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
           VALUES (${workspace_id}, ${epoch_id}, ${track}, ${input.window.sample_start}, ${input.window.sample_end}, ${input.origin}, UTC_TIMESTAMP(6)) AS new
           ON DUPLICATE KEY UPDATE sample_end = GREATEST(transcript_coverage.sample_end, new.sample_end)`;
+        const sealed = yield* sql<{ id: MeetingId }>`SELECT DISTINCT m.id FROM meetings m
+          JOIN meeting_ranges r ON r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision
+          WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${epoch_id} AND r.track = ${track}
+            AND r.sample_start < ${input.window.sample_end} AND r.sample_end > ${input.window.sample_start}
+            AND m.state NOT IN ${sql.in(OPEN_STATES)} AND m.processing->>'$.transcript' <> 'complete'`;
+        for (const meeting of sealed) yield* scheduleFinalize({ id: meeting.id, workspace_id }, null);
         return inserted.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${sql.in('id', inserted)}`);
       }),
     );

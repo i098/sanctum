@@ -89,14 +89,21 @@ export const assembleRecording = (job: MeetingJob) =>
       const found = yield* selectMeeting(job.workspace_id, meeting_id);
       if (found._tag === 'None' || OPEN_STATES.includes(found.value.state)) return { skipped: 'meeting is open or missing' };
       const revision = found.value.boundary_revision;
-      const [existing] = yield* sql<{ object_key: string }>`SELECT object_key FROM meeting_recordings WHERE meeting_id = ${meeting_id} AND boundary_revision = ${revision}`;
-      if (existing !== undefined) return { object_key: existing.object_key, boundary_revision: revision };
       const ranges = yield* currentRanges(job.workspace_id, meeting_id);
+      const setStatus = (status: string) => sql`UPDATE meetings SET processing = JSON_SET(processing, '$.recording', ${status}), updated_at = UTC_TIMESTAMP(6)
+        WHERE id = ${meeting_id} AND boundary_revision = ${revision}`;
+      const [existing] = yield* SqlSchema.findAll({
+        Request: Schema.Void,
+        Result: RecordingRow,
+        execute: () => sql`SELECT object_key, pieces, sample_rate FROM meeting_recordings WHERE meeting_id = ${meeting_id} AND boundary_revision = ${revision}`,
+      })(undefined);
+      // Finalizing a revision again (a later transcript or attribution) keeps its cut and restores the status finalize reset.
+      if (existing !== undefined) {
+        return yield* Effect.as(setStatus(gapsOf(ranges, existing.pieces).length === 0 ? 'complete' : 'partial'), { object_key: existing.object_key, boundary_revision: revision });
+      }
       const rate = ranges[0]?.epoch.sample_rate ?? 0;
       const { pieces, parts, status } = yield* cutRanges(job.workspace_id, ranges, rate);
-      const setStatus = sql`UPDATE meetings SET processing = JSON_SET(processing, '$.recording', ${status}), updated_at = UTC_TIMESTAMP(6)
-        WHERE id = ${meeting_id} AND boundary_revision = ${revision}`;
-      if (parts.length === 0) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
+      if (parts.length === 0) return yield* Effect.as(setStatus(status), { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
       const wav = wavFile(rate, parts);
       const sha256 = createHash('sha256').update(wav).digest('hex');
       const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}.wav`;
@@ -108,7 +115,7 @@ export const assembleRecording = (job: MeetingJob) =>
             VALUES (${randomUUID()}, ${job.workspace_id}, ${meeting_id}, ${revision}, ${object_key}, ${Buffer.from(sha256, 'hex')}, ${wav.byteLength}, ${rate},
               ${(wav.byteLength - 44) / 2}, ${JSON.stringify(pieces)}, UTC_TIMESTAMP(6))
             ON DUPLICATE KEY UPDATE id = id`;
-          yield* setStatus;
+          yield* setStatus(status);
           yield* enqueueJob({ workspace_id: job.workspace_id, kind: 'speakers.refine', work_key: `meeting:${meeting_id}`, payload: { meeting_id }, requested_by: job.requested_by, source_revision: revision });
         }),
       );
