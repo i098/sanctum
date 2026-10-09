@@ -25,7 +25,7 @@ const env = { SANCTUM_EMBEDDED_ISSUER: 'better-auth', SANCTUM_OIDC_ISSUER: ISSUE
 /** JWKS of the server under test, whose port is known only after it starts. */
 const served = { url: '' };
 const keys: JWTVerifyGetKey = (header, token) => createRemoteJWKSet(new URL(`${served.url}/idp/jwks`))(header, token);
-const serveIssuer = Effect.tap(serveFake(Option.some({ resource: RESOURCE, issuer: ISSUER, keys }), env), ({ url }) => {
+const serveIssuer = Effect.tap(serveFake(Option.some({ resource: RESOURCE, issuer: ISSUER, keys, defaultScopes: [] }), env), ({ url }) => {
   served.url = url;
 });
 
