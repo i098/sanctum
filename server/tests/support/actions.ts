@@ -1,12 +1,12 @@
 /** Fixture accounts, grants, ledger rows and a fake provider behind `executeIntegrationAction`; nothing leaves the process. */
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, type ActionId, IntegrationAccountId, JobId, type JobKind, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
+import { type AccessScope, type ActionId, IntegrationAccountId, JobId, type JobKind, type MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Layer } from 'effect';
 import { engineeringDefaults } from '../../src/config.ts';
 import type { executeIntegrationAction, IntegrationFailure } from '../../src/integrations.ts';
-import type { ClaimedJob } from '../../src/job-types.ts';
 import { LlmClient, makeLlm } from '../../src/llm.ts';
+import { claimed } from './capture.ts';
 import { fixturePipedream } from './pipedream.ts';
 
 type ExecuteInput = Parameters<typeof executeIntegrationAction>[0];
@@ -82,20 +82,11 @@ export const seedMeeting = (workspace_id: WorkspaceId, writers: ReadonlyArray<Ac
 export const queuedJob = (workspace_id: WorkspaceId, kind: JobKind, work_key: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [row] = yield* sql<{ id: string; payload: unknown; requested_by: string | null; attempts: number; lease_generation: string }>`
+    const [row] = yield* sql<{ id: string; payload: unknown; requested_by: PrincipalId | null; attempts: number; lease_generation: string }>`
       SELECT id, payload, requested_by, attempts, lease_generation FROM jobs WHERE workspace_id = ${workspace_id} AND kind = ${kind} AND work_key = ${work_key}`;
     if (!row) throw new Error(`no ${kind} job for ${work_key}`);
-    return {
-      id: JobId.make(row.id),
-      workspace_id,
-      kind,
-      work_key,
-      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-      requested_by: row.requested_by,
-      source_revision: null,
-      attempt: row.attempts + 1,
-      lease_generation: Number(row.lease_generation) + 1,
-    } as ClaimedJob;
+    const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    return { ...claimed(workspace_id, kind, payload), id: JobId.make(row.id), work_key, requested_by: row.requested_by, attempt: row.attempts + 1, lease_generation: Number(row.lease_generation) + 1 };
   });
 
 export const actionRow = (workspace_id: WorkspaceId, id: ActionId) =>
