@@ -46,9 +46,9 @@ function useLabelledInputs(permission: PermissionState, inputLabel: string | nul
 
 /**
  * The microphone choice: inputs by their own labels, so nothing shows before microphone permission.
- * The empty value is the browser's default input. While capture is not running, it also checks the chosen input for sound.
+ * The empty value is the browser's default input. With `check`, while capture is not running, it also checks the chosen input for sound.
  */
-export function InputPicker({ engine }: { engine: CaptureView }) {
+export function InputPicker({ engine, check = false }: { engine: CaptureView; check?: boolean }) {
   const { inputId, inputLabel, permission, listener } = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const inputs = useLabelledInputs(permission, inputLabel);
   if (inputs.length === 0) return null;
@@ -58,7 +58,7 @@ export function InputPicker({ engine }: { engine: CaptureView }) {
         <option value="">{defaultLabel(inputs)}</option>
         {inputs.filter(device => device.deviceId !== 'default').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label}</option>)}
       </select>
-      {IDLE.includes(listener) && <InputCheck deviceId={inputId} />}
+      {check && IDLE.includes(listener) && <InputCheck deviceId={inputId} />}
     </span>
   );
 }

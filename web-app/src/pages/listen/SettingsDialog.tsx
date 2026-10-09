@@ -195,7 +195,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
     ...accountRows(signIn, setManage, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
-    ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} /></>],
+    ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
     ['Integrations', 'Unavailable: integrations are not connected yet'],
     ['Retention', 'Not selected: nothing is deleted automatically'],
   ];

@@ -20,7 +20,7 @@ const INPUTS = {
 };
 
 /** Replaces the browser's inputs with tones whose level the test sets. Runs in the page. */
-function installInputs(inputs: Record<string, { label: string; gain: number }>): void {
+function installInputs(inputs: Record<string, { label: string; gain: number; fail?: string }>): void {
   const levels = new Map<string, GainNode[]>();
   window.__requests = [];
   window.__level = (id, gain) => levels.get(id)?.forEach(node => (node.gain.value = gain));
@@ -30,6 +30,7 @@ function installInputs(inputs: Record<string, { label: string; gain: number }>):
     const id = ((audio.deviceId as ConstrainDOMStringParameters | undefined)?.exact as string | undefined) ?? 'default';
     const input = inputs[id];
     if (input === undefined) throw new DOMException('no such input', 'OverconstrainedError');
+    if (input.fail) throw new DOMException('busy', input.fail);
     const context = new AudioContext();
     const level = new GainNode(context, { gain: input.gain });
     const destination = context.createMediaStreamDestination();
@@ -45,7 +46,7 @@ function installInputs(inputs: Record<string, { label: string; gain: number }>):
     Object.entries(inputs).map(([deviceId, { label }]) => ({ deviceId, kind: 'audioinput', label, groupId: '' }) as MediaDeviceInfo);
 }
 
-async function listen(page: Page, inputs: Record<string, { label: string; gain: number }> = INPUTS) {
+async function listen(page: Page, inputs: Record<string, { label: string; gain: number; fail?: string }> = INPUTS) {
   await page.addInitScript(installInputs, inputs);
   const server = await fakeServer(page);
   await page.goto('/');
@@ -109,4 +110,17 @@ test('before listening, Settings checks the chosen input for sound', async ({ pa
   await expect(check).toHaveText('This input is sending sound.');
   expect(await page.evaluate(() => window.__requests.at(-1))).toMatchObject({ deviceId: { exact: 'iphone' } });
   expect(await page.evaluate(() => localStorage.getItem('sanctum.microphone'))).toBe('iphone');
+});
+
+test('the picker on the listening page opens no probe stream while capture is stopped', async ({ page }) => {
+  await page.addInitScript(installInputs, { default: { label: 'Default - MacBook Pro Microphone', gain: 0, fail: 'NotReadableError' }, iphone: INPUTS.iphone });
+  await fakeServer(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Listen' }).click();
+  await expect(helper(page)).toHaveText('The microphone reported a hardware error.');
+  const picker = page.getByRole('combobox', { name: 'Microphone' });
+  await picker.selectOption({ label: '萧 Microphone' });
+  await expect(picker).toHaveValue('iphone');
+  await expect(page.locator('.listen-input-check')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__requests)).toMatchObject([{}]);
 });
