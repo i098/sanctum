@@ -63,7 +63,8 @@ const MemberRow = Schema.Struct({
   workspace_id: WorkspaceId,
   principal_id: PrincipalId,
   kind: PrincipalKind,
-  display_name: Schema.String,
+  display_name: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
   role: WorkspaceRole,
   permission_revision: DbSafeInt,
 });
@@ -71,7 +72,7 @@ type MemberRow = typeof MemberRow.Type;
 
 const toAccess = (member: MemberRow, scopes: ReadonlyArray<AccessScopeName>, allowlist: ReadonlyArray<MeetingId> | null): AccessScope => ({
   workspace_id: member.workspace_id,
-  principal: { id: member.principal_id, kind: member.kind, display_name: member.display_name },
+  principal: { id: member.principal_id, kind: member.kind, display_name: member.display_name, ...(member.email === null ? {} : { email: member.email }) },
   role: member.role,
   scopes,
   meetings: allowlist === null ? { kind: 'accessible' } : { kind: 'allowlist', meeting_ids: allowlist },
@@ -83,7 +84,7 @@ const activeMember = (sql: SqlClient.SqlClient, workspace: Statement.Fragment = 
   JOIN workspace_members m ON m.workspace_id = x.workspace_id AND m.principal_id = x.principal_id AND m.revoked_at IS NULL
   JOIN principals p ON p.id = m.principal_id AND p.disabled_at IS NULL
   JOIN workspaces w ON w.id = m.workspace_id AND ${workspace}`;
-const memberColumns = (sql: SqlClient.SqlClient) => sql`m.workspace_id, m.principal_id, p.kind, p.display_name, m.role, w.permission_revision`;
+const memberColumns = (sql: SqlClient.SqlClient) => sql`m.workspace_id, m.principal_id, p.kind, p.display_name, p.email, m.role, w.permission_revision`;
 
 /** Row decoding failures are defects (schema drift), not caller errors. */
 const findOne = <A, I>(Result: Schema.Schema<A, I>, statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
@@ -189,6 +190,9 @@ export const resolveAccess = (input: MemberKey) =>
 
 export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
   access.scopes.includes(scope) ? Effect.void : Effect.fail(new Forbidden({ message: `Requires ${scope}`, required_scope: scope }));
+
+/** The principal's name for text copied into shared records; never the email, which only the principal's own session shows. */
+export const actorName = (access: AccessScope) => access.principal.display_name ?? 'a member';
 
 /**
  * Opens a browser session for an active human or device member, e.g. after the configured

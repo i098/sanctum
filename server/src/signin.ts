@@ -72,6 +72,16 @@ const Flow = Schema.Struct({
 type Flow = typeof Flow.Type;
 const FlowCookie = Schema.compose(Schema.StringFromBase64Url, Schema.parseJson(Flow));
 
+/** A non-empty claim, trimmed, else null. */
+const claim = (value: unknown) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null);
+
+/** Profile from the ID token: `name` (else given and family name, '' when none) and an `email` the column accepts. */
+const profileOf = (claims: Record<string, unknown>) => {
+  const address = claim(claims['email']);
+  const name = claim(claims['name']) ?? [claim(claims['given_name']), claim(claims['family_name'])].filter(part => part !== null).join(' ');
+  return { name, email: address !== null && address.length <= 320 ? address : null };
+};
+
 /** Same-origin path, query and fragment of `value`, else `/`; never an open redirect, so never `//` or `/\` after normalization. */
 const localPath = (value: string | null) => {
   const base = 'https://sanctum.invalid';
@@ -147,16 +157,16 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         return { url: url.href, flow };
       });
 
-    const login = (identity: { issuer: string; subject: string }, flow: Flow, name: unknown) =>
+    const login = (identity: { issuer: string; subject: string }, flow: Flow, name: string, email: string | null) =>
       Effect.gen(function* () {
         const notMember = (reason: string) => new SignInFailed({ code: 'not_member', reason, params: [['issuer', identity.issuer], ['subject', identity.subject]] });
-        yield* reconcileSignIn(identity, typeof name === 'string' ? name : null, flow.create).pipe(
+        yield* reconcileSignIn(identity, name, flow.create).pipe(
           Effect.provideService(WorkosOrganizations, organizations),
           Effect.catchTag('WorkosFailure', error => new SignInFailed({ code: 'failed', reason: error.message })),
         );
         // The embedded issuer's organizations decide membership; this repairs a change whose Sanctum side failed after Better Auth saved it.
         if (embeddedIssuer !== null) {
-          yield* reconcileMember(identity.issuer, { id: identity.subject, name: typeof name === 'string' ? name : '' }).pipe(
+          yield* reconcileMember(identity.issuer, { id: identity.subject, name }).pipe(
             Effect.catchTag('Forbidden', error => new SignInFailed({ code: 'failed', reason: error.message })),
           );
         }
@@ -177,11 +187,12 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });
         }
         const member = { workspace_id: memberships[0]!.workspace_id, principal_id: principal.value };
-        // Plan sign-in section 5.2: the ID token `name` claim, when present and non-empty, refreshes the display name in the session's transaction.
+        // Plan sign-in section 5.2: non-empty ID token `name` (or given and family name) and `email` claims refresh the profile in the session's transaction; with an email but no name the display name is cleared, so no seeded placeholder lingers.
         const session = yield* sql.withTransaction(
           Effect.gen(function* () {
             const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
-            if (typeof name === 'string' && name.trim() !== '') yield* sql`UPDATE principals SET display_name = ${name.trim().slice(0, 200)} WHERE id = ${principal.value}`;
+            const fresh = name === '' ? null : name.slice(0, 200);
+            yield* sql`UPDATE principals SET display_name = IF(${fresh} IS NOT NULL, ${fresh}, IF(${email} IS NOT NULL, NULL, display_name)), email = COALESCE(${email}, email) WHERE id = ${principal.value}`;
             return opened;
           }),
         );
@@ -219,7 +230,8 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         const claims = tokens.claims();
         if (claims === undefined) return yield* failed('no ID token');
         const identity = { issuer: claims.iss, subject: claims.sub };
-        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, claims['name']);
+        const { name, email } = profileOf(claims);
+        return yield* flow.intent === 'link' ? link(identity, flow, request) : login(identity, flow, name, email);
       });
 
     const answer = (error: Unauthenticated | Forbidden | Unavailable) => Effect.succeed(errorResponse(error));

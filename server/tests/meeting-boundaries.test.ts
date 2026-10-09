@@ -175,6 +175,24 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('a nameless member closing a meeting leaves no email in the boundary record', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
+        const [meeting] = yield* meetingsOf(listener.workspace_id);
+        const id = MeetingId.make(meeting!.id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting({ ...owner, principal: { ...owner.principal, display_name: null, email: 'cap@example.test' } }, id);
+        const [event] = yield* sql<{ decision: string }>`SELECT CAST(decision AS CHAR) AS decision FROM boundary_events WHERE meeting_id = ${id} AND operation = 'close'`;
+        expect(event!.decision).toContain('closed by a member');
+        expect(event!.decision).not.toContain('cap@example.test');
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('explicit close seals at the live watermark, keeps the listener active and never drains actions', () =>
     withDatabase(
       Effect.gen(function* () {

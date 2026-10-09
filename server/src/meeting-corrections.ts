@@ -18,7 +18,7 @@ import {
   Unavailable,
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
-import { authorizeMeeting, requireScope } from './auth.ts';
+import { actorName, authorizeMeeting, requireScope } from './auth.ts';
 import { boundaryChanged } from './context-events.ts';
 import {
   currentRanges,
@@ -111,7 +111,7 @@ export const splitMeeting = (access: AccessScope, meeting_id: MeetingId, input: 
           decision: 'split' as const,
           source: { epoch_id: input.at.epoch_id, track: anchor.track, sample_start: input.at.sample, sample_end: input.at.sample + 1 },
           evidence: ['manual_split'],
-          reason: `split by ${access.principal.display_name}`,
+          reason: `split by ${actorName(access)}`,
           uncertainty: 0,
           earlier_meeting_id: meeting_id,
           later_meeting_id: later_id,
@@ -199,7 +199,7 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
           decision: 'continue' as const,
           source: source(ranges[0]!),
           evidence: ['manual_merge'],
-          reason: `merged by ${access.principal.display_name}`,
+          reason: `merged by ${actorName(access)}`,
           uncertainty: 0,
           target_meeting_id: into.id,
           merged_meeting_id: folded.id,

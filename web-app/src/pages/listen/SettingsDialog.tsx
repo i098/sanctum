@@ -1,7 +1,7 @@
 import type { SanctumClient } from '@sanctum/sdk';
 import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
-import { connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
+import { accountLabel, connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
 import { InputPicker } from './InputPicker.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
@@ -106,6 +106,26 @@ function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolea
   );
 }
 
+type Principal = Extract<SignInState, { status: 'signed_in' }>['access']['principal'];
+
+/** Initials stand in for an avatar: no issuer sends a picture claim, and the CSP loads no remote images. */
+function Account({ principal, role }: { principal: Principal; role: string }) {
+  const { label, beneath } = accountLabel(principal);
+  return (
+    <span className="listen-account">
+      <span className="listen-avatar" aria-hidden="true">
+        {label.split('@')[0]!.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
+      </span>
+      <span className="listen-account-text">
+        <span className="listen-account-name">
+          {label} <span className="listen-role">{role}</span>
+        </span>
+        {beneath && <span className="listen-account-email">{beneath}</span>}
+      </span>
+    </span>
+  );
+}
+
 /**
  * Sign out shows only with a configured issuer: without one, the session is an operator-seeded row,
  * and revoking it would leave no way back in.
@@ -118,7 +138,7 @@ function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { s
   };
   return (
     <>
-      <span>Signed in as {signIn.access.principal.display_name} ({signIn.access.role})</span>
+      <Account principal={signIn.access.principal} role={signIn.access.role} />
       {signIn.issuer && (
         <span className="listen-signin-actions">
           <button type="button" onClick={() => run(connectSignIn, 'Connect sign-in could not start. Try again.')}>Connect sign-in</button>

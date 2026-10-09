@@ -40,6 +40,12 @@ export type SignInState =
 /** How the last sign-in redirect ended (`/?signin=<code>`), read once from the landing URL. */
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
 
+/** Who the signed-in person is to themself: the provider name, else the email (shown only in their own view); `beneath` is the email next to a name. */
+export const accountLabel = ({ display_name, email }: AccessScope['principal']) => ({
+  label: display_name ?? email ?? '',
+  beneath: display_name === null ? undefined : email,
+});
+
 /** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. `embedded`: the self-hosted Better Auth issuer. */
 async function configured(): Promise<false | 'unavailable' | { selfServe: boolean; embedded: boolean; workos: boolean }> {
   try {

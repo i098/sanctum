@@ -2,7 +2,7 @@ import type { Meeting } from '@sanctum/sdk';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
-import { endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
+import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
@@ -318,7 +318,7 @@ function SignInLine({ signIn, message }: { signIn: SignInState; message: { text:
     : (
       <>
         <p className="listen-helper" data-warning={message.warning}>{message.text}</p>
-        {landing === 'signed_in' && signIn.status === 'signed_in' && <p className="listen-helper listen-welcome">Signed in as {signIn.access.principal.display_name}</p>}
+        {landing === 'signed_in' && signIn.status === 'signed_in' && <p className="listen-helper listen-welcome">Signed in as {accountLabel(signIn.access.principal).label}</p>}
       </>
     );
 }

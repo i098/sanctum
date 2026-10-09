@@ -260,6 +260,16 @@
                           ]
                         },
                         "display_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "email": {
                           "type": "string"
                         }
                       },
@@ -8285,6 +8295,16 @@
                           ]
                         },
                         "display_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "email": {
                           "type": "string"
                         }
                       },
@@ -8661,6 +8681,16 @@
                                 ]
                               },
                               "display_name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "email": {
                                 "type": "string"
                               }
                             },
