@@ -27,11 +27,12 @@ Secrets come from the environment only; none are committed.
 | Speech | `PYANNOTE_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` |
 | Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (Cloudflare API token with only Workers AI permission; Whisper speech-to-text, live and batch, and voice and extraction by default), `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, research |
 | Integrations | `PIPEDREAM_API_URL`, `PIPEDREAM_ENVIRONMENT`, `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` |
-| Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_CLIENT_SECRET` (unset means a public client with PKCE), `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth` serves the self-hosted issuer at `/idp`), `BETTER_AUTH_SECRET` (at least 32 random bytes) |
+| Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`); sign-in is enabled only when all three are set, otherwise `/auth/login` answers `503`; `SANCTUM_OIDC_CLIENT_SECRET` (omit for a public client, which uses PKCE), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth`; reported by `GET /auth/config`, no issuer is served yet), `BETTER_AUTH_SECRET` (at least 32 random bytes, needed when the embedded issuer is selected) |
 | Remote MCP | `SANCTUM_MCP_ISSUER`, `SANCTUM_MCP_JWKS_URL`, `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_DEFAULT_SCOPES` (comma list granted only to tokens that name no Sanctum scope, such as WorkOS DCR/CIMD clients; always narrowed by role and never `workspace:admin` or `capture:ingest`; empty by default; when set, metadata and challenges stop naming scopes) |
 
 WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
-The sign-in routes and the embedded issuer read these settings as they ship; until then they only gate activation.
+The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does not stop startup unless `identity_issuer` is listed, and sign-in then stays off.
+The embedded issuer (`SANCTUM_EMBEDDED_ISSUER`) is not built yet; setting it only gates activation and is reported by `/auth/config`.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
@@ -67,6 +68,20 @@ Run migrations explicitly (`npm run migrate --workspace server`, or `server/dist
 Each file is split into single-object steps (`CREATE TABLE`, `CREATE INDEX`, or `ALTER TABLE ... ADD COLUMN` for one column) recorded in `schema_migrations` and `schema_migration_steps` under a per-schema named lock.
 After an interruption, rerun the same command: finished steps are skipped, an object created before its ledger row is adopted, and an object created outside the ledger stops the run.
 Never edit an applied migration (its checksum is verified), and never roll back by dropping tables.
+
+## Sign-in
+
+With the `SANCTUM_OIDC_*` group set, `/auth/login` signs a person in through any OIDC issuer (authorization code with `state`, `nonce` and PKCE), and `POST /auth/logout` revokes the browser session. Without the group, `/auth/login` answers `503`.
+The verified issuer and subject select a principal through `principal_identities`; membership never comes from an email address.
+Each successful sign-in with a non-empty ID token `name` claim replaces the principal's display name, including one set with `--display-name`, in the transaction that opens the session (plan sign-in section 5.2).
+An unknown identity lands on `/?signin=not_member&issuer=…&subject=…`. On a fresh install, make that identity the first owner:
+
+```bash
+npm run owner -w server -- --issuer <iss> --subject <sub> --display-name "<name>" --workspace "<name>" --timezone <IANA>
+```
+
+It creates the workspace, principal, identity and `owner` membership in one transaction, and refuses while any workspace exists; `--workspace-id <id>` instead adds an owner to that workspace (`server/dist/owner.js` in the image).
+A signed-in person binds a further issuer identity to themselves with `POST /auth/link`; a pair already bound to another principal is refused.
 
 ## Checks
 
