@@ -74,7 +74,11 @@ test('a browser caption taller than the rail shows its tail after an ellipsis an
     .toBe(true);
 });
 
-test('a recognition error removes browser captions and their note', async ({ page }) => {
+const UNAVAILABLE = 'Word-by-word captions are not available in this browser. Lines appear after each phrase.';
+
+test('a permanent recognition error (as in Dia) stops captions for the page, says so once, and keeps server lines', async ({ page }) => {
+  const warnings: string[] = [];
+  page.on('console', message => message.type() === 'warning' && warnings.push(message.text()));
   await openListening(page, { speech: true });
   const rail = page.getByRole('region', { name: 'Live transcript' });
   await page.evaluate(() => window.__speech.say('we keep the pilot'));
@@ -82,7 +86,25 @@ test('a recognition error removes browser captions and their note', async ({ pag
   await page.evaluate(() => window.__speech.end('network'));
   await expect(rail.getByText('we keep the pilot', { exact: true })).toHaveCount(0);
   await expect(page.getByText(NOTE)).toHaveCount(0);
+  await expect(page.getByText(UNAVAILABLE)).toHaveCount(1);
+  await page.evaluate(() => window.__capture.transcript('we keep the pilot small', '0'));
+  await expect(rail.getByText('S0: we keep the pilot small')).toBeVisible();
+  // No retry, now or after the next capture start; the note shows only while capturing.
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(page.getByText(UNAVAILABLE)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await expect(page.getByText(UNAVAILABLE)).toHaveCount(1);
   expect(await page.evaluate(() => window.__speech.starts)).toBe(1);
+  expect(warnings).toEqual(['Browser captions stopped: network']);
+});
+
+test('a transient recognition error (no-speech) restarts captions without a note', async ({ page }) => {
+  await openListening(page, { speech: true });
+  await expect(page.getByText(NOTE)).toBeVisible();
+  await page.evaluate(() => window.__speech.end('no-speech'));
+  await expect.poll(() => page.evaluate(() => window.__speech.starts)).toBe(2);
+  await expect(page.getByText(NOTE)).toBeVisible();
+  await expect(page.getByText(UNAVAILABLE)).toHaveCount(0);
 });
 
 test("agent work shows the live meeting's actions by title, follows their state and takes a reconnect's snapshot", async ({ page }) => {

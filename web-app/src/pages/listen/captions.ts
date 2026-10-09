@@ -38,23 +38,33 @@ interface SpeechWindow {
   webkitSpeechRecognition?: RecognitionConstructor;
 }
 
-/** The browser's recognition, if it has one (Firefox has none). TypeScript's DOM types lack it; Chrome ships it prefixed. */
+/** Errors after which the browser's recognition never works on this page (Dia and other Chromium builds without Google's speech service report `network`). */
+const PERMANENT = ['network', 'service-not-allowed', 'not-allowed', 'language-not-supported'];
+
+/** Set by a permanent error: captions stay off until the page reloads. */
+let unavailable = false;
+
+/** The browser's recognition, if it has one (Firefox has none) and it has not failed for good. TypeScript's DOM types lack it; Chrome ships it prefixed. */
 export function browserRecognition(): RecognitionConstructor | undefined {
+  if (unavailable) return undefined;
   const scope = window as SpeechWindow;
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
 }
 
+/** `on` while captions run; `unavailable` once a permanent error stopped them for this page. */
+export type CaptionState = 'on' | 'off' | 'unavailable';
+
 /**
  * Runs captions into `rail` until the returned cleanup, restarting each time the browser ends a
- * session. `onActive` reports whether captions run; on an error they stop and the rail keeps
- * only server segments.
+ * session. `onState` reports whether captions run. A transient error (`no-speech`, `aborted`)
+ * restarts them; any other stops them and the rail keeps only server segments.
  *
  * Rule that never shows words twice: a final server segment replaces every browser word shown
  * before it arrived. The rail drops all captions, and the words of the current utterance shown so
  * far are skipped from then on. It holds because the browser recognises faster than a server chunk
  * returns; words shown after the chunk ended reappear with the next server segment.
  */
-export function startCaptions(Recognition: RecognitionConstructor, subscribeTranscript: SubscribeTranscript, rail: CaptionRail, onActive: (active: boolean) => void): () => void {
+export function startCaptions(Recognition: RecognitionConstructor, subscribeTranscript: SubscribeTranscript, rail: CaptionRail, onState: (state: CaptionState) => void): () => void {
   const recognition = new Recognition();
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -70,13 +80,16 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
   const wordEnds = (text: string): number[] => [...segmenter.segment(text)].filter(part => part.isWordLike).map(part => part.index + part.segment.length);
   const unseen = (text: string): string => (skip === 0 ? text : text.slice(wordEnds(text)[skip - 1] ?? text.length)).trim();
 
-  const stop = (): void => {
+  let stopped = false;
+  const stop = (state: CaptionState = 'off'): void => {
+    if (stopped) return;
+    stopped = true;
     recognition.onend = null;
     recognition.abort();
     rail.clear();
-    onActive(false);
+    onState(state);
   };
-  recognition.onstart = () => onActive(true);
+  recognition.onstart = () => onState('on');
   recognition.onresult = event => {
     if (event.resultIndex !== utterance) {
       utterance = event.resultIndex;
@@ -95,8 +108,11 @@ export function startCaptions(Recognition: RecognitionConstructor, subscribeTran
     rail.show(unseen(interim), false);
   };
   recognition.onerror = event => {
-    // The browser ends the session after these and it restarts; any other error (not-allowed, network, …) stops captions.
-    if (event.error !== 'no-speech' && event.error !== 'aborted') stop();
+    // The browser ends the session after these and it restarts.
+    if (event.error === 'no-speech' || event.error === 'aborted') return;
+    console.warn('Browser captions stopped:', event.error);
+    unavailable ||= PERMANENT.includes(event.error);
+    stop(unavailable ? 'unavailable' : 'off');
   };
   recognition.onend = () => {
     interim = '';

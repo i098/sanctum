@@ -5,7 +5,7 @@ import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, Listener
 import { endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { Dialog } from './Dialog.tsx';
-import { browserRecognition, startCaptions } from './captions.ts';
+import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewDialog } from './ReviewDialog.tsx';
@@ -241,11 +241,17 @@ function Footer({ engine, snapshot, onOpen, onFailure, children }: FooterProps) 
   );
 }
 
+/** The browser-captions line under the status while capture runs: whose speech service runs them, or that none can. */
+function CaptionNote({ state, capturing }: { state: CaptionState; capturing: boolean }) {
+  if (!capturing || state === 'off') return null;
+  return <p className="listen-helper listen-note">{state === 'on' ? "Live captions use your browser's speech service (in Chrome, Google's)." : 'Word-by-word captions are not available in this browser. Lines appear after each phrase.'}</p>;
+}
+
 interface RailsProps {
   live: boolean;
   /** Capture runs (also while degraded or reconnecting), so browser captions run too. */
   capturing: boolean;
-  onCaptions: (active: boolean) => void;
+  onCaptions: (state: CaptionState) => void;
 }
 
 /** Side live updates: what the room said on the left, agent work on the right. */
@@ -285,7 +291,8 @@ export function ListenPage() {
   // A capture issue may mean the session ended, so each new issue reads the session again.
   useEffect(refreshSignIn, [refreshSignIn, snapshot.issue]);
   const [failure, setFailure] = useState<string | null>(null);
-  const [captions, setCaptions] = useState(false);
+  const [captions, setCaptions] = useState<CaptionState>('off');
+  const capturing = CAPTURING.includes(snapshot.listener);
   useEffect(() => startWaveform(canvas.current!, engine.levels, () => engine.getSnapshot().listener), [engine]);
   const { meeting, helper, end } = useEndMeeting(engine, snapshot.listener, setFailure);
   const message = statusMessage(snapshot, failure, helper);
@@ -306,9 +313,9 @@ export function ListenPage() {
         {signIn.status === 'signed_out'
           ? <a className="listen-helper" href={SIGN_IN_URL}>Sign in to listen</a>
           : <p className="listen-helper" data-warning={message.warning}>{message.text}</p>}
-        {captions && <p className="listen-helper listen-note">Live captions use your browser's speech service (in Chrome, Google's).</p>}
+        <CaptionNote state={captions} capturing={capturing} />
       </section>
-      <Rails live={snapshot.listener === 'listening'} capturing={CAPTURING.includes(snapshot.listener)} onCaptions={setCaptions} />
+      <Rails live={snapshot.listener === 'listening'} capturing={capturing} onCaptions={setCaptions} />
       <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
