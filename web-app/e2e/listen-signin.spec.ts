@@ -121,6 +121,16 @@ test('self-hosted issuer: Team opens over Settings, closes back to it, and captu
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });
 
+test('self-hosted issuer: on a phone Team covers the whole viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
+  await openListening(page, { configured: 'embedded', access: ACCESS });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const box = await page.getByRole('dialog', { name: 'Team' }).boundingBox();
+  expect(box).toEqual({ x: 0, y: 0, width: 390, height: 780 });
+});
+
 test('an operator-seeded session without an issuer offers no sign out', async ({ page }) => {
   await openListening(page, { configured: false, access: ACCESS });
   const settings = await openSettings(page);
