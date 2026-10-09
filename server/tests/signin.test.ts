@@ -9,12 +9,13 @@ import { linkIdentity, openSession } from '../src/auth.ts';
 import { armWorkosSync, syncWorkosEvents, WorkosOrganizations, workosSettings } from '../src/org-sync.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
-import { linkWorkspaceOrg } from '../src/store.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const ISSUER = 'https://issuer.fixture.test';
 const CLIENT_ID = 'sanctum-fixture';
+const linkWorkspaceOrg = (link: { readonly workspace_id: WorkspaceId; readonly issuer: string; readonly org_id: string }) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES (${link.issuer}, ${link.org_id}, ${link.workspace_id}, UTC_TIMESTAMP(6))`);
 const { publicKey, privateKey } = await generateKeyPair('ES256');
 const jwk = { ...(await exportJWK(publicKey)), alg: 'ES256', kid: 'fixture' };
 
