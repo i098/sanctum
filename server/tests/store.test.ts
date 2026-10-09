@@ -3,8 +3,8 @@ import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { PrincipalId, ProfileId, type MeetingId, type WorkspaceId } from '@sanctum/contracts';
 import { ConfigProvider, Effect } from 'effect';
-import { ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno } from '../src/db.ts';
-import { addMember, bumpPermissionRevision, createProfile, grantMeetingAccess, nextContextSeq, reviseProfile } from '../src/store.ts';
+import { ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno, nextContextSeq } from '../src/db.ts';
+import { addMember, bumpPermissionRevision, createProfile, grantMeetingAccess, reviseProfile } from '../src/store.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 

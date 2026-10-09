@@ -46,6 +46,7 @@ const engine = {
     store.update({ listener: 'listening', permission: 'granted', archive: 'capturing' });
   },
   async pause() { fake.calls.push('pause'); store.update({ listener: 'paused' }); },
+  async end() { if (!['stopped', 'paused'].includes(engine.getSnapshot().listener)) await engine.pause(); return null; },
   async resume() { fake.calls.push('resume'); store.update({ listener: 'listening' }); },
   async orphanedRecordings() { return []; },
   async exportRecording() { return null; },

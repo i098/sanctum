@@ -2,7 +2,7 @@ import type { Meeting } from '@sanctum/sdk';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
-import { readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
+import { endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsDialog } from './AgentsDialog.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, startCaptions } from './captions.ts';
@@ -170,8 +170,9 @@ function useOpenMeeting(): [string | null, () => void] {
 }
 
 /**
- * End meeting: capture stops first, so the close seals at everything the server accepted up to the pause (final
- * segments still in flight land inside the sealed range), then the meeting closes. `helper` says so until capture starts again, else names the listener state.
+ * End meeting: capture stops first, and the end request carries the last sample this page captured before the pause (also
+ * when it is already paused), so finals still in flight or reconciled later join the closed meeting and never open a new one.
+ * Without any capture on this page (a reload while paused) it carries no sample and the server fences what the meeting used. `helper` says so until capture starts again, else names the listener state.
  */
 function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: (message: string | null) => void) {
   const [meeting, forget] = useOpenMeeting();
@@ -181,8 +182,7 @@ function useEndMeeting(engine: CaptureView, listener: ListenerState, onFailure: 
   }, [listener]);
   const end = (meeting_id: string): void => {
     onFailure(null);
-    const stopped = CAPTURING.includes(engine.getSnapshot().listener) ? engine.pause() : Promise.resolve();
-    stopped.then(() => client.meetings.closeMeeting({ meeting_id })).then(() => {
+    engine.end().then(captured => endMeeting(meeting_id, captured)).then(() => {
       forget();
       setEnded(true);
     }, (error: unknown) => onFailure(`Meeting not ended: ${error instanceof Error ? error.message : String(error)}`));

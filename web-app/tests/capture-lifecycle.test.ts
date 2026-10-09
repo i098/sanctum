@@ -503,6 +503,29 @@ describe('capture lifecycle', () => {
     expect(h.lives[1]!.options.start.epoch_id).not.toBe(first);
   });
 
+  it('End pauses like Pause, even before the live socket accepts, and resolves with the last sample captured in the epoch, or null when none is open', async () => {
+    const h = harness();
+    expect(await h.engine.end()).toBeNull();
+    await h.engine.start();
+    h.feed(0.3);
+    expect(h.snapshot().listener).toBe('starting'); // the live socket has not accepted yet
+    const epoch_id = h.lives[0]!.options.start.epoch_id;
+    expect(await h.engine.end()).toEqual({ epoch_id, sample: BLOCK * 6 });
+    expect(h.snapshot()).toMatchObject({ listener: 'paused', epochId: null });
+    expect(h.lives[0]!.stopped).toBe('pause');
+  });
+
+  it('fences a resumed epoch at its own sample count, not the recorder index', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.3);
+    await h.engine.end();
+    await h.engine.resume();
+    h.feed(0.1);
+    expect(await h.engine.end()).toEqual({ epoch_id: h.lives[1]!.options.start.epoch_id, sample: BLOCK * 2 });
+    expect(await h.engine.end()).toEqual({ epoch_id: h.lives[1]!.options.start.epoch_id, sample: BLOCK * 2 });
+  });
+
   it('ends capture on tab close and reports the committed parts as interrupted on the next load', async () => {
     const closed = harness();
     await closed.engine.start();
@@ -992,14 +1015,14 @@ describe('capture lifecycle', () => {
     expect(h.buffer.chunks.size).toBe(2); // never deleted
   });
 
-  it('honours a pause pressed while the microphone prompt is open', async () => {
+  it.each(['pause', 'end'] as const)('honours %s pressed while the microphone prompt is open', async (stop) => {
     let grant: (stream: MediaStream) => void = () => { };
     const track = new FakeTrack();
     const h = harness({ getUserMedia: () => new Promise<MediaStream>((resolve) => (grant = resolve)) });
     const starting = h.engine.start();
     await settle();
     expect(h.snapshot().listener).toBe('starting');
-    await h.engine.pause();
+    await h.engine[stop]();
     grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
     await starting;
     expect(h.snapshot()).toMatchObject({ listener: 'paused', permission: 'granted' });

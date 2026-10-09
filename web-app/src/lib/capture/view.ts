@@ -1,3 +1,9 @@
+/** The audio End meeting fences: the capture epoch and the last sample captured before the pause (sent as the contracts' `EndMeeting`). */
+export interface EndFence {
+  readonly epoch_id: string;
+  readonly sample: number;
+}
+
 /** Listener lifecycle (plan 06). */
 export type ListenerState = 'stopped' | 'starting' | 'listening' | 'reconnecting' | 'paused' | 'degraded';
 export type PermissionState = 'unknown' | 'prompt' | 'pending' | 'granted' | 'denied' | 'unsupported';
@@ -81,6 +87,8 @@ export interface CaptureView {
   readonly levels: LevelSource;
   start(): Promise<void>;
   pause(): Promise<void>;
+  /** Pauses like `pause` for End meeting; resolves with the last sample captured before the pause, or null when no epoch was open. */
+  end(): Promise<EndFence | null>;
   resume(): Promise<void>;
   /** Recordings orphaned by a removed listener, never pending audio; null while any tab of this browser captures. */
   orphanedRecordings(): Promise<readonly OrphanedRecording[] | null>;

@@ -19,7 +19,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
-import { appendContextEvent } from './context-events.ts';
+import { boundaryChanged } from './context-events.ts';
 import {
   currentRanges,
   dbFailures,
@@ -79,9 +79,6 @@ const copyMeeting = (row: MeetingRow, input: { readonly state: MeetingRow['state
     return id;
   });
 
-const boundaryChanged = (access: AccessScope, meeting_id: MeetingId, revision: number) =>
-  appendContextEvent({ workspace_id: access.workspace_id, meeting_id, item: null, change: 'meeting_boundary_changed', actor: access.principal.id, source_revision: revision });
-
 /**
  * Splits one meeting at a source position. The earlier part keeps the meeting ID under the next
  * boundary revision; the later part becomes a new meeting with the same access. An open meeting's
@@ -122,8 +119,8 @@ export const splitMeeting = (access: AccessScope, meeting_id: MeetingId, input: 
         };
         yield* recordBoundary({ meeting: row, revision, operation: 'split', decision, actor: access.principal.id });
         yield* recordBoundary({ meeting: { id: later_id, workspace_id: access.workspace_id }, revision: 1, operation: 'split', decision, actor: access.principal.id });
-        yield* boundaryChanged(access, meeting_id, revision);
-        yield* boundaryChanged(access, later_id, 1);
+        yield* boundaryChanged({ id: meeting_id, workspace_id: access.workspace_id }, revision, access.principal.id);
+        yield* boundaryChanged({ id: later_id, workspace_id: access.workspace_id }, 1, access.principal.id);
         yield* scheduleFinalize(row, access.principal.id);
         if (!open) yield* scheduleFinalize({ id: later_id, workspace_id: access.workspace_id }, access.principal.id);
         return later_id;
@@ -210,8 +207,8 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
         };
         yield* recordBoundary({ meeting: into, revision, operation: 'merge', decision, actor: access.principal.id });
         yield* recordBoundary({ meeting: folded, revision: folded.boundary_revision + 1, operation: 'merge', decision, actor: access.principal.id });
-        yield* boundaryChanged(access, into.id, revision);
-        yield* boundaryChanged(access, folded.id, folded.boundary_revision + 1);
+        yield* boundaryChanged(into, revision, access.principal.id);
+        yield* boundaryChanged(folded, folded.boundary_revision + 1, access.principal.id);
         if (!open) yield* scheduleFinalize(into, access.principal.id);
       }),
     );

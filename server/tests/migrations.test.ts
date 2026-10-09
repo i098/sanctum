@@ -15,7 +15,7 @@ const tables = Effect.gen(function* () {
 
 describe('migration files', () => {
   it('are numbered, parsed into inspectable steps and create every plan section 07 table', () => {
-    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     const created = migrations.flatMap(migration => migration.steps.map(step => step.object.table));
     expect(created).toEqual(
       expect.arrayContaining([
@@ -82,7 +82,7 @@ describe('migrate against MySQL 8.4', () => {
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* migrate(migrations.slice(0, -1));
+        yield* migrate(migrations.filter(migration => migration.version < 16));
         yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES ('w-linked', 'Linked', 'UTC', UTC_TIMESTAMP(6)), ('w-free', 'Free', 'UTC', UTC_TIMESTAMP(6))`;
         yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES ('p-1', 'human', 'One', UTC_TIMESTAMP(6)), ('p-2', 'human', 'Two', UTC_TIMESTAMP(6))`;
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at, revoked_at) VALUES
@@ -135,6 +135,21 @@ describe('migrate against MySQL 8.4', () => {
       Effect.gen(function* () {
         const exit = yield* Effect.exit(requireCurrentSchema(migrations));
         expect(Exit.isFailure(exit) && String(exit.cause)).toMatch(/pending migrations: 1, 2/);
+      }),
+    ),
+  );
+
+  it.effect('adds the End fence window to capture epochs as two nullable columns with no default, so existing epochs stay unfenced', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* migrate(migrations);
+        const columns = yield* sql`SELECT TABLE_NAME AS tbl, COLUMN_NAME AS name, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS dflt FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME LIKE 'end_fence%' ORDER BY COLUMN_NAME`;
+        expect(columns).toEqual([
+          { tbl: 'capture_epochs', name: 'end_fence_from_sample', nullable: 'YES', dflt: null },
+          { tbl: 'capture_epochs', name: 'end_fence_sample', nullable: 'YES', dflt: null },
+        ]);
       }),
     ),
   );

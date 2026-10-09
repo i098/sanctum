@@ -1,5 +1,5 @@
 /** Meetings, boundary decisions, source ownership ranges and speaker tracks (plan sections 06 and 09). */
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from '@effect/platform';
 import { Schema } from 'effect';
 import { Authenticated } from './auth.ts';
 import {
@@ -121,6 +121,23 @@ export type SplitMeeting = typeof SplitMeeting.Type;
 export const SplitResult = Schema.Struct({ earlier: Meeting, later: Meeting });
 export type SplitResult = typeof SplitResult.Type;
 
+/**
+ * End meeting, for the website only (kept out of OpenAPI, the SDKs and MCP): closes like `closeMeeting` and fences the audio
+ * the page captured before it paused. Only a principal that owns the meeting's listener or a listener of its capture group may
+ * send it; `epoch_id` must name an epoch of such a listener the caller owns. The server fences every epoch the meeting owns ranges
+ * in, up to the end of that epoch (real time while it still runs, plus a short allowance); the page names the epoch it captured
+ * last and `fence_sample`, its last sample, which is stored clamped to real time since the server recorded the epoch's start. A
+ * page that captured nothing (a reload while paused) sends neither, and only the server's own windows apply. An unowned final
+ * of `epoch_id` that starts inside the window from the meeting's first sample in that epoch up to `fence_sample` never opens
+ * a meeting: it joins the meeting owning the nearest earlier range of that epoch within the window, which is finalized again
+ * if it was sealed. The field is not `sample` so that the payload shares no shape with a public schema, which would name that
+ * schema after this route in the SDKs.
+ */
+export const EndMeeting = Schema.Struct({ epoch_id: Schema.optional(CaptureEpochId), fence_sample: Schema.optional(SampleIndex) }).pipe(
+  Schema.filter(end => (end.epoch_id === undefined) === (end.fence_sample === undefined), { message: () => 'epoch_id and fence_sample are sent together or not at all' }),
+);
+export type EndMeeting = typeof EndMeeting.Type;
+
 const RevisionedMeeting = Schema.Struct({ meeting_id: MeetingId, expected_revision: Revision });
 
 /** `source` is folded into `target`; both need matching access before they can merge. */
@@ -159,6 +176,7 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.post('mergeMeetings', '/meetings/merge').setPayload(MergeMeetings).addSuccess(Meeting))
   .add(HttpApiEndpoint.get('getMeeting')`/meetings/${meetingId}`.addSuccess(Meeting))
   .add(HttpApiEndpoint.post('closeMeeting')`/meetings/${meetingId}/close`.addSuccess(Meeting))
+  .add(HttpApiEndpoint.post('endMeeting')`/meetings/${meetingId}/end`.setPayload(EndMeeting).addSuccess(Meeting).annotate(OpenApi.Exclude, true))
   .add(HttpApiEndpoint.post('splitMeeting')`/meetings/${meetingId}/split`.setPayload(SplitMeeting).addSuccess(SplitResult))
   .add(HttpApiEndpoint.get('getTranscript')`/meetings/${meetingId}/transcript`.setUrlParams(TranscriptParams).addSuccess(TranscriptPage))
   .add(HttpApiEndpoint.post('recordingAccess')`/meetings/${meetingId}/recording-access`.addSuccess(RecordingAccess))

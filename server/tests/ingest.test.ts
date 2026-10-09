@@ -28,7 +28,7 @@ import {
   workersAiWhisper,
 } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
-import { finalizeSealed, jobsOf } from './support/capture.ts';
+import { finalizeSealed, jobsOf, meetingsOf, rangesOf } from './support/capture.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -56,7 +56,7 @@ const setup = Effect.gen(function* () {
     return { socket, accepted: yield* socket.take('accepted') };
   });
   const { socket } = yield* connect;
-  return { host, access, speech, store, providers, listener_id, epoch_id, socket, connect };
+  return { host, tokens, access, speech, store, providers, listener_id, epoch_id, socket, connect };
 });
 
 const finals = (access: AccessScope, epoch_id: CaptureEpochId) =>
@@ -88,6 +88,26 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       yield* socket.take('transcript');
       yield* pause(200);
       expect(socket.messages.filter(message => message._tag === 'transcript')).toEqual([]);
+    }),
+  );
+
+  it.scoped('End meeting before the stop arrives: finals the stop flushes join the closed meeting, never a new one', () =>
+    Effect.gen(function* () {
+      const { host, tokens, access, speech, epoch_id, socket } = yield* setup;
+      for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+      const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 4_800);
+      stream!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'we should review the budget numbers today', confidence: 0.9, speaker: '0' });
+      const [meeting] = yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 1);
+      // The End lands first and seals at the lagging watermark; it fences the 6 frames the page captured, and the stop still arrives after it.
+      tokens.set('ender', { ...access, scopes: ['context:write'] });
+      expect((yield* api(host, 'ender', 'POST', `/meetings/${meeting!.id}/end`, { epoch_id, fence_sample: 9_600 })).body).toMatchObject({ state: 'closing' });
+      for (let sequence = 3; sequence < 6; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+      stream!.pending.push({ start_s: 0.4, end_s: 0.6, is_final: true, text: 'Alice will fish the billing report', confidence: 0.9, speaker: '0' });
+      socket.send(JSON.stringify({ _tag: 'stop', reason: 'pause' }));
+      expect(yield* socket.closed).toMatchObject({ code: 1000, reason: 'stopped' });
+      expect((yield* finals(access, epoch_id)).at(-1)).toEqual([6_400, 9_600, 'Alice will fish the billing report', 'live']);
+      expect((yield* meetingsOf(access.workspace_id)).map(row => row.state)).toEqual(['closing']);
+      expect(yield* rangesOf(meeting!.id)).toEqual([{ epoch_id, sample_start: 0, sample_end: 9_600 }]);
     }),
   );
 

@@ -63,7 +63,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `jobs.ts`: `EnqueueJob = { workspace_id; kind: JobKind; work_key: string; payload: unknown; requested_by: PrincipalId | null; source_revision?: number; delay_ms?: number; max_attempts?: number; expedite?: boolean }`; an active row with the same key is re-armed (timer restarts; `expedite` makes it due no later than this request).
 - `job-runner.ts`: `runWorker<R>(handlers: JobHandlers<R>, options?): Effect<never, SqlError, R | SqlClient>`, plus claim, lease, fenced completion and deadlock retry; its sweeper also runs media's `sweepLapsedListeners` from listeners.ts and meetings' `sweepIdleMeetings` from meetings.ts. Only worker.ts imports it.
 - `jobs.ts` holds only `enqueueJob` and imports no application module, so enqueueing never deepens a caller's import chain.
-- `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
+- `db.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `store.ts`: `workspaceForOrg(input: { issuer; org_id }): Effect<Option<WorkspaceId>, SqlError, R>` and `linkWorkspaceOrg(input: { workspace_id; issuer; org_id }): Effect<void, SqlError, R>` (idempotent; a clash with another link is a defect) over migration `012_workspace_orgs`.
 - `store.ts`: `addMember(input: { workspace_id; principal_id; role; org_issuer? })` stores `workspace_members.org_issuer` (migration `016_member_org_issuer`): the issuer whose organization sync granted the membership, NULL when Sanctum did; org sync revokes only memberships its issuer granted.
@@ -124,7 +124,7 @@ Owns `server/src/listeners.ts`, `server/src/recordings.ts`, `server/src/transcri
 
 ### meetings (T12, T13, T14)
 
-Owns `server/src/meetings.ts`, `server/src/meeting-store.ts`, `server/src/meeting-corrections.ts`, `server/src/meetings-api.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges` and `006_speakers`, `MeetingsApi` in contracts meetings.ts.
+Owns `server/src/meetings.ts`, `server/src/meeting-store.ts`, `server/src/meeting-corrections.ts`, `server/src/meetings-api.ts`, `server/src/boundaries.ts`, `server/src/playback.ts`, `server/src/speakers.ts`, `server/src/providers/pyannote.ts`, `scripts/evaluate-speakers.ts`, migrations `005_meeting_ranges`, `006_speakers` and `017_meeting_end_fence`, `MeetingsApi` in contracts meetings.ts.
 Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so media keeps `recordings.ts`.
 
 - `meetings.ts`: `onFinalSegments(event: { workspace_id; listener_id; capture_group_id: string | null; segments: ReadonlyArray<TranscriptSegment> }): Effect<void, SqlError, R>`.
@@ -133,7 +133,7 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 - `meetings.ts`: `getMeeting(access, meeting_id): Effect<Meeting, NotFound, R>` and `meetingRanges(access, meeting_id): Effect<ReadonlyArray<MeetingRange>, NotFound, R>`.
 - `playback.ts`: `issueRecordingAccess(access, meeting_id): Effect<RecordingAccess, NotFound | Forbidden | Unavailable, R | ObjectStore>`.
 - Handles job kinds `meeting.finalize`, `recording.assemble`, `speakers.refine`; boundary corrections call context's `appendContextEvent`.
-- `MeetingsApi` operations: `listMeetings`, `getMeeting`, `closeMeeting`, `splitMeeting`, `mergeMeetings`, `getTranscript`, `recordingAccess`, `mapSpeaker`, `getNotes`, `exportMeeting`.
+- `MeetingsApi` operations: `listMeetings`, `getMeeting`, `closeMeeting`, `endMeeting`, `splitMeeting`, `mergeMeetings`, `getTranscript`, `recordingAccess`, `mapSpeaker`, `getNotes`, `exportMeeting`.
 - Notes (integration-owned): `meeting.finalize` enqueues `notes.summarize` (`notes-job.ts`), which stores the models slice's canonical `summarizeMeeting` output on `meetings.notes` with `notes_revision` and `processing.notes`; corrections, and final text that lands after a close left the transcript incomplete (`recordFinalWindow`), re-finalize and so regenerate notes. `notes.ts` serves `getNotes` and the Markdown `exportMeeting`; `meeting-evidence.ts` loads a meeting's final segments and epoch anchors for extraction and notes.
 - Automatically detected meetings start restricted; `createMeeting` grants `owner` only to the capturing listener's principal ([DECISIONS.md](DECISIONS.md)), and kernel's `authorizeMeeting` has no role override.
 
