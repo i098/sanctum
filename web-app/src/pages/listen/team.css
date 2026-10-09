@@ -44,3 +44,28 @@
     min-width: 0;
   }
 }
+
+@media (max-width: 480px) {
+  /*
+   * The members table needs more than a phone's width, so its third column (Last active) goes and the
+   * fixed layout gives the User column the rest of the width, where long names and emails truncate.
+   * The widget gives columns no class of their own; listen-signin.spec.ts checks that the hidden
+   * header is Last active and that the table then fits 390 px.
+   */
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :nth-child(3) {
+    display: none;
+  }
+
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRootTable {
+    table-layout: fixed;
+  }
+
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :first-child {
+    width: auto;
+  }
+
+  /* The widget's 28 px actions column counts its padding, which the fixed layout keeps; the button needs both. */
+  .listen-team [data-woswidgets-widget-id='users-management'] .rt-TableRoot tr > :last-child {
+    width: calc(28px + 2 * var(--table-cell-padding));
+  }
+}

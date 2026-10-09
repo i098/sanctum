@@ -138,6 +138,24 @@ test('WorkOS: an owner manages the team in the widgets over Settings, and closin
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });
 
+test('WorkOS on a phone: Team hides only the Last active column, and the members table fits the screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fakeWorkosWidgets(page);
+  await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
+  const settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const members = page.getByRole('dialog', { name: 'Team' }).getByRole('region', { name: 'Members' });
+  await expect(members).toContainText('grace@example.test');
+  await expect(members.getByRole('columnheader', { name: 'Last active' })).toBeHidden();
+  for (const name of ['User', 'Role']) await expect(members.getByRole('columnheader', { name })).toBeVisible();
+  await expect(members.getByRole('row').filter({ hasText: 'grace@example.test' }).getByRole('button', { name: 'User actions' })).toBeInViewport({ ratio: 1 });
+  // The table's scroll area has nothing to scroll sideways, and the table ends inside the screen.
+  const viewport = members.locator('.rt-ScrollAreaViewport');
+  expect(await viewport.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+  const table = (await members.locator('table').boundingBox())!;
+  expect(table.x + table.width).toBeLessThanOrEqual(390);
+});
+
 test('WorkOS: a member, or an owner without WorkOS organizations, gets no Team', async ({ page }) => {
   const signIn: FakeSignIn = { configured: true, workos: true, access: { ...ACCESS, role: 'member' } };
   await openListening(page, signIn);
