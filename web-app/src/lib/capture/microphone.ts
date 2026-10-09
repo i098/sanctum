@@ -22,6 +22,9 @@ export const SILENT_PEAK = 1;
 /** Seconds of dead audio before an input counts as sending no sound (a closed MacBook's built-in microphone). */
 export const SILENT_SECONDS = 3;
 
+/** Length of the dead run after `amount` more audio (samples, ms: the caller's unit) whose loudest sample was `peak` on the PCM16 scale: any sound ends the run. */
+export const deadRun = (run: number, peak: number, amount: number): number => (peak > SILENT_PEAK ? 0 : run + amount);
+
 const DEVICE_ISSUES: Record<string, CaptureIssue> = {
   NotAllowedError: 'permission_denied',
   SecurityError: 'permission_denied',

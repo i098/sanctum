@@ -11,7 +11,7 @@ import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
 import { openLiveStream, streamUrl, type DegradedReason, type LiveOptions, type LiveStatus, type LiveStream, type LiveUpdate, type RejectReason, type StopReason } from './live.ts';
 import { assembleWav } from './orphans.ts';
-import { acquireMicrophone, SILENT_PEAK, SILENT_SECONDS } from './microphone.ts';
+import { acquireMicrophone, deadRun, SILENT_SECONDS } from './microphone.ts';
 import { captureIssue, captureLockHeld, holdCaptureLock, watchMicrophonePermission } from './permissions.ts';
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { LISTENER_KEY } from './stored-listener.ts';
@@ -352,7 +352,7 @@ class CaptureController implements CaptureView {
       this.publish();
       return true;
     } catch (error) {
-      this.issue = captureIssue(error);
+      this.notice = captureIssue(error);
       this.publish();
       return false;
     }
@@ -418,8 +418,9 @@ class CaptureController implements CaptureView {
 
   /** Any sample above `SILENT_PEAK` ends the dead run and clears the warning at once. */
   private hearSilence(samples: Int16Array, rate: number): void {
-    const loud = samples.some((sample) => sample > SILENT_PEAK || sample < -SILENT_PEAK);
-    this.silentSamples = loud ? 0 : this.silentSamples + samples.length;
+    let peak = 0;
+    for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+    this.silentSamples = deadRun(this.silentSamples, peak, samples.length);
     const silent = this.silentSamples >= rate * this.timing.silentSeconds;
     if (silent !== this.silent) {
       this.silent = silent;

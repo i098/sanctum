@@ -554,6 +554,19 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: 'unsupported_constraints', inputId: null, inputLabel: 'Default - MacBook Pro Microphone' });
   });
 
+  it('keeps the silent warning after a failed input switch, and clears the failure on the next good one', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.feed(1, 0);
+    expect(h.snapshot().issue).toBe('silent_input');
+    await h.engine.chooseInput('iphone-gone');
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'silent_input', inputId: null });
+    await h.engine.chooseInput('iphone');
+    expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null, inputId: 'iphone' });
+  });
+
   it('names lost live transcription while capture continues, and drops it once the stream reconnects', async () => {
     const h = harness();
     await h.engine.start();
