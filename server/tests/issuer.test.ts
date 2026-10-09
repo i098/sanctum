@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { ClientMetadataResourceFetch } from '@better-auth/oauth-provider';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -8,10 +9,8 @@ import { Effect, Option, Redacted } from 'effect';
 import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import { createConnection } from 'mysql2/promise';
 import { inject } from 'vitest';
-import { dbLayer } from '../src/db.ts';
 import { createIssuer, registerSanctumClient } from '../src/issuer.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
-import { createTestDatabase } from './support/database.ts';
+import { freshDatabase, migrateDatabase, type TestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
 
@@ -20,6 +19,7 @@ const ISSUER = `${ORIGIN}/idp`;
 const RESOURCE = `${ORIGIN}/mcp`;
 const REDIRECT = 'https://client.fixture.test/callback';
 const SECRET = 'fixture-secret-0123456789abcdef0123456789';
+const settings = { issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) };
 const env = { SANCTUM_EMBEDDED_ISSUER: 'better-auth', SANCTUM_OIDC_ISSUER: ISSUER, SANCTUM_MCP_RESOURCE: RESOURCE, BETTER_AUTH_SECRET: SECRET };
 
 /** JWKS of the server under test, whose port is known only after it starts. */
@@ -31,6 +31,24 @@ const serveIssuer = Effect.tap(serveFake(Option.some({ resource: RESOURCE, issue
 
 /** Sends one request to the issuer; the tests pass either a real HTTP server or the issuer's handler. */
 type Send = (path: string, init?: RequestInit) => Promise<Response>;
+
+/** Sends requests straight to an issuer's handler, as a browser-like (`sec-fetch-mode: cors`) client: Better Auth then answers a redirect as JSON. */
+const sendTo = (auth: { handler: (request: Request) => Promise<Response> }): Send => (path, init) =>
+  auth.handler(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...(init?.headers as Record<string, string>), 'sec-fetch-mode': 'cors' } }));
+
+/** Dynamic client registration; `body` overrides the default public client with `REDIRECT`. */
+const register = (send: Send, body: Record<string, unknown> = {}) =>
+  send('/idp/oauth2/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_name: 'Fixture', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', ...body }),
+  }).then(async response => ({ status: response.status, body: (await response.json()) as Record<string, unknown> }));
+
+const migratedDatabase = Effect.tap(freshDatabase, migrateDatabase);
+
+/** An issuer on `mysql` whose pool closes with the scope. */
+const openIssuer = (mysql: TestDatabase['mysql'], fetchMetadata?: ClientMetadataResourceFetch) =>
+  Effect.acquireRelease(Effect.sync(() => createIssuer(settings, mysql, fetchMetadata)), ({ pool }) => Effect.promise(() => pool.end()));
 
 /** Registers a user and returns its subject plus the issuer session cookie a browser would hold. */
 async function signUp(send: Send) {
@@ -80,15 +98,13 @@ async function authorize(send: Send, cookie: string, client: string, params: Rec
 describe('embedded Better Auth issuer', () => {
   it.scoped('fits migration 011: Better Auth finds no schema drift once Sanctum has migrated', () =>
     Effect.gen(function* () {
-      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      const database = yield* freshDatabase;
       // Better Auth caches the result per pool, so each check uses its own issuer.
-      const check = Effect.acquireUseRelease(
-        Effect.sync(() => createIssuer({ issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) }, database.mysql)),
-        ({ auth }) => Effect.promise(async () => (await auth.$context).checkSchema!()!.then(() => 'current', (error: Error) => error.message)),
-        ({ pool }) => Effect.promise(() => pool.end()),
+      const check = Effect.scoped(
+        Effect.flatMap(openIssuer(database.mysql), ({ auth }) => Effect.promise(async () => (await auth.$context).checkSchema!()!.then(() => 'current', (error: Error) => error.message))),
       );
       expect(yield* check).toMatch(/Missing tables/);
-      yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+      yield* migrateDatabase(database);
       expect(yield* check).toBe('current');
     }),
   );
@@ -109,15 +125,10 @@ describe('embedded Better Auth issuer', () => {
       const { url, db } = yield* serveIssuer;
       const send: Send = (path, init) => fetch(`${url}${path}`, init);
       const { user, cookie } = yield* Effect.promise(() => signUp(send));
-      const registered = yield* Effect.promise(() =>
-        send('/idp/oauth2/register', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ client_name: 'Fixture MCP client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' }),
-        }).then(r => r.json() as Promise<{ client_id: string }>),
-      );
+      const registered = yield* Effect.promise(() => register(send, { client_name: 'Fixture MCP client' }));
+      const clientId = registered.body['client_id'] as string;
 
-      const mcp = yield* Effect.promise(() => authorize(send, cookie, registered.client_id, { scope: 'openid context:read context:write', resource: RESOURCE }));
+      const mcp = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid context:read context:write', resource: RESOURCE }));
       // The resource's allowed scopes bound the access token; `openid` stays with the ID token.
       expect(decodeJwt(mcp.access_token)).toMatchObject({ iss: ISSUER, sub: user, scope: 'context:read context:write' });
 
@@ -137,8 +148,8 @@ describe('embedded Better Auth issuer', () => {
       expect(listed.isError).toBeFalsy();
       expect(listed.structuredContent).toMatchObject({ meetings: [] });
 
-      const login = yield* Effect.promise(() => authorize(send, cookie, registered.client_id, { scope: 'openid profile', nonce: 'fixture-nonce' }));
-      const { payload } = yield* Effect.promise(() => jwtVerify(login.id_token!, keys, { issuer: ISSUER, audience: registered.client_id }));
+      const login = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid profile', nonce: 'fixture-nonce' }));
+      const { payload } = yield* Effect.promise(() => jwtVerify(login.id_token!, keys, { issuer: ISSUER, audience: clientId }));
       expect(payload).toMatchObject({ sub: user, nonce: 'fixture-nonce' });
     }),
   );
@@ -146,27 +157,19 @@ describe('embedded Better Auth issuer', () => {
   it.scoped('registers a loopback-only DCR client without application_type as native and leaves other requests unchanged', () =>
     Effect.gen(function* () {
       const { url } = yield* serveIssuer;
-      const register = (body: Record<string, unknown>) =>
-        Effect.promise(async () => {
-          const response = await fetch(`${url}/idp/oauth2/register`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ client_name: 'Fixture', token_endpoint_auth_method: 'none', ...body }),
-          });
-          return { status: response.status, body: (await response.json()) as Record<string, unknown> };
-        });
+      const registerLoopback = (body: Record<string, unknown>) => Effect.promise(() => register((path, init) => fetch(`${url}${path}`, init), body));
 
       for (const redirect of ['http://localhost:8123/callback', 'http://127.0.0.1:8123/callback', 'http://[::1]:8123/callback']) {
-        const accepted = yield* register({ redirect_uris: [redirect] });
+        const accepted = yield* registerLoopback({ redirect_uris: [redirect] });
         expect(accepted.status, redirect).toBe(201);
         expect(accepted.body['application_type'], redirect).toBe('native');
       }
-      const remote = yield* register({ redirect_uris: ['http://evil.fixture.test/callback'] });
+      const remote = yield* registerLoopback({ redirect_uris: ['http://evil.fixture.test/callback'] });
       expect(remote.status).toBe(400);
       expect(remote.body['error']).toBe('invalid_redirect_uri');
-      const mixed = yield* register({ redirect_uris: ['http://127.0.0.1:8123/callback', 'https://client.fixture.test/callback'] });
+      const mixed = yield* registerLoopback({ redirect_uris: ['http://127.0.0.1:8123/callback', 'https://client.fixture.test/callback'] });
       expect(mixed.body['error']).toBe('invalid_redirect_uri');
-      const web = yield* register({ application_type: 'web', redirect_uris: ['http://127.0.0.1:8123/callback'] });
+      const web = yield* registerLoopback({ application_type: 'web', redirect_uris: ['http://127.0.0.1:8123/callback'] });
       expect(web.body['error']).toBe('invalid_redirect_uri');
     }),
   );
@@ -176,47 +179,32 @@ describe('embedded Better Auth issuer', () => {
       const { url } = yield* serveIssuer;
       const send: Send = (path, init) => fetch(`${url}${path}`, init);
       const { cookie } = yield* Effect.promise(() => signUp(send));
-      const register = (scope?: string) =>
-        Effect.promise(async () => {
-          const response = await send('/idp/oauth2/register', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ client_name: 'Fixture', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', ...(scope ? { scope } : {}) }),
-          });
-          return (await response.json()) as { client_id: string };
-        });
+      const registerClient = (scope?: string) => Effect.promise(() => register(send, scope ? { scope } : {})).pipe(Effect.map(({ body }) => body['client_id'] as string));
 
-      const plain = yield* register();
-      expect(plain.client_id).toBeDefined();
-      const granted = yield* Effect.promise(() => authorize(send, cookie, plain.client_id, { resource: RESOURCE }));
+      const plain = yield* registerClient();
+      const granted = yield* Effect.promise(() => authorize(send, cookie, plain, { resource: RESOURCE }));
       expect(decodeJwt(granted.access_token)['scope']).toBe('context:read context:write recordings:read');
 
-      const explicit = yield* register('openid actions:request');
-      const actions = yield* Effect.promise(() => authorize(send, cookie, explicit.client_id, { scope: 'openid actions:request', resource: RESOURCE }));
+      const explicit = yield* registerClient('openid actions:request');
+      const actions = yield* Effect.promise(() => authorize(send, cookie, explicit, { scope: 'openid actions:request', resource: RESOURCE }));
       expect(decodeJwt(actions.access_token)['scope']).toBe('actions:request');
     }),
   );
 
   it.scoped('issuer:client registers a first-party public PKCE client for the redirect, without consent', () =>
     Effect.gen(function* () {
-      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-      yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+      const database = yield* migratedDatabase;
       const redirect = new URL('https://sanctum.fixture.test/auth/callback');
-      const settings = { issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) };
       const clientId = yield* registerSanctumClient(settings, database.mysql, redirect);
-      const rows = yield* Effect.provide(
-        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ clientId: string; clientSecret: string | null; skipConsent: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>`SELECT clientId, clientSecret, skipConsent, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client`),
-        dbLayer(database.mysql),
-      );
+      const { auth, pool } = yield* openIssuer(database.mysql);
+      const [rows] = yield* Effect.promise(() => pool.query('SELECT clientId, clientSecret, skipConsent, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client'));
       expect(rows).toHaveLength(1);
-      const [row] = rows;
+      const [row] = rows as Array<{ clientId: string; clientSecret: string | null; skipConsent: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>;
       expect(row).toMatchObject({ clientId, clientSecret: null, skipConsent: 1, tokenEndpointAuthMethod: 'none' });
       expect(typeof row!.redirectUris === 'string' ? JSON.parse(row!.redirectUris) : row!.redirectUris).toEqual([redirect.href]);
 
       // Behavior, not columns: the client signs in without a consent screen, and PKCE stays mandatory.
-      const { auth, pool } = createIssuer(settings, database.mysql);
-      yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
-      const send: Send = (path, init) => auth.handler(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...(init?.headers as Record<string, string>), 'sec-fetch-mode': 'cors' } }));
+      const send = sendTo(auth);
       const { cookie } = yield* Effect.promise(() => signUp(send));
       const start = (pkce: Record<string, string>) =>
         Effect.promise(async () => {
@@ -236,14 +224,11 @@ describe('embedded Better Auth issuer', () => {
   it.scoped('completes an authorization for a URL-style CIMD client id', () =>
     Effect.gen(function* () {
       const clientId = 'https://client.fixture.test/oauth/client-metadata.json';
-      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-      yield* Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+      const database = yield* migratedDatabase;
       const document = { client_id: clientId, client_name: 'Fixture CIMD client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' };
       const fetchMetadata = async () => new Response(JSON.stringify(document), { headers: { 'content-type': 'application/json' } });
-      const { auth, pool } = createIssuer({ issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) }, database.mysql, fetchMetadata);
-      yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
-      // A browser-like fetch: Better Auth answers a `cors` navigation with the redirect as JSON.
-      const send: Send = (path, init) => auth.handler(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...(init?.headers as Record<string, string>), 'sec-fetch-mode': 'cors' } }));
+      const { auth, pool } = yield* openIssuer(database.mysql, fetchMetadata);
+      const send = sendTo(auth);
 
       const { user, cookie } = yield* Effect.promise(() => signUp(send));
       const token = yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid offline_access context:read', resource: RESOURCE }));

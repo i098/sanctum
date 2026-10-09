@@ -2,6 +2,7 @@
   "name": "@sanctum/server",
   "private": true,
   "type": "module",
+  "imports": { "#better-auth-api": "better-auth/api" },
   "description": "Sanctum API and worker entrypoints",
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
