@@ -16,3 +16,4 @@ _site/
 playwright-report/
 test-results/
 .wrangler/
+*.tsbuildinfo

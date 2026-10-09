@@ -645,6 +645,25 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('a batch final that starts before the first range of an ended meeting and ends inside it joins the meeting, never a new one', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { device, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 28_665 / RATE, 30, 'please send the summary to the whole team');
+        const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${30 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 30 * RATE });
+        yield* hear(listener, epoch, 20_000 / RATE, 30_000 / RATE, 'Good morning to you.');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
+        const ranges = yield* rangesOf(id);
+        expect(ranges[0]).toMatchObject({ epoch_id: epoch, sample_start: 20_000 });
+        expect(ranges.at(-1)).toMatchObject({ epoch_id: epoch, sample_end: 30 * RATE });
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('N1 after finalize: batch audio just before an already finalized End meeting joins it and finalizes it again, never a ghost', () =>
     withDatabase(
       Effect.gen(function* () {

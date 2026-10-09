@@ -297,7 +297,7 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
         FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
         WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track} AND r.sample_start > ${source.sample_start}
         ORDER BY r.sample_start LIMIT 1) n
-      WHERE n.state IN ('closing', 'closed') AND (n.sample_start - ${source.sample_end}) * 1000 <= ${engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}`;
+      WHERE n.state IN ('closing', 'closed') AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}`;
     const closed = next === undefined ? null : yield* selectMeeting(workspace_id, next.meeting_id, true);
     if (closed?._tag !== 'Some') return false;
     yield* claimSource(closed.value, source);
