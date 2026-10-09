@@ -109,6 +109,38 @@ interface WhisperConfig {
   };
 }
 
+const failedResponse = (response: Response, rateLimitBackoffMs: number) => {
+  const rateLimited = response.status === 429;
+  const retryAfter = Number(response.headers.get('retry-after'));
+  return unavailable(`responded ${response.status}`, rateLimited || response.status >= 500, rateLimited ? (retryAfter > 0 ? retryAfter * 1000 : rateLimitBackoffMs) : undefined);
+};
+
+const toResults = (result: typeof WhisperResponse.Type.result) => {
+  if (result.segments === undefined) return result.text.trim() === '' ? Effect.succeed([]) : Effect.fail(unavailable('response has text without segments', false));
+  return Effect.succeed(
+    result.segments.flatMap((segment): Array<AsrResult> => {
+      const text = segment.text.trim();
+      return text === '' ? [] : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
+    }),
+  );
+};
+
+const requestSegments = (url: string, token: string, wav: Uint8Array, limits: WhisperConfig['liveAsr']) =>
+  Effect.gen(function* () {
+    const response = yield* Effect.tryPromise(signal =>
+      fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ audio: Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength).toString('base64'), vad_filter: true }),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)]),
+      }),
+    ).pipe(Effect.mapError(error => unavailable(`request failed: ${String(error.cause)}`)));
+    if (!response.ok) return yield* failedResponse(response, limits.rateLimitBackoffMs);
+    const body = yield* Effect.tryPromise(() => response.json()).pipe(Effect.mapError(() => unavailable('response was not JSON')));
+    const { result } = yield* Schema.decodeUnknown(WhisperResponse)(body).pipe(Effect.mapError(() => unavailable('unexpected response shape', false)));
+    return yield* toResults(result);
+  });
+
 /** Missing settings are not a startup error: every call fails as `Unavailable`, and sessions report degraded ASR. */
 export function whisperSpeechToText(config: WhisperConfig) {
   const limits = config.liveAsr;
@@ -125,27 +157,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
     Effect.gen(function* () {
       const { url, token } = yield* configured;
       if (!hasSound(samples, Math.round((20 * sample_rate) / 1000), limits.speechFloorRms)) return [];
-      const wav = wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]);
-      const response = yield* Effect.tryPromise(signal =>
-        fetch(url, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ audio: Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength).toString('base64'), vad_filter: true }),
-          signal: AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)]),
-        }),
-      ).pipe(Effect.mapError(error => unavailable(`request failed: ${String(error.cause)}`)));
-      if (!response.ok) {
-        const rateLimited = response.status === 429;
-        const retryAfter = Number(response.headers.get('retry-after'));
-        return yield* unavailable(`responded ${response.status}`, rateLimited || response.status >= 500, rateLimited ? (retryAfter > 0 ? retryAfter * 1000 : limits.rateLimitBackoffMs) : undefined);
-      }
-      const body = yield* Effect.tryPromise(() => response.json()).pipe(Effect.mapError(() => unavailable('response was not JSON')));
-      const { result } = yield* Schema.decodeUnknown(WhisperResponse)(body).pipe(Effect.mapError(() => unavailable('unexpected response shape', false)));
-      if (result.segments === undefined) return result.text.trim() === '' ? [] : yield* unavailable('response has text without segments', false);
-      return result.segments.flatMap((segment): Array<AsrResult> => {
-        const text = segment.text.trim();
-        return text === '' ? [] : [{ start_s: segment.start, end_s: segment.end, is_final: true, text, confidence: null, speaker: null }];
-      });
+      return yield* requestSegments(url, token, wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]), limits);
     });
 
   const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>) =>
