@@ -90,6 +90,7 @@ test('Settings deletes the workspace only after its exact name is typed, and und
   await submit.click();
   await expect(confirm).toBeHidden();
   await expect(settings.getByRole('heading', { name: 'Workspace deleted' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start', 'pause']);
   await settings.getByRole('button', { name: 'Undo deletion' }).click();
   await expect(settings.getByRole('heading', { name: 'Delete workspace' })).toBeVisible();
   expect(writes).toEqual([

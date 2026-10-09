@@ -15,6 +15,7 @@ import { engineeringDefaults, workspacePurgeGraceDays } from './config.ts';
 import { DbJson, DbUtc } from './db.ts';
 import type { JobHandler } from './job-types.ts';
 import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
+import { closeWorkspaceSockets } from './media/open-sockets.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { bumpPermissionRevision, write } from './store.ts';
 
@@ -64,7 +65,7 @@ const getWorkspace = (workspace_id: WorkspaceId) =>
   ).pipe(Effect.orDie);
 
 /** Idempotent: deleting an already deleted workspace keeps the first grace period. */
-const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
+export const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const days = yield* Effect.orDie(workspacePurgeGraceDays);
@@ -90,6 +91,7 @@ const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
         }),
       )
       .pipe(Effect.catchTag('SqlError', Effect.die));
+    yield* closeWorkspaceSockets(access.workspace_id, 'workspace deleted');
     return yield* getWorkspace(access.workspace_id);
   });
 

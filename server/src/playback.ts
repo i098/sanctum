@@ -5,14 +5,15 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema } from '@effect/sql';
-import { type AccessScope, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
+import { type AccessScope, JobFailure, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt, DbSha256 } from './db.ts';
-import { enqueueJob } from './jobs.ts';
+import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { asJobResult, currentRanges, MeetingJobPayload, type MeetingJob, OPEN_STATES, selectMeeting, type TimedRange } from './meeting-store.ts';
 import { ObjectStore, wavFile } from './providers/object-store.ts';
+import { workspaceIsLive } from './store.ts';
 
 const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeInt, sha256: DbSha256, object_key: Schema.String });
 
@@ -93,6 +94,7 @@ export const assembleRecording = (job: MeetingJob) =>
       const wav = wavFile(rate, parts);
       const sha256 = createHash('sha256').update(wav).digest('hex');
       const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}.wav`;
+      if (!(yield* workspaceIsLive(job.workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
       yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
       yield* sql.withTransaction(
         Effect.gen(function* () {

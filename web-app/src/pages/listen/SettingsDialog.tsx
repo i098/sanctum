@@ -152,7 +152,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
         ))}
       </dl>
       <LocalRecordings engine={engine} />
-      <WorkspaceDeletion client={client} />
+      <WorkspaceDeletion client={client} onDeleted={() => void engine.pause()} />
     </Dialog>
   );
 }

@@ -19,6 +19,7 @@ import {
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbUtc } from './db.ts';
 import { onFinalSegments } from './meetings.ts';
+import { workspaceIsLive } from './store.ts';
 
 export interface SampleSpan {
   readonly sample_start: number;
@@ -141,6 +142,7 @@ export const recordFinalWindow = (input: FinalWindow) =>
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* sql`SELECT id FROM capture_epochs WHERE workspace_id = ${workspace_id} AND id = ${epoch_id} FOR UPDATE`;
+        if (!(yield* workspaceIsLive(workspace_id))) return [];
         const covered = yield* coverageIn(workspace_id, epoch_id, track, input.window);
         const inserted: Array<string> = [];
         // A segment whose midpoint another origin already covered duplicates live/replayed audio.

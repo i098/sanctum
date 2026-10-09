@@ -38,7 +38,7 @@ function ConfirmDeletion({ name, busy, onCancel, onConfirm }: ConfirmProps) {
  * Owner-only Settings section: delete the workspace after typing its name, and undo while the
  * grace period runs. Hidden for anyone the server does not answer as the owner.
  */
-export function WorkspaceDeletion({ client }: { client: SanctumClient }) {
+export function WorkspaceDeletion({ client, onDeleted }: { client: SanctumClient; onDeleted: () => void }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,7 +77,12 @@ export function WorkspaceDeletion({ client }: { client: SanctumClient }) {
       </div>
       {failure && <p role="alert" className="listen-local-gap">{failure}</p>}
       <Dialog title="Delete workspace?" open={confirming} onClose={() => setConfirming(false)}>
-        <ConfirmDeletion name={workspace.name} busy={busy} onCancel={() => setConfirming(false)} onConfirm={typed => run(() => client.workspace.deleteWorkspace({ confirm_name: typed }))} />
+        <ConfirmDeletion
+          name={workspace.name}
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={typed => run(() => client.workspace.deleteWorkspace({ confirm_name: typed }).then(deleted => { onDeleted(); return deleted; }))}
+        />
       </Dialog>
     </section>
   );

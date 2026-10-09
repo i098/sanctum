@@ -27,7 +27,7 @@ import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { heldUntil } from './lease-claims.ts';
 import { ObjectStore, type ObjectStoreError } from './providers/object-store.ts';
-import { write } from './store.ts';
+import { workspaceIsLive, write } from './store.ts';
 
 /** Batch reconciliation waits this long after an upload so live finals for the range can land first. */
 const RECONCILE_DELAY_MS = 60_000;
@@ -178,6 +178,7 @@ const validateChunk = (access: AccessScope, listener_id: ListenerId, chunk_id: R
     if (!access.scopes.includes('capture:ingest')) {
       return yield* new Forbidden({ message: 'The capture:ingest scope is required', required_scope: 'capture:ingest' });
     }
+    if (!(yield* workspaceIsLive(access.workspace_id))) return yield* new Forbidden({ message: 'This workspace is deleted' });
     yield* heldEpoch(access, listener_id, manifest);
     const shapeError = wavError(body, manifest);
     if (shapeError !== null) return yield* invalid(shapeError);
@@ -221,6 +222,7 @@ export const putChunk = (access: AccessScope, listener_id: ListenerId, chunk_id:
     const sql = yield* SqlClient.SqlClient;
     yield* sql.withTransaction(
       Effect.gen(function* () {
+        if (!(yield* workspaceIsLive(access.workspace_id))) return yield* new Forbidden({ message: 'This workspace is deleted' });
         yield* sql`
           UPDATE recording_chunks SET upload_state = 'committed', committed_at = UTC_TIMESTAMP(6)
           WHERE workspace_id = ${access.workspace_id} AND id = ${chunk_id} AND upload_state = 'pending'`;

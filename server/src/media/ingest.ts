@@ -11,6 +11,7 @@ import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect'
 import { Authenticator } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
 import type { SpeechToText } from '../providers/whisper.ts';
+import { trackSocket } from './open-sockets.ts';
 import { openLiveSession, reject, SessionRejected } from './session.ts';
 
 /** Queued inbound messages per socket (at most ~1.2 MB of maximum-size frames). */
@@ -64,6 +65,7 @@ const converse = (access: AccessScope, listener: ListenerRow, socket: Socket.Soc
       const writer = yield* socket.writer;
       const inbound = yield* Mailbox.make<string | Uint8Array>(INBOUND_LIMIT);
       const overflow = yield* Deferred.make<Closing>();
+      yield* trackSocket(access.workspace_id, (code, reason) => Deferred.unsafeDone(overflow, Exit.succeed({ code, reason })));
       const ended = yield* Deferred.make<void>();
       // The writer waits for an open socket, so writes race the peer's disconnect instead of hanging.
       const write = (chunk: string | Socket.CloseEvent) => writer(chunk).pipe(Effect.ignore, Effect.raceFirst(Deferred.await(ended)));

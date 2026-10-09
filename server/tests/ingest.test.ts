@@ -7,6 +7,7 @@ import { Effect, Layer } from 'effect';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
 import { finalSegments } from '../src/transcripts.ts';
+import { deleteWorkspace } from '../src/workspaces.ts';
 import {
   chunk,
   claimListener,
@@ -82,6 +83,22 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       yield* socket.take('transcript');
       yield* pause(200);
       expect(socket.messages.filter(message => message._tag === 'transcript')).toEqual([]);
+    }),
+  );
+
+  it.scoped('closes an open listener socket when its workspace is deleted, and leaves other workspaces connected', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { access, socket } = yield* setup;
+      const other = yield* setup;
+      socket.send(pcmFrame(0, 0));
+      yield* socket.take('ack');
+      const [row] = yield* sql<{ name: string }>`SELECT name FROM workspaces WHERE id = ${access.workspace_id}`;
+      yield* deleteWorkspace(access, row!.name);
+
+      expect(yield* socket.closed).toEqual({ code: 1008, reason: 'workspace deleted' });
+      other.socket.send(pcmFrame(0, 0));
+      expect(yield* other.socket.take('ack')).toMatchObject({ sample_end: 1_600 });
     }),
   );
 

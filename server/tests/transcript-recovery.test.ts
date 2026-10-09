@@ -31,7 +31,7 @@ const setup = (seconds: number) =>
     }
     const reconcile = (sample_start: number, sample_end: number) =>
       Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start, sample_end } }), providers);
-    return { access, epoch_id, speech, reconcile };
+    return { access, listener_id: listener.id, epoch_id, speech, store, providers, reconcile };
   });
 
 const liveFinal = (access: AccessScope, epoch_id: CaptureEpochId, sample_start: number, sample_end: number, text: string) =>
@@ -265,6 +265,26 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       expect(yield* getSegments(access, [revised!.id])).toEqual([revised]);
       const outsider = yield* seedDevice('Other room');
       expect(yield* getSegments(outsider, [revised!.id])).toEqual([]);
+    }),
+  );
+
+  it.effect('refuses segment, chunk and object writes once the workspace is deleted', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { access, listener_id, epoch_id, providers, store } = yield* setup(1);
+      yield* liveFinal(access, epoch_id, 0, 8_000, 'before the delete');
+      yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${access.workspace_id}`;
+      const objects = store.objects.size;
+
+      expect(yield* liveFinal(access, epoch_id, 8_000, 16_000, 'after the delete')).toEqual([]);
+      const later = chunk({ listener_id, epoch_id, sequence: 1, sample_start: RATE, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 300 }) });
+      const refused = yield* Effect.flip(Effect.provide(putChunk(access, listener_id, later.manifest.chunk_id, later.manifest, later.body), providers));
+      expect(refused).toMatchObject({ _tag: 'Forbidden' });
+
+      expect(yield* texts(access, epoch_id)).toEqual([['live', 0, 8_000, 'before the delete', 1]]);
+      const [chunks] = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM recording_chunks WHERE workspace_id = ${access.workspace_id}`;
+      expect(Number(chunks!.n)).toBe(1);
+      expect(store.objects.size).toBe(objects);
     }),
   );
 });
