@@ -116,6 +116,20 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
     }),
   );
 
+  it.effect('keeps the deployment-wide WorkOS sync job on the tombstone of the purged workspace', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = memoryObjectStore();
+      const a = yield* seed('Anchor', store);
+      const sync = yield* enqueueJob({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
+      yield* deleteNow(a.owner);
+      const lease = yield* claim;
+      expect(yield* Effect.provide(purgeWorkspace(lease.job), store.layer)).toMatchObject({ status: 'succeeded', result: { purged: true } });
+      const rows = yield* sql<{ id: string; kind: string }>`SELECT id, kind FROM jobs WHERE workspace_id = ${a.workspace_id} ORDER BY kind`;
+      expect(rows.map(row => [row.id, row.kind])).toEqual([[sync, 'workos.sync'], [lease.job.id, 'workspace.purge']]);
+    }),
+  );
+
   it.effect('never purges a restored workspace', () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

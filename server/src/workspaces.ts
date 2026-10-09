@@ -189,7 +189,7 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore> = job
         // Revisions supersede earlier revisions of the same table; unlink them so one DELETE can remove all.
         yield* sql`UPDATE context_items SET supersedes_id = NULL, supersedes_revision = NULL WHERE workspace_id = ${workspace_id}`;
         for (const table of PURGED_TABLES) yield* purge(table);
-        yield* purge('jobs', sql`id <> ${job.id}`);
+        yield* purge('jobs', sql`id <> ${job.id} AND kind <> 'workos.sync'`);
         yield* purge('workspace_members');
         // Principals left with no membership in any workspace (agents, devices, people only here) go with it.
         if (members.length > 0) {
