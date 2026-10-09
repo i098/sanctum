@@ -68,7 +68,7 @@ No application database, microphone, or external integration is involved.
 The `app` job runs `npm run check:app` (`scripts/check-app.ts`) and stops at the first failing step.
 Steps, in order: workspace typechecks, root Vitest suites, web build, Playwright browser tests, benchmark manifest validation, benchmark correctness smoke (`npm run benchmark -- --smoke`) and the accelerated 24-hour replay (`npm run replay:capture`).
 Child processes run with `SANCTUM_ENV=test` and without provider credential variables, so external side effects stay disabled.
-Server tests use a `mysql:8.4` service container through `SANCTUM_TEST_MYSQL_URL`; its root password is a non-secret test literal.
+Server tests use a MySQL 8.4 service container through `SANCTUM_TEST_MYSQL_URL` (image source: [operations](operations.md#processes)); its root password is a non-secret test literal.
 Playwright installs only the Chromium headless shell and its system dependencies.
 The job has read-only repository permissions, no secrets, no deployment, and a twenty-minute timeout.
 The benchmark smoke fails on a failed operation or an invalid result record, never on timing; comparative timing gates belong on a controlled benchmark host, and Rust parity remains unverified ([benchmarks/README.md](../benchmarks/README.md)).
