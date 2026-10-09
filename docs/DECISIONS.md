@@ -61,7 +61,7 @@ Both providers below use one `iss` and one `sub` for the login ID token and the 
 - **Self-hosted:** Better Auth runs embedded in the server on the existing MySQL. It is the OIDC issuer and, through its OAuth provider plugin, the MCP authorization server.
 - **MCP default scopes on WorkOS:** WorkOS gives MCP clients no Sanctum scope names, so `SANCTUM_MCP_DEFAULT_SCOPES` is `context:read,context:write,recordings:read`. No actions scope is granted by default.
 - **Account and workspace management:** use the providers, do not build it. Hosted uses the WorkOS AuthKit profile and WorkOS Organizations; self-hosted uses the Better Auth organization plugin. Glue maps provider organizations, members and roles onto Sanctum workspaces, principals and `workspace_members`, which stay the only input to authorization. Membership never comes from an email domain.
-- **Self-serve workspace creation (hosted):** on, but only after the Sanctum-side seat limit ships.
+- **Self-serve workspace creation (hosted):** on, now that the Sanctum-side seat limit has shipped; the hosted site sets `SANCTUM_SELF_SERVE_WORKSPACES=true` (`deploy/cloudflare/wrangler.jsonc`), and the default elsewhere is off.
 - **Seat limits:** none while self-serve is off. Before self-serve opens, Sanctum enforces a seat limit per workspace at membership creation, configurable per workspace with a default.
 - **Workspace deletion:** a soft delete revokes all memberships, sessions and agent credentials at once; a durable purge job later deletes the R2 objects and rows and writes a receipt. Nothing is purged automatically while meeting retention is open. Deleting a provider organization only detaches its link and never starts a purge.
 - **Billing:** none now. Use Stripe Billing when paid plans exist.
