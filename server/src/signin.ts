@@ -3,7 +3,7 @@
  * self-hosted): the authorization code flow with `state`, `nonce` and PKCE (whenever the issuer
  * advertises S256, and always for a public client). The verified `(iss, sub)` pair is the only key:
  * it selects a principal, then its one active human membership, and a browser session opens with
- * the cookies the secret login link sets. Membership never follows from an email address.
+ * the `sanctum_session` and `sanctum_csrf` cookies. Membership never follows from an email address.
  */
 import { HttpApiBuilder, HttpServerRequest, HttpServerResponse } from '@effect/platform';
 import { SqlClient, SqlSchema } from '@effect/sql';

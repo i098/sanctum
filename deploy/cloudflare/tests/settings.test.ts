@@ -11,13 +11,8 @@ describe('container environment', () => {
     expect(containerEnv({ SANCTUM_DEFAULT_SEAT_LIMIT: '5' })).toEqual({ SANCTUM_DEFAULT_SEAT_LIMIT: '5' });
   });
 
-  it('keeps the login tokens in the Worker', () => {
-    const worker = { LOGIN_TOKEN: 'link', SESSION_TOKEN: 'session', CSRF_TOKEN: 'csrf', MYSQL_HOST: 'db' };
-    expect(containerEnv(worker)).toEqual({ MYSQL_HOST: 'db' });
-  });
-
-  it('forwards the sign-in settings the Worker has and keeps the login tokens in the Worker', () => {
-    const worker = { LOGIN_TOKEN: 'link', SESSION_TOKEN: 'session', CSRF_TOKEN: 'csrf', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', MYSQL_HOST: 'db' };
+  it('forwards the sign-in settings the Worker has and keeps Worker-only values out', () => {
+    const worker = { API: 'binding', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', MYSQL_HOST: 'db' };
     expect(containerEnv(worker)).toEqual({ SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', MYSQL_HOST: 'db' });
   });
 });
