@@ -157,7 +157,7 @@ describe('MCP over Streamable HTTP', () => {
         statuses.push(response.status);
         const header = response.headers.get('www-authenticate');
         expect(header).toContain(`resource_metadata="https://sanctum.fixture.test/.well-known/oauth-protected-resource/mcp"`);
-        if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read actions:request actions:execute"');
+        if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read"');
       }
       expect(statuses).toEqual([401, 401, 401, 403]);
     }),
@@ -170,7 +170,7 @@ describe('MCP over Streamable HTTP', () => {
       const token = (access: AccessScope, scope: string, claims: { aud?: string } = {}) =>
         Effect.flatMap(Effect.provide(identify(access), db), subject => Effect.promise(() => sign(subject, scope, claims)));
       const metadata = yield* Effect.promise(() => fetch(`${url}/.well-known/oauth-protected-resource/mcp`).then(r => r.json()));
-      expect(metadata).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER], bearer_methods_supported: ['header'] });
+      expect(metadata).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER], scopes_supported: ['context:read', 'context:write', 'recordings:read', 'actions:request', 'actions:execute'], bearer_methods_supported: ['header'] });
 
       const meeting = domain.addMeeting(owner!, 'Defaults review');
       const add = { meeting_id: meeting.id, expected_revision: 0, kind: 'decision', text: 'Ship', sources: [{ artifact_id: randomUUID() }], idempotency_key: 'd-1' };
@@ -189,7 +189,7 @@ describe('MCP over Streamable HTTP', () => {
       const send = (token: string | null) => Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION)));
       const missing = yield* send(null);
       expect(missing.status).toBe(401);
-      expect(missing.headers.get('www-authenticate')).not.toContain('scope=');
+      expect(missing.headers.get('www-authenticate')).toContain('scope="context:read"');
       expect((yield* send(yield* Effect.promise(() => sign(`sub-${member!.principal.id}`, 'openid', { aud: 'https://other.test/mcp' })))).status).toBe(401);
       expect((yield* send(yield* Effect.promise(() => sign('sub-unknown', 'openid')))).status).toBe(403);
     }),
