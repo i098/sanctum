@@ -2,6 +2,7 @@
   "name": "@sanctum/server",
   "private": true,
   "type": "module",
+  "imports": { "#better-auth-api": "better-auth/api" },
   "description": "Sanctum API and worker entrypoints",
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
@@ -10,10 +11,13 @@
     "owner": "node src/owner.ts",
     "start": "node src/main.ts",
     "worker": "node src/worker.ts",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "issuer:client": "node src/issuer.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.129.0",
+    "@better-auth/cimd": "1.7.7",
+    "@better-auth/oauth-provider": "1.7.7",
     "@effect/platform": "0.97.2",
     "@effect/platform-node": "0.108.2",
     "@effect/sql": "0.52.1",
@@ -22,6 +26,7 @@
     "@sanctum/contracts": "*",
     "@sanctum/sdk": "*",
     "aws4fetch": "1.0.20",
+    "better-auth": "1.7.7",
     "effect": "3.22.2",
     "jose": "^6.2.12",
     "mysql2": "3.24.4",

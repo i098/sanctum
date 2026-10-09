@@ -157,7 +157,7 @@ describe('MCP over Streamable HTTP', () => {
         statuses.push(response.status);
         const header = response.headers.get('www-authenticate');
         expect(header).toContain(`resource_metadata="https://sanctum.fixture.test/.well-known/oauth-protected-resource/mcp"`);
-        if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read actions:request actions:execute"');
+        if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read"');
       }
       expect(statuses).toEqual([401, 401, 401, 403]);
     }),

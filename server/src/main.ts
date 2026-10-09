@@ -1,7 +1,7 @@
 /**
- * API entrypoint: one Node HTTP server for `/api/v1`, health, built website assets and (added
- * by their slices) `/mcp` and the live-ingest WebSocket upgrade. Accepted durable work
- * belongs to the separate worker entrypoint (worker.ts), never to this process.
+ * API entrypoint: one Node HTTP server for `/api/v1`, health, built website assets, `/mcp`, the
+ * embedded issuer at `/idp` when selected, and the live-ingest WebSocket upgrade. Accepted durable
+ * work belongs to the separate worker entrypoint (worker.ts), never to this process.
  */
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -14,6 +14,7 @@ import { ApiLive, OpenApiLive } from './api.ts';
 import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer, type MysqlOptions } from './db.ts';
+import { embeddedIssuerLive } from './issuer.ts';
 import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpDelegation } from './mcp.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, SpeechSynthesizerLive, type SpeechToText } from './media/providers.ts';
@@ -45,7 +46,7 @@ export const serverLayer = (
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
-    Layer.provide([ListenerStreamLive, McpLive, SignInLive, OpenApiLive]),
+    Layer.provide([ListenerStreamLive, McpLive, SignInLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
     Layer.provide([SpeechSynthesizerLive, SpeechRepliesLive.pipe(Layer.provide(LlmLive))]),
     Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
     Layer.provide(overrides.media ?? MediaProvidersLive),

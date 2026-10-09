@@ -188,7 +188,7 @@ export const McpAuthorizationFromEnv = Layer.effect(
   ),
 );
 
-const MCP_SCOPES: ReadonlyArray<AccessScopeName> = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
+export const MCP_SCOPES: ReadonlyArray<AccessScopeName> = AccessScopeName.literals.filter(scope => scope !== 'capture:ingest' && scope !== 'workspace:admin');
 const metadataUrl = (resource: string) => new URL(`/.well-known/oauth-protected-resource${new URL(resource).pathname}`, resource).href;
 
 const Identity = Schema.Struct({ principal_id: PrincipalId, workspace_id: WorkspaceId });
@@ -230,10 +230,10 @@ const authorize = (auth: McpAuthorization, request: HttpServerRequest.HttpServer
     return { ...access, scopes: access.scopes.filter(scope => granted.includes(scope)) };
   });
 
-/** Names the MCP scopes only when tokens must carry them; with defaults the AS may refuse Sanctum scope names. */
+/** Names scopes only when tokens must carry them (no defaults), never the action scopes; with defaults the AS may refuse Sanctum scope names. */
 const challenge = (auth: McpAuthorization, error: Unauthenticated | Forbidden) => {
   const unauthenticated = error._tag === 'Unauthenticated';
-  const scope = unauthenticated && auth.defaultScopes.length === 0 ? `, scope="${MCP_SCOPES.join(' ')}"` : '';
+  const scope = unauthenticated && auth.defaultScopes.length === 0 ? `, scope="${MCP_SCOPES.filter(name => !name.startsWith('actions:')).join(' ')}"` : '';
   return HttpServerResponse.unsafeJson(error, {
     status: unauthenticated ? 401 : 403,
     headers: {

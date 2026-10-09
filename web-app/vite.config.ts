@@ -15,6 +15,7 @@ export default defineConfig({
       '/api': { target: api, ws: true },
       '/auth': api,
       '/mcp': api,
+      '/idp': api,
       '/healthz': api,
       '/readyz': api,
     },

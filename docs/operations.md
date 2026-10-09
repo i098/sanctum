@@ -7,7 +7,7 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
-- `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade and the built website, all on one port behind Caddy.
+- `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade, the built website and, when [self-hosted sign-in](#self-hosted-sign-in) is on, the embedded issuer at `/idp`, all on one port behind Caddy.
 - `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions).
 
 Both refuse to start in `SANCTUM_ENV=production` until every decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
@@ -27,12 +27,12 @@ Secrets come from the environment only; none are committed.
 | Speech | `PYANNOTE_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` |
 | Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (Cloudflare API token with only Workers AI permission; Whisper speech-to-text, live and batch, and voice and extraction by default), `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, research |
 | Integrations | `PIPEDREAM_API_URL`, `PIPEDREAM_ENVIRONMENT`, `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` |
-| Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`); sign-in is enabled only when all three are set, otherwise `/auth/login` answers `503`; `SANCTUM_OIDC_CLIENT_SECRET` (omit for a public client, which uses PKCE), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth`; reported by `GET /auth/config`, no issuer is served yet), `BETTER_AUTH_SECRET` (at least 32 random bytes, needed when the embedded issuer is selected) |
+| Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`); sign-in is enabled only when all three are set, otherwise `/auth/login` answers `503`; `SANCTUM_OIDC_CLIENT_SECRET` (omit for a public client, which uses PKCE), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth` serves the self-hosted issuer at `/idp`; reported by `GET /auth/config`), `BETTER_AUTH_SECRET` (at least 32 characters, needed when the embedded issuer is selected) |
 | Remote MCP | `SANCTUM_MCP_ISSUER`, `SANCTUM_MCP_JWKS_URL`, `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_DEFAULT_SCOPES` (comma list granted only to tokens that name no Sanctum scope, such as WorkOS DCR/CIMD clients; always narrowed by role and never `workspace:admin` or `capture:ingest`; empty by default; when set, metadata and challenges stop naming scopes) |
 
 WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
 The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does not stop startup unless `identity_issuer` is listed, and sign-in then stays off.
-The embedded issuer (`SANCTUM_EMBEDDED_ISSUER`) is not built yet; setting it only gates activation and is reported by `/auth/config`.
+With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
@@ -46,6 +46,27 @@ MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d mysql
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose run --rm api node server/dist/migrate.js
 MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
 ```
+
+## Self-hosted sign-in
+
+`SANCTUM_EMBEDDED_ISSUER=better-auth` mounts Better Auth ([server/src/issuer.ts](../server/src/issuer.ts)) in the API process at `/idp`: the OIDC issuer for website sign-in and the OAuth authorization server for `/mcp`.
+It uses the existing MySQL through its own two-connection pool and the `auth_*` tables of migration `011_embedded_issuer`; run migrations first. Sanctum never runs Better Auth's own migrator.
+
+| Setting | Value |
+| --- | --- |
+| `SANCTUM_EMBEDDED_ISSUER` | `better-auth` |
+| `BETTER_AUTH_SECRET` | At least 32 random characters, for example `openssl rand -base64 32`. Signs issuer state and encrypts the stored signing keys, so keep it stable. |
+| `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_ISSUER` | `https://<host>/idp` (the API refuses to start when the embedded issuer path is not `/idp`) |
+| `SANCTUM_MCP_RESOURCE` | `https://<host>/mcp`, the audience of every MCP access token |
+| `SANCTUM_MCP_JWKS_URL` | `https://<host>/idp/jwks` (EdDSA keys) |
+
+- **Discovery**: `/idp/.well-known/openid-configuration` and `/.well-known/oauth-authorization-server/idp` advertise PKCE `S256`, dynamic client registration at `/idp/oauth2/register` and Client ID Metadata Documents.
+- **Pages**: Better Auth sends browsers to `/sign-in`, `/sign-up` and `/consent` on the website during an authorization request.
+- **Website client**: with the settings above plus `SANCTUM_OIDC_REDIRECT_URI=https://<host>/auth/callback`, run `npm run issuer:client -w server`. It registers a public client (PKCE, no consent screen) and prints the id for `SANCTUM_OIDC_CLIENT_ID`; leave `SANCTUM_OIDC_CLIENT_SECRET` unset. Each run registers another client.
+- **MCP clients** register themselves (open registration or a metadata document URL). A registration without `application_type` whose redirect URIs are all `http` loopback URIs (`localhost`, `127.0.0.1`, `[::1]`, any port) is registered as `native`; every other registration keeps the OIDC default `web`, which allows only `https` redirects. Access tokens carry only the Sanctum scopes the user approved for the `/mcp` resource.
+- **Client scopes**: an authorization request that names no `scope` is offered only the OIDC scopes plus `context:read`, `context:write` and `recordings:read`, for every client (registered, metadata document or `issuer:client`). While `SANCTUM_MCP_DEFAULT_SCOPES` is unset, the `/mcp` 401 challenge names every MCP scope except `actions:request` and `actions:execute`, and the resource metadata lists every supported scope. Setting `SANCTUM_MCP_DEFAULT_SCOPES=context:read,context:write,recordings:read` makes both stop naming scopes and grants those scopes to tokens that name no Sanctum scope. `actions:request` and `actions:execute` are granted only when a client names them in its authorization request.
+- **Access**: an issuer account alone grants nothing. Its `(issuer, subject)` pair must be linked to a principal with an active membership in `principal_identities`; membership never comes from the email address.
+- **Upgrades**: Better Auth versions are pinned. At startup it logs any difference between its expected schema and the database; an upgrade that needs more than new tables, indexes or columns is its own reviewed task.
 
 ## Cloudflare
 

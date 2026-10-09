@@ -39,6 +39,11 @@ export async function createDatabaseOn(adminUrl: string): Promise<TestDatabase &
 /** A database on the Vitest run's shared server (Vitest is imported lazily so other processes can load this module). */
 export const createTestDatabase = async () => createDatabaseOn((await import('vitest')).inject('mysqlAdminUrl'));
 
+/** A fresh database dropped with the scope; migrate it with `migrateDatabase`. */
+export const freshDatabase = Effect.acquireRelease(Effect.promise(createTestDatabase), database => Effect.promise(database.drop));
+
+export const migrateDatabase = (database: TestDatabase) => Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql));
+
 /** Runs `use` against a fresh database (optionally fully migrated) and drops it afterwards. */
 export const withDatabase = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>, options: { readonly migrated?: boolean } = {}) =>
   Effect.acquireUseRelease(
