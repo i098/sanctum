@@ -18,6 +18,9 @@ const answer = JSON.stringify({
 
 const close = (meeting_id: string) => Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE meetings SET state = 'closed', ended_at = UTC_TIMESTAMP(6) WHERE id = ${meeting_id}`);
 
+const meetingTitle = (meeting_id: string) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ title: string | null }>`SELECT title FROM meetings WHERE id = ${meeting_id}`);
+
 const processingNotes = (meeting_id: string) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql<{ notes: string }>`SELECT JSON_UNQUOTE(JSON_EXTRACT(processing, '$.notes')) AS notes FROM meetings WHERE id = ${meeting_id}`);
 
@@ -40,15 +43,19 @@ layer(Layer.merge(migratedDatabase, fixtureLlm([answer, answer])), { timeout: 12
       expect(notes).toMatchObject({ revision: 1, boundary_revision: 1, title: 'Pilot review', sections: [{ heading: 'Decisions' }, { heading: 'Next steps' }] });
       expect(notes.sections[1]!.points[0]!.sources[0]).toMatchObject({ start_ms: 65_000, end_ms: 70_000 });
       expect(yield* processingNotes(meeting.meeting_id)).toEqual([{ notes: 'complete' }]);
+      // Review and the listening header read meetings.title: the notes title names the untitled meeting.
+      expect(yield* meetingTitle(meeting.meeting_id)).toEqual([{ title: 'Pilot review' }]);
 
       const exported = yield* exportMeeting(owner!, meeting.meeting_id);
       expect(exported).toMatchObject({ format: 'markdown', notes_revision: 1, filename: `meeting-${meeting.meeting_id}-notes-r1.md` });
       expect(exported.content).toContain('# Pilot review');
       expect(exported.content).toContain('## Next steps\n- Beta ships on Friday. (1:05)');
 
-      // Regeneration after a correction bumps the revision rather than overwriting silently.
+      // Regeneration after a correction bumps the revision rather than overwriting silently, and keeps a title a person set.
+      yield* Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE meetings SET title = 'Board sync' WHERE id = ${meeting.meeting_id}`);
       yield* summarizeNotes(job);
       expect((yield* getMeetingNotes(owner!, meeting.meeting_id)).notes.revision).toBe(2);
+      expect(yield* meetingTitle(meeting.meeting_id)).toEqual([{ title: 'Board sync' }]);
 
       // Another workspace, a missing scope and the device credential see nothing.
       expect((yield* Effect.flip(exportMeeting(outsider!, meeting.meeting_id)))._tag).toBe('NotFound');
