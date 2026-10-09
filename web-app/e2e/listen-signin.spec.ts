@@ -169,6 +169,33 @@ test('WorkOS: a member, or an owner without WorkOS organizations, gets no Team',
   await expect(settings.getByRole('button', { name: 'Team' })).toHaveCount(0);
 });
 
+test('WorkOS: the owner of an unlinked workspace sets up the team, and an admin there gets no Team', async ({ page, context }) => {
+  await context.addCookies([{ name: 'sanctum_csrf', value: 'csrf-fixture', url: 'http://localhost' }]);
+  await fakeWorkosWidgets(page);
+  const signIn: FakeSignIn = { configured: true, workos: true, teamLinked: false, access: { ...ACCESS, role: 'admin', scopes: [...ACCESS.scopes, 'workspace:admin'] } };
+  await openListening(page, signIn);
+  let settings = await openSettings(page);
+  await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet');
+  await page.keyboard.press('Escape');
+
+  let csrf: string | null = null;
+  await page.route('**/api/v1/workspace/team', route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    csrf = route.request().headers()['x-csrf-token'] ?? null;
+    signIn.teamLinked = true;
+    return route.fulfill({ json: { linked: true } });
+  });
+  signIn.access = { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] };
+  await page.reload();
+  settings = await openSettings(page);
+  await settings.getByRole('button', { name: 'Team' }).click();
+  const team = page.getByRole('dialog', { name: 'Team' });
+  await expect(team).toContainText('Current members keep their access.');
+  await team.getByRole('button', { name: 'Set up team' }).click();
+  await expect(team.getByRole('region', { name: 'Members' })).toContainText('grace@example.test');
+  expect(csrf).toBe('csrf-fixture');
+});
+
 test('not a member: Settings opens with the issuer and subject for the operator', async ({ page }) => {
   await serveListening(page, { configured: true, access: null });
   await page.goto('/?signin=not_member&issuer=https%3A%2F%2Fexample.authkit.app&subject=user_01FIXTURE');

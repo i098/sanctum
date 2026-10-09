@@ -85,16 +85,19 @@ const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId) =>
     }
   });
 
-/** Upsert: adds the member or reactivates a revoked one with the given role, within the seat limit. */
-export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId; readonly role: WorkspaceRole }) =>
+/**
+ * Upsert: adds the member or reactivates a revoked one with the given role, within the seat limit.
+ * `org_issuer` names the issuer whose organization sync grants it; without one, Sanctum owns it.
+ */
+export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly principal_id: PrincipalId; readonly role: WorkspaceRole; readonly org_issuer?: string }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
-        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
-          VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, UTC_TIMESTAMP(6)) AS new
-          ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL`;
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, org_issuer, created_at)
+          VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, UTC_TIMESTAMP(6)) AS new
+          ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL, org_issuer = new.org_issuer`;
         return yield* bumpPermissionRevision(input.workspace_id);
       }),
     );

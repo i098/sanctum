@@ -1,7 +1,8 @@
 /**
  * Hosted Team overlay (sign-in plan W2): the signed-in owner's or admin's WorkOS profile and the
- * workspace's members (invite, remove, change role) in the WorkOS widgets. Settings loads this
- * module when Team first opens, so the listening page never ships the widgets, Radix Themes or their styles.
+ * workspace's members (invite, remove, change role) in the WorkOS widgets, or "Set up team" for the
+ * owner of a workspace that has no WorkOS organization yet. Settings loads this module when Team
+ * first opens, so the listening page never ships the widgets, Radix Themes or their styles.
  */
 import '@radix-ui/themes/styles.css';
 import '@workos-inc/widgets/styles.css';
@@ -19,6 +20,30 @@ const THEME: NonNullable<WorkOsWidgetsProps['theme']> = {
   hasBackground: false,
   fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
 };
+
+/** The owner links a workspace created before WorkOS; `onLinked` re-reads sign-in, which then loads the widgets. */
+export function SetUpTeam({ onLinked }: { onLinked: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const setUp = () => {
+    setBusy(true);
+    setFailure(null);
+    post('/api/v1/workspace/team').then(onLinked, (error: Error) => {
+      setFailure(error.message);
+      setBusy(false);
+    });
+  };
+  return (
+    <div className="listen-panel listen-confirm">
+      <p>This workspace has no team yet. Set up team creates it in WorkOS with you as the owner, so you can invite members and change their roles here.</p>
+      <p>Current members keep their access. Each one joins the team after accepting your invitation and signing in.</p>
+      <div className="listen-local-actions">
+        <button type="button" data-primary disabled={busy} onClick={setUp}>Set up team</button>
+      </div>
+      {failure && <p role="alert" className="listen-local-gap">{failure}</p>}
+    </div>
+  );
+}
 
 export function TeamWidgets() {
   const [token, setToken] = useState<string | Error | null>(null);

@@ -15,7 +15,7 @@ const tables = Effect.gen(function* () {
 
 describe('migration files', () => {
   it('are numbered, parsed into inspectable steps and create every plan section 07 table', () => {
-    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15]);
+    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]);
     const created = migrations.flatMap(migration => migration.steps.map(step => step.object.table));
     expect(created).toEqual(
       expect.arrayContaining([
@@ -29,7 +29,7 @@ describe('migration files', () => {
 
   it('rejects names and statements the runner cannot inspect after a crash', () => {
     expect(() => parseMigration('1_bad.sql', 'CREATE TABLE a (id INT);')).toThrow(/Invalid migration file name/);
-    expect(() => parseMigration('010_drop.sql', 'DROP TABLE a;')).toThrow(/can be inspected after a crash/);
+    expect(() => parseMigration('010_drop.sql', 'DROP TABLE a;')).toThrow(/idempotent UPDATE steps/);
     expect(() => parseMigration('010_alter.sql', 'ALTER TABLE a ADD COLUMN b INT, ADD COLUMN c INT;')).toThrow(/single ADD COLUMN/);
     const parsed = parseMigration('010_ok.sql', '-- comment\nCREATE TABLE a (id INT);\nCREATE UNIQUE INDEX a_id ON a (id);\nALTER TABLE a ADD COLUMN b VARCHAR(10) NULL;\n');
     expect(parsed.steps.map(step => step.object)).toEqual([{ kind: 'table', table: 'a' }, { kind: 'index', table: 'a', index: 'a_id' }, { kind: 'column', table: 'a', column: 'b' }]);
@@ -71,9 +71,30 @@ describe('migrate against MySQL 8.4', () => {
         yield* sql`DELETE FROM schema_migration_steps WHERE version = ${last.version}`;
         yield* sql`UPDATE schema_migrations SET completed_at = NULL WHERE version = ${last.version}`;
         const report = yield* migrate(migrations);
-        expect(report.applied).toEqual([]);
-        expect(report.adopted).toHaveLength(last.steps.length);
+        expect(report.applied).toHaveLength(last.steps.filter(step => step.object.kind === 'backfill').length);
+        expect(report.adopted).toHaveLength(last.steps.filter(step => step.object.kind !== 'backfill').length);
         expect(yield* pendingMigrations(migrations)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect('backfills the issuer of members already managed by organization sync', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* migrate(migrations.slice(0, -1));
+        yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES ('w-linked', 'Linked', 'UTC', UTC_TIMESTAMP(6)), ('w-free', 'Free', 'UTC', UTC_TIMESTAMP(6))`;
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES ('p-1', 'human', 'One', UTC_TIMESTAMP(6)), ('p-2', 'human', 'Two', UTC_TIMESTAMP(6))`;
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at, revoked_at) VALUES
+          ('w-linked', 'p-1', 'owner', UTC_TIMESTAMP(6), NULL), ('w-linked', 'p-2', 'member', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)), ('w-free', 'p-1', 'owner', UTC_TIMESTAMP(6), NULL)`;
+        yield* sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES ('https://issuer.test', 'org_1', 'w-linked', UTC_TIMESTAMP(6))`;
+        yield* migrate(migrations);
+        const rows = yield* sql<{ workspace_id: string; principal_id: string; org_issuer: string | null }>`SELECT workspace_id, principal_id, org_issuer FROM workspace_members ORDER BY workspace_id, principal_id`;
+        expect(rows).toEqual([
+          { workspace_id: 'w-free', principal_id: 'p-1', org_issuer: null },
+          { workspace_id: 'w-linked', principal_id: 'p-1', org_issuer: 'https://issuer.test' },
+          { workspace_id: 'w-linked', principal_id: 'p-2', org_issuer: null },
+        ]);
       }),
     ),
   );
