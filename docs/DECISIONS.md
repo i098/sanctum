@@ -41,8 +41,8 @@ These secrets and production resources do not belong in this repository.
 
 Accepted: a meeting ends in one of two ways, and both run the same close as `POST /api/v1/meetings/{id}/close` (finalize, recording, notes and memory).
 
-- **End meeting control:** the listening page shows End meeting in its control row while a meeting is open, also while paused. After one confirmation it stops capture and closes the meeting.
-- **Automatic close:** the worker closes an open meeting after 10 minutes with no speech, whether its listener is paused, stopped or silent. The meeting ends at its last speech. The setting is `engineeringDefaults.meetingIdleCloseMs` (default 10 minutes).
+- **End meeting control:** the listening page shows End meeting in its control row while a meeting is open, also while paused. After one confirmation it stops capture and closes the meeting. When the listener has no live epoch, the close seals at the end of its most recently ended epoch that the meeting uses, so final segments still in flight land inside the sealed meeting.
+- **Automatic close:** the worker closes an open meeting that has had no speech for 10 minutes, but only when the listener is quiet and not lagging. Quiet means either that ASR finished 10 minutes of audio past the last speech (silence), or that every epoch of the listener (or its capture group) is paused or stopped for 10 minutes with all audio after the last speech transcribed and uploaded. A provider outage or an upload backlog never closes a meeting. The meeting ends at its last speech. The setting is `engineeringDefaults.meetingIdleCloseMs` (default 10 minutes).
 
 Before this decision, Pause kept a meeting open and the page had no way to close it, so notes, memory and the recording never ran for a page user.
 

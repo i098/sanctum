@@ -36,7 +36,7 @@ With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSU
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime, meeting idle close) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
-The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech, whether its listener is paused, stopped or silent; the close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only MySQL ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
+The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech when ASR finished that much audio past the last speech, or when its listener is paused or stopped for that long with nothing left to transcribe or upload; it never closes while ASR or upload lags. The close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only MySQL ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
 
 ## Local stack
 
