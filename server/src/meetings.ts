@@ -255,23 +255,26 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
   });
 
 /**
- * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence, which never reaches past
- * what the server holds of that epoch (its watermark, or the last committed chunk). It joins the closed meeting while that
- * is closing (when the audio is not from before the meeting started) and is dropped after; it never opens a meeting.
- * Returns whether the segment was such audio.
+ * Longest stretch of audio the page can have captured that the server has not yet received at End: the page's socket
+ * buffer holds at most 192 000 bytes (6 s of 16 kHz PCM16) and the server persists its watermark once a second.
+ */
+const END_FENCE_SLACK_SECONDS = 7;
+
+/**
+ * Audio of an End from before the pause: a final of the fenced epoch that starts before the fence and not before the
+ * closed meeting started. It joins the closed meeting while that is closing and is dropped after; it never opens a
+ * meeting. Returns whether the segment was such audio.
  */
 const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { source } = segment;
-    const [fenced] = yield* sql<{ id: MeetingId }>`SELECT m.id FROM meetings m JOIN capture_epochs e ON e.workspace_id = m.workspace_id AND e.id = m.end_fence_epoch_id
-      WHERE m.workspace_id = ${workspace_id} AND m.end_fence_epoch_id = ${source.epoch_id}
-        AND LEAST(m.end_fence_sample, GREATEST(e.live_sample_end, COALESCE((SELECT MAX(c.sample_start + c.sample_count) FROM recording_chunks c
-          WHERE c.workspace_id = e.workspace_id AND c.epoch_id = e.id AND c.upload_state = 'committed'), 0))) > ${source.sample_start}
-      ORDER BY m.end_fence_sample LIMIT 1`;
+    const [fenced] = yield* sql<{ id: MeetingId }>`SELECT id FROM meetings
+      WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start} ORDER BY end_fence_sample LIMIT 1`;
     if (fenced === undefined) return false;
     const closed = yield* selectMeeting(workspace_id, fenced.id, true);
-    if (closed._tag === 'Some' && closed.value.state === 'closing' && sampleMs(epoch, source.sample_start) >= Date.parse(closed.value.started_at)) {
+    if (closed._tag === 'None' || sampleMs(epoch, source.sample_start) < Date.parse(closed.value.started_at)) return false;
+    if (closed.value.state === 'closing') {
       const end = yield* claimSource(closed.value, source);
       yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
     }
@@ -515,9 +518,16 @@ export const closeMeeting = (access: AccessScope, meeting_id: MeetingId, fence?:
       Effect.gen(function* () {
         const before = yield* selectMeeting(access.workspace_id, meeting_id);
         if (before._tag === 'None' || before.value.listener_id === null) return;
-        if (fence !== undefined) {
-          const [listener] = yield* sql<{ principal_id: PrincipalId }>`SELECT principal_id FROM listeners WHERE workspace_id = ${access.workspace_id} AND id = ${before.value.listener_id}`;
-          if (listener?.principal_id !== access.principal.id) return yield* new Forbidden({ message: 'Only the principal that owns the listener can end its meeting' });
+        const fenced = fence === undefined ? undefined : (yield* sql<{ listener_id: string; principal_id: PrincipalId; capture_group_id: string | null; sample_rate: number; overlaps: number; received: string }>`SELECT e.listener_id, l.principal_id, l.capture_group_id, e.sample_rate,
+            (e.ended_at IS NULL OR e.ended_at >= m.started_at) AS overlaps,
+            GREATEST(e.live_sample_end, COALESCE((SELECT MAX(c.sample_start + c.sample_count) FROM recording_chunks c
+              WHERE c.workspace_id = e.workspace_id AND c.epoch_id = e.id AND c.upload_state = 'committed'), 0)) AS received
+          FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id JOIN meetings m ON m.id = ${meeting_id}
+          WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${fence!.epoch_id}`)[0];
+        if (fenced !== undefined) {
+          const sameGroup = before.value.capture_group_id !== null && fenced.capture_group_id === before.value.capture_group_id;
+          if (fenced.listener_id !== before.value.listener_id && !sameGroup) return yield* new NotFound({ message: 'Capture epoch not found' });
+          if (fenced.principal_id !== access.principal.id) return yield* new Forbidden({ message: 'Only the principal that owns the listener can end its meeting' });
         }
         if (!OPEN_STATES.includes(before.value.state)) return;
         yield* lockCaptureKey({ workspace_id: access.workspace_id, listener_id: before.value.listener_id, capture_group_id: before.value.capture_group_id });
@@ -536,10 +546,9 @@ export const closeMeeting = (access: AccessScope, meeting_id: MeetingId, fence?:
           cue: { evidence: ['explicit_close'], reason: `closed by ${access.principal.display_name}`, uncertainty: 0 },
           actor: access.principal.id,
         });
-        if (fence !== undefined) {
-          const [epoch] = yield* sql<{ listener_id: string }>`SELECT listener_id FROM capture_epochs WHERE workspace_id = ${access.workspace_id} AND id = ${fence.epoch_id}`;
-          if (epoch !== undefined && epoch.listener_id !== row.value.listener_id) return yield* new NotFound({ message: 'Capture epoch not found' });
-          yield* sql`UPDATE meetings SET end_fence_epoch_id = ${fence.epoch_id}, end_fence_sample = ${fence.sample} WHERE id = ${meeting_id}`;
+        if (fence !== undefined && fenced !== undefined && Number(fenced.overlaps) === 1) {
+          const sample = Math.min(fence.sample, Number(fenced.received) + END_FENCE_SLACK_SECONDS * fenced.sample_rate);
+          yield* sql`UPDATE meetings SET end_fence_epoch_id = ${fence.epoch_id}, end_fence_sample = ${sample} WHERE id = ${meeting_id}`;
         }
       }),
     );

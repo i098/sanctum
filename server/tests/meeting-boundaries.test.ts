@@ -455,7 +455,7 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
-  it.effect('a fence past what the server holds does not reach beyond it, so later speech still forms a meeting', () =>
+  it.effect('a fence past what the server holds is stored clamped, so speech beyond the clamp still forms a meeting', () =>
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -464,20 +464,76 @@ describe('automatic meeting lifecycle', () => {
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
         yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
         yield* closeMeeting(device, id, { epoch_id: epoch, sample: 10_000 * RATE });
-        yield* hear(listener, epoch, 45, 50, "good morning everyone, let's go over the hiring plan");
+        expect(yield* sql`SELECT end_fence_sample FROM meetings WHERE id = ${id}`).toEqual([{ end_fence_sample: String(47 * RATE) }]);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${60 * RATE} WHERE id = ${epoch}`;
+        yield* hear(listener, epoch, 50, 55, "good morning everyone, let's go over the hiring plan");
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing', 'provisional']);
       }),
       { migrated: true },
     ),
   );
 
-  it.effect('End on an epoch the server has not registered yet still closes the meeting', () =>
+  it.effect('End on an epoch the server has not registered yet closes the meeting and stores no fence', () =>
     withDatabase(
       Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const { device, listener, epoch } = yield* setup;
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
         expect(yield* closeMeeting(device, id, { epoch_id: CaptureEpochId.make(randomUUID()), sample: 5 * RATE })).toMatchObject({ state: 'closing' });
+        expect(yield* sql`SELECT end_fence_epoch_id, end_fence_sample FROM meetings WHERE id = ${id}`).toEqual([{ end_fence_epoch_id: null, end_fence_sample: null }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('an epoch of the listener that ended before the meeting started gets no fence', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { device, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
+        const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        const earlier = yield* seedEpoch(listener, '2026-09-28 15:00:00.000000');
+        yield* sql`UPDATE capture_epochs SET ended_at = '2026-09-28 15:30:00.000000', end_reason = 'pause' WHERE id = ${earlier}`;
+        expect(yield* closeMeeting(device, id, { epoch_id: earlier, sample: 5 * RATE })).toMatchObject({ state: 'closing' });
+        expect(yield* sql`SELECT end_fence_epoch_id, end_fence_sample FROM meetings WHERE id = ${id}`).toEqual([{ end_fence_epoch_id: null, end_fence_sample: null }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('a meeting of a capture group ends with the fence of the epoch another listener of the group captured', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [, phone, laptop] = yield* seedWorkspace('Group', ['owner', 'device', 'device']);
+        const group = yield* seedGroup(phone!.workspace_id);
+        const first = yield* seedListener(phone!, { group });
+        const second = yield* seedListener(laptop!, { group });
+        const firstEpoch = yield* seedEpoch(first);
+        const secondEpoch = yield* seedEpoch(second, '2026-09-28 16:01:00.000000');
+        yield* hear(first, firstEpoch, 0, 30, 'please send the summary to the whole team');
+        const id = MeetingId.make((yield* meetingsOf(first.workspace_id))[0]!.id);
+        yield* sql`UPDATE meetings SET visibility = 'workspace' WHERE id = ${id}`;
+        expect(yield* closeMeeting(laptop!, id, { epoch_id: secondEpoch, sample: 5 * RATE })).toMatchObject({ state: 'closing' });
+        expect(yield* sql`SELECT end_fence_epoch_id FROM meetings WHERE id = ${id}`).toEqual([{ end_fence_epoch_id: secondEpoch }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
+  it.effect('a reconciled final from before the closed meeting started is placed normally, not fenced away', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { device, listener, epoch } = yield* setup;
+        yield* hear(listener, epoch, 100, 130, 'this meeting starts well after capture began');
+        const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${140 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting(device, id, { epoch_id: epoch, sample: 140 * RATE });
+        yield* hear(listener, epoch, 10, 15, "good morning everyone, let's go over the hiring plan");
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state).sort()).toEqual(['closing', 'provisional']);
       }),
       { migrated: true },
     ),
