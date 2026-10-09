@@ -8,6 +8,7 @@ import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
 
 // The WorkOS widgets load only when an owner or admin first opens Team (Dialog renders its children only while open).
 const TeamWidgets = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.TeamWidgets })));
+const SetUpTeam = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.SetUpTeam })));
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -134,7 +135,7 @@ function SignInRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInCh
 }
 
 /** Hosted owners and admins open Team (the WorkOS widgets) from here; the dialog shows over Settings. */
-function WorkspaceRow({ signIn }: { signIn: SignInState }) {
+function WorkspaceRow({ signIn, onSignInChange }: { signIn: SignInState; onSignInChange: () => void }) {
   const [team, setTeam] = useState(false);
   if (signIn.status !== 'signed_in' || !signIn.workosTeam) return WORKSPACE[signIn.status];
   return (
@@ -142,7 +143,7 @@ function WorkspaceRow({ signIn }: { signIn: SignInState }) {
       <span>{WORKSPACE.signed_in}</span>
       <span className="listen-signin-actions"><button type="button" onClick={() => setTeam(true)}>Team</button></span>
       <Dialog title="Team" open={team} onClose={() => setTeam(false)}>
-        <Suspense><TeamWidgets /></Suspense>
+        <Suspense>{signIn.workosTeam === 'setup' ? <SetUpTeam onLinked={onSignInChange} /> : <TeamWidgets />}</Suspense>
       </Dialog>
     </>
   );
@@ -152,7 +153,7 @@ function WorkspaceRow({ signIn }: { signIn: SignInState }) {
 export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange }: SettingsProps) {
   const rows: ReadonlyArray<readonly [string, ReactNode]> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
-    ['Workspace', <WorkspaceRow signIn={signIn} />],
+    ['Workspace', <WorkspaceRow signIn={signIn} onSignInChange={onSignInChange} />],
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', MICROPHONE[permission]],
     ['Integrations', 'Unavailable: integrations are not connected yet'],

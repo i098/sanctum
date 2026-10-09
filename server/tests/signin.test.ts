@@ -653,9 +653,88 @@ describe('WorkOS widget token', () => {
       expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toMatchObject({ workos_organizations: false });
       const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
       const session = yield* Effect.provide(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }), db);
-      const response = yield* Effect.promise(() =>
-        get(`${base}/api/v1/workspace/widget-token`, `sanctum_session=${session.token}`, { method: 'POST', headers: { 'x-csrf-token': session.csrf_token } }));
-      expect(response.status).toBe(503);
+      for (const [method, path] of [['POST', 'widget-token'], ['GET', 'team'], ['POST', 'team']]) {
+        const response = yield* Effect.promise(() =>
+          get(`${base}/api/v1/workspace/${path}`, `sanctum_session=${session.token}`, { method: method!, headers: { 'x-csrf-token': session.csrf_token } }));
+        expect(response.status).toBe(503);
+      }
+    }),
+  );
+});
+
+describe('WorkOS Set up team', () => {
+  it.scoped('links an existing workspace once for its owner, and existing members keep access until WorkOS grants and removes them', () =>
+    Effect.gen(function* () {
+      const { issuer, client } = configured();
+      const workos = fakeWorkos();
+      const { base, db } = yield* withServer(client, workos.layer(ISSUER, false));
+      const [owner, admin, member] = yield* Effect.provide(seedWorkspace('Acme', ['owner', 'admin', 'member']), db);
+      const workspace_id = owner!.workspace_id;
+      const open = (access: AccessScope) => Effect.provide(openSession({ workspace_id, principal_id: access.principal.id }), db);
+      const team = (session: { token: string; csrf_token: string }, method: 'GET' | 'POST') =>
+        Effect.promise(async () => {
+          const response = await get(`${base}/api/v1/workspace/team`, `sanctum_session=${session.token}`, { method, headers: { 'x-csrf-token': session.csrf_token } });
+          return { status: response.status, body: (await response.json()) as { linked?: boolean; message?: string } };
+        });
+      /** `role`, `role (WorkOS)` when WorkOS granted it, or `revoked`. */
+      const membership = (access: AccessScope) =>
+        Effect.provide(
+          Effect.flatMap(SqlClient.SqlClient, sql =>
+            sql<{ role: string; active: number; org_issuer: string | null }>`SELECT role, revoked_at IS NULL AS active, org_issuer FROM workspace_members
+              WHERE workspace_id = ${workspace_id} AND principal_id = ${access.principal.id}`),
+          db,
+        ).pipe(Effect.map(([row]) => (Number(row!.active) !== 1 ? 'revoked' : row!.org_issuer === ISSUER ? `${row!.role} (WorkOS)` : row!.role)));
+      /** One `workos.sync` pass on the scheduled row. */
+      const sync = Effect.provide(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const [job] = yield* sql<{ id: string; workspace_id: WorkspaceId }>`SELECT id, workspace_id FROM jobs WHERE kind = 'workos.sync' AND status = 'pending'`;
+          const claimed = { id: JobId.make(job!.id), workspace_id: job!.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null, source_revision: null, attempt: 1, lease_generation: 1 } as const;
+          return yield* syncWorkosEvents(claimed).pipe(Effect.provide(workos.layer(ISSUER, false)));
+        }),
+        db,
+      );
+      const ownerSession = yield* open(owner!);
+      expect(yield* team(ownerSession, 'GET')).toEqual({ status: 200, body: { linked: false } });
+
+      // A login-link owner first connects WorkOS sign-in; admins and members are refused before WorkOS is asked.
+      expect(yield* team(ownerSession, 'POST')).toMatchObject({ status: 404, body: { message: 'Your account has no WorkOS sign-in yet. Use Connect sign-in first.' } });
+      yield* Effect.provide(identify(admin!), db);
+      expect(yield* team(yield* open(admin!), 'POST')).toMatchObject({ status: 403, body: { message: 'Only the workspace owner can set up the team' } });
+      expect(yield* team(yield* open(member!), 'POST')).toMatchObject({ status: 403, body: { required_scope: 'workspace:admin' } });
+      const memberSubject = yield* Effect.provide(identify(member!), db);
+      const ownerSubject = yield* Effect.provide(identify(owner!), db);
+      expect(workos.requests).toEqual([]);
+
+      // WorkOS fails after creating the organization; the retry reuses it, and a repeat creates nothing.
+      workos.failOnce.add('POST /user_management/organization_memberships');
+      expect(yield* team(ownerSession, 'POST')).toMatchObject({ status: 503, body: { message: 'WorkOS did not set up the team. Try again.' } });
+      expect(yield* team(ownerSession, 'POST')).toEqual({ status: 200, body: { linked: true } });
+      expect(yield* team(ownerSession, 'POST')).toEqual({ status: 200, body: { linked: true } });
+      expect(yield* team(ownerSession, 'GET')).toEqual({ status: 200, body: { linked: true } });
+      expect(workos.organizations).toEqual([{ id: 'org_1', name: 'Acme', external_id: `sanctum-workspace:${workspace_id}` }]);
+      expect(workos.memberships).toEqual([{ user_id: ownerSubject, organization_id: 'org_1', status: 'active', role: { slug: 'owner' } }]);
+      expect(workos.requests.filter(request => !request.startsWith('GET '))).toEqual(['POST /organizations', 'POST /user_management/organization_memberships', 'POST /user_management/organization_memberships']);
+      expect(yield* Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`SELECT org_id FROM workspace_orgs WHERE workspace_id = ${workspace_id}`), db)).toEqual([{ org_id: 'org_1' }]);
+      // The widgets now load for the owner.
+      const token = yield* Effect.promise(() =>
+        get(`${base}/api/v1/workspace/widget-token`, `sanctum_session=${ownerSession.token}`, { method: 'POST', headers: { 'x-csrf-token': ownerSession.csrf_token } }).then(r => r.json()));
+      expect(token).toEqual({ token: `widget:${ownerSubject}:org_1` });
+
+      // Only the owner moved to WorkOS; the others keep their Sanctum memberships after a sync pass and the member's own AuthKit sign-in.
+      expect([yield* membership(owner!), yield* membership(admin!), yield* membership(member!)]).toEqual(['owner (WorkOS)', 'admin', 'member']);
+      expect(yield* sync).toMatchObject({ status: 'succeeded' });
+      const signedIn = yield* Effect.promise(() => signIn(base, issuer, { sub: memberSubject }));
+      expect(signedIn.headers.get('location')).toBe('/');
+      expect([yield* membership(admin!), yield* membership(member!)]).toEqual(['admin', 'member']);
+
+      // Accepting the invitation makes the membership WorkOS's, so a removal there now revokes it.
+      workos.setMembership(memberSubject, 'org_1', 'active', 'member');
+      yield* Effect.promise(() => signIn(base, issuer, { sub: memberSubject }));
+      expect(yield* membership(member!)).toBe('member (WorkOS)');
+      workos.deleteMembership(memberSubject, 'org_1');
+      expect(yield* sync).toMatchObject({ status: 'succeeded' });
+      expect([yield* membership(owner!), yield* membership(admin!), yield* membership(member!)]).toEqual(['owner (WorkOS)', 'admin', 'revoked']);
     }),
   );
 });

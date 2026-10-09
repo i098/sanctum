@@ -126,7 +126,7 @@ function installSpeech(fake: boolean): void {
   Object.defineProperty(window, 'webkitSpeechRecognition', { value: FakeRecognition, configurable: true });
 }
 
-/** What the fake server says about sign-in: `/auth/config` and `GET /api/v1/session`. */
+/** What the fake server says about sign-in: `/auth/config`, `GET /api/v1/session` and `GET /api/v1/workspace/team`. */
 export interface FakeSignIn {
   /** `'unavailable'` answers `/auth/config` with a 503. */
   configured: boolean | 'unavailable';
@@ -136,6 +136,8 @@ export interface FakeSignIn {
   selfServe?: boolean;
   /** `workos_organizations` in `/auth/config`: WorkOS holds the team, so owners and admins get Team. */
   workos?: boolean;
+  /** Whether the workspace has its WorkOS organization (default true); without one only the owner gets Team, to set it up. */
+  teamLinked?: boolean;
 }
 
 /** `FakeSignIn` is read on every request, so a spec may change it mid-test. */
@@ -161,6 +163,9 @@ export async function serveListening(page: Page, options: ListenOptions = {}): P
   await page.route('**/api/v1/session', route => route.fulfill(options.access
     ? { json: options.access }
     : { status: 401, json: { _tag: 'Unauthenticated', code: 'unauthenticated', message: 'No credentials' } }));
+  await page.route('**/api/v1/workspace/team', route => route.request().method() === 'GET'
+    ? route.fulfill({ json: { linked: options.teamLinked ?? true } })
+    : route.fallback());
 }
 
 const MEMBER = { emailVerified: true, profilePictureUrl: null, lastActivityAt: '2026-10-08T15:00:00.000Z', createdAt: '2026-10-01T09:00:00.000Z', isDirectoryManaged: false };

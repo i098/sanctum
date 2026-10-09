@@ -19,6 +19,19 @@
   margin-top: 0;
 }
 
+/*
+ * Team covers Settings at every width: while Team is open, the Settings box behind it is hidden
+ * and only its backdrop stays, so the page dims as before. Team itself (a DOM child) stays visible.
+ */
+.listen-dialog:has(.listen-dialog[open] > .listen-team) {
+  visibility: hidden;
+}
+
+.listen-dialog:has(.listen-dialog[open] > .listen-team)::backdrop,
+.listen-dialog:has(> .listen-team) {
+  visibility: visible;
+}
+
 @media (max-width: 640px) {
   /* Team takes the whole phone screen, so the members table and profile get its full width. */
   .listen-dialog:has(> .listen-team) {

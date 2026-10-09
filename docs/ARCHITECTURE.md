@@ -66,6 +66,7 @@ Kernel added `browser_sessions.workspace_id` to `001_initial` and `jobs.rearmed`
 - `store.ts`: `nextContextSeq(workspace_id): Effect<number, SqlError, R>` locks the workspace row; call inside the change's transaction.
 - `store.ts`: `bumpPermissionRevision(workspace_id): Effect<number, SqlError, R>`.
 - `store.ts`: `workspaceForOrg(input: { issuer; org_id }): Effect<Option<WorkspaceId>, SqlError, R>` and `linkWorkspaceOrg(input: { workspace_id; issuer; org_id }): Effect<void, SqlError, R>` (idempotent; a clash with another link is a defect) over migration `012_workspace_orgs`.
+- `store.ts`: `addMember(input: { workspace_id; principal_id; role; org_issuer? })` stores `workspace_members.org_issuer` (migration `016_member_org_issuer`): the issuer whose organization sync granted the membership, NULL when Sanctum did; org sync revokes only memberships its issuer granted.
 - `cache.ts`: `scopedCacheKey(access, ...parts: ReadonlyArray<string | number>): string` including principal, permission and source revisions.
 - contracts: `AgentsApi` with `createAgent`, `listAgents`, `revokeCredential`.
 
@@ -190,7 +191,7 @@ Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts
 
 Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS suites in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
 
-- `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
+- `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `linkExistingWorkspace(settings, workspace_id, identity)` for Team's "Set up team"; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
 - `WorkosOrganizations` tag (`WorkosOrganizationsFromEnv`), provided by main.ts and worker.ts.
 
 ### workspace deletion
@@ -205,8 +206,8 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 
 Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-app/src/pages/listen/{WorkosTeam.tsx,team.css}`, `web-app/e2e/team-csp.spec.ts` and the widget-token suite in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
 
-- `widget-token.ts`: `WidgetTokenLive` mounts `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
-- `/auth/config` reports `workos_organizations`; SettingsDialog lazy-loads `WorkosTeam.tsx` only for owners and admins on such a server.
+- `widget-token.ts`: `WidgetTokenLive` mounts `GET`/`POST /api/v1/workspace/team` (link status; owner-only "Set up team") and `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
+- `/auth/config` reports `workos_organizations`; SettingsDialog lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server.
 - The `style-src` hashes in `web.ts` cover the widgets' fixed `<style>` elements; `team-csp.spec.ts` fails when a dependency bump changes one.
 
 ## Hot files

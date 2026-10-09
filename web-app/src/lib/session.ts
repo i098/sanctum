@@ -25,11 +25,13 @@ export const SIGN_IN_URL = '/auth/login?return_to=/';
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
  * come from an operator-seeded `browser_sessions` row. A server without the route counts as not configured.
- * `workosTeam`: WorkOS organizations hold the workspace's team (hosted) and the caller is an owner or admin, so Settings offers Team.
+ * `workosTeam`: WorkOS organizations hold the hosted team. `linked`: the workspace has its WorkOS
+ * organization and the caller is an owner or admin, so Settings offers Team; `setup`: it has none
+ * yet and the caller is its owner, so Team offers "Set up team"; false: no Team.
  * `selfServe`: a signed-in user without a membership may create a workspace.
  */
 export type SignInState =
-  | { status: 'signed_in'; access: AccessScope; issuer: boolean; workosTeam: boolean }
+  | { status: 'signed_in'; access: AccessScope; issuer: boolean; workosTeam: 'linked' | 'setup' | false }
   | { status: 'signed_out'; selfServe: boolean }
   | { status: 'checking' | 'unconfigured' | 'unavailable' };
 
@@ -56,11 +58,24 @@ async function session(client: SanctumClient): Promise<AccessScope | 'signed_out
   }
 }
 
+/** `workosTeam` for an owner or admin on a WorkOS server; a failed read offers no Team. */
+async function workosTeam(access: AccessScope): Promise<'linked' | 'setup' | false> {
+  if (!access.scopes.includes('workspace:admin')) return false;
+  try {
+    const response = await fetch('/api/v1/workspace/team', { headers: { accept: 'application/json' } });
+    if (!response.ok) return false;
+    if ((await response.json()).linked === true) return 'linked';
+    return access.role === 'owner' && 'setup';
+  } catch {
+    return false;
+  }
+}
+
 export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   const [issuer, current] = await Promise.all([configured(), session(client)]);
   if (typeof current === 'object') {
-    const workosTeam = typeof issuer === 'object' && issuer.workos && current.scopes.includes('workspace:admin');
-    return { status: 'signed_in', access: current, issuer: issuer !== false, workosTeam };
+    const team = typeof issuer === 'object' && issuer.workos ? await workosTeam(current) : false;
+    return { status: 'signed_in', access: current, issuer: issuer !== false, workosTeam: team };
   }
   if (current === 'unavailable' || issuer === 'unavailable') return { status: 'unavailable' };
   return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
