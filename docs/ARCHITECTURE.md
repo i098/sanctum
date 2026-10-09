@@ -84,8 +84,8 @@ Owns `web-app/src/lib/capture/{controller,permissions,microphone,recorder,record
 
 Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,ReviewDialog.tsx,InputPicker.tsx,input-level.ts}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
 
-- `Dialog.tsx`: `Dialog({ title, open, onClose, children })` with focus trap, Escape and focus return; AgentsDialog and Settings reuse it.
-- `InputPicker.tsx`: `InputPicker({ engine, check? })`, the microphone choice (through `CaptureView.chooseInput`); only with `check` does it also test the chosen input for sound while capture is stopped or paused; `input-level.ts`: `useInputLevel(deviceId)`, the live level and dead-input state of one input outside capture. Settings and the silent-input warning use the picker, and only Settings sets `check`; the onboarding mic step (branch `fm/sanctum-onboarding`) is the intended second consumer of both. The dead-input floor, threshold and run rule (`SILENT_PEAK`, `SILENT_SECONDS`, `deadRun`) live once in capture's `microphone.ts`, shared by the capture engine and the check.
+- `Dialog.tsx`: `Dialog({ title, open, onClose, children, closeLabel? })` with focus trap, Escape and focus return; AgentsDialog, Settings and the welcome (`closeLabel` Skip) reuse it.
+- `InputPicker.tsx`: `InputPicker({ engine, check? })`, the microphone choice (through `CaptureView.chooseInput`); only with `check` does it also test the chosen input for sound while capture is stopped or paused; `InputCheckText({ input })` is that test's line for one `useInputLevel` reading; `input-level.ts`: `useInputLevel(deviceId)`, the live level and dead-input state of one input outside capture. Settings and the silent-input warning use the picker, and only Settings sets `check`; the welcome's microphone step uses the picker without `check` and draws its level bar and `InputCheckText` from one `useInputLevel` reading. The dead-input floor, threshold and run rule (`SILENT_PEAK`, `SILENT_SECONDS`, `deadRun`) live once in capture's `microphone.ts`, shared by the capture engine and the check.
 - `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.
 - `rails.ts`: `startTranscriptRail(lines, subscribeTranscript)` and `startActionFeed(feed, subscribeActions)`, the kiosk's side live updates.
 - Imports only `getCaptureEngine`, `subscribeTranscript`, `subscribeActions`, view.ts types and `microphone.ts` (light: no recorder) from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
@@ -220,6 +220,13 @@ Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-a
 - `widget-token.ts`: `WidgetTokenLive` mounts `GET`/`POST /api/v1/workspace/team` (link status; owner-only "Set up team") and `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
 - `/auth/config` reports `workos_organizations`; SettingsDialog lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server.
 - The `style-src` hashes in `web.ts` cover the widgets' fixed `<style>` elements; `team-csp.spec.ts` fails when a dependency bump changes one.
+
+### onboarding (first-run welcome)
+
+Owns `server/src/onboarding.ts`, migration `020_onboarding`, `OnboardingApi` in contracts `onboarding.ts`, `server/tests/onboarding.test.ts`, `web-app/src/pages/listen/Welcome.tsx` and `web-app/e2e/listen-welcome.spec.ts`.
+
+- `OnboardingApi` is website only (`OpenApi.Exclude`, so not in the SDKs or MCP): `GET`/`POST /api/v1/onboarding` read and set `principals.onboarded_at` with the workspace name, and `POST /api/v1/workspace/name` renames the workspace for `workspace:admin`.
+- `TeamButton` in SettingsDialog.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) for both Settings and the welcome; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
 
 ## Hot files
 

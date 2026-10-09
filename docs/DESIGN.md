@@ -91,6 +91,9 @@ Signed out, an outlined Sign in to listen button replaces the helper line under 
 Both sign-in links return to `/?signin=ok`, where a signed-in session shows "Signed in as <name>" (the email when the issuer gave no name) under the helper line until the next load, even when the issuer redirects back at once; Settings keeps showing the identity.
 A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
 With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open a dialog over Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
+A person's first signed-in visit opens Welcome to Sanctum over the listening view, on the Settings tokens and rows: one step at a time with Back and Next, focus on each step's heading, and Skip in the header (and Escape) at every step.
+The steps are what Sanctum records and who sees it; a microphone check (permission, the input picker and a level meter of a preview stream that is never recorded, saying so after 3 s without any sound); the workspace name, which owners and admins rename there, with the server's Team (Invite teammates, or Set up team for the owner of an unlinked hosted workspace); and Start listening, which closes it and starts capture.
+Skipping or finishing is stored for the person on the server, so the welcome does not open again on any device; Settings → Welcome → Show welcome again opens it.
 Keep controls keyboard-accessible, trap focus correctly in dialogs, and return focus on close.
 
 ## Acceptance

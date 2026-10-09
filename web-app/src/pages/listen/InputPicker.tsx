@@ -14,14 +14,18 @@ const CHECK: Record<InputLevel['state'], string> = {
   silent: 'This input is sending no sound.',
 };
 
-/** Before listening, says whether the chosen input hears anything, so a dead one is found before a meeting. */
-function Probe({ deviceId }: { deviceId: string | null }) {
-  const { state, issue } = useInputLevel(deviceId);
+/** Whether the input hears anything, from one `useInputLevel` reading; the welcome draws its level from the same reading. */
+export function InputCheckText({ input }: { input: InputLevel }) {
   return (
-    <span className="listen-input-check" data-state={issue ? 'silent' : state}>
-      {issue ? 'This input cannot be opened.' : CHECK[state]}
+    <span className="listen-input-check" data-state={input.issue ? 'silent' : input.state}>
+      {input.issue ? 'This input cannot be opened.' : CHECK[input.state]}
     </span>
   );
+}
+
+/** Before listening, says whether the chosen input hears anything, so a dead one is found before a meeting. */
+function Probe({ deviceId }: { deviceId: string | null }) {
+  return <InputCheckText input={useInputLevel(deviceId)} />;
 }
 
 function InputCheck({ deviceId, listener }: { deviceId: string | null; listener: ListenerState }) {

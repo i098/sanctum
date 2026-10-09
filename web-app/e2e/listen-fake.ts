@@ -140,6 +140,8 @@ export interface FakeSignIn {
   workos?: boolean;
   /** Whether the workspace has its WorkOS organization (default true); without one only the owner gets Team, to set it up. */
   teamLinked?: boolean;
+  /** The welcome's server state; finishing, skipping and renaming change it in place. Absent: the routes fall through and no welcome opens. */
+  onboarding?: { completed: boolean; workspace_name: string };
 }
 
 /** `FakeSignIn` is read on every request, so a spec may change it mid-test. */
@@ -168,6 +170,12 @@ export async function serveListening(page: Page, options: ListenOptions = {}): P
   await page.route('**/api/v1/workspace/team', route => route.request().method() === 'GET'
     ? route.fulfill({ json: { linked: options.teamLinked ?? true } })
     : route.fallback());
+  await page.route(/\/api\/v1\/(onboarding|workspace\/name)$/, route => {
+    const state = options.onboarding;
+    if (state === undefined) return route.fallback();
+    if (route.request().method() === 'POST') Object.assign(state, route.request().url().endsWith('/onboarding') ? { completed: true } : { workspace_name: route.request().postDataJSON().name.trim() });
+    return route.fulfill({ json: state });
+  });
 }
 
 const MEMBER = { emailVerified: true, profilePictureUrl: null, lastActivityAt: '2026-10-08T15:00:00.000Z', createdAt: '2026-10-01T09:00:00.000Z', isDirectoryManaged: false };

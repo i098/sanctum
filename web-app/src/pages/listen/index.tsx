@@ -12,9 +12,10 @@ import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from
 import { ReviewDialog } from './ReviewDialog.tsx';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import { startWaveform } from './waveform.ts';
+import { useOnboarding, Welcome } from './Welcome.tsx';
 import './listen.css';
 
-type Overlay = 'review' | 'agents' | 'settings';
+type Overlay = 'review' | 'agents' | 'settings' | 'welcome';
 
 const client = sessionClient();
 
@@ -340,6 +341,7 @@ export function ListenPage() {
   const { meeting, helper, end } = useEndMeeting(engine, snapshot.listener, setFailure);
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
+  const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
 
   return (
     <main aria-label="Sanctum" className="listen">
@@ -364,7 +366,9 @@ export function ListenPage() {
       </Footer>
       <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
       <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
-      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} />
+      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} />
+      {/* After Settings, so Settings has closed before the welcome it opens takes the modal layer. */}
+      <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>
   );
 }
