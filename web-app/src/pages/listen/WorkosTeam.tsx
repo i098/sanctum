@@ -34,7 +34,7 @@ export function SetUpTeam({ onLinked }: { onLinked: () => void }) {
     });
   };
   return (
-    <div className="listen-panel listen-confirm">
+    <div className="listen-team listen-panel listen-confirm">
       <p>This workspace has no team yet. Set up team creates it in WorkOS with you as the owner, so you can invite members and change their roles here.</p>
       <p>Current members keep their access. Each one joins the team after accepting your invitation and signing in.</p>
       <div className="listen-local-actions">
