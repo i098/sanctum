@@ -32,7 +32,7 @@ class AccessScope(TypedDict):
 class Principal(TypedDict):
     id: str
     kind: Literal["human", "agent", "device"]
-    display_name: str
+    display_name: str | None
     email: NotRequired[str]
 
 

@@ -626,7 +626,7 @@ const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | 
     yield* sealMeeting(row, {
       watermark: live === undefined ? null : { epoch_id: live.epoch_id, track: live.track, sample_end: Number(live.live_sample_end) },
       state: 'closing',
-      cue: { evidence: ['explicit_close'], reason: `closed by ${access.principal.display_name}`, uncertainty: 0 },
+      cue: { evidence: ['explicit_close'], reason: `closed by ${access.principal.display_name ?? 'a member'}`, uncertainty: 0 },
       actor: access.principal.id,
     });
     if (fence === undefined) return;

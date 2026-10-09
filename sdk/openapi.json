@@ -260,7 +260,14 @@
                           ]
                         },
                         "display_name": {
-                          "type": "string"
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "email": {
                           "type": "string"
@@ -8288,7 +8295,14 @@
                           ]
                         },
                         "display_name": {
-                          "type": "string"
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "email": {
                           "type": "string"
@@ -8667,7 +8681,14 @@
                                 ]
                               },
                               "display_name": {
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "email": {
                                 "type": "string"

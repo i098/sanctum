@@ -27,7 +27,7 @@ export type AccessScope = {
 export type Principal = {
   readonly id: string;
   readonly kind: "human" | "agent" | "device";
-  readonly display_name: string;
+  readonly display_name: string | null;
   readonly email?: string;
 };
 

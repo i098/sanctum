@@ -63,7 +63,7 @@ const MemberRow = Schema.Struct({
   workspace_id: WorkspaceId,
   principal_id: PrincipalId,
   kind: PrincipalKind,
-  display_name: Schema.String,
+  display_name: Schema.NullOr(Schema.String),
   email: Schema.NullOr(Schema.String),
   role: WorkspaceRole,
   permission_revision: DbSafeInt,

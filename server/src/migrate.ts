@@ -46,8 +46,8 @@ const TABLE = /^CREATE TABLE `?(\w+)`?/i;
 const INDEX = /^CREATE (?:UNIQUE |FULLTEXT )?INDEX `?(\w+)`? ON `?(\w+)`?/i;
 /** One column per statement, so the step stays a single inspectable object. */
 const COLUMN = /^ALTER TABLE `?(\w+)`? ADD COLUMN `?(\w+)`?[^,]*$/i;
-/** Re-runnable data fix after a column add: it must be idempotent, so a crash needs no inspection. */
-const BACKFILL = /^UPDATE `?(\w+)`? /i;
+/** Re-runnable data fix or column redefinition: it must be idempotent, so a crash needs no inspection. */
+const BACKFILL = /^(?:UPDATE `?(\w+)`? |ALTER TABLE `?(\w+)`? MODIFY COLUMN )/i;
 
 function schemaObject(statement: string, file: string): SchemaObject {
   const table = TABLE.exec(statement);
@@ -57,8 +57,8 @@ function schemaObject(statement: string, file: string): SchemaObject {
   const column = COLUMN.exec(statement);
   if (column) return { kind: 'column', table: column[1]!, column: column[2]! };
   const backfill = BACKFILL.exec(statement);
-  if (backfill) return { kind: 'backfill', table: backfill[1]! };
-  throw new MigrationError({ message: `${file}: only CREATE TABLE, CREATE INDEX, single ADD COLUMN and idempotent UPDATE steps are allowed: ${statement.slice(0, 60)}` });
+  if (backfill) return { kind: 'backfill', table: (backfill[1] ?? backfill[2])! };
+  throw new MigrationError({ message: `${file}: only CREATE TABLE, CREATE INDEX, single ADD COLUMN, MODIFY COLUMN and idempotent UPDATE steps are allowed: ${statement.slice(0, 60)}` });
 }
 
 /** Parses `NNN_name.sql`: `--` comment lines are dropped and statements end with `;` at end of line. */

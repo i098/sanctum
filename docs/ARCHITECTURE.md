@@ -194,7 +194,7 @@ Owns `web-app/landing/` (static page, `npm run build:landing`), `web-app/e2e/lan
 Owns `server/src/signin.ts`, `server/src/owner.ts`, `server/tests/signin.test.ts`; operation in [operations.md](operations.md#sign-in).
 
 - Mounts `/auth/*` from main.ts; opens sessions through `openSession` and `linkIdentity` in auth.ts.
-- Login refreshes `principals.display_name` and `principals.email` (migration `018_principal_email`) from the ID token (`name`, else `given_name` and `family_name`, else the email replaces the seeded name); Settings' Sign-in row shows them with the role as a label and initials for the avatar.
+- Login refreshes `principals.display_name` and `principals.email` (migration `018_principal_email`) from the ID token (`name`, else `given_name` and `family_name`, with an email but no name the display name is cleared to NULL); Settings' Sign-in row shows them (the email leads when the name is NULL; shared and audit text then says "a member") with the role as a label and initials for the avatar.
 - B1 (self-hosted organizations): `server/src/issuer-orgs.ts` (Better Auth organization hooks and the sign-in repair `reconcileMember`), migration `013_issuer_organizations`, `web-app/src/pages/auth/team.tsx` (Team and Profile dialogs) and the `/invite/<id>` page; operation in [operations.md](operations.md#self-hosted-sign-in).
 
 ### organizations (W1)

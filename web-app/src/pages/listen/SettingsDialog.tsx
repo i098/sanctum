@@ -112,6 +112,7 @@ function Notice({ notice, selfServe }: { notice: SignInNotice; selfServe: boolea
  */
 function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { status: 'signed_in' }>; onSignInChange: () => void }) {
   const { principal, role } = signIn.access;
+  const label = principal.display_name ?? principal.email ?? '';
   const [failure, setFailure] = useState<string | null>(null);
   const run = (action: () => Promise<void>, failed: string) => {
     setFailure(null);
@@ -121,13 +122,13 @@ function SignedIn({ signIn, onSignInChange }: { signIn: Extract<SignInState, { s
     <>
       <span className="listen-account">
         <span className="listen-avatar" aria-hidden="true">
-          {principal.display_name.split('@')[0]!.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
+          {label.split('@')[0]!.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]!.toUpperCase()).join('')}
         </span>
         <span className="listen-account-text">
           <span className="listen-account-name">
-            {principal.display_name} <span className="listen-role">{role}</span>
+            {label} <span className="listen-role">{role}</span>
           </span>
-          {principal.email && principal.email !== principal.display_name && <span className="listen-account-email">{principal.email}</span>}
+          {principal.display_name !== null && principal.email && <span className="listen-account-email">{principal.email}</span>}
         </span>
       </span>
       {signIn.issuer && (

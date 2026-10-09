@@ -93,7 +93,7 @@ test('signed in: name, email, role label, keyboard focus, sign out', async ({ pa
 
 test('signed in with an email and no name: the email leads, once', async ({ page }) => {
   const email = 'cap@example.test';
-  await openListening(page, { configured: true, access: { ...ACCESS, principal: { ...ACCESS.principal, display_name: email, email } } });
+  await openListening(page, { configured: true, access: { ...ACCESS, principal: { ...ACCESS.principal, display_name: null, email } } });
   const settings = await openSettings(page);
   await expect(row(settings, 'Sign-in').locator('.listen-account-name')).toHaveText(`${email} owner`);
   await expect(row(settings, 'Sign-in').locator('.listen-account-email')).toHaveCount(0);

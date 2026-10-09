@@ -177,13 +177,13 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });
         }
         const member = { workspace_id: memberships[0]!.workspace_id, principal_id: principal.value };
-        // Plan sign-in section 5.2: non-empty ID token `name` (or given and family name) and `email` claims refresh the profile in the session's transaction; with no name the email replaces any seeded placeholder.
+        // Plan sign-in section 5.2: non-empty ID token `name` (or given and family name) and `email` claims refresh the profile in the session's transaction; with an email but no name the display name is cleared, so no seeded placeholder lingers.
         const session = yield* sql.withTransaction(
           Effect.gen(function* () {
             const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
             const fresh = typeof name === 'string' && name.trim() !== '' ? name.trim().slice(0, 200) : null;
             const address = typeof email === 'string' && email.trim() !== '' && email.trim().length <= 320 ? email.trim() : null;
-            yield* sql`UPDATE principals SET display_name = COALESCE(${fresh}, ${address}, display_name), email = COALESCE(${address}, email) WHERE id = ${principal.value}`;
+            yield* sql`UPDATE principals SET display_name = IF(${fresh} IS NOT NULL, ${fresh}, IF(${address} IS NOT NULL, NULL, display_name)), email = COALESCE(${address}, email) WHERE id = ${principal.value}`;
             return opened;
           }),
         );

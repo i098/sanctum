@@ -266,7 +266,7 @@ describe('OIDC sign-in', () => {
     }),
   );
 
-  it.scoped('with an email and no name, the email replaces the seeded placeholder; given and family name beat it', () =>
+  it.scoped('with an email and no name, the seeded placeholder is cleared and no email becomes the display name; given and family name beat it', () =>
     Effect.gen(function* () {
       const { issuer, client } = configured();
       const { base, db } = yield* withServer(client);
@@ -275,7 +275,7 @@ describe('OIDC sign-in', () => {
       const principalOf = (response: Response) => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(response, 'sanctum_session')}`).then(r => r.json() as Promise<AccessScope>).then(a => a.principal);
 
       const emailOnly = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, email: 'cap@example.test' }).then(principalOf));
-      expect(emailOnly).toMatchObject({ display_name: 'cap@example.test', email: 'cap@example.test' });
+      expect(emailOnly).toEqual({ id: owner!.principal.id, kind: 'human', display_name: null, email: 'cap@example.test' });
 
       const parts = yield* Effect.promise(() => signIn(base, issuer, { sub: subject, email: 'cap@example.test', given_name: 'Cap', family_name: 'Tain' }).then(principalOf));
       expect(parts).toMatchObject({ display_name: 'Cap Tain', email: 'cap@example.test' });
