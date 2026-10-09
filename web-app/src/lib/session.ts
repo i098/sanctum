@@ -25,10 +25,11 @@ export const SIGN_IN_URL = '/auth/login?return_to=/';
 /**
  * `issuer`: `GET /auth/config` reports a complete sign-in issuer. Without one, a session can only
  * come from the operator's login link. A server without the route counts as not configured.
+ * `workosTeam`: WorkOS organizations hold the workspace's team (hosted) and the caller is an owner or admin, so Settings offers Team.
  * `selfServe`: a signed-in user without a membership may create a workspace.
  */
 export type SignInState =
-  | { status: 'signed_in'; access: AccessScope; issuer: boolean }
+  | { status: 'signed_in'; access: AccessScope; issuer: boolean; workosTeam: boolean }
   | { status: 'signed_out'; selfServe: boolean }
   | { status: 'checking' | 'unconfigured' | 'unavailable' };
 
@@ -36,12 +37,12 @@ export type SignInState =
 export type SignInNotice = { code: 'not_member'; issuer: string; subject: string } | { code: 'failed' | 'unconfigured' };
 
 /** `false`: no route, a non-JSON body (a server before the route may answer with the SPA index) or a 4xx; `'unavailable'`: network error or 5xx. */
-async function configured(): Promise<false | 'unavailable' | { selfServe: boolean }> {
+async function configured(): Promise<false | 'unavailable' | { selfServe: boolean; workos: boolean }> {
   try {
     const response = await fetch('/auth/config', { headers: { accept: 'application/json' } });
     if (response.status >= 500) return 'unavailable';
     const config = response.ok ? await response.json() : {};
-    return config.sign_in === true && { selfServe: config.self_serve_workspaces === true };
+    return config.sign_in === true && { selfServe: config.self_serve_workspaces === true, workos: config.workos_organizations === true };
   } catch (error) {
     return error instanceof SyntaxError ? false : 'unavailable';
   }
@@ -57,7 +58,10 @@ async function session(client: SanctumClient): Promise<AccessScope | 'signed_out
 
 export async function readSignIn(client: SanctumClient): Promise<SignInState> {
   const [issuer, current] = await Promise.all([configured(), session(client)]);
-  if (typeof current === 'object') return { status: 'signed_in', access: current, issuer: issuer !== false };
+  if (typeof current === 'object') {
+    const workosTeam = typeof issuer === 'object' && issuer.workos && current.scopes.includes('workspace:admin');
+    return { status: 'signed_in', access: current, issuer: issuer !== false, workosTeam };
+  }
   if (current === 'unavailable' || issuer === 'unavailable') return { status: 'unavailable' };
   return issuer ? { status: current, selfServe: issuer.selfServe } : { status: 'unconfigured' };
 }
@@ -72,10 +76,11 @@ export function takeSignInNotice(location: Location, history: History): SignInNo
   return { code: code === 'unconfigured' ? 'unconfigured' : 'failed' };
 }
 
-async function post(path: string): Promise<Response> {
+/** Same-origin POST with the CSRF header; a refusal throws the error envelope's message, else the status. */
+export async function post(path: string): Promise<Response> {
   const token = csrfToken();
   const response = await fetch(path, { method: 'POST', headers: token === undefined ? {} : { 'x-csrf-token': decodeURIComponent(token) } });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? `HTTP ${response.status}`);
   return response;
 }
 

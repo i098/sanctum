@@ -25,6 +25,7 @@ import { loadMigrations } from './migrate.ts';
 import { type WorkosOrganizations, WorkosOrganizationsFromEnv } from './org-sync.ts';
 import type { ObjectStore } from './providers/object-store.ts';
 import { secureResponses, webAssetsLive } from './web.ts';
+import { WidgetTokenLive } from './widget-token.ts';
 
 /** `vite build` output; the same relative path from `src/` in the repository and `dist/` in the image. */
 const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.url));
@@ -48,7 +49,7 @@ export const serverLayer = (
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
-    Layer.provide([ListenerStreamLive, McpLive, SignInLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
+    Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
     Layer.provide([SpeechSynthesizerLive, SpeechRepliesLive.pipe(Layer.provide(LlmLive))]),
     Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
     Layer.provide(overrides.media ?? MediaProvidersLive),

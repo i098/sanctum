@@ -1,8 +1,5 @@
-import { type ChildProcess, spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { openListening } from './listen-fake.ts';
+import { openListening, realServer } from './listen-fake.ts';
 
 /**
  * Review against the real API server and database (server/tests/support/review-server.ts) with a
@@ -11,22 +8,10 @@ import { openListening } from './listen-fake.ts';
  */
 test.use({ locale: 'en-US', timezoneId: 'UTC' });
 
-let child: ChildProcess;
-let server: { url: string; objects: string; session: string; csrf: string };
-test.beforeAll(async () => {
-  const script = fileURLToPath(new URL('../../server/tests/support/review-server.ts', import.meta.url));
-  child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
-  // Request logs share stdout and keep being read; the JSON line is the address.
-  const lines = createInterface({ input: child.stdout! });
-  server = JSON.parse(await new Promise<string>(resolve => lines.on('line', line => line.startsWith('{') && resolve(line))));
-});
-test.afterAll(async () => {
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  child.kill('SIGTERM');
-  await exited;
-});
+const started = realServer<{ url: string; objects: string; session: string; csrf: string }>(new URL('../../server/tests/support/review-server.ts', import.meta.url));
 
 test('Review reads the real meeting, and a decision\'s source plays its authorized audio', async ({ page }) => {
+  const server = started();
   await page.context().addCookies([{ name: 'sanctum_csrf', value: server.csrf, url: test.info().project.use.baseURL!, sameSite: 'Strict' }]);
   await page.route('**/api/v1/**', async route => {
     const { pathname, search } = new URL(route.request().url());

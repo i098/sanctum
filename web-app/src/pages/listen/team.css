@@ -1,0 +1,46 @@
+/* Hosted Team overlay: the WorkOS widgets (Radix Themes) inside the Sanctum dialog, on Sanctum's tokens. */
+.listen-team .radix-themes {
+  /* The widgets' root theme otherwise fills the viewport height and stretches the dialog. */
+  min-height: 0;
+  --accent-9: #3d7dff;
+  --accent-10: #5b8fff;
+  --color-background: #12161e;
+  --color-panel-solid: #171c26;
+}
+
+.listen-team h3 {
+  margin: 24px 0 8px;
+  color: #e7ecf3;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.listen-team section:first-of-type h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  /* Team takes the whole phone screen, so the members table and profile get its full width. */
+  .listen-dialog:has(> .listen-team) {
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    padding: 20px 16px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* Profile labels sit above their values, as Settings rows do on phones. */
+  .listen-team .rt-DataListItem {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .listen-team .rt-DataListLabel {
+    min-width: 0;
+  }
+}

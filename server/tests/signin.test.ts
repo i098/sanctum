@@ -117,7 +117,7 @@ const fakeWorkos = () => {
     emit('organization_membership.deleted', memberships.splice(index, 1)[0]);
   };
 
-  type Body = Record<'name' | 'external_id' | 'user_id' | 'organization_id' | 'role_slug', string>;
+  type Body = Record<'name' | 'external_id' | 'user_id' | 'organization_id' | 'role_slug', string> & { scopes?: ReadonlyArray<string> };
   /** Handlers by `METHOD /path`; the external-id lookup is keyed by its prefix. */
   const routes: Record<string, (query: URLSearchParams, body: Body, path: string) => Response> = {
     'GET /organizations/external_id': (_query, _body, path) => {
@@ -144,6 +144,11 @@ const fakeWorkos = () => {
       const page = events.slice(start).filter(event => types.includes(event.event)).slice(0, Number(query.get('limit')));
       return Response.json({ object: 'list', data: page.map(event => ({ object: 'event', ...event, created_at: '2026-10-09T00:00:00.000Z' })), list_metadata: { after: page.at(-1)?.id ?? null } });
     },
+    // Only the user-management scope is ever requested; the fake token names who it is for.
+    'POST /widgets/token': (_query, body) =>
+      body.scopes?.join() === 'widgets:users-table:manage'
+        ? Response.json({ token: `widget:${body.user_id}:${body.organization_id}` })
+        : Response.json({ message: 'unexpected scopes' }, { status: 422 }),
   };
 
   /** The client always sends a method, the bearer key and (for POST) a JSON body. */
@@ -439,7 +444,7 @@ describe('OIDC sign-in', () => {
   it.scoped('reports sign-in as unavailable while no issuer is configured', () =>
     Effect.gen(function* () {
       const { base } = yield* withServer(Option.none());
-      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toEqual({ sign_in: false, embedded_issuer: null, self_serve_workspaces: false });
+      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toEqual({ sign_in: false, embedded_issuer: null, self_serve_workspaces: false, workos_organizations: false });
       const login = yield* Effect.promise(() => get(`${base}/auth/login`));
       expect(login.status).toBe(503);
       expect(yield* Effect.promise(() => login.json())).toMatchObject({ code: 'unavailable', retryable: false });
@@ -603,6 +608,54 @@ describe('workos.sync events job', () => {
         expect(workos.requests.map(request => new URLSearchParams(request.split('?')[1]).get('after'))).toEqual([null, 'event_0002', 'event_0003']);
         expect(yield* sql`SELECT \`cursor\` FROM sync_cursors WHERE name = 'workos.events'`).toEqual([{ cursor: 'event_0004' }]);
       }).pipe(Effect.provide(db));
+    }),
+  );
+});
+
+describe('WorkOS widget token', () => {
+  it.scoped('issues an admin a token for their WorkOS user and linked organization, and refuses members and missing links clearly', () =>
+    Effect.gen(function* () {
+      const { client } = configured();
+      const workos = fakeWorkos();
+      const { base, db } = yield* withServer(client, workos.layer(ISSUER, false));
+      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toMatchObject({ workos_organizations: true });
+      const [owner, member] = yield* Effect.provide(seedWorkspace('Acme', ['owner', 'member']), db);
+      const open = (access: AccessScope) => Effect.provide(openSession({ workspace_id: access.workspace_id, principal_id: access.principal.id }), db);
+      const request = (session: { token: string; csrf_token: string }, csrf = session.csrf_token) =>
+        Effect.promise(async () => {
+          const response = await get(`${base}/api/v1/workspace/widget-token`, `sanctum_session=${session.token}`, { method: 'POST', headers: { 'x-csrf-token': csrf } });
+          return { status: response.status, cache: response.headers.get('cache-control'), body: (await response.json()) as { token?: string; message?: string } };
+        });
+      const ownerSession = yield* open(owner!);
+
+      // A login-link owner without a WorkOS identity, then one whose workspace has no organization: 404 with the reason.
+      expect(yield* request(ownerSession)).toMatchObject({ status: 404, body: { message: 'Your account has no WorkOS sign-in yet. Use Connect sign-in first.' } });
+      const subject = yield* Effect.provide(identify(owner!), db);
+      expect(yield* request(ownerSession)).toMatchObject({ status: 404, body: { message: 'This workspace is not linked to a WorkOS organization.' } });
+
+      yield* Effect.provide(linkWorkspaceOrg({ workspace_id: owner!.workspace_id, issuer: ISSUER, org_id: 'org_acme' }), db);
+      expect(yield* request(ownerSession)).toEqual({ status: 200, cache: 'no-store', body: { token: `widget:${subject}:org_acme` } });
+      expect(yield* request(ownerSession, 'wrong')).toMatchObject({ status: 403, body: { message: 'CSRF token is missing or invalid' } });
+
+      // A member is refused before WorkOS is asked.
+      yield* Effect.provide(identify(member!), db);
+      expect(yield* request(yield* open(member!))).toMatchObject({ status: 403, body: { required_scope: 'workspace:admin' } });
+      expect(workos.requests).toEqual(['POST /widgets/token']);
+
+      workos.failOnce.add('POST /widgets/token');
+      expect(yield* request(ownerSession)).toMatchObject({ status: 503, body: { message: 'WorkOS did not issue a widget token', retryable: true } });
+    }),
+  );
+
+  it.scoped('answers 503 when the server has no WorkOS organizations', () =>
+    Effect.gen(function* () {
+      const { base, db } = yield* withServer(configured().client);
+      expect(yield* Effect.promise(() => fetch(`${base}/auth/config`).then(r => r.json()))).toMatchObject({ workos_organizations: false });
+      const [owner] = yield* Effect.provide(seedWorkspace('Acme', ['owner']), db);
+      const session = yield* Effect.provide(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }), db);
+      const response = yield* Effect.promise(() =>
+        get(`${base}/api/v1/workspace/widget-token`, `sanctum_session=${session.token}`, { method: 'POST', headers: { 'x-csrf-token': session.csrf_token } }));
+      expect(response.status).toBe(503);
     }),
   );
 });

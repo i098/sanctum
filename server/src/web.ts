@@ -1,7 +1,7 @@
 /**
  * Built website assets behind the API routes (plan section 04, "One application image") and
  * the browser security policy every response carries: microphone limited to this origin,
- * a CSP that allows only same-origin scripts/connections, and Secure session cookies.
+ * a CSP that allows only same-origin scripts and same-origin connections plus the WorkOS API, and Secure session cookies.
  * HTTPS and HSTS are terminated by the reverse proxy (Caddyfile).
  */
 import { readdirSync } from 'node:fs';
@@ -13,11 +13,16 @@ export const securityHeaders = {
   'content-security-policy': [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self'",
+    // The WorkOS widgets in the hosted Team overlay add three fixed `<style>` elements; each hash allows only its exact text.
+    // Regenerate them whenever @workos-inc/widgets, @radix-ui/themes or the root `overrides` change (web-app/e2e/team-csp.spec.ts fails on drift):
+    // @radix-ui/react-scroll-area viewport scrollbar hiding; @radix-ui/react-select viewport scrollbar hiding;
+    // react-remove-scroll-bar's body scroll lock while a widget dialog is open (gap 0: the page never scrolls).
+    "style-src 'self' 'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw=' 'sha256-441zG27rExd4/il+NvIqyL8zFx5XmyNQtE381kSkUJk=' 'sha256-nzTgYzXYDNe6BAHiiI7NNlfK8n/auuOAhh2t92YvuXo='",
     "img-src 'self' data:",
     // Signed recording URLs point at private R2 objects.
     "media-src 'self' blob: https://*.r2.cloudflarestorage.com",
-    "connect-src 'self'",
+    // The WorkOS widgets in the hosted Team overlay call the WorkOS API from the browser.
+    "connect-src 'self' https://api.workos.com",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",

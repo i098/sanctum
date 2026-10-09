@@ -201,13 +201,21 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 - Deleting ends this process's open listener sockets of the workspace with a `rejected` message (`unauthorized`) and close code 1008 (`server/src/media/open-sockets.ts`), and `workspaceIsLive` in store.ts refuses segment, chunk commit and recording-object writes of a deleted workspace in every process; a reconcile or recording job that meets the deletion mid-run fails with the requester refusal, so Undo requeues it; the web app pauses capture after a successful delete.
 - Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first. The purge keeps the deployment-wide `workos.sync` job row, because it is anchored to the oldest workspace.
 
+### team widgets (W2)
+
+Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-app/src/pages/listen/{WorkosTeam.tsx,team.css}`, `web-app/e2e/team-csp.spec.ts` and the widget-token suite in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
+
+- `widget-token.ts`: `WidgetTokenLive` mounts `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
+- `/auth/config` reports `workos_organizations`; SettingsDialog lazy-loads `WorkosTeam.tsx` only for owners and admins on such a server.
+- The `style-src` hashes in `web.ts` cover the widgets' fixed `<style>` elements; `team-csp.spec.ts` fails when a dependency bump changes one.
+
 ## Hot files
 
 | File | Who touches it | How |
 | --- | --- | --- |
 | `packages/contracts/src/api.ts` | every slice with REST | One `.add(XApi)` line. |
 | `server/src/api.ts` | every slice with REST | One handler layer in the `ApiLive` list. |
-| `server/src/main.ts` | kernel, media, interfaces, serve, sign-in | Authenticator swap; upgrade handler; `/mcp` mount; `/auth/*` mount; static assets. |
+| `server/src/main.ts` | kernel, media, interfaces, serve, sign-in, team widgets | Authenticator swap; upgrade handler; `/mcp` mount; `/auth/*` mount; widget-token mount; static assets. |
 | `server/src/worker.ts` | slices with provider layers | Provide the layer next to `dbLayer`. |
 | `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; the services a handler needs come from its type, and worker.ts provides their layers. Handler modules import `job-types.ts`, never this file. |
 | `server/src/config.ts` | models, media, actions, pipedream | Own key inside `serverConfig`; defaults stay in `engineeringDefaults`. |
