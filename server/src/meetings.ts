@@ -267,10 +267,10 @@ const endFenced = (workspace_id: WorkspaceId, epoch: EpochClock, segment: Transc
     const sql = yield* SqlClient.SqlClient;
     const { source } = segment;
     const [fenced] = yield* sql<{ id: MeetingId }>`SELECT id FROM meetings
-      WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start} ORDER BY end_fence_sample LIMIT 1`;
-    if (fenced === undefined) return false;
-    const closed = yield* selectMeeting(workspace_id, fenced.id, true);
-    if (closed._tag === 'None' || sampleMs(epoch, source.sample_start) < Date.parse(closed.value.started_at)) return false;
+      WHERE workspace_id = ${workspace_id} AND end_fence_epoch_id = ${source.epoch_id} AND end_fence_sample > ${source.sample_start}
+        AND started_at <= ${dbTime(sampleMs(epoch, source.sample_start))} ORDER BY end_fence_sample LIMIT 1`;
+    const closed = fenced === undefined ? null : yield* selectMeeting(workspace_id, fenced.id, true);
+    if (closed?._tag !== 'Some') return false;
     const end = yield* claimSource(closed.value, source);
     yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
     if (closed.value.state !== 'closing') yield* scheduleFinalize(closed.value, null);
@@ -286,17 +286,16 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { source } = segment;
-    const [next] = yield* sql<{ meeting_id: MeetingId; sample_start: number; is_first: number }>`SELECT r.meeting_id, CAST(r.sample_start AS DOUBLE) AS sample_start,
-        r.sample_start = (SELECT MIN(q.sample_start) FROM meeting_ranges q WHERE q.meeting_id = r.meeting_id AND q.boundary_revision = r.boundary_revision
-          AND q.epoch_id = r.epoch_id AND q.track = r.track) AS is_first
-      FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
-      WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track} AND r.sample_start > ${source.sample_start}
-      ORDER BY r.sample_start LIMIT 1`;
-    if (next === undefined || Number(next.is_first) !== 1) return false;
-    const distance = (Math.max(0, next.sample_start - source.sample_end) * 1000) / epoch.sample_rate;
-    if (distance > engineeringDefaults.boundaryEvaluationGapMs) return false;
-    const closed = yield* selectMeeting(workspace_id, next.meeting_id, true);
-    if (closed._tag === 'None' || (closed.value.state !== 'closing' && closed.value.state !== 'closed')) return false;
+    // The nearest range after the segment must be its meeting's first, of a closing or closed meeting, within the boundary gap.
+    const [next] = yield* sql<{ meeting_id: MeetingId }>`SELECT n.meeting_id FROM (SELECT r.meeting_id, r.sample_start, m.state,
+          r.sample_start = (SELECT MIN(q.sample_start) FROM meeting_ranges q WHERE q.meeting_id = r.meeting_id AND q.boundary_revision = r.boundary_revision
+            AND q.epoch_id = r.epoch_id AND q.track = r.track) AS is_first
+        FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+        WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track} AND r.sample_start > ${source.sample_start}
+        ORDER BY r.sample_start LIMIT 1) n
+      WHERE n.is_first AND n.state IN ('closing', 'closed') AND (n.sample_start - ${source.sample_end}) * 1000 <= ${engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}`;
+    const closed = next === undefined ? null : yield* selectMeeting(workspace_id, next.meeting_id, true);
+    if (closed?._tag !== 'Some') return false;
     yield* claimSource(closed.value, source);
     yield* sql`UPDATE meetings SET started_at = LEAST(started_at, ${dbTime(sampleMs(epoch, source.sample_start))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
     if (closed.value.state === 'closed') yield* scheduleFinalize(closed.value, null);
@@ -552,9 +551,10 @@ export const meetingRanges = (access: AccessScope, meeting_id: MeetingId) =>
 const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeeting) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [epoch] = yield* sql<{ listener_id: string; principal_id: PrincipalId; capture_group_id: string | null; sample_rate: number; sample_start: string; overlaps: number; elapsed_us: string }>`SELECT e.listener_id, l.principal_id, l.capture_group_id, e.sample_rate, e.sample_start,
-        (e.ended_at IS NULL OR e.ended_at >= m.started_at) AS overlaps,
-        TIMESTAMPDIFF(MICROSECOND, e.started_at, UTC_TIMESTAMP(6)) AS elapsed_us
+    const elapsed = sql`GREATEST(0, TIMESTAMPDIFF(MICROSECOND, e.started_at, UTC_TIMESTAMP(6))) + ${END_FENCE_CLOCK_SLACK_SECONDS * 1_000_000}`;
+    const [epoch] = yield* sql<{ in_meeting: number | null; owned: number; overlaps: number; sample: string }>`SELECT
+        (e.listener_id = m.listener_id OR l.capture_group_id = m.capture_group_id) AS in_meeting, l.principal_id = ${access.principal.id} AS owned,
+        (e.ended_at IS NULL OR e.ended_at >= m.started_at) AS overlaps, LEAST(${fence.sample}, e.sample_start + FLOOR((${elapsed}) * e.sample_rate / 1000000)) AS sample
       FROM capture_epochs e JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id JOIN meetings m ON m.id = ${meeting.id}
       WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${fence.epoch_id}`;
     const forbidden = new Forbidden({ message: 'Only the principal that owns the listener can end its meeting' });
@@ -563,13 +563,9 @@ const endFenceSample = (access: AccessScope, meeting: MeetingRow, fence: EndMeet
         AND (id = ${meeting.listener_id} OR capture_group_id = ${meeting.capture_group_id}) LIMIT 1`;
       return own === undefined ? yield* forbidden : null;
     }
-    if (epoch.listener_id !== meeting.listener_id && (meeting.capture_group_id === null || epoch.capture_group_id !== meeting.capture_group_id)) {
-      return yield* new NotFound({ message: 'Capture epoch not found' });
-    }
-    if (epoch.principal_id !== access.principal.id) return yield* forbidden;
-    if (Number(epoch.overlaps) !== 1) return null;
-    const elapsed = Math.floor((Math.max(0, Number(epoch.elapsed_us)) / 1_000_000 + END_FENCE_CLOCK_SLACK_SECONDS) * epoch.sample_rate);
-    return { epoch_id: fence.epoch_id, sample: Math.min(fence.sample, Number(epoch.sample_start) + elapsed) };
+    if (Number(epoch.in_meeting) !== 1) return yield* new NotFound({ message: 'Capture epoch not found' });
+    if (Number(epoch.owned) !== 1) return yield* forbidden;
+    return Number(epoch.overlaps) === 1 ? { epoch_id: fence.epoch_id, sample: Number(epoch.sample) } : null;
   });
 
 /** Seals the open meeting at the listener's capture watermark for an explicit close and records the End fence when there is one. */

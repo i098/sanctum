@@ -5,7 +5,7 @@
  * directly. Closing the tab ends capture: the next page load seals what the closed page had
  * committed and reports that capture as interrupted, never as still recording.
  */
-import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpochId, type EndMeeting, type RecordingChunkManifest } from '@sanctum/contracts';
+import { LeaseGeneration, ListenerId, SampleRate, StartMessage, type CaptureEpochId, type RecordingChunkManifest } from '@sanctum/contracts';
 import { Cause, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { RecoveryBuffer, type EpochEnd } from './buffer.ts';
 import { makeListenersClient, type ListenersClient } from './client.ts';
@@ -15,7 +15,7 @@ import { acquireMicrophone, captureIssue, captureLockHeld, holdCaptureLock, watc
 import { ChunkAssembler, startRecorder, WAVEFORM_BANDS, type Recorder } from './recorder.ts';
 import { LISTENER_KEY } from './stored-listener.ts';
 import { drainPending, type UploaderOptions } from './uploader.ts';
-import { createCaptureStore, type CaptureIssue, type CaptureView, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
+import { createCaptureStore, type CaptureIssue, type CaptureView, type EndFence, type ListenerState, type LevelSource, type OrphanedRecording, type PermissionState, type WavPart } from './view.ts';
 
 /** Browser-side engineering defaults (plan 02); tests shorten them. */
 export interface CaptureTiming {
@@ -115,7 +115,7 @@ class CaptureController implements CaptureView {
   /** A pause or halt requested while the microphone was still being opened. */
   private cancelStart: 'paused' | 'stopped' | null = null;
   /** Where the last epoch of this page stopped capturing: what End meeting fences while paused. */
-  private captured: EndMeeting | null = null;
+  private captured: EndFence | null = null;
   private permission: PermissionState = 'unknown';
   private issue: CaptureIssue | null = null;
   private live: LiveStatus | null = null;
@@ -196,7 +196,7 @@ class CaptureController implements CaptureView {
   };
 
   /** Pauses for End meeting; resolves with where this page last stopped capturing (also when already paused), or null when it never has. */
-  readonly end = async (): Promise<EndMeeting | null> => {
+  readonly end = async (): Promise<EndFence | null> => {
     this.issue = null;
     await this.stopSession('pause', 'paused');
     return this.captured;

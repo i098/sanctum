@@ -29,10 +29,9 @@ import {
   workersAiWhisper,
 } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
-import { finalizeSealed, jobsOf } from './support/capture.ts';
+import { finalizeSealed, jobsOf, meetingsOf, rangesOf } from './support/capture.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 import { seedWorkspace } from './support/fixtures.ts';
-import { meetingsOf, rangesOf } from './support/capture.ts';
 
 const RATE = 16_000;
 

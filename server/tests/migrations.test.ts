@@ -4,7 +4,6 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit } from 'effect';
 import { loadMigrations, migrate, parseMigration, pendingMigrations, requireCurrentSchema, type Migration } from '../src/migrate.ts';
 import { withDatabase } from './support/database.ts';
-import { seedWorkspace } from './support/fixtures.ts';
 
 const migrations = loadMigrations();
 const stepCount = migrations.reduce((total, migration) => total + migration.steps.length, 0);
@@ -125,10 +124,11 @@ describe('migrate against MySQL 8.4', () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* migrate(migrations.slice(0, -1));
-        const [owner] = yield* seedWorkspace('Fence');
+        const workspace_id = randomUUID();
         const id = randomUUID();
+        yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, 'Fence', 'UTC', UTC_TIMESTAMP(6))`;
         yield* sql`INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
-          VALUES (${id}, ${owner!.workspace_id}, 'closed', 'UTC', UTC_TIMESTAMP(6), '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+          VALUES (${id}, ${workspace_id}, 'closed', 'UTC', UTC_TIMESTAMP(6), '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
         yield* migrate(migrations);
         expect(yield* sql`SELECT end_fence_epoch_id, end_fence_sample FROM meetings WHERE id = ${id}`).toEqual([{ end_fence_epoch_id: null, end_fence_sample: null }]);
         const columns = yield* sql<{ name: string; nullable: string }>`SELECT COLUMN_NAME AS name, IS_NULLABLE AS nullable FROM information_schema.COLUMNS
