@@ -130,7 +130,7 @@ function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
         <RoleSelect roles={assignable(access.role)} name="role" aria-label="Role" defaultValue="member" className={field} />
         <button type="submit" data-primary disabled={busy}>Invite</button>
       </form>
-      <p className="mt-2 text-xs text-ink-muted">Anyone who opens the link and signs up with that email address joins, so share it only with that person.</p>
+      <p className="mt-2 text-xs text-ink-muted">Only someone who has the link and signs up with that email address can join, so share it only with that person.</p>
       {invited && (
         <div role="status" className="mt-3 rounded bg-surface px-3 py-2.5">
           <p className="text-xs text-ink-secondary">

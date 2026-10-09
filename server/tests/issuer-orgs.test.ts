@@ -198,6 +198,23 @@ describe('self-hosted organizations', () => {
     }),
   );
 
+  it.scoped('a session with the invited email cannot list its invitations to learn the id', () =>
+    Effect.gen(function* () {
+      const server = yield* selfHosted;
+      yield* Effect.promise(async () => {
+        const team = await ownerWithTeam(server);
+        const email = `squat-${randomBytes(4).toString('hex')}@fixture.test`;
+        const invited = await idp(server, '/organization/invite-member', team.owner.cookie, { email, role: 'member', organizationId: team.workspace_id });
+        const squatter = await signUp(server, 'Squatter', email);
+        const listed = await fetch(`${server.base}/idp/organization/list-user-invitations`, { headers: { origin: ORIGIN, cookie: squatter.cookie } });
+        expect(listed.status).toBe(404);
+        expect(await listed.text()).not.toContain(invited.body['id']);
+        // The id from the link still accepts.
+        expect((await idp(server, '/organization/accept-invitation', squatter.cookie, { invitationId: invited.body['id'] })).status).toBe(200);
+      });
+    }),
+  );
+
   it.scoped('sign-in repairs a membership whose Sanctum side failed, and MCP org_id selects the workspace', () =>
     Effect.gen(function* () {
       const server = yield* selfHosted;

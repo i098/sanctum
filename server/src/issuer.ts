@@ -177,7 +177,8 @@ export const createIssuer = (
     verification: { modelName: 'auth_verification' },
     // The JWT plugin's session-token endpoint is not an OAuth grant; tokens come from /oauth2/token only.
     // Leaving runs no organization hook, so a member leaves only by an admin's removal, which Sanctum sees.
-    disabledPaths: ['/token', '/organization/leave'],
+    // Listing one's invitations would hand their ids to anyone who registers an invited address, so the link stays the only way to learn an id.
+    disabledPaths: ['/token', '/organization/leave', '/organization/list-user-invitations'],
     plugins: [
       jwt({ schema: { jwks: { modelName: 'auth_jwks' } } }),
       // better-auth 1.7.7's OpenAPI metadata types fail `exactOptionalPropertyTypes`; the intersection keeps the endpoint types.
@@ -185,7 +186,7 @@ export const createIssuer = (
       cimd({ fetchClientMetadataResource: fetchMetadata }),
       loopbackClientsAreNative,
       scopelessAuthorizeGetsDefaults,
-      // No email transport: inviters copy the link, and Better Auth's default lets any session with the invited email accept.
+      // No email transport: inviters copy the link. Sign-up is open and email unverified, so anyone can register an invited address; the invitation id in the link is the secret.
       // Once SMTP exists, send invitations by email and set `requireEmailVerificationOnInvitation: true` (docs/operations.md).
       organization({
         schema: { organization: { modelName: 'auth_organization' }, member: { modelName: 'auth_member' }, invitation: { modelName: 'auth_invitation' } },
