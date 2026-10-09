@@ -32,6 +32,7 @@ import { DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
   asJobResult,
+  boundaryChanged,
   currentRanges,
   dbFailures,
   dbTime,
@@ -273,7 +274,19 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
         WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision}`;
       yield* sql`UPDATE meetings SET boundary_revision = ${revision}, processing = ${JSON.stringify(PENDING_PROCESSING)}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${row.id}`;
     }
-    yield* claimSource({ ...row, boundary_revision: revision }, source);
+    const joined = { ...row, boundary_revision: revision };
+    const end = yield* claimSource(joined, source);
+    if (revision !== row.boundary_revision) {
+      yield* recordBoundary({
+        meeting: row,
+        revision,
+        operation: 'close',
+        decision: { decision: 'close', source: { ...source, sample_end: end }, evidence: ['late_audio'], reason: 'late audio joined the finalized meeting', uncertainty: 0 },
+        actor: null,
+      });
+      const owners = yield* sql<{ principal_id: PrincipalId }>`SELECT principal_id FROM listeners WHERE workspace_id = ${row.workspace_id} AND id = ${row.listener_id}`;
+      yield* Effect.forEach(owners, owner => boundaryChanged(row, revision, owner.principal_id), { discard: true });
+    }
     yield* scheduleFinalize(row, null);
   });
 

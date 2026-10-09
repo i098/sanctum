@@ -353,6 +353,12 @@ describe('automatic meeting lifecycle', () => {
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closed']);
         expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closed', boundary_revision: 2, ended_at: '2026-09-28T16:00:40Z', processing: { recording: 'pending' } });
         expect(yield* sql`SELECT COUNT(*) AS n FROM meeting_recordings r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision WHERE m.id = ${id}`).toEqual([{ n: '0' }]);
+        expect(yield* sql`SELECT boundary_revision, operation, actor_principal_id FROM boundary_events WHERE meeting_id = ${id} AND boundary_revision = 2`).toEqual([
+          { boundary_revision: 2, operation: 'close', actor_principal_id: null },
+        ]);
+        expect(yield* sql`SELECT change_kind, source_revision FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([
+          { change_kind: 'meeting_boundary_changed', source_revision: '2' },
+        ]);
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 49 * RATE }]);
         const pending = (yield* jobsOf(listener.workspace_id)).filter(job => job.kind === 'meeting.finalize' && job.status === 'pending');
         expect(pending).toEqual([{ kind: 'meeting.finalize', work_key: `meeting:${id}`, status: 'pending' }]);
