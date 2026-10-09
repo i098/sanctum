@@ -192,7 +192,7 @@ Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS s
 - `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
 - `WorkosOrganizations` tag (`WorkosOrganizationsFromEnv`), provided by main.ts and worker.ts.
 
-### workspace deletion (plan 10.1 option A)
+### workspace deletion
 
 Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceApi` and the `WorkspaceOwner` middleware in contracts `workspace.ts`, `web-app/src/pages/listen/WorkspaceDeletion.tsx`.
 

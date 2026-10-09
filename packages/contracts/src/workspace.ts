@@ -1,4 +1,4 @@
-/** Workspace deletion for its owner: soft delete, undo during the grace period, then a durable purge (plan 10.1 option A). */
+/** Workspace deletion for its owner: soft delete, undo during the grace period, then a durable purge. */
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from '@effect/platform';
 import { Schema } from 'effect';
 import { CurrentAccess } from './auth.ts';

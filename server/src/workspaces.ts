@@ -1,5 +1,5 @@
 /**
- * Workspace deletion (plan 10.1 option A). The owner confirms with the exact workspace name; the
+ * Workspace deletion. The owner confirms with the exact workspace name; the
  * workspace is then marked deleted, which refuses every membership, session and agent credential
  * of it at once (auth.ts joins only live workspaces), and a `workspace.purge` job becomes due after
  * the grace period, during which the owner can restore it. The purge deletes the workspace's R2
