@@ -169,8 +169,8 @@ export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
   access.scopes.includes(scope) ? Effect.void : Effect.fail(new Forbidden({ message: `Requires ${scope}`, required_scope: scope }));
 
 /**
- * Opens a browser session for an active human or device member, e.g. after the (unselected)
- * login issuer verified an identity or after device enrollment. Returns the only plain copies of
+ * Opens a browser session for an active human or device member, e.g. after the configured
+ * login issuer (docs/DECISIONS.md) verified an identity or after device enrollment. Returns the only plain copies of
  * the cookie and CSRF tokens; the opener sets them as `sanctum_session` (HttpOnly) and
  * `sanctum_csrf` (script-readable, SameSite=Strict), which the website echoes as `x-csrf-token`.
  */
