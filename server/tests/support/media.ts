@@ -20,7 +20,7 @@ import { dbLayer } from '../../src/db.ts';
 import type { serverLayer } from '../../src/main.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 import type { ObjectStore } from '../../src/providers/object-store.ts';
-import { type AsrResult, SpeechToText } from '../../src/providers/whisper.ts';
+import { type AsrBatch, type AsrResult, SpeechToText } from '../../src/providers/whisper.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
 
@@ -57,6 +57,8 @@ interface FakeStream {
   /** The connection's scope closed (socket and keep-alive released). */
   released: boolean;
   readonly emit: (result: AsrResult) => void;
+  /** One provider answer for a whole audio span, as a Whisper chunk. */
+  readonly emitBatch: (batch: AsrBatch) => void;
   /** The provider drops the connection unexpectedly. */
   readonly drop: () => void;
 }
@@ -79,14 +81,15 @@ export function fakeSpeech() {
           controls.openFailures--;
           return yield* new Unavailable({ message: 'fake provider outage', retryable: true });
         }
-        const mailbox = yield* Mailbox.make<AsrResult, Unavailable>();
+        const mailbox = yield* Mailbox.make<AsrBatch, Unavailable>();
         const stream: FakeStream = {
           sample_rate,
           received: 0,
           backlog: 0,
           finished: false,
           released: false,
-          emit: result => void mailbox.unsafeOffer(result),
+          emit: result => void mailbox.unsafeOffer({ start_s: result.start_s, end_s: result.end_s, results: [result] }),
+          emitBatch: batch => void mailbox.unsafeOffer(batch),
           drop: () => void mailbox.unsafeDone(Exit.fail(new Unavailable({ message: 'fake provider dropped', retryable: true }))),
         };
         streams.push(stream);

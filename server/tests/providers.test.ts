@@ -139,8 +139,8 @@ describe('Workers AI Whisper', () => {
       yield* stream.finish;
       const cut = 24_160;
       expect([...(yield* Effect.flatten(collected.await))]).toEqual([
-        { start_s: 0, end_s: cut / 16_000, is_final: true, text: '', confidence: null, speaker: null },
-        { start_s: cut / 16_000, end_s: 3, is_final: true, text: '', confidence: null, speaker: null },
+        { start_s: 0, end_s: cut / 16_000, results: [] },
+        { start_s: cut / 16_000, end_s: 3, results: [] },
       ]);
       expect(server.requests).toHaveLength(0);
       const quiet = new Int16Array(16_000);
@@ -197,10 +197,12 @@ describe('Workers AI Whisper', () => {
       const results = [...(yield* Effect.flatten(collected.await))];
       expect(server.requests.map(request => sentAudio(request.body).samples.length).sort()).toEqual([48_000 - cut, cut].sort());
       expect(results).toEqual([
-        { start_s: 0.1, end_s: 0.5, is_final: true, text: `heard ${cut}`, confidence: null, speaker: null },
-        { start_s: 0, end_s: cut / 16_000, is_final: true, text: '', confidence: null, speaker: null },
-        { start_s: cut / 16_000 + 0.1, end_s: cut / 16_000 + 0.5, is_final: true, text: `heard ${48_000 - cut}`, confidence: null, speaker: null },
-        { start_s: cut / 16_000, end_s: 3, is_final: true, text: '', confidence: null, speaker: null },
+        { start_s: 0, end_s: cut / 16_000, results: [{ start_s: 0.1, end_s: 0.5, is_final: true, text: `heard ${cut}`, confidence: null, speaker: null }] },
+        {
+          start_s: cut / 16_000,
+          end_s: 3,
+          results: [{ start_s: cut / 16_000 + 0.1, end_s: cut / 16_000 + 0.5, is_final: true, text: `heard ${48_000 - cut}`, confidence: null, speaker: null }],
+        },
       ]);
       expect(stream.backlogBytes()).toBe(0);
     }),

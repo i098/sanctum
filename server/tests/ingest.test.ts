@@ -141,6 +141,22 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
+  it.scoped('records a whole live chunk as transcribed, so reconciliation does not re-send the gaps between its words', () =>
+    Effect.gen(function* () {
+      const { host, access, speech, providers, listener_id, epoch_id, socket } = yield* setup;
+      for (let sequence = 0; sequence < 10; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
+      const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === RATE);
+      stream!.emitBatch({ start_s: 0, end_s: 1, results: [{ start_s: 0.2, end_s: 0.3, is_final: true, text: 'between pauses', confidence: null, speaker: null }] });
+      yield* eventually(finals(access, epoch_id), rows => rows.length === 1);
+
+      const archived = chunk({ listener_id, epoch_id, sequence: 0, sample_start: 0, samples: syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 440 }) });
+      expect((yield* uploadChunk(host, 'device', archived)).status).toBe(200);
+      yield* Effect.provide(reconcileTranscript({ workspace_id: access.workspace_id, payload: { epoch_id, track: 0, sample_start: 0, sample_end: RATE } }), providers);
+      expect(speech.batches).toEqual([]);
+      expect(yield* finals(access, epoch_id)).toEqual([[3_200, 4_800, 'between pauses', 'live']]);
+    }),
+  );
+
   it.scoped('skips live ASR under provider backpressure instead of queueing without bound', () =>
     Effect.gen(function* () {
       const { speech, socket } = yield* setup;

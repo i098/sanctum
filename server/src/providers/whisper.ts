@@ -22,13 +22,20 @@ export interface AsrResult {
   readonly speaker: string | null;
 }
 
+/** What the provider answered for the audio span `[start_s, end_s)`; the span is finished even when `results` is empty. */
+export interface AsrBatch {
+  readonly start_s: number;
+  readonly end_s: number;
+  readonly results: ReadonlyArray<AsrResult>;
+}
+
 export interface AsrStream {
   /** Queues audio without waiting; `false` once the connection is gone. */
   readonly send: (samples: Int16Array) => boolean;
   /** Bytes queued by `send` but not yet sent to the provider. */
   readonly backlogBytes: () => number;
-  /** Results in audio order; ends after `finish` once the provider answered everything, fails on a provider error. An empty-text final marks audio the provider finished, so reconciliation skips it. */
-  readonly results: Stream.Stream<AsrResult, Unavailable>;
+  /** Answers in audio order; ends after `finish` once the provider answered everything, fails on a provider error. Audio the provider did not answer is absent. */
+  readonly results: Stream.Stream<AsrBatch, Unavailable>;
   /** Sends the audio still buffered and ends `results` after its answer. */
   readonly finish: Effect.Effect<void>;
 }
@@ -162,15 +169,14 @@ export function whisperSpeechToText(config: WhisperConfig) {
         offset += length;
         queued += samples.byteLength;
       };
-      const transcribeChunk = ({ offset, samples }: Chunk): Effect.Effect<ReadonlyArray<AsrResult>, Unavailable> => {
+      const transcribeChunk = ({ offset, samples }: Chunk): Effect.Effect<ReadonlyArray<AsrBatch>, Unavailable> => {
         queued -= samples.byteLength;
         const shift = offset / sample_rate;
-        const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrResult>);
+        const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrBatch>);
         if (Date.now() < pausedUntil) return skipped;
         return transcribe(sample_rate, samples).pipe(
           Effect.map(results => [
-            ...results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })),
-            { start_s: shift, end_s: shift + samples.length / sample_rate, is_final: true, text: '', confidence: null, speaker: null },
+            { start_s: shift, end_s: shift + samples.length / sample_rate, results: results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })) },
           ]),
           Effect.catchIf(
             error => error.retry_after_ms !== undefined,

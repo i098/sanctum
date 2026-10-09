@@ -26,7 +26,7 @@ import {
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
-import { type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
+import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/cartesia.ts';
 import { SpeechGate, SpeechReplies, speechController } from './speech-gate.ts';
@@ -91,26 +91,37 @@ const partialSegment = (stt: { readonly provider: string; readonly model: string
     created_at: new Date().toISOString(),
   });
 
-/** Maps one provider result to epoch samples: partials go to the client only, finals become evidence first. */
-const relayResult = (
+/** Maps one provider answer to epoch samples: partials go to the client only; finals and the span they answered become evidence in one write, or not at all. */
+const relayBatch = (
   { access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>,
   stt: { readonly provider: string; readonly model: string },
   current: Lane,
-  result: AsrResult,
+  batch: AsrBatch,
 ) =>
   Effect.gen(function* () {
     const rate = start.clock.sample_rate;
-    const sample_start = current.anchor + Math.round(result.start_s * rate);
-    const sample_end = Math.min(current.anchor + Math.round(result.end_s * rate), current.next_sample);
-    if (sample_end <= sample_start) return;
-    const source = { epoch_id: start.epoch_id, track: start.track, sample_start, sample_end };
-    if (!result.is_final) return yield* send({ _tag: 'transcript', segment: partialSegment(stt, current.connection_id, source, result) });
+    const span = (result: { readonly start_s: number; readonly end_s: number }) => ({
+      sample_start: current.anchor + Math.round(result.start_s * rate),
+      sample_end: Math.min(current.anchor + Math.round(result.end_s * rate), current.next_sample),
+    });
+    const finals: Array<{ sample_start: number; sample_end: number; text: string; confidence: number | null; speaker_label: string | null }> = [];
+    for (const result of batch.results) {
+      const { sample_start, sample_end } = span(result);
+      if (sample_end <= sample_start) continue;
+      if (result.is_final) finals.push({ sample_start, sample_end, text: result.text, confidence: result.confidence, speaker_label: result.speaker });
+      else {
+        const source = { epoch_id: start.epoch_id, track: start.track, sample_start, sample_end };
+        yield* send({ _tag: 'transcript', segment: partialSegment(stt, current.connection_id, source, result) });
+      }
+    }
+    const window = span(batch);
+    if (window.sample_end <= window.sample_start || (finals.length === 0 && batch.results.length > 0)) return;
     const segments = yield* publishFinalWindow({
       workspace_id: access.workspace_id,
       epoch_id: start.epoch_id,
       track: start.track,
-      window: { sample_start, sample_end },
-      segments: [{ sample_start, sample_end, text: result.text, confidence: result.confidence, speaker_label: result.speaker }],
+      window,
+      segments: finals,
       origin: 'live',
       provider: stt.provider,
       model: stt.model,
@@ -184,7 +195,7 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         const current: Lane = { connection_id, anchor, next_sample: anchor, stream: opened.right, scope, consumer: null };
         lane = current;
         current.consumer = yield* opened.right.results.pipe(
-          Stream.runForEach(result => relayResult({ access, listener, start, send }, stt, current, result)),
+          Stream.runForEach(batch => relayBatch({ access, listener, start, send }, stt, current, batch)),
           Effect.catchAll(error =>
             Effect.gen(function* () {
               if (lane === current) {
