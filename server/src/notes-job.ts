@@ -36,7 +36,9 @@ export const summarizeNotes = (job: { readonly workspace_id: WorkspaceId; readon
       Effect.tapError(() => markFailed(job.workspace_id, meeting.id)),
     );
     const stored = { ...notes, boundary_revision: meeting.boundary_revision, generated_at: new Date().toISOString() };
+    // The notes title names a meeting nobody titled; a title already set is never replaced.
     const updated = yield* sql`UPDATE meetings SET notes = ${JSON.stringify(stored)}, notes_revision = notes_revision + 1,
+        title = COALESCE(title, NULLIF(${notes.title.slice(0, 300)}, '')),
         processing = JSON_SET(processing, '$.notes', 'complete'), updated_at = UTC_TIMESTAMP(6)
       WHERE workspace_id = ${job.workspace_id} AND id = ${meeting.id} AND boundary_revision = ${meeting.boundary_revision}`.raw;
     const affected = typeof updated === 'object' && updated !== null && 'affectedRows' in updated ? Number(updated.affectedRows) : 0;
