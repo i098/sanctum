@@ -6,7 +6,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
-  "routes": [{ "pattern": "sanctum.42nights.dev", "custom_domain": true }],
+  // The app host serves the app, API and MCP; the apex redirects to it (src/index.ts).
+  "routes": [
+    { "pattern": "app.sanctum.42nights.dev", "custom_domain": true },
+    { "pattern": "sanctum.42nights.dev", "custom_domain": true }
+  ],
   // Invocation logs would store the request URL, and `/auth/callback?code=…` carries one-time authorization codes.
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // Restarts the job worker after a crash or rollout; a running worker is left alone unless its start settings changed (docs/operations.md, "Cloudflare").
@@ -20,10 +24,10 @@
     "SANCTUM_SELECTED_DECISIONS": "identity_issuer,mcp_authorization_server",
     "SANCTUM_OIDC_ISSUER": "https://merry-precipice-00.authkit.app",
     "SANCTUM_OIDC_CLIENT_ID": "client_01M4F52XRNYW3H8YQBF1NRGQCE",
-    "SANCTUM_OIDC_REDIRECT_URI": "https://sanctum.42nights.dev/auth/callback",
+    "SANCTUM_OIDC_REDIRECT_URI": "https://app.sanctum.42nights.dev/auth/callback",
     "SANCTUM_MCP_ISSUER": "https://merry-precipice-00.authkit.app",
     "SANCTUM_MCP_JWKS_URL": "https://merry-precipice-00.authkit.app/oauth2/jwks",
-    "SANCTUM_MCP_RESOURCE": "https://sanctum.42nights.dev/mcp",
+    "SANCTUM_MCP_RESOURCE": "https://app.sanctum.42nights.dev/mcp",
     // WorkOS DCR and CIMD clients get only OIDC scopes; these apply to such tokens, narrowed by role.
     "SANCTUM_MCP_DEFAULT_SCOPES": "context:read,context:write,recordings:read",
     // A signed-in user with no membership may create a workspace and its WorkOS organization; needs the WORKOS_API_KEY secret (docs/operations.md).

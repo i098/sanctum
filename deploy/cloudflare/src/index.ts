@@ -1,8 +1,9 @@
 /**
- * Sanctum on Cloudflare: this Worker forwards every request, including the listener WebSocket, to
- * the API container. A second container from the same image runs the job worker; the cron restarts
- * it after a crash or rollout, so jobs keep running while nobody has the site open. State lives in
- * MySQL and R2, never on container disk.
+ * Sanctum on Cloudflare: this Worker serves two hosts. The app host forwards every request,
+ * including the listener WebSocket, to the API container; the apex sends visitors to the app host.
+ * A second container from the same image runs the job worker; the cron restarts it after a crash or
+ * rollout, so jobs keep running while nobody has the site open. State lives in MySQL and R2, never
+ * on container disk.
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import { type AppSettings, containerEnv, retireStaleContainer } from './settings.ts';
@@ -46,8 +47,19 @@ export class SanctumJobs extends SanctumContainer {
   override async onActivityExpired() {}
 }
 
+/** The app, `/api/v1`, `/mcp`, `/auth/*` and the rest of the site. */
+const APP_HOST = 'app.sanctum.42nights.dev';
+const APEX_HOST = 'sanctum.42nights.dev';
+
+/** The apex: 308 to the same path and query on the app host, so old links keep working. MCP tokens issued for the apex resource no longer match the audience, so MCP clients must authorize again. */
+const apex = (request: Request) => {
+  const url = new URL(request.url);
+  url.host = APP_HOST;
+  return Response.redirect(url.toString(), 308);
+};
+
 export default {
-  fetch: (request, env) => getContainer(env.API).fetch(request),
+  fetch: (request, env) => (new URL(request.url).hostname === APEX_HOST ? apex(request) : getContainer(env.API).fetch(request)),
   scheduled: async (_controller, env) => {
     await getContainer(env.JOBS).start();
   },
