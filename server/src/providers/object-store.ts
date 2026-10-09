@@ -6,7 +6,7 @@
 import { Context, Data, type Effect } from 'effect';
 
 export class ObjectStoreError extends Data.TaggedError('ObjectStoreError')<{
-  readonly operation: 'put' | 'head' | 'get' | 'presign';
+  readonly operation: 'put' | 'head' | 'get' | 'presign' | 'list' | 'delete';
   readonly key: string;
   readonly message: string;
   /** Unknown outcome (e.g. timeout after sending); callers reconcile with `head` before retrying. */
@@ -28,6 +28,10 @@ interface ObjectStoreService {
   readonly get: (key: string) => Effect.Effect<Uint8Array, ObjectStoreError>;
   /** Signed GET URL; issue only after a fresh access check and never for longer than the configured TTL. */
   readonly presignGet: (key: string, ttlMs: number) => Effect.Effect<string, ObjectStoreError>;
+  /** Up to one page (at most 1,000) of keys starting with `prefix`, in key order. */
+  readonly list: (prefix: string) => Effect.Effect<ReadonlyArray<string>, ObjectStoreError>;
+  /** Idempotent: deleting a missing key succeeds. */
+  readonly delete: (key: string) => Effect.Effect<void, ObjectStoreError>;
 }
 
 export class ObjectStore extends Context.Tag('sanctum/ObjectStore')<ObjectStore, ObjectStoreService>() {}

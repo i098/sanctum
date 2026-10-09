@@ -20,14 +20,17 @@ type R2Config = Config.Config.Success<typeof r2Config>;
 
 type Operation = ObjectStoreError['operation'];
 
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
 function r2Store(config: R2Config) {
   // Retries stay with the caller: an unanswered PUT is ambiguous and is reconciled with `head`, never blindly resent.
   const client = new AwsClient({ accessKeyId: config.accessKeyId, secretAccessKey: Redacted.value(config.secretAccessKey), service: 's3', region: 'auto', retries: 0 });
-  const objectUrl = (name: string) => new URL(`${config.endpoint.pathname.replace(/\/$/, '')}/${config.bucket}/${config.prefix}${name}`, config.endpoint);
+  const bucketPath = `${config.endpoint.pathname.replace(/\/$/, '')}/${config.bucket}`;
+  const objectUrl = (name: string) => new URL(`${bucketPath}/${config.prefix}${name}`, config.endpoint);
 
-  const request = (operation: Operation, name: string, method: string, body?: Uint8Array, extra: Record<string, string> = {}) =>
+  const request = (operation: Operation, name: string, method: string, body?: Uint8Array, extra: Record<string, string> = {}, url = objectUrl(name)) =>
     Effect.tryPromise(signal =>
-      client.fetch(objectUrl(name), {
+      client.fetch(url, {
         method,
         // Sign the actual bytes so R2 rejects a body altered in transit.
         headers: body === undefined ? extra : { ...extra, 'x-amz-content-sha256': createHash('sha256').update(body).digest('hex') },
@@ -38,7 +41,8 @@ function r2Store(config: R2Config) {
       // A write whose response never arrived may still have landed; the caller reconciles with head.
       Effect.mapError(error => new ObjectStoreError({ operation, key: name, message: String(error.cause), ambiguous: method === 'PUT' })),
       Effect.filterOrFail(
-        response => response.ok || (method !== 'PUT' && response.status === 404),
+        // A missing object is an answer for head and get; for list and delete a 404 means a missing bucket.
+        response => response.ok || ((operation === 'head' || operation === 'get') && response.status === 404),
         response => new ObjectStoreError({ operation, key: name, message: `R2 responded ${response.status}`, ambiguous: method === 'PUT' && response.status >= 500 }),
       ),
     );
@@ -75,6 +79,17 @@ function r2Store(config: R2Config) {
         Effect.map(request => request.url),
         Effect.mapError(error => new ObjectStoreError({ operation: 'presign', key: name, message: String(error.cause), ambiguous: false })),
       ),
+    list: prefix => {
+      const url = new URL(bucketPath, config.endpoint);
+      url.search = new URLSearchParams({ 'list-type': '2', prefix: `${config.prefix}${prefix}`, 'max-keys': '1000' }).toString();
+      return request('list', prefix, 'GET', undefined, {}, url).pipe(
+        Effect.flatMap(response => Effect.tryPromise(() => response.text())),
+        Effect.mapError(error => (error._tag === 'UnknownException' ? new ObjectStoreError({ operation: 'list', key: prefix, message: String(error.cause), ambiguous: false }) : error)),
+        // ListObjectsV2 XML: each <Key> is XML-escaped and carries the configured prefix.
+        Effect.map(xml => [...xml.matchAll(/<Key>([^<]*)<\/Key>/g)].map(match => match[1]!.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => XML_ENTITIES[name]!).slice(config.prefix.length))),
+      );
+    },
+    delete: name => Effect.asVoid(request('delete', name, 'DELETE')),
   });
 }
 
@@ -86,6 +101,13 @@ export const R2ObjectStoreLive = Layer.effect(
   Effect.map(Config.option(r2Config), config =>
     Option.isSome(config)
       ? r2Store(config.value)
-      : ObjectStore.of({ put: unconfigured('put'), head: unconfigured('head'), get: unconfigured('get'), presignGet: unconfigured('presign') }),
+      : ObjectStore.of({
+        put: unconfigured('put'),
+        head: unconfigured('head'),
+        get: unconfigured('get'),
+        presignGet: unconfigured('presign'),
+        list: unconfigured('list'),
+        delete: unconfigured('delete'),
+      }),
   ),
 );

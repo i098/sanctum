@@ -29,9 +29,9 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 | Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `mysqlErrno`. |
 | Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
-| Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
+| Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`, `list`, `delete`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
 | Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
-| Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `WorkerServices`, `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
+| Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
 | Analyser levels | [levels.ts](../web-app/src/lib/capture/levels.ts) | `createAnalyserLevels(analyser, bandCount)` for the waveform. |
 | Server tests | [server/tests/support](../server/tests/support/database.ts) | `withDatabase`, `seedWorkspace`, `fixtureAccess`, `memoryObjectStore`; one MySQL 8.4 per run. |
@@ -193,6 +193,14 @@ Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS s
 - `org-sync.ts`: `reconcileSignIn(identity, name, create)`, called by signin.ts after the ID token is verified; `syncWorkosEvents` handles job kind `workos.sync` and is registered in worker.ts next to its layer (one more import would make job-handlers.ts a Sentrux god file); `armWorkosSync` schedules it when the worker starts.
 - `WorkosOrganizations` tag (`WorkosOrganizationsFromEnv`), provided by main.ts and worker.ts.
 
+### workspace deletion
+
+Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceApi` and the `WorkspaceOwner` middleware in contracts `workspace.ts`, `web-app/src/pages/listen/WorkspaceDeletion.tsx`.
+
+- `auth.ts` joins only live workspaces, so a deleted workspace refuses every session, credential and `resolveAccess` at once; `WorkspaceOwnerLive` and `openSession` alone still admit an owner until `purge_after`, so the owner can sign in again and undo.
+- Deleting ends this process's open listener sockets of the workspace with a `rejected` message (`unauthorized`) and close code 1008 (`server/src/media/open-sockets.ts`), and `workspaceIsLive` in store.ts refuses segment, chunk commit and recording-object writes of a deleted workspace in every process; a reconcile or recording job that meets the deletion mid-run fails with the requester refusal, so Undo requeues it; the web app pauses capture after a successful delete.
+- Handles job kind `workspace.purge`; a table added with a `workspace_id` column joins `PURGED_TABLES` in workspaces.ts, children first. The purge keeps the deployment-wide `workos.sync` job row, because it is anchored to the oldest workspace.
+
 ## Hot files
 
 | File | Who touches it | How |
@@ -201,7 +209,7 @@ Owns `server/src/org-sync.ts`, `server/src/providers/workos.ts` and the WorkOS s
 | `server/src/api.ts` | every slice with REST | One handler layer in the `ApiLive` list. |
 | `server/src/main.ts` | kernel, media, interfaces, serve, sign-in | Authenticator swap; upgrade handler; `/mcp` mount; `/auth/*` mount; static assets. |
 | `server/src/worker.ts` | slices with provider layers | Provide the layer next to `dbLayer`. |
-| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; add provider tags to `WorkerServices`. Handler modules import `job-types.ts`, never this file. |
+| `server/src/job-handlers.ts` | media, meetings, context, actions | One `kind: handler` entry; the services a handler needs come from its type, and worker.ts provides their layers. Handler modules import `job-types.ts`, never this file. |
 | `server/src/config.ts` | models, media, actions, pipedream | Own key inside `serverConfig`; defaults stay in `engineeringDefaults`. |
 | `server/src/media/session.ts` | media, meetings, actions | Media owns it; siblings expose functions it calls. |
 | `web-app/src/pages/listen/engine.ts` | capture, listen-ui, actions | Capture owns it; actions adds playback registration. |

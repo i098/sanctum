@@ -8,6 +8,9 @@ import { SqlClient } from '@effect/sql';
 import type { JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 
+/** Failure message of a job whose requester lost access; restoring a workspace requeues the jobs that failed with it. */
+export const REQUESTER_REFUSED = 'Requester is no longer authorized';
+
 export interface EnqueueJob {
   readonly workspace_id: WorkspaceId;
   readonly kind: JobKind;

@@ -71,6 +71,29 @@ describe('R2 object store', () => {
     }),
   );
 
+  it.scoped('lists keys under a prefix without the configured prefix and deletes them; a missing bucket fails', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((request, _body, response) => {
+        const url = new URL(request.url!, 'http://r2.test');
+        if (request.method === 'DELETE') return response.writeHead(204).end();
+        if (url.pathname !== '/audio') return response.writeHead(404).end();
+        const keys = url.searchParams.get('prefix') === 'private/w/1/' ? ['private/w/1/a&amp;b.wav', 'private/w/1/c.wav'] : [];
+        response.writeHead(200, { 'content-type': 'application/xml' });
+        response.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><IsTruncated>false</IsTruncated>${keys.map(key => `<Contents><Key>${key}</Key><Size>1</Size></Contents>`).join('')}</ListBucketResult>`);
+      });
+      const store = (bucket: string) =>
+        Effect.provide(ObjectStore, R2ObjectStoreLive.pipe(Layer.provide(withConfig({ R2_ENDPOINT: server.url, R2_BUCKET: bucket, R2_ACCESS_KEY_ID: 'key-id', R2_SECRET_ACCESS_KEY: 'secret', R2_PREFIX: 'private/' }))));
+      const audio = yield* store('audio');
+      expect(yield* audio.list('w/1/')).toEqual(['w/1/a&b.wav', 'w/1/c.wav']);
+      const list = new URL(server.requests[0]!.url, 'http://r2.test');
+      expect(Object.fromEntries(list.searchParams)).toEqual({ 'list-type': '2', prefix: 'private/w/1/', 'max-keys': '1000' });
+      expect(server.requests[0]!.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 /);
+      yield* audio.delete('w/1/c.wav');
+      expect(server.requests[1]).toMatchObject({ method: 'DELETE', url: '/audio/private/w/1/c.wav' });
+      expect(yield* Effect.flip((yield* store('missing')).list('w/1/'))).toMatchObject({ operation: 'list', message: 'R2 responded 404' });
+    }),
+  );
+
   it.effect('fails every call visibly when R2 is not configured', () =>
     Effect.gen(function* () {
       const store = yield* Effect.provide(ObjectStore, R2ObjectStoreLive.pipe(Layer.provide(withConfig({}))));

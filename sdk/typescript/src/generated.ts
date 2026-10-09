@@ -621,6 +621,17 @@ export type RevokeCredentialInput = {
   readonly key_id: string;
 };
 
+export type Workspace = {
+  readonly id: string;
+  readonly name: string;
+  readonly deleted_at: string | null;
+  readonly purge_after: string | null;
+};
+
+export type DeleteWorkspace = {
+  readonly confirm_name: string;
+};
+
 export interface Operations {
   'health.healthz': { input: Readonly<Record<string, unknown>>; output: HealthzOutput };
   'health.readyz': { input: Readonly<Record<string, unknown>>; output: ReadyzOutput };
@@ -655,6 +666,9 @@ export interface Operations {
   'agents.createAgent': { input: CreateAgent; output: CreatedAgent };
   'agents.listAgents': { input: ListAgentsInput; output: AgentPage };
   'agents.revokeCredential': { input: RevokeCredentialInput; output: null };
+  'workspace.getWorkspace': { input: Readonly<Record<string, unknown>>; output: Workspace };
+  'workspace.deleteWorkspace': { input: DeleteWorkspace; output: Workspace };
+  'workspace.restoreWorkspace': { input: Readonly<Record<string, unknown>>; output: Workspace };
 }
 
 export const operations: Record<keyof Operations, OperationSpec> = {
@@ -691,4 +705,7 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'agents.createAgent': {"method":"POST","path":"/api/v1/agents","pathParams":[],"queryParams":[],"body":true},
   'agents.listAgents': {"method":"GET","path":"/api/v1/agents","pathParams":[],"queryParams":["cursor","limit"],"body":false},
   'agents.revokeCredential': {"method":"DELETE","path":"/api/v1/agents/{agent_id}/credentials/{key_id}","pathParams":["agent_id","key_id"],"queryParams":[],"body":false},
+  'workspace.getWorkspace': {"method":"GET","path":"/api/v1/workspace","pathParams":[],"queryParams":[],"body":false},
+  'workspace.deleteWorkspace': {"method":"DELETE","path":"/api/v1/workspace","pathParams":[],"queryParams":[],"body":true},
+  'workspace.restoreWorkspace': {"method":"POST","path":"/api/v1/workspace/restore","pathParams":[],"queryParams":[],"body":false},
 };

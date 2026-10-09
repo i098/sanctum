@@ -46,6 +46,16 @@ export const nextContextSeq: (workspace_id: WorkspaceId) => Effect.Effect<number
 export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> =
   increment('permission_revision');
 
+/**
+ * True while the workspace is not deleted. The share lock holds until the caller's transaction ends,
+ * so a delete waits for the write in flight and a write after the delete sees it.
+ */
+export const workspaceIsLive = (workspace_id: WorkspaceId) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    sql => sql`SELECT 1 FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NULL FOR SHARE`,
+  ).pipe(Effect.map(rows => rows.length > 0));
+
 /** Roles that take a seat; agents and devices never count against the limit. */
 const seatRoles: ReadonlyArray<WorkspaceRole> = ['owner', 'admin', 'member'];
 

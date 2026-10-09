@@ -34,7 +34,11 @@ export const engineeringDefaults = {
       'speakers.refine': 20 * 60_000,
       /** Above one research call with transport retries (3 × 4 min) plus planning. */
       'research.run': 20 * 60_000,
+      /** Object deletes are idempotent, so a hit keeps its progress and the next attempt continues. */
+      'workspace.purge': 30 * 60_000,
     } as Partial<Record<JobKind, number>>,
+    /** A purge retries every retryable error at the capped backoff until it succeeds: the INT UNSIGNED maximum of `jobs.max_attempts`. */
+    purgeMaxAttempts: 2 ** 32 - 1,
   },
   /**
    * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks cut at the
@@ -109,10 +113,17 @@ export const defaultSeatLimit: Config.Config<number | null> = Schema.Config('SAN
   Config.map(Option.getOrNull),
 );
 
+/** Days between deleting a workspace and purging its recordings and rows; the owner can undo until then. */
+export const workspacePurgeGraceDays = Config.integer('SANCTUM_WORKSPACE_PURGE_GRACE_DAYS').pipe(
+  Config.validate({ message: 'must be at least 1 day', validation: days => days >= 1 }),
+  Config.withDefault(7),
+);
+
 export const serverConfig = Config.all({
   environment: Config.literal('development', 'test', 'production')('SANCTUM_ENV').pipe(Config.withDefault('development')),
   /** Default seat limit; null is unlimited. Read here so a malformed value fails at startup. */
   seatLimit: defaultSeatLimit,
+  workspacePurgeGraceDays,
   apiPort: port('API_PORT', 7102),
   mysql: Config.all({
     host: Config.string('MYSQL_HOST').pipe(Config.withDefault('127.0.0.1')),

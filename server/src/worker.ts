@@ -8,13 +8,16 @@ import { Effect } from 'effect';
 import { requireActivation, serverConfig } from './config.ts';
 import { dbLayer } from './db.ts';
 import { PipedreamLive } from './integrations.ts';
-import { jobHandlers, type WorkerServices } from './job-handlers.ts';
+import { jobHandlers } from './job-handlers.ts';
+import type { JobHandlers } from './job-types.ts';
 import { LlmLive } from './llm.ts';
 import { runWorker } from './job-runner.ts';
 import { MediaProvidersLive } from './media/providers.ts';
 import { loadMigrations, requireCurrentSchema } from './migrate.ts';
 import { armWorkosSync, syncWorkosEvents, type WorkosOrganizations, WorkosOrganizationsFromEnv } from './org-sync.ts';
 import { PyannoteLive } from './providers/pyannote.ts';
+
+type WorkerServices = typeof jobHandlers extends JobHandlers<infer R> ? R : never;
 
 if (import.meta.main) {
   Effect.gen(function* () {

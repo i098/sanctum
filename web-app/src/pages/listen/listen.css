@@ -561,6 +561,54 @@
   box-shadow: inset 0 0 0 1px #3d7dff;
 }
 
+.listen-dialog button[data-danger] {
+  color: #f2a23b;
+  box-shadow: inset 0 0 0 1px rgb(242 162 59 / 0.55);
+}
+
+.listen-workspace {
+  margin-top: 20px;
+  padding-top: 4px;
+  border-top: 1px solid #171c26;
+}
+
+.listen-workspace p,
+.listen-confirm p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.listen-confirm label {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0 12px;
+  color: #8b919c;
+}
+
+.listen-confirm strong {
+  color: #e7ecf3;
+  font-weight: 500;
+}
+
+.listen-confirm input {
+  padding: 8px 10px;
+  border: 1px solid #222936;
+  border-radius: 4px;
+  background: #0b0e14;
+  color: #e7ecf3;
+  font: inherit;
+}
+
+.listen-confirm input:focus-visible {
+  outline: 1px solid #3d7dff;
+  border-color: #3d7dff;
+}
+
+.listen-confirm .listen-local-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .listen-local-gap {
   color: #f2a23b;
 }

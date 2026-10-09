@@ -10,9 +10,10 @@ import { SqlClient, SqlSchema } from '@effect/sql';
 import { Forbidden, Unauthenticated, Unavailable, WorkspaceId } from '@sanctum/contracts';
 import { ConfigError, Context, Data, Effect, Layer, Option, Redacted, Schema } from 'effect';
 import * as oidc from 'openid-client';
-import { Authenticator, identityPrincipal, linkIdentity, openSession, revokeSession, SESSION_COOKIE } from './auth.ts';
+import { Authenticator, identityPrincipal, linkIdentity, openSession, ownerUntilPurge, revokeSession, SESSION_COOKIE } from './auth.ts';
 import { serverConfig } from './config.ts';
 import { reconcileSignIn, SelfServeRequest, WorkosOrganizations } from './org-sync.ts';
+import { DbSafeInt } from './db.ts';
 
 /** Relying-party settings: the `SANCTUM_OIDC_*` group, all set or not configured. */
 export interface SignIn {
@@ -151,13 +152,16 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         );
         const principal = yield* identityPrincipal(identity);
         if (Option.isNone(principal)) return yield* notMember('unknown identity');
-        const memberships = yield* SqlSchema.findAll({
+        const found = yield* SqlSchema.findAll({
           Request: Schema.Void,
-          Result: Schema.Struct({ workspace_id: WorkspaceId }),
-          execute: () => sql`SELECT m.workspace_id FROM workspace_members m JOIN principals p ON p.id = m.principal_id
-            WHERE m.principal_id = ${principal.value} AND m.revoked_at IS NULL AND p.disabled_at IS NULL AND p.kind = 'human'
+          Result: Schema.Struct({ workspace_id: WorkspaceId, live: DbSafeInt }),
+          execute: () => sql`SELECT m.workspace_id, w.deleted_at IS NULL AS live FROM workspace_members m
+            JOIN principals p ON p.id = m.principal_id JOIN workspaces w ON w.id = m.workspace_id
+            WHERE m.principal_id = ${principal.value} AND m.revoked_at IS NULL AND p.disabled_at IS NULL AND p.kind = 'human' AND ${ownerUntilPurge(sql)}
             AND (${flow.workspace ?? null} IS NULL OR m.workspace_id = ${flow.workspace ?? null}) ORDER BY m.workspace_id`,
         })(undefined).pipe(Effect.catchTag('ParseError', Effect.die));
+        const live = found.filter(m => m.live === 1);
+        const memberships = live.length > 0 ? live : found;
         if (memberships.length === 0) return yield* notMember('no active human membership');
         if (memberships.length > 1) {
           return yield* new SignInFailed({ code: 'choose_workspace', reason: 'several memberships', params: memberships.map(m => ['workspace', m.workspace_id]) });

@@ -5,14 +5,15 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient, SqlSchema } from '@effect/sql';
-import { type AccessScope, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
+import { type AccessScope, JobFailure, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt, DbSha256 } from './db.ts';
-import { enqueueJob } from './jobs.ts';
+import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { asJobResult, currentRanges, MeetingJobPayload, type MeetingJob, OPEN_STATES, selectMeeting, type TimedRange } from './meeting-store.ts';
 import { ObjectStore, wavFile } from './providers/object-store.ts';
+import { workspaceIsLive } from './store.ts';
 
 const ChunkRow = Schema.Struct({ sample_start: DbSafeInt, sample_count: DbSafeInt, sha256: DbSha256, object_key: Schema.String });
 
@@ -61,6 +62,20 @@ const cutRange = (workspace_id: string, range: TimedRange) =>
     return { pieces, parts };
   });
 
+// ponytail: whole cut in worker memory and ranges at another sample rate become gaps; stream a multipart upload and add verified resampling when meetings outgrow this.
+const cutRanges = (workspace_id: string, ranges: ReadonlyArray<TimedRange>, rate: number) =>
+  Effect.gen(function* () {
+    const pieces: Array<SourceRange> = [];
+    const parts: Array<Uint8Array> = [];
+    for (const range of ranges.filter(candidate => candidate.epoch.sample_rate === rate)) {
+      const cut = yield* cutRange(workspace_id, range);
+      pieces.push(...cut.pieces);
+      parts.push(...cut.parts);
+    }
+    const status = parts.length === 0 ? 'failed' : gapsOf(ranges, pieces).length === 0 ? 'complete' : 'partial';
+    return { pieces, parts, status };
+  });
+
 /**
  * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>.wav` for a sealed
  * meeting's current boundary revision, then queues speaker refinement over that cut.
@@ -78,21 +93,14 @@ export const assembleRecording = (job: MeetingJob) =>
       if (existing !== undefined) return { object_key: existing.object_key, boundary_revision: revision };
       const ranges = yield* currentRanges(job.workspace_id, meeting_id);
       const rate = ranges[0]?.epoch.sample_rate ?? 0;
-      const pieces: Array<SourceRange> = [];
-      const parts: Array<Uint8Array> = [];
-      // ponytail: whole cut in worker memory and ranges at another sample rate become gaps; stream a multipart upload and add verified resampling when meetings outgrow this.
-      for (const range of ranges.filter(candidate => candidate.epoch.sample_rate === rate)) {
-        const cut = yield* cutRange(job.workspace_id, range);
-        pieces.push(...cut.pieces);
-        parts.push(...cut.parts);
-      }
-      const status = parts.length === 0 ? 'failed' : gapsOf(ranges, pieces).length === 0 ? 'complete' : 'partial';
+      const { pieces, parts, status } = yield* cutRanges(job.workspace_id, ranges, rate);
       const setStatus = sql`UPDATE meetings SET processing = JSON_SET(processing, '$.recording', ${status}), updated_at = UTC_TIMESTAMP(6)
         WHERE id = ${meeting_id} AND boundary_revision = ${revision}`;
       if (parts.length === 0) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
       const wav = wavFile(rate, parts);
       const sha256 = createHash('sha256').update(wav).digest('hex');
       const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}.wav`;
+      if (!(yield* workspaceIsLive(job.workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
       yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
       yield* sql.withTransaction(
         Effect.gen(function* () {

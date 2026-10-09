@@ -195,6 +195,23 @@ describe('MCP over Streamable HTTP', () => {
     }),
   );
 
+  it.scoped('selects the live membership of a person whose other workspace is deleted', () =>
+    Effect.gen(function* () {
+      const { url, db } = yield* serveFake(configured);
+      const [owner] = yield* Effect.provide(seedWorkspace('Deleted soon', ['owner']), db);
+      const [member] = yield* Effect.provide(seedWorkspace('Kept', ['owner']), db);
+      const subject = yield* Effect.provide(identify(member!), db);
+      yield* Effect.provide(addMember({ workspace_id: owner!.workspace_id, principal_id: member!.principal.id, role: 'member' }), db);
+      const send = Effect.flatMap(Effect.promise(() => sign(subject, 'context:read')), token => Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION))));
+      expect((yield* send).status).toBe(403);
+      yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${owner!.workspace_id}`),
+        db,
+      );
+      expect((yield* send).status).toBe(200);
+    }),
+  );
+
   it.scoped('negotiates older protocol versions and binds sessions to their principal', () =>
     Effect.gen(function* () {
       const { url, db } = yield* serveFake(configured);

@@ -6,11 +6,15 @@ import { Effect, Layer, Option, Redacted } from 'effect';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { CustomFetch } from 'openid-client';
 import { linkIdentity, openSession } from '../src/auth.ts';
+import { claimJob } from '../src/job-runner.ts';
+import { enqueueJob } from '../src/jobs.ts';
 import { armWorkosSync, syncWorkosEvents, WorkosOrganizations, workosSettings } from '../src/org-sync.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
+import { purgeWorkspace } from '../src/workspaces.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { memoryObjectStore } from './support/object-store.ts';
 
 const ISSUER = 'https://issuer.fixture.test';
 const CLIENT_ID = 'sanctum-fixture';
@@ -165,6 +169,10 @@ const fakeWorkos = () => {
 const withServer = (client: Option.Option<SignIn>, organizations?: Layer.Layer<WorkosOrganizations>) =>
   serveApiWithDb({ overrides: { signIn: Layer.succeed(SignInSettings, { client, embeddedIssuer: null }), ...(organizations ? { organizations } : {}) } });
 
+/** Soft-deletes a workspace as `deleteWorkspace` does; a negative `days` puts the purge time in the past. */
+const markDeleted = (db: Layer.Layer<SqlClient.SqlClient, unknown>) => (id: string, days: number) =>
+  Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+
 const configured = () => {
   const issuer = fixtureIssuer();
   const client: SignIn = {
@@ -307,6 +315,25 @@ describe('OIDC sign-in', () => {
       const chosen = yield* Effect.promise(() => signIn(base, issuer, { sub }, `/auth/login?workspace=${second!.workspace_id}`));
       const access = yield* Effect.promise(() => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(chosen, 'sanctum_session')}`).then(r => r.json()));
       expect(access).toMatchObject({ workspace_id: second!.workspace_id, role: 'owner' });
+
+      // A deleted workspace drops out of the choice: the live one is entered, and an owner alone may still enter a deleted one until its purge.
+      const enteredWorkspace = (grant: Grant) =>
+        Effect.gen(function* () {
+          const response = yield* Effect.promise(() => signIn(base, issuer, grant));
+          if (cookieValue(response, 'sanctum_session') === undefined) return null;
+          const [row] = yield* Effect.provide(
+            Effect.flatMap(SqlClient.SqlClient, sql => sql<{ workspace_id: string }>`SELECT workspace_id FROM browser_sessions WHERE principal_id = ${first!.principal.id} ORDER BY created_at DESC LIMIT 1`),
+            db,
+          );
+          return row!.workspace_id;
+        });
+      const mark = markDeleted(db);
+      yield* mark(second!.workspace_id, 7);
+      expect(yield* enteredWorkspace({ sub })).toBe(first!.workspace_id);
+      yield* mark(first!.workspace_id, 7);
+      expect(yield* enteredWorkspace({ sub })).toBe(second!.workspace_id);
+      yield* mark(second!.workspace_id, -1);
+      expect(yield* enteredWorkspace({ sub })).toBeNull();
     }),
   );
 
@@ -368,6 +395,44 @@ describe('OIDC sign-in', () => {
       const signedIn = yield* Effect.promise(() => signIn(base, issuer, { sub: 'user_first' }));
       const access = yield* Effect.promise(() => get(`${base}/api/v1/session`, `sanctum_session=${cookieValue(signedIn, 'sanctum_session')}`).then(r => r.json()));
       expect(access).toMatchObject({ workspace_id: created.workspace_id, principal: { id: created.principal_id }, role: 'owner' });
+    }),
+  );
+
+  it.scoped('bootstraps a new owner after the only workspace was deleted, and refuses to add an owner to the deleted one', () =>
+    Effect.gen(function* () {
+      const { client } = configured();
+      const { db } = yield* withServer(client);
+      const owner = (subject: string, workspace: OwnerInput['workspace']) =>
+        Effect.provide(createOwner({ issuer: ISSUER, subject, display_name: 'Owner', workspace }), db);
+      const mark = markDeleted(db);
+
+      const first = yield* owner('user_first', { name: 'Acme', timezone: 'UTC' });
+      yield* mark(first.workspace_id, 7);
+      const refused = yield* Effect.flip(owner('user_cofounder', { id: first.workspace_id }));
+      expect(refused).toMatchObject({ _tag: 'OwnerRefused', message: expect.stringContaining('was deleted at') });
+      const second = yield* owner('user_first', { name: 'Again', timezone: 'UTC' });
+      expect(second.workspace_id).not.toBe(first.workspace_id);
+      expect(second.principal_id).toBe(first.principal_id);
+      expect(yield* Effect.flip(owner('user_other', { name: 'Third', timezone: 'UTC' }))).toMatchObject({ _tag: 'OwnerRefused' });
+
+      const purge = (workspace_id: WorkspaceId) =>
+        Effect.gen(function* () {
+          yield* mark(workspace_id, -1);
+          yield* enqueueJob({ workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: first.principal_id }, requested_by: null });
+          const lease = Option.getOrThrow(yield* claimJob(['workspace.purge'], 60_000));
+          yield* Effect.provide(purgeWorkspace(lease.job), memoryObjectStore().layer);
+        }).pipe(Effect.provide(db));
+      yield* mark(second.workspace_id, 7);
+      yield* purge(first.workspace_id);
+      yield* purge(second.workspace_id);
+      const third = yield* owner('user_first', { name: 'Third', timezone: 'UTC' });
+      expect(third.workspace_id).not.toBe(second.workspace_id);
+      expect(third.principal_id).not.toBe(first.principal_id);
+      const [row] = yield* Effect.provide(
+        Effect.flatMap(SqlClient.SqlClient, sql => sql<{ n: number }>`SELECT COUNT(*) AS n FROM principal_identities WHERE subject = 'user_first'`),
+        db,
+      );
+      expect(Number(row!.n)).toBe(1);
     }),
   );
 

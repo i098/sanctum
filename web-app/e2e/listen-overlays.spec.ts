@@ -63,3 +63,46 @@ test('Settings reports real device facts and leaves open policies unselected', a
     'Not selected: nothing is deleted automatically',
   ]);
 });
+
+test('Settings deletes the workspace only after its exact name is typed, and undo restores it', async ({ page, context }) => {
+  const live = { id: '11111111-1111-4111-8111-111111111111', name: 'Acme Studio', deleted_at: null, purge_after: null };
+  const deleted = { ...live, deleted_at: '2026-10-08T17:00:00.000Z', purge_after: '2026-10-15T17:00:00.000Z' };
+  const writes: Array<{ method: string; body: unknown; csrf: string | undefined }> = [];
+  let state: object = live;
+  await context.addCookies([{ name: 'sanctum_csrf', value: 'csrf-fixture', url: 'http://localhost' }]);
+  await page.route(/\/api\/v1\/workspace(\/restore)?$/, route => {
+    const request = route.request();
+    if (request.method() !== 'GET') {
+      writes.push({ method: request.method(), body: request.postDataJSON(), csrf: request.headers()['x-csrf-token'] });
+      state = request.method() === 'DELETE' ? deleted : live;
+    }
+    return route.fulfill({ json: state });
+  });
+  await openListening(page);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: 'Delete workspace…' }).click();
+  const confirm = page.getByRole('dialog', { name: 'Delete workspace?' });
+  const submit = confirm.getByRole('button', { name: 'Delete workspace' });
+  await confirm.getByRole('textbox').fill('acme studio');
+  await expect(submit).toBeDisabled();
+  await confirm.getByRole('textbox').fill('Acme Studio');
+  await submit.click();
+  await expect(confirm).toBeHidden();
+  await expect(settings.getByRole('heading', { name: 'Workspace deleted' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start', 'pause']);
+  await settings.getByRole('button', { name: 'Undo deletion' }).click();
+  await expect(settings.getByRole('heading', { name: 'Delete workspace' })).toBeVisible();
+  expect(writes).toEqual([
+    { method: 'DELETE', body: { confirm_name: 'Acme Studio' }, csrf: 'csrf-fixture' },
+    { method: 'POST', body: null, csrf: 'csrf-fixture' },
+  ]);
+});
+
+test('Settings shows no workspace deletion to anyone the server does not answer as the owner', async ({ page }) => {
+  await page.route('**/api/v1/workspace', route => route.fulfill({ status: 403, json: { _tag: 'Forbidden', code: 'forbidden', message: 'Only a workspace owner can manage the workspace', retryable: false } }));
+  await openListening(page);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('heading', { name: 'Recordings of removed listeners' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /workspace/i })).toHaveCount(0);
+});

@@ -13,7 +13,7 @@ import { resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, mysqlErrno } from './db.ts';
 import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
-import { later } from './jobs.ts';
+import { later, REQUESTER_REFUSED } from './jobs.ts';
 import { sweepLapsedListeners } from './listeners.ts';
 import { sweepIdleMeetings } from './meetings.ts';
 import { write } from './store.ts';
@@ -144,7 +144,7 @@ const failureOf = (cause: Cause.Cause<JobFailure>) =>
  * handler under its ceiling while renewing the lease, then completes the row. A ceiling hit
  * interrupts the handler and fails the attempt (already counted at claim) retryably.
  */
-const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number, ceilingMs: number) =>
+export const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number, ceilingMs: number) =>
   Effect.gen(function* () {
     const { job } = lease;
     const requester = job.requested_by;
@@ -153,7 +153,7 @@ const runJob = <R>(handlers: JobHandlers<R>, lease: Lease, leaseMs: number, ceil
       : yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: requester }).pipe(
         Effect.as(null),
         Effect.catchAll(error => Effect.succeed(error._tag === 'Forbidden'
-          ? new JobFailure({ message: 'Requester is no longer authorized', retryable: false })
+          ? new JobFailure({ message: REQUESTER_REFUSED, retryable: false })
           : new JobFailure({ message: error.message, retryable: true }))),
       );
     if (refused !== null) return yield* completeJob(lease, { status: 'failed', error: refused });
