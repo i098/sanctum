@@ -15,6 +15,18 @@ const CHECKING: InputLevel = { level: 0, state: 'checking', issue: null };
 /** The level is shown at this pace; a change of state shows at once. */
 const LEVEL_MS = 100;
 
+/** Verdict for one frame: sound once heard, silent after a long enough dead run, else still checking. */
+function inputState(heard: boolean, dead: number): InputLevel['state'] {
+  if (dead >= SILENT_SECONDS * 1000) return 'silent';
+  return heard ? 'sound' : 'checking';
+}
+
+/** A new level shows only when `full`; a change of state shows at once. */
+function nextInput(prev: InputLevel, peak: number, state: InputLevel['state'], full: boolean): InputLevel {
+  const level = full ? Math.round((peak / 0x8000) * 100) / 100 : prev.level;
+  return prev.level === level && prev.state === state ? prev : { level, state, issue: null };
+}
+
 /**
  * Live level of one input (`deviceId` null: the default one) and whether it sends exact digital zero, with the
  * capture engine's floor and threshold. It opens its own stream, so use it only while capture is not running.
@@ -53,12 +65,10 @@ export function useInputLevel(deviceId: string | null): InputLevel {
         dead = deadRun(dead, peak, now - last);
         last = now;
         heard ||= dead === 0;
-        const state = dead >= SILENT_SECONDS * 1000 ? 'silent' : heard ? 'sound' : 'checking';
-        if (now - shown >= LEVEL_MS) {
-          shown = now;
-          const level = Math.round((peak / 0x8000) * 100) / 100;
-          setInput(prev => (prev.level === level && prev.state === state ? prev : { level, state, issue: null }));
-        } else setInput(prev => (prev.state === state ? prev : { ...prev, state }));
+        const full = now - shown >= LEVEL_MS;
+        if (full) shown = now;
+        const state = inputState(heard, dead);
+        setInput(prev => nextInput(prev, peak, state, full));
         frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(tick);
