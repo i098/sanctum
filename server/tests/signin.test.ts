@@ -391,6 +391,29 @@ describe('OIDC sign-in', () => {
     }),
   );
 
+  it.scoped('bootstraps a new owner after the only workspace was deleted, and refuses to add an owner to the deleted one', () =>
+    Effect.gen(function* () {
+      const { client } = configured();
+      const { db } = yield* withServer(client);
+      const owner = (subject: string, workspace: OwnerInput['workspace']) =>
+        Effect.provide(createOwner({ issuer: ISSUER, subject, display_name: 'Owner', workspace }), db);
+      const mark = (id: string, days: number) =>
+        Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+
+      const first = yield* owner('user_first', { name: 'Acme', timezone: 'UTC' });
+      yield* mark(first.workspace_id, 7);
+      const refused = yield* Effect.flip(owner('user_cofounder', { id: first.workspace_id }));
+      expect(refused).toMatchObject({ _tag: 'OwnerRefused', message: expect.stringContaining('was deleted at') });
+      const second = yield* owner('user_second', { name: 'Again', timezone: 'UTC' });
+      expect(second.workspace_id).not.toBe(first.workspace_id);
+
+      yield* mark(second.workspace_id, -1);
+      expect(yield* Effect.flip(owner('user_late', { id: second.workspace_id }))).toMatchObject({ _tag: 'OwnerRefused' });
+      const third = yield* owner('user_third', { name: 'Third', timezone: 'UTC' });
+      expect(third.workspace_id).not.toBe(second.workspace_id);
+    }),
+  );
+
   it.scoped('reports sign-in as unavailable while no issuer is configured', () =>
     Effect.gen(function* () {
       const { base } = yield* withServer(Option.none());

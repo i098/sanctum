@@ -20,7 +20,7 @@ export interface OwnerInput {
   readonly issuer: string;
   readonly subject: string;
   readonly display_name: string;
-  /** A new workspace (refused while any exists), or the id of an existing one to add an owner to. */
+  /** A new workspace (refused while a live one exists), or the id of an existing live workspace to add an owner to. */
   readonly workspace: { readonly name: string; readonly timezone: string } | { readonly id: WorkspaceId };
 }
 
@@ -32,12 +32,16 @@ export const createOwner = (input: OwnerInput) =>
         let workspace_id: WorkspaceId;
         if ('id' in input.workspace) {
           workspace_id = input.workspace.id;
-          const [found] = yield* sql`SELECT id FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
+          const [found] = yield* sql<{ deleted_at: string | null; purge_after: string | null }>`SELECT DATE_FORMAT(deleted_at, '%Y-%m-%d %H:%i:%s') AS deleted_at,
+            DATE_FORMAT(purge_after, '%Y-%m-%d %H:%i:%s') AS purge_after FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
           if (found === undefined) return yield* new OwnerRefused({ message: `Workspace ${workspace_id} does not exist` });
+          if (found.deleted_at !== null) {
+            return yield* new OwnerRefused({ message: `Workspace ${workspace_id} was deleted at ${found.deleted_at} UTC and is purged from ${found.purge_after} UTC; it cannot get an owner` });
+          }
         } else {
           const { name, timezone } = input.workspace;
           yield* Effect.try({ try: () => new Intl.DateTimeFormat('en-US', { timeZone: timezone }), catch: () => new OwnerRefused({ message: `Unknown IANA time zone ${timezone}` }) });
-          const [existing] = yield* sql`SELECT id FROM workspaces LIMIT 1 FOR UPDATE`;
+          const [existing] = yield* sql`SELECT id FROM workspaces WHERE deleted_at IS NULL LIMIT 1 FOR UPDATE`;
           if (existing !== undefined) return yield* new OwnerRefused({ message: 'A workspace already exists; pass --workspace-id to add an owner to it' });
           workspace_id = WorkspaceId.make(randomUUID());
           yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${name}, ${timezone}, UTC_TIMESTAMP(6))`;

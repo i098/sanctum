@@ -110,7 +110,7 @@ An unknown identity lands on `/?signin=not_member&issuer=…&subject=…`. On a 
 npm run owner -w server -- --issuer <iss> --subject <sub> --display-name "<name>" --workspace "<name>" --timezone <IANA>
 ```
 
-It creates the workspace, principal, identity and `owner` membership in one transaction, and refuses while any workspace exists; `--workspace-id <id>` instead adds an owner to that workspace (`server/dist/owner.js` in the image).
+It creates the workspace, principal, identity and `owner` membership in one transaction, and refuses while a workspace that is not deleted exists (a deleted workspace, during its grace period or after its purge, does not block a new one); `--workspace-id <id>` instead adds an owner to that workspace, and refuses a deleted workspace with its deletion and purge time (`server/dist/owner.js` in the image).
 A signed-in person binds a further issuer identity to themselves with `POST /auth/link`; a pair already bound to another principal is refused.
 
 ### WorkOS organizations
