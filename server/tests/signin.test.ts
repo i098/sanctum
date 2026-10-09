@@ -71,7 +71,8 @@ const fixtureIssuer = (): FixtureIssuer => {
   const authorize = async (location: string, grant: Grant) => {
     const request = new URL(location).searchParams;
     expect(request.get('client_id')).toBe(CLIENT_ID);
-    const claims = { nonce: grant.nonce ?? request.get('nonce'), ...(grant.name ? { name: grant.name } : {}), ...(grant.email ? { email: grant.email } : {}), ...(grant.given_name ? { given_name: grant.given_name } : {}), ...(grant.family_name ? { family_name: grant.family_name } : {}) };
+    const { name, email, given_name, family_name } = grant;
+    const claims = { nonce: grant.nonce ?? request.get('nonce'), ...Object.fromEntries(Object.entries({ name, email, given_name, family_name }).filter(([, value]) => value)) };
     const idToken = await new SignJWT(claims)
       .setProtectedHeader({ alg: 'ES256', kid: 'fixture' })
       .setIssuer(grant.iss ?? ISSUER)

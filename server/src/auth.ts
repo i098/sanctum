@@ -191,6 +191,9 @@ export const resolveAccess = (input: MemberKey) =>
 export const requireScope = (access: AccessScope, scope: AccessScopeName) =>
   access.scopes.includes(scope) ? Effect.void : Effect.fail(new Forbidden({ message: `Requires ${scope}`, required_scope: scope }));
 
+/** The principal's name for text copied into shared records; never the email, which only the principal's own session shows. */
+export const actorName = (access: AccessScope) => access.principal.display_name ?? 'a member';
+
 /**
  * Opens a browser session for an active human or device member, e.g. after the configured
  * login issuer (docs/DECISIONS.md) verified an identity (signin.ts) or after device enrollment. An owner of a deleted workspace
