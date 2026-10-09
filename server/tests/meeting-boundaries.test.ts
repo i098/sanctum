@@ -390,6 +390,27 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  it.effect('late finals while a finalize run is in flight: the first moves to a new revision, once the run is rearmed later ones join it', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch, id } = yield* endWhileLive;
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
+        yield* sql`UPDATE jobs SET status = 'running', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
+        yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
+        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
+        expect(yield* sql`SELECT rearmed FROM jobs WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`).toEqual([{ rearmed: 1 }]);
+        yield* hear(listener, epoch, 47, 49, 'and copy the finance lead on the report');
+        yield* sql`UPDATE jobs SET status = 'paused', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
+        yield* hear(listener, epoch, 49, 50, 'then we are done for today');
+        expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
+        expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 50 * RATE }]);
+        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '1' }]);
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('after End, a final at or past the fence opens a new meeting', () =>
     withDatabase(
       Effect.gen(function* () {
