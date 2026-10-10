@@ -13,7 +13,7 @@ Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who ow
 - List every stand-in you created in your hand-off; integration keeps the real file and deletes the stand-in.
 - Signatures below are the contract; extend them compatibly, never rename them.
 - Run `npm run check:app` and the gates in [docs/CI.md](CI.md) before handing a slice back.
-- Report CI's strict Sentrux compare against main (quality, cycles, complex functions, coupling within 0.05); a new cycle or import depth is an integration bug.
+- Report the Sentrux comparison results defined in [docs/CI.md](CI.md#quality-regression-gates); a new cycle or import depth is an integration bug.
 
 ## Shared foundation (integration owner)
 

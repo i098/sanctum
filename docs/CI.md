@@ -27,9 +27,12 @@ The scanners check code structure and static findings; they do not prove runtime
 - Fallow excludes only generated site output, generated snippets and generated index.html; application and tooling source stay in scope.
 - Sentrux 0.5.7 and its Linux grammars are version-pinned and SHA-256-verified before execution.
 - The committed Sentrux floor is 6491, with zero cycles and zero god files; its original JSON is preserved.
-- CI also measures base and candidate in temporary tracked-file snapshots using the same scanner and grammars, so improvements cannot later regress to the initial floor.
-- Native Sentrux permits a 0.02 quality-signal drop; an additional JSON comparison rejects any score drop beyond floating-point noise, any added cycles/god files/complex functions, and coupling growth beyond its native 0.05 tolerance.
-- Baseline changes cannot weaken the baseline from the base revision; CI never saves candidate measurements over the committed floor.
+- CI also measures base and candidate in temporary tracked-file snapshots using the same scanner and grammars.
+- Native Sentrux permits a 0.02 quality-signal drop; the CI comparison blocks a measured drop of more than 0.025 (250 points).
+  It compares the candidate against both the measured base revision and that revision's committed floor, matching the fleet rule.
+  The base is the PR base, the push-before commit, or HEAD^ for manual dispatch.
+- CI also rejects added cycles, god files, and complex functions, and coupling growth beyond its native 0.05 tolerance. The Sentrux gate still blocks its DEGRADED verdict.
+- Committed baseline quality allows no drop beyond floating-point noise against the base revision's baseline; the 0.025 measured-code tolerance does not apply. CI never saves candidate measurements over the committed floor.
 
 Local checks after staging new source files (Sentrux uses Git's tracked-file inventory):
 
