@@ -18,6 +18,17 @@
 - Expose one shared context model through website, SDKs, and MCP.
 - Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
 
+## Spoken work decision - 2026-10-10
+
+The captain chose model judgment: "The model should be start enough to decide whether or not to do something (recommended)".
+Accepted: after a completed direct spoken request during a live meeting, the planner model decides whether Sanctum should do background work.
+It returns a boolean and a short normalized request; keyword rules do not make this decision.
+A work request starts one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
+The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
+Answer-only requests still use the existing spoken reply path and start no research.
+Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
+The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
+
 ## Still open
 
 ### Saved-meeting retention

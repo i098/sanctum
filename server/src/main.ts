@@ -19,6 +19,7 @@ import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpD
 import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, SpeechSynthesizerLive, type SpeechToText } from './media/providers.ts';
 import { SpeechRepliesLive } from './media/speech-reply.ts';
+import { SpeechWorkRequestsLive } from './media/speech-work.ts';
 import { LlmLive } from './llm.ts';
 import { SignInFromEnv, type SignInSettings, SignInLive } from './signin.ts';
 import { loadMigrations } from './migrate.ts';
@@ -50,7 +51,7 @@ export const serverLayer = (
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
     Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
-    Layer.provide([SpeechSynthesizerLive, SpeechRepliesLive.pipe(Layer.provide(LlmLive))]),
+    Layer.provide([SpeechSynthesizerLive, Layer.merge(SpeechRepliesLive, SpeechWorkRequestsLive).pipe(Layer.provide(LlmLive))]),
     Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
     Layer.provide(overrides.media ?? MediaProvidersLive),
     Layer.provide(withMcpDelegation(authenticator)),
