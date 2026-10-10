@@ -21,7 +21,10 @@ interface ResearchJob {
   readonly requested_by: PrincipalId;
 }
 
-/** Inspected actions the requester holds a grant for in this meeting, among the search matches for the request. */
+/**
+ * Inspected actions the requester holds a grant for in this meeting, among the search matches for
+ * the request in each granted app, so actions of other usable apps cannot crowd granted ones out.
+ */
 export const offeredActions = (access: AccessScope, meeting_id: MeetingId, request: string) =>
   Effect.gen(function* () {
     const grants = (yield* activeActionGrants(access)).filter(grant => grant.meeting_id === null || grant.meeting_id === meeting_id);
@@ -30,10 +33,12 @@ export const offeredActions = (access: AccessScope, meeting_id: MeetingId, reque
     // inspected schema must be the one of that grant's account or execution rejects it as stale.
     const accounts = new Map<string, IntegrationAccountId>();
     for (const grant of grants) if (!accounts.has(grant.action_key)) accounts.set(grant.action_key, grant.account_id);
-    const { matches } = yield* searchIntegrationActions(access, { intent: request.slice(0, 500), limit: SEARCH_MAX_LIMIT });
+    const apps = [...new Set(grants.map(grant => grant.app_slug))];
+    const searched = yield* Effect.forEach(apps, app => searchIntegrationActions(access, { intent: request.slice(0, 500), app, limit: SEARCH_MAX_LIMIT }), { concurrency: 4 });
+    const keys = new Set(searched.flatMap(({ matches }) => matches.map(match => match.action_key)).filter(key => accounts.has(key)));
     const inspected = yield* Effect.forEach(
-      matches.filter(match => accounts.has(match.action_key)),
-      match => getIntegrationAction(access, { action_key: match.action_key, account_id: accounts.get(match.action_key)! }).pipe(Effect.catchTag('NotFound', () => Effect.succeed(null))),
+      [...keys],
+      action_key => getIntegrationAction(access, { action_key, account_id: accounts.get(action_key)! }).pipe(Effect.catchTag('NotFound', () => Effect.succeed(null))),
       { concurrency: 4 },
     );
     return inspected.filter(action => action !== null);

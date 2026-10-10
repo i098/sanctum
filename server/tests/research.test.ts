@@ -33,7 +33,13 @@ const gmailAction = (key: string, name: string, description: string): FixtureAct
   description,
   configurable_props: [{ name: 'gmail', type: 'app', app: 'gmail' }, { name: 'to', type: 'string[]' }, { name: 'subject', type: 'string' }, { name: 'body', type: 'string', optional: true }],
 });
-const pipedream = fixturePipedream([gmailAction(SEND, 'Send Email', 'Send an email from your Gmail account.'), gmailAction('gmail-create-draft', 'Create Draft', 'Create a draft email in Gmail.')]);
+/** Five other apps whose top match for an emailing request would fill one ranked search across all usable apps. */
+const OTHER_APPS = ['slack', 'notion', 'github', 'google_calendar', 'google_drive'];
+const pipedream = fixturePipedream([
+  gmailAction(SEND, 'Send Email', 'Send an email from your Gmail account.'),
+  gmailAction('gmail-create-draft', 'Create Draft', 'Create a draft email in Gmail.'),
+  ...OTHER_APPS.map(app => ({ key: `${app}-email-digest`, name: 'Email Digest', version: '0.1.0', description: 'Email a digest of new items.', configurable_props: [{ name: app, type: 'app', app }] })),
+]);
 
 /** Scripted planner answers, in order; every planner request is kept. */
 const planner = { answers: [] as string[], requests: [] as ProviderRequest[] };
@@ -193,7 +199,7 @@ describe('research.run', () => {
         expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ body: 'MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).' }) })]);
 
         // A retried job whose earlier attempt requested the email plans nothing again: it reports that email and the stored research.
-        planner.answers = [email(null), email('MySQL 8.4 is the current LTS line, per https://dev.mysql.com/doc/.')];
+        planner.answers = [JSON.stringify({ web_research: false, actions: [{ action_key: SEND, title: 'Email someone else', arguments: [{ name: 'to', value_json: '["b@example.com"]' }, { name: 'subject', value_json: '"MySQL LTS release"' }] }] })];
         const retried = yield* runResearch(yield* queuedJob(member.workspace_id, 'research.run', 'lts'));
         expect(retried).toEqual({
           status: 'succeeded',
@@ -310,6 +316,27 @@ describe('research.run', () => {
         expect(planner.requests).toHaveLength(1);
         expect(openai.bodies).toHaveLength(0);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.effect('offers a granted action that the usable accounts of five other apps would crowd out of one ranked search', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { member, meeting_id } = yield* setup;
+        yield* Effect.forEach(OTHER_APPS, app => seedAccount(member, 'active', app));
+        planner.answers = [
+          JSON.stringify({
+            web_research: false,
+            actions: [{ action_key: SEND, title: 'Email the rollout notes', arguments: [{ name: 'to', value_json: '["a@example.com"]' }, { name: 'subject', value_json: '"Rollout notes"' }] }],
+          }),
+        ];
+        expect(yield* runResearch(yield* researchJob(member, meeting_id, 'crowded', 'Email the rollout notes to a@example.com'))).toMatchObject({
+          status: 'succeeded',
+          result: { offered: [SEND], actions: [{ action_key: SEND, state: 'queued' }] },
+        });
+        // One search per granted app, so the five other apps are never searched.
+        expect(pipedream.calls.filter(call => call.operation === 'searchActions')).toEqual([expect.objectContaining({ request: expect.objectContaining({ app: 'gmail' }) })]);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));
