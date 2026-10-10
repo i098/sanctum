@@ -13,7 +13,7 @@ import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { directRequest, makeSpeechGate, SpeechGate, speechController, type SpeechWindow } from '../src/media/speech-gate.ts';
 import { planActions } from '../src/planner.ts';
-import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
+import { SpeechSynthesizer } from '../src/providers/speech.ts';
 import { actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';

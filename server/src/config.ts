@@ -138,11 +138,6 @@ export const serverConfig = Config.all({
     /** PEM CA certificate; when set, connections require TLS verified against it, host name included. */
     caCert: Config.option(Config.string('MYSQL_CA_CERT')).pipe(Config.map(Option.getOrUndefined)),
   }),
-  /** Requested speech output; without a key and voice, speech fails as unavailable instead of being faked. */
-  cartesia: Config.all({
-    apiKey: Config.option(Config.redacted('CARTESIA_API_KEY')),
-    voiceId: Config.option(Config.string('CARTESIA_VOICE_ID')),
-  }),
   /** Decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...activationDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),
   /** Human login with any standard OIDC issuer: WorkOS AuthKit hosted, embedded Better Auth self-hosted. */
@@ -168,7 +163,7 @@ export const serverConfig = Config.all({
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
-  /** Cloudflare Workers AI REST base for this account and a token with only Workers AI permission: speech-to-text and the voice and extraction models. */
+  /** Server-only Workers AI credentials shared by speech-to-text, requested speech, and text models. */
   workersAi: Config.option(
     Config.all({
       baseUrl: Config.string('WORKERS_AI_ACCOUNT_ID').pipe(Config.map(account => `https://api.cloudflare.com/client/v4/accounts/${account}/ai`)),

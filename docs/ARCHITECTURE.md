@@ -150,7 +150,7 @@ Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/contex
 
 ### actions (T18, T19 recovery, T20)
 
-Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/speech-requests.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
+Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/speech-requests.ts`, `server/src/providers/speech.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
 
 - `actions.ts`: `requestAction(access, input: RequestActionInput): Effect<RequestActionOutput, Forbidden | NotFound | HashConflict, R>` (the third gateway).
 - `actions.ts`: `getActionReceipt(access, action_id): Effect<ActionReceipt, NotFound, R>`.

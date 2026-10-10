@@ -75,6 +75,16 @@ Accepted: when Sanctum detects a meeting, the principal of the capturing listene
 The meeting stays `restricted`; every other principal, including workspace owners and admins, still needs an explicit grant.
 Before this decision, nobody could read a detected meeting, so Review, the listening header and the agent-work feed stayed empty.
 
+## Speech output decision - 2026-10-10
+
+Accepted: requested speech uses Cloudflare Workers AI Aura-2 (`@cf/deepgram/aura-2-en`) with the existing server-only Workers AI credentials.
+The Luna speaker returns mono PCM16 little-endian at 24 kHz with `encoding: linear16` and `container: none`.
+One real REST call returned these bytes despite an `audio/mpeg` header; [release evidence](release-evidence.md#workers-ai-speech-output) records the check.
+The adapter keeps each request abortable before headers and during streaming.
+The request window, sentence generation, generation checks and browser cancellation remain unchanged.
+Missing credentials or provider errors produce unavailable speech, with no replacement audio.
+No deployment or secret change forms part of this cutover.
+
 ## Text model provider decision — 2026-10-08
 
 Accepted: the voice and extraction roles (spoken replies, notes, memory and context) use Cloudflare Workers AI on the 42nights account, which Sanctum already runs on, so no new vendor account or card is needed.

@@ -29,7 +29,7 @@ import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { publishFinalWindow } from '../transcripts.ts';
-import { SpeechSynthesizer } from '../providers/cartesia.ts';
+import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
 
 export const liveLimits = {

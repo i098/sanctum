@@ -10,8 +10,8 @@ The only model-quality evidence is the small Workers AI smoke comparison under W
 | State | Status | Evidence |
 | --- | --- | --- |
 | Implemented | Yes, with the open items below | T01–T25 on this branch; slice ownership and seams in [ARCHITECTURE.md](ARCHITECTURE.md). |
-| Locally tested | Yes | `npm run check:app`: workspace typechecks, 443 Vitest tests against MySQL 8.4, 36 Playwright specs in Chromium, benchmark manifest, benchmark correctness smoke, accelerated day replay. Python SDK: 7 unittest cases in an isolated venv. `npm run check` for the handoff. Rust benchmark reference: 9 `cargo test` cases and a matched `node scripts/benchmark-compare.ts --smoke` run. |
-| Model-evaluated | Partial (smoke only) | Speaker behavior and real-meeting speech-to-text are unrun: no approved real meeting recordings or provider credentials were available, so they are tested only with fixture providers (`fixtureLlm`, fixture speech-to-text/pyannote/Cartesia/Pipedream). Live Whisper chunk lengths were measured on synthetic speech only ([DECISIONS.md](DECISIONS.md#speech-to-text-decision--2026-10-08)). The Workers AI text roles had a live smoke comparison on synthetic fixtures; see Workers AI text models. |
+| Locally tested | Yes | This slice passed `npm run check:app`: workspace typechecks, 681 Vitest tests against MySQL, 98 Playwright checks, web builds, benchmark smoke and accelerated day replay. `npm run check`, docs render/build, Fallow and Sentrux also passed. Earlier delivery evidence includes seven Python SDK checks and the Rust benchmark reference. |
+| Model-evaluated | Partial (smoke only) | Speaker behavior and real-meeting speech-to-text remain fixture-only; no approved real meeting recordings were available. Live Whisper chunk lengths were measured on synthetic speech ([DECISIONS.md](DECISIONS.md#speech-to-text-decision--2026-10-08)). Workers AI text roles had a synthetic smoke comparison. Aura-2 had one live byte check; see Workers AI speech output. |
 | Web-built | Yes | `npm run build -w web-app` (Vite) inside `check:app`; the API serves the build (`server/tests/capabilities.test.ts`, deep links and security headers). |
 | Migrated | Disposable databases and the Cloudflare deployment's database | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). The `sanctum` database on the Aiven MySQL 8.4 service (`sql_require_primary_key=1`) was migrated with the image's `node server/dist/migrate.js` over verified TLS; every migration applied unchanged. |
 | Deployed | Yes, development mode | Cloudflare, 42nights account ([operations.md](operations.md#cloudflare)): Worker `sanctum` at `https://app.sanctum.42nights.dev` (custom domain; the apex `https://sanctum.42nights.dev` answers 308 to it), Container applications `sanctum-sanctumapi` and `sanctum-sanctumjobs`, R2 bucket `sanctum-recordings`, `SANCTUM_ENV=development` with no provider keys. The deployed commit is recorded on the pull request that added the deployment. |
@@ -38,6 +38,29 @@ The only model-quality evidence is the small Workers AI smoke comparison under W
 | Effect lifecycle | Pass, one gap | `jobs.test.ts` and `worker-recovery.test.ts` (lease loss interrupts handlers, killed workers recover, accepted work survives the API), `api-contract.test.ts` and `mcp.test.ts` (client abort cancels the server handler), `ingest.test.ts` (sockets). Pool exhaustion is not tested separately. |
 | SDK/MCP | Pass | `sdk/typescript/tests`, `sdk/python/tests` (both examples end to end against the fixture server), `server/tests/mcp.test.ts` (eleven tools, discovery, schema equality with REST, conflict, revoke, separate principals). |
 | Compatibility | Pass, one gap | Notes, exports, matching and meeting deep links: `server/tests/capabilities.test.ts`, `notes.test.ts`, `matching.test.ts`. Requested speech works for a principal with context access (`silence.test.ts`); a room device credential lacks `context:read`, so a request spoken at a device gets no reply yet. |
+
+## Workers AI speech output
+
+One live REST call on 2026-10-10 used `@cf/deepgram/aura-2-en` and the existing server-only Workers AI token.
+The request used synthetic text: "Sanctum speaks only when you ask."
+Controls: `speaker: luna`, `encoding: linear16`, `container: none`, `sample_rate: 24000`.
+HTTP 200 returned 119,040 bytes with an `audio/mpeg` header.
+The bytes contain raw mono PCM16 little-endian, 59,520 samples at 24 kHz, lasting 2.48 seconds.
+The prefix is `eaffeeffedffe4ffe1ffeafffcff2500`; no RIFF, ID3, Ogg or FLAC header appears.
+A forced MPEG decode with FFmpeg returned exit 69, zero decoded bytes, and `Header missing`.
+Adjacent PCM samples have correlation 0.971; peak amplitude is 11,431 and RMS is 1,529.
+Raw payload SHA-256: `0496c263ef0fa12171440b8095927f46a59152d70cf40e8a83e766a512699a69`.
+The listening sample is `screenshots/aura-2-byte-check.wav` in the repository.
+FFprobe reports `pcm_s16le`, 24,000 Hz, one channel and 2.480000 seconds for that WAV.
+
+A temporary Playwright scenario passed these bytes through the actual Aura adapter and Chromium's `OfflineAudioContext`.
+Browser output matched all 59,520 PCM samples exactly.
+Cancellation stopped playback and rejected late chunks; the cancelled render contained only zero samples.
+The temporary scenario was removed after it passed.
+`speech-provider.test.ts`, `silence.test.ts` and `playback.test.ts` passed 24 checks, including request aborts before headers and during audio.
+The adapter preserves sample boundaries across odd-sized HTTP chunks and reports truncated samples as unavailable.
+The existing gate checks sentence order, expiry, barge-in, stale generations, reconnect and silent background work.
+This check proves the byte format and local playback path, not voice quality, production latency or a deployment.
 
 ## Workers AI text models
 
