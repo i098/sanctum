@@ -68,6 +68,15 @@ Answer in a few short plain-text paragraphs, cite the pages you used, and say so
 /** The `research` artifact's content. */
 const StoredResearch = Schema.parseJson(Schema.Struct({ text: Schema.String, sources: Schema.Array(Schema.Struct({ url: Schema.String, title: Schema.NullOr(Schema.String) })) }));
 
+/** The research a job already stored, if any. */
+const storedArtifact = (job: ResearchJob) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [stored] = yield* sql<{ id: ArtifactId; content: string }>`
+      SELECT id, content FROM artifacts WHERE workspace_id = ${job.workspace_id} AND kind = 'research' AND provenance->>'$.job_id' = ${job.id} LIMIT 1`;
+    return stored ? { artifact_id: stored.id, ...(yield* Schema.decodeUnknown(StoredResearch)(stored.content)) } : null;
+  });
+
 /**
  * Web research for the original request, stored once per job: a retried job that stored its
  * research reuses the artifact without paying again; each further paid attempt counts against the
@@ -76,9 +85,8 @@ const StoredResearch = Schema.parseJson(Schema.Struct({ text: Schema.String, sou
 const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [stored] = yield* sql<{ id: ArtifactId; content: string }>`
-      SELECT id, content FROM artifacts WHERE workspace_id = ${job.workspace_id} AND kind = 'research' AND provenance->>'$.job_id' = ${job.id} LIMIT 1`;
-    if (stored) return { artifact_id: stored.id, ...(yield* Schema.decodeUnknown(StoredResearch)(stored.content)) };
+    const stored = yield* storedArtifact(job);
+    if (stored) return stored;
     const llm = yield* LlmClient;
     const call_id = randomUUID();
     const prompt = `Today (UTC): ${new Date().toISOString().slice(0, 10)}\n\nRequest: ${request}`;
@@ -141,4 +149,15 @@ export const webResearch = (job: ResearchJob, meeting_id: MeetingId, request: st
       return item.id;
     }));
     return { artifact_id: found.artifact_id, context_item_id, text: found.text, sources: found.sources };
+  });
+
+/** The cited research a job already stored, as `research.run` reports it; null when it stored none. Never pays. */
+export const storedResearch = (job: ResearchJob) =>
+  Effect.gen(function* () {
+    const stored = yield* storedArtifact(job);
+    if (!stored) return null;
+    const sql = yield* SqlClient.SqlClient;
+    const [item] = yield* sql<{ id: ContextItemId }>`SELECT id FROM context_items
+      WHERE workspace_id = ${job.workspace_id} AND author_principal_id = ${job.requested_by} AND idempotency_key = ${`research-${job.id}`} LIMIT 1`;
+    return { artifact_id: stored.artifact_id, context_item_id: item?.id ?? null, sources: stored.sources };
   });

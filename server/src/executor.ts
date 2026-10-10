@@ -7,12 +7,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type RequestActionInput, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Either, Fiber, Option, Schedule, Schema } from 'effect';
-import { type ActionRow, findByIdempotencyKey, loadAction, requestAction } from './actions.ts';
+import { type ActionRow, findByIdempotencyKey, loadAction, requestAction, researchJobActions } from './actions.ts';
 import { authorizeMeeting, requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
 import { type Plan, type PlanInput, planWork } from './planner.ts';
-import { offeredActions, type WebResearch, webResearch } from './research.ts';
+import { offeredActions, storedResearch, type WebResearch, webResearch } from './research.ts';
 
 /** The claimed-job fields these handlers read; stated here so this module does not import the registry. */
 interface Job {
@@ -163,11 +163,11 @@ export const executeAction = (job: Job) =>
 const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), request: Schema.String.pipe(Schema.minLength(1)) });
 
 /**
- * Requests one planned action; with `researched`, a key conflict means an earlier attempt of the
+ * Requests one planned action for the job; with `researched`, a key conflict means an earlier attempt of the
  * job requested it with other research-written content, so that action is reported.
  */
-const requestPlanned = (access: AccessScope, input: typeof RequestActionInput.Type, researched: boolean) =>
-  requestAction(access, input).pipe(
+const requestPlanned = (access: AccessScope, input: typeof RequestActionInput.Type, researched: boolean, job_id: JobId) =>
+  requestAction(access, input, job_id).pipe(
     Effect.map(output => ({ action_key: input.action_key, ...output })),
     Effect.catchAll(error =>
       Effect.gen(function* () {
@@ -212,17 +212,24 @@ const researchOutcome = (plan: Plan, pass: ResearchPass, requested: number) => {
 const researchSummary = (found: ResearchPass['found']) =>
   found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
 
+/** What earlier attempts of the job requested, with the research it stored; null when they requested nothing, so the job plans. */
+const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }) =>
+  Effect.gen(function* () {
+    const requested = yield* researchJobActions(job.workspace_id, job.id);
+    if (requested.length === 0) return null;
+    return { research: yield* storedResearch(job), actions: requested.map(action => ({ ...action, already_requested: true })) };
+  });
+
 /**
  * `research.run`: find and inspect the requester's granted actions that match the request, let the
  * planner decide on web research and fill in actions, then research first; actions planned with
  * research are planned again from the cited research, which may change only their content fields,
  * and none is requested when research is refused or that pass changes anything else. Each planned
- * action is submitted through the same grant gateway as any agent. A job that stored its research
- * does not pay for it again, and each further paid attempt counts against the allowance. Planned
- * idempotency keys derive from each action's arguments, and after research from the job and its
- * non-content arguments, so a retried or resumed job does not request the same action twice.
- * Dropped proposals are reported with their reasons, and nothing to do is reported as the outcome,
- * never an empty success.
+ * action is submitted through the same grant gateway as any agent and records the job. A job that
+ * stored its research does not pay for it again, and each further paid attempt counts against the
+ * allowance. A retried job whose earlier attempt requested actions does not plan again: it reports
+ * those actions and the stored research. Dropped proposals are reported with their reasons, and
+ * nothing to do is reported as the outcome, never an empty success.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -232,10 +239,13 @@ export const runResearch = (job: Job) =>
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: job.requested_by });
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
     yield* authorizeMeeting(access, meeting_id, 'write');
+    const requester = { ...job, requested_by: job.requested_by };
+    const earlier = yield* earlierAttempt(requester);
+    if (earlier) return { status: 'succeeded', result: earlier } as const;
     const offered = yield* offeredActions(access, meeting_id, request);
     const plan = yield* planWork(access, { meeting_id, request, actions: offered });
-    const pass = yield* researchPass({ ...job, requested_by: job.requested_by }, access, { meeting_id, request, offered, plan });
-    const actions = yield* Effect.forEach(pass.planned, input => requestPlanned(access, { ...input, meeting_id }, pass.second !== null));
+    const pass = yield* researchPass(requester, access, { meeting_id, request, offered, plan });
+    const actions = yield* Effect.forEach(pass.planned, input => requestPlanned(access, { ...input, meeting_id }, pass.second !== null, job.id));
     const outcome = researchOutcome(plan, pass, actions.length);
     if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
     const extra = { ...(plan.rejected ? { dropped: plan.rejected } : {}), ...(outcome ? { outcome } : {}) };

@@ -191,10 +191,17 @@ describe('research.run', () => {
         yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', id), executeAction);
         expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ body: 'MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).' }) })]);
 
-        // A retried job reuses its research; a research pass that words the email differently is reported as the request an earlier attempt made.
+        // A retried job whose earlier attempt requested the email plans nothing again: it reports that email and the stored research.
         planner.answers = [email(null), email('MySQL 8.4 is the current LTS line, per https://dev.mysql.com/doc/.')];
         const retried = yield* runResearch(yield* queuedJob(member.workspace_id, 'research.run', 'lts'));
-        expect(retried).toMatchObject({ status: 'succeeded', result: { actions: [{ action_key: SEND, action_id: id, state: (yield* actionRow(member.workspace_id, id)).state, already_requested: true }] } });
+        expect(retried).toEqual({
+          status: 'succeeded',
+          result: {
+            research: { artifact_id: expect.any(String), context_item_id: expect.any(String), sources: [{ url: 'https://dev.mysql.com/doc/', title: 'MySQL docs' }] },
+            actions: [{ action_key: SEND, action_id: id, state: (yield* actionRow(member.workspace_id, id)).state, already_requested: true }],
+          },
+        });
+        expect(planner.requests).toHaveLength(2);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
         expect(provider.sent).toHaveLength(1);
 
@@ -208,7 +215,7 @@ describe('research.run', () => {
             outcome: `No action requested: ${SEND} was planned together with the refused web research`,
           },
         });
-        expect(planner.requests).toHaveLength(5);
+        expect(planner.requests).toHaveLength(3);
         expect(openai.bodies).toHaveLength(1);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
       }).pipe(Effect.provide(services)),
@@ -274,6 +281,34 @@ describe('research.run', () => {
         yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', id), executeAction);
         expect(provider.sent).toHaveLength(1);
         expect(openai.bodies).toHaveLength(0);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.effect('reports what an earlier attempt requested, whatever the planner answers on the retry', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { member, meeting_id } = yield* setup;
+        const job = yield* researchJob(member, meeting_id, 'retry', 'Email the rollout notes to a@example.com');
+        const email = (to: string) => ({ action_key: SEND, title: 'Email the rollout notes', arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Rollout notes"' }] });
+        planner.answers = [JSON.stringify({ web_research: false, actions: [email('a@example.com')] })];
+        expect(yield* runResearch(job)).toMatchObject({ result: { actions: [{ action_key: SEND, state: 'queued' }] } });
+        const [{ id }] = (yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`) as [{ id: ActionId }];
+
+        // The attempt dies before it completes; each retry's planner would change the recipient, ask for research, or drop the email.
+        const retries = [
+          { web_research: false, actions: [email('b@example.com')] },
+          { web_research: true, actions: [email('a@example.com')] },
+          { web_research: false, actions: [{ ...email('a@example.com'), arguments: [] }] },
+        ];
+        for (const answer of retries) {
+          planner.answers = [JSON.stringify(answer)];
+          expect(yield* runResearch(job)).toEqual({ status: 'succeeded', result: { research: null, actions: [{ action_key: SEND, action_id: id, state: 'queued', already_requested: true }] } });
+        }
+        expect(planner.requests).toHaveLength(1);
+        expect(openai.bodies).toHaveLength(0);
+        expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));
