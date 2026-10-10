@@ -87,7 +87,7 @@ Total: 24 calls.
 ## Open implementation items
 
 - Spoken replies from a room device need a reply authority (for example the listener's human owner).
-- `research.run` needs a meeting and plans only over actions already inspected.
+- See the [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) for the authorized spoken-work handler and ASR timing limits.
 
 ## Checklist items left open
 

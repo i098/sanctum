@@ -6,13 +6,12 @@
  * the window; late chunks of an old generation are dropped here and again in the browser.
  * Media's session.ts drives `speechController` per socket; nothing else can emit speech.
  */
-import { randomUUID } from 'node:crypto';
 import type { AccessScope, CaptureEpochId, ListenerId, SpeechCancelMessage, SpeechCancelReason, SpeechChunkMessage, TranscriptSegment, Unavailable } from '@sanctum/contracts';
 import { Context, Effect, Fiber, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
 import { SPEECH_SAMPLE_RATE, SpeechSynthesizer } from '../providers/cartesia.ts';
 
-interface SpeechWindow {
+export interface SpeechWindow {
   readonly listener_id: ListenerId;
   readonly epoch_id: CaptureEpochId;
   readonly request_id: string;
@@ -71,10 +70,16 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
 export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
 /** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
-/** Reply text for one direct request on one listener; provided by the API entrypoint (speech-reply.ts). */
+/** Reply text for one direct request on one listener; provided by the API entrypoint (speech-requests.ts). */
 export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
   SpeechReplies,
   (access: AccessScope, listener_id: ListenerId) => (request: string) => Stream.Stream<string, Unavailable>
+>() {}
+
+/** Work detection runs independently of requested speech and never emits audio. */
+export class SpeechWorkRequests extends Context.Tag('sanctum/SpeechWorkRequests')<
+  SpeechWorkRequests,
+  (access: AccessScope, listener_id: ListenerId) => (request: string, window: SpeechWindow) => Effect.Effect<void>
 >() {}
 
 export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
@@ -148,22 +153,31 @@ const speak = (
     if (expired && message) yield* io.send(message);
   }).pipe(Effect.catchAll(error => Effect.logWarning('Requested speech failed', error.message)));
 
+const startsSeparateTurn = (
+  turn: Pick<TranscriptSegment['source'], 'epoch_id' | 'sample_start' | 'sample_end'>,
+  source: TranscriptSegment['source'],
+  minimumGap: number,
+) => turn.epoch_id !== source.epoch_id || source.sample_start - turn.sample_end >= minimumGap
+  || turn.sample_start - source.sample_end >= minimumGap;
+
 /**
  * Per-socket speech ownership for media's session: feed every transcript segment and the
- * socket's end. `respond` streams the reply text for one direct request (planner role).
+ * socket's end. `respond` streams the reply text for one direct request (voice role).
  */
 export const speechController = (options: {
   readonly listener_id: ListenerId;
   readonly sample_rate: number;
   readonly send: (message: SpeechMessage) => Effect.Effect<void>;
   readonly respond: (request: string) => Stream.Stream<string, Unavailable>;
+  readonly requestWork?: (request: string, window: SpeechWindow) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const gate = yield* SpeechGate;
     const synthesizer = yield* SpeechSynthesizer;
-    const { listener_id, send } = options;
+    const { listener_id, send, requestWork = () => Effect.void } = options;
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
-    let turn: { epoch_id: CaptureEpochId; texts: string[]; sample_end: number } | null = null;
+    let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
+    const seenFinals = new Set<TranscriptSegment['id']>();
     let turnTimer: Fiber.RuntimeFiber<void> | null = null;
     let speaking: Fiber.RuntimeFiber<void> | null = null;
 
@@ -177,18 +191,27 @@ export const speechController = (options: {
     const completeTurn = Effect.gen(function* () {
       const finished = turn;
       turn = null;
-      const request = finished ? directRequest(finished.texts.join(' ')) : null;
-      if (!finished || request === null) return;
-      const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: randomUUID(), sample_end: finished.sample_end });
+      if (!finished) return;
+      finished.segments.sort((a, b) => a.source.sample_start - b.source.sample_start);
+      const request = directRequest(finished.segments.map(segment => segment.text).join(' '));
+      if (request === null) return;
+      const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.segments[0]!.id, sample_end: finished.sample_end });
       speaking = yield* Effect.forkDaemon(speak({ gate, synthesizer, listener_id, send, reply: options.respond(request) }, window));
+      yield* Effect.forkDaemon(requestWork(request, window));
     });
 
     /** Extends the open turn, or completes it first when this segment starts after a pause or in a new epoch. */
     const extendTurn = (segment: TranscriptSegment) =>
       Effect.gen(function* () {
         const { epoch_id, sample_start, sample_end } = segment.source;
-        if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples)) yield* completeTurn;
-        turn = turn ? { ...turn, texts: [...turn.texts, segment.text], sample_end } : { epoch_id, texts: [segment.text], sample_end };
+        if (turn && startsSeparateTurn(turn, segment.source, endOfTurnSamples)) yield* completeTurn;
+        if (turn) {
+          turn.segments.push(segment);
+          turn.sample_start = Math.min(turn.sample_start, sample_start);
+          turn.sample_end = Math.max(turn.sample_end, sample_end);
+        } else {
+          turn = { epoch_id, segments: [segment], sample_start, sample_end };
+        }
         if (turnTimer) yield* Fiber.interrupt(turnTimer);
         turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
       });
@@ -196,6 +219,10 @@ export const speechController = (options: {
     return {
       onSegment: (segment: TranscriptSegment) =>
         Effect.gen(function* () {
+          if (segment.status === 'final') {
+            if (seenFinals.has(segment.id)) return;
+            seenFinals.add(segment.id);
+          }
           const role = segmentRole(gate, listener_id, segment);
           if (role === 'ignore') return;
           if (role === 'interrupt') yield* cancel('barge_in');

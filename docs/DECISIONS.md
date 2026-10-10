@@ -18,6 +18,24 @@
 - Expose one shared context model through website, SDKs, and MCP.
 - Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
 
+## Spoken work decision - 2026-10-10
+
+The captain chose model judgment: "The model should be start enough to decide whether or not to do something (recommended)".
+Accepted: after a completed direct spoken request during a live meeting, the planner model decides whether Sanctum should do background work.
+It returns only a boolean; keyword rules do not make this decision.
+Accepted work retains the original spoken request without model rewriting.
+A work request enqueues one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
+The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
+Final segments collected within a turn are deduplicated by ID and ordered by source samples before either model receives the request.
+The listener lock precedes transaction reads of current authorization, grants, and all job history.
+Answer-only requests still use the existing spoken reply path and start no research.
+Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
+Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
+Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
+The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
+The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
+The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records the authorized handler and ASR timing limits.
+
 ## Still open
 
 ### Saved-meeting retention

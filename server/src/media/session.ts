@@ -30,7 +30,7 @@ import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/cartesia.ts';
-import { SpeechGate, SpeechReplies, speechController } from './speech-gate.ts';
+import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
 
 export const liveLimits = {
   /** Provider send backlog at which live ASR is skipped and the range left to batch reconciliation. */
@@ -269,8 +269,10 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
   Effect.gen(function* () {
     const synthesizer = yield* Effect.serviceOption(SpeechSynthesizer);
     const replies = yield* Effect.serviceOption(SpeechReplies);
+    const work = yield* Effect.serviceOption(SpeechWorkRequests);
     if (Option.isSome(synthesizer) && Option.isSome(replies)) {
-      return yield* speechController({ listener_id: listener.id, sample_rate: start.clock.sample_rate, send, respond: replies.value(access, listener.id) }).pipe(
+      return yield* speechController({ listener_id: listener.id, sample_rate: start.clock.sample_rate, send, respond: replies.value(access, listener.id),
+        ...(Option.isSome(work) ? { requestWork: work.value(access, listener.id) } : {}) }).pipe(
         Effect.provideService(SpeechSynthesizer, synthesizer.value),
       );
     }

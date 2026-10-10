@@ -11,7 +11,7 @@ import { vi } from 'vitest';
 import { createActionGrant, requestAction } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
-import { directRequest, makeSpeechGate, SpeechGate, speechController } from '../src/media/speech-gate.ts';
+import { directRequest, makeSpeechGate, SpeechGate, speechController, type SpeechWindow } from '../src/media/speech-gate.ts';
 import { planActions } from '../src/planner.ts';
 import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
 import { actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
@@ -58,14 +58,16 @@ const listen = (reply: (request: string) => Stream.Stream<string>, gate = makeSp
   Effect.gen(function* () {
     const sent: Array<SpeechChunkMessage | SpeechCancelMessage> = [];
     const requests: string[] = [];
+    const work: Array<{ request: string; window: SpeechWindow }> = [];
     const controller = yield* speechController({
       listener_id: LISTENER,
       sample_rate: RATE,
       send: message => Effect.sync(() => void sent.push(message)),
       respond: request => (requests.push(request), reply(request)),
+      requestWork: (request, window) => Effect.sync(() => { work.push({ request, window }); }),
     }).pipe(Effect.provideService(SpeechGate, gate), Effect.provideService(SpeechSynthesizer, fakeSynthesizer));
     const chunks = () => sent.filter((message): message is SpeechChunkMessage => message._tag === 'speech_chunk');
-    return { ...controller, gate, sent, requests, chunks };
+    return { ...controller, gate, sent, requests, work, chunks };
   });
 
 const clock = { now: 1_000_000 };
@@ -108,6 +110,60 @@ describe('speech gate', () => {
       expect(chunks.map(chunk => chunk.sequence)).toEqual([0, 1, 2, 3]);
       expect(chunks[0]).toMatchObject({ sample_rate: 24_000, audio: Buffer.alloc(4_800).toString('base64') });
       expect(synthesized.slice(-2)).toEqual(['The next item is hiring.', 'Then budget.']);
+    }));
+
+  for (const order of [[0, 2, 1], [2, 1, 0]] as const) {
+    it.effect(`preserves the ordered request for speech and work when finals arrive ${order.join(',')}`, () =>
+      Effect.gen(function* () {
+        const session = yield* listen(() => Stream.make('I will send the notes.'));
+        const segments = [
+          heard('Sanctum, please', 0, 500),
+          heard('send', 500, 800),
+          heard('the notes', 800, 1_200),
+        ];
+        for (const index of order) yield* session.onSegment(segments[index]!);
+        yield* session.onSegment(segments[order[0]]!);
+        yield* settle(turnWaitMs);
+        expect(session.requests).toEqual(['please send the notes']);
+        expect(session.work).toEqual([{ request: 'please send the notes', window: expect.objectContaining({
+          request_id: segments[0]!.id, sample_end: segments[2]!.source.sample_end,
+        }) }]);
+        expect(session.chunks()).toHaveLength(2);
+        for (const segment of segments) yield* session.onSegment(segment);
+        yield* settle(turnWaitMs);
+        expect(session.requests).toEqual(['please send the notes']);
+        expect(session.work).toHaveLength(1);
+        expect(session.chunks()).toHaveLength(2);
+        yield* session.onEnd('disconnect');
+      }));
+  }
+
+  it.effect('accepts unseen finals with earlier or equal sample ends', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.empty);
+      const segments = [
+        heard('Sanctum, prepare the notes', 10_000, 11_000),
+        heard('Sanctum, send the notes', 8_000, 9_000),
+        heard('Sanctum, look up the times', 8_000, 9_000),
+      ];
+      for (const segment of segments) {
+        yield* session.onSegment(segment);
+        yield* settle(turnWaitMs);
+      }
+      expect(session.requests).toEqual(['prepare the notes', 'send the notes', 'look up the times']);
+      expect(session.work.map(work => work.request)).toEqual(session.requests);
+      yield* session.onEnd('disconnect');
+    }));
+
+  it.effect('keeps requests separate across a backward source gap', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.empty);
+      yield* session.onSegment(heard('Sanctum, send the notes', endOfTurnMs + 1_000, endOfTurnMs + 1_500));
+      yield* session.onSegment(heard('Sanctum, prepare the notes', 0, 1_000));
+      yield* settle(turnWaitMs);
+      expect(session.requests).toEqual(['send the notes', 'prepare the notes']);
+      expect(session.work.map(work => work.request)).toEqual(session.requests);
+      yield* session.onEnd('disconnect');
     }));
 
   it.effect('does not hear its own speech as a request or a barge-in', () =>

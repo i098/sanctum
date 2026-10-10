@@ -150,7 +150,7 @@ Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/contex
 
 ### actions (T18, T19 recovery, T20)
 
-Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/media/speech-reply.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
+Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/speech-requests.ts`, `server/src/providers/cartesia.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
 
 - `actions.ts`: `requestAction(access, input: RequestActionInput): Effect<RequestActionOutput, Forbidden | NotFound | HashConflict, R>` (the third gateway).
 - `actions.ts`: `getActionReceipt(access, action_id): Effect<ActionReceipt, NotFound, R>`.
@@ -159,10 +159,15 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech
 - Handles job kinds `action.execute`, `action.reconcile`, `research.run`.
 - `actions.ts`: `listenerFeed(access, listener_id)` returns the listener's open meeting and its agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
 - Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from MySQL every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
-- `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-reply.ts `SpeechRepliesLive`), so a process without them stays silent.
+- `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-requests.ts `SpeechRepliesLive`), so a process without them stays silent.
+- `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller's independent work fiber.
+  The [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) owns the trigger and authorization contract.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
-- `research.run` needs a meeting; the models planner proposes only actions already inspected with `get_integration_action`, so research without inspected actions plans nothing.
+- Known handler limit: `runResearch` supplies no inspected actions to `planActions`, so an authorized job succeeds with an empty action list.
+  It performs no hosted research or integration discovery; the authorized follow-up is [#95](https://github.com/i098/sanctum/issues/95).
+- Known ASR timing limit: delayed finals across lane rotation can split a request prematurely or be ignored during an active reply.
+  Sorting only restores segments collected before turn completion; the authorized follow-up is [#96](https://github.com/i098/sanctum/issues/96).
 
 ### interfaces (T22, T23)
 

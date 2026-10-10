@@ -164,21 +164,26 @@ const replay = (row: ActionRow, sha256: string) =>
     ? Effect.succeed<typeof RequestActionOutput.Type>({ action_id: row.id, state: row.state })
     : Effect.fail(new HashConflict({ message: 'Idempotency key was used for a different request', existing_sha256: row.args_sha256 }));
 
-/** Active, unexpired grants to this principal for this action, meeting and an active account. */
-const matchGrant = (access: AccessScope, input: ActionRequest) =>
+export const activeActionGrants = (access: AccessScope, input?: Pick<ActionRequest, 'action_key' | 'meeting_id'>) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
-    const grants = yield* SqlSchema.findAll({
+    return yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: GrantRow,
       execute: () => sql`
                 SELECT ${sql.literal(GRANT_COLUMNS)} FROM action_grants g
                 JOIN integration_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.account_id
-                WHERE g.workspace_id = ${access.workspace_id} AND g.grantee_principal_id = ${access.principal.id} AND g.action_key = ${input.action_key}
+                WHERE g.workspace_id = ${access.workspace_id} AND g.grantee_principal_id = ${access.principal.id}
                     AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND a.status = 'active'
-                    AND (g.meeting_id IS NULL OR g.meeting_id = ${input.meeting_id})
+                    ${input ? sql`AND g.action_key = ${input.action_key} AND (g.meeting_id IS NULL OR g.meeting_id = ${input.meeting_id})` : sql``}
                 ORDER BY g.meeting_id IS NULL, g.created_at DESC`,
     })(undefined);
+  });
+
+/** Active, unexpired grants to this principal for this action, meeting and an active account. */
+const matchGrant = (access: AccessScope, input: ActionRequest) =>
+  Effect.gen(function*() {
+    const grants = yield* activeActionGrants(access, input);
     const grant = grants.find(candidate => restrictionsAllow(candidate.restrictions, input.arguments));
     if (!grant) return yield* new Forbidden({ message: 'No active grant covers this action, account and arguments' });
     return grant;
