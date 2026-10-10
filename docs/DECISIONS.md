@@ -117,7 +117,7 @@ Its model schema lists strict `json_schema` output with `name`, `schema` and `st
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
 The Cerebras client is removed; see the [configuration guide](operations.md#configuration) for Anthropic overrides.
-Research stays on Anthropic until the separate research execution slice replaces it.
+Research moved to OpenAI in the [web research provider decision](#web-research-provider-decision---2026-10-10).
 
 ## Sign-in and workspace management decision — 2026-10-08
 
