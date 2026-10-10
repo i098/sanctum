@@ -256,7 +256,7 @@ describe('spoken work', () => {
         });
         expect(rows[0]!.rearmed).toBe(0);
         yield* test.controller.onEnd('disconnect');
-      }).pipe(Effect.ensuring(release));
+      }).pipe(Effect.ensuring(release.pipe(Effect.orDie)));
     })), { migrated: true }));
 
   for (const change of ['membership removed', 'grant revoked', 'grant expired', 'account disconnected'] as const) {
@@ -282,7 +282,7 @@ describe('spoken work', () => {
           expect(test.requests).toHaveLength(1);
           expect(yield* test.jobs).toEqual([]);
           yield* test.controller.onEnd('disconnect');
-        }).pipe(Effect.ensuring(release));
+        }).pipe(Effect.ensuring(release.pipe(Effect.orDie)));
       })), { migrated: true }));
   }
 });
