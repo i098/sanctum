@@ -11,6 +11,7 @@ import { vi } from 'vitest';
 import { engineeringDefaults, serverConfig } from '../src/config.ts';
 import { LlmClient, LlmLive, makeLlm } from '../src/llm.ts';
 import { anthropic } from '../src/providers/anthropic.ts';
+import { openAi } from '../src/providers/openai.ts';
 import { workersAi } from '../src/providers/workers-ai.ts';
 
 interface Seen {
@@ -66,18 +67,19 @@ const ask = { system: 'Extract.', prompt: 'Transcript', name: 'answer', output: 
 const budget = { ...engineeringDefaults.modelRequest, timeoutMs: 400 };
 const roles = engineeringDefaults.modelRoles;
 const withWorkersAi = (url: string) => makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: `${url}/accounts/acct/ai`, apiToken: 'test-key' }) }, budget);
-const withAnthropic = (url: string) => makeLlm(roles, { anthropic: anthropic({ apiKey: 'test-key', baseUrl: url }) }, budget);
+// Research defaults to OpenAI; Anthropic stays selectable with `RESEARCH_MODEL_PROVIDER=anthropic`.
+const withAnthropic = (url: string) =>
+  makeLlm({ ...roles, research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null } }, { anthropic: anthropic({ apiKey: 'test-key', baseUrl: url }) }, budget);
 
 describe('model provider configuration', () => {
+  const defaultModels = { 'workers-ai': '@cf/qwen/qwen3.8-27b', anthropic: 'claude-sonnet-5-5', openai: 'gpt-4.1-mini-2025-04-14' } as const;
   for (const role of ['voice', 'extraction', 'planner', 'research'] as const) {
-    for (const provider of role === 'research' ? ['anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
+    for (const provider of role === 'research' ? ['openai', 'anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
       it.effect(`uses a compatible default and preserves an explicit ${role} model on ${provider}`, () =>
         Effect.gen(function* () {
           const settings = new Map<string, string>([[`${role.toUpperCase()}_MODEL_PROVIDER`, provider]]);
           const defaults = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
-          expect(defaults.modelRoles[role]).toMatchObject({
-            provider, model: provider === 'anthropic' ? roles.research.model : roles.voice.model,
-          });
+          expect(defaults.modelRoles[role]).toMatchObject({ provider, model: defaultModels[provider] });
           settings.set(`${role.toUpperCase()}_MODEL`, 'explicit-model');
           const explicit = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
           expect(explicit.modelRoles[role]).toMatchObject({ provider, model: 'explicit-model' });
@@ -212,7 +214,10 @@ describe('Anthropic client', () => {
         message([{ type: 'text', text: 'Option B supports retention controls.', citations: [citation, citation] }]),
       ]);
       const result = yield* withAnthropic(server.url).research({ system: 'Research.', prompt: 'Which option supports retention?' });
-      expect(result).toEqual({ model: 'claude-sonnet-5-5', value: { text: 'Option B supports retention controls.', sources: [{ url: 'https://example.com/b', title: 'Option B' }] } });
+      expect(result).toEqual({
+        model: 'claude-sonnet-5-5',
+        value: { text: 'Option B supports retention controls.', sources: [{ url: 'https://example.com/b', title: 'Option B' }], usage: { input_tokens: 20, output_tokens: 10, web_searches: 0 } },
+      });
       expect(server.seen[0]!.body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: budget.researchMaxSearches }]);
       expect(server.seen[1]!.body.messages).toEqual([{ role: 'user', content: 'Which option supports retention?' }, { role: 'assistant', content: search }]);
     }));
@@ -247,6 +252,67 @@ describe('Anthropic client', () => {
       expect(server.seen[0]!.body).toMatchObject({ model: 'claude-haiku-4-5', stream: true });
       const overloaded = yield* Effect.flip(Stream.runDrain(llm.stream('voice', { system: '', prompt: '' })));
       expect(overloaded).toMatchObject({ retryable: true, message: expect.stringMatching(/HTTP 529/) });
+    }));
+});
+
+describe('OpenAI research client', () => {
+  const withOpenAi = (url: string) => makeLlm(roles, { openai: openAi({ apiKey: 'test-key', baseUrl: url }) }, budget);
+  const cite = (url: string, title: string) => ({ type: 'url_citation', start_index: 0, end_index: 5, url, title });
+
+  it.scopedLive('sends one Responses web_search request and maps cited sources and usage', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([
+        json(200, {
+          id: 'resp_1',
+          status: 'completed',
+          output: [
+            { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'mysql 8.4 lts' } },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'MySQL 8.4 is the LTS line.', annotations: [cite('https://dev.mysql.com/a', 'A'), cite('https://dev.mysql.com/a', 'A'), cite('https://dev.mysql.com/b', 'B')] }] },
+          ],
+          usage: { input_tokens: 8_300, output_tokens: 120, total_tokens: 8_420 },
+        }),
+      ]);
+      const admitted: string[] = [];
+      const result = yield* withOpenAi(server.url).research({ system: 'Research.', prompt: 'Which MySQL line is LTS?' }, model => Effect.sync(() => void admitted.push(model)));
+      expect(result).toEqual({
+        model: 'gpt-4.1-mini-2025-04-14',
+        value: {
+          text: 'MySQL 8.4 is the LTS line.',
+          sources: [{ url: 'https://dev.mysql.com/a', title: 'A' }, { url: 'https://dev.mysql.com/b', title: 'B' }],
+          usage: { input_tokens: 8_300, output_tokens: 120, web_searches: 1 },
+        },
+      });
+      expect(admitted).toEqual(['gpt-4.1-mini-2025-04-14']);
+      const [request] = server.seen;
+      expect(request!.path).toBe('/v1/responses');
+      expect(request!.headers.authorization).toBe('Bearer test-key');
+      expect(request!.body).toEqual({
+        model: 'gpt-4.1-mini-2025-04-14',
+        instructions: 'Research.',
+        input: 'Which MySQL line is LTS?',
+        tools: [{ type: 'web_search' }],
+        max_tool_calls: budget.researchMaxSearches,
+        max_output_tokens: budget.maxOutputTokens,
+        store: false,
+      });
+    }));
+
+  it.scopedLive('never retries a paid request, sends nothing when not admitted, and fails an incomplete answer', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([
+        json(429, { error: { message: 'Rate limit reached' } }, { 'retry-after': '7' }),
+        json(200, { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }),
+      ]);
+      const llm = withOpenAi(server.url);
+      expect(yield* Effect.flip(llm.research({ system: '', prompt: 'q' }))).toMatchObject({ retryable: true, retry_after_ms: 7_000, message: expect.stringMatching(/OpenAI HTTP 429/) });
+      expect(server.seen).toHaveLength(1);
+      const refused = yield* Effect.flip(llm.research({ system: '', prompt: 'q' }, () => Effect.fail('spent' as const)));
+      expect(refused).toBe('spent');
+      expect(server.seen).toHaveLength(1);
+      expect(yield* Effect.flip(llm.research({ system: '', prompt: 'q' }))).toMatchObject({ retryable: false, message: 'research model: OpenAI research ended incomplete: max_output_tokens' });
+      // OpenAI pays only for research: no text role can select it, and text calls on it fail visibly.
+      expect((yield* Effect.flip(makeLlm({ ...roles, voice: { provider: 'openai', model: 'gpt-4.1-mini', reasoning: null } }, { openai: openAi({ apiKey: 'k', baseUrl: server.url }) }).generate('voice', ask))).message).toMatch(/no text generation/);
+      expect(server.seen).toHaveLength(2);
     }));
 });
 

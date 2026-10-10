@@ -62,14 +62,18 @@ export const anthropic = (options: AnthropicOptions): ModelProvider => {
     research: async (request, budget, signal) => {
       const tools = [{ type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: budget.maxSearches }];
       const content: ContentBlock[] = [];
+      const usage = { input_tokens: 0, output_tokens: 0, web_searches: 0 };
       for (let turn = 0; turn <= budget.maxContinuations; turn++) {
         const messages: MessageParam[] = [{ role: 'user', content: request.prompt }, ...(content.length > 0 ? [{ role: 'assistant' as const, content }] : [])];
         const message = await create({ ...params(request), messages, tools }, signal);
         content.push(...message.content);
+        usage.input_tokens += message.usage.input_tokens;
+        usage.output_tokens += message.usage.output_tokens;
+        usage.web_searches += message.usage.server_tool_use?.web_search_requests ?? 0;
         if (message.stop_reason !== 'pause_turn') {
           if (message.stop_reason === 'max_tokens') throw new ProviderError('Anthropic research was truncated at max_tokens', false);
           const sources = new Map(citationsOf(content).map(source => [source.url, source]));
-          return { text: textOf(content), sources: [...sources.values()] };
+          return { text: textOf(content), sources: [...sources.values()], usage };
         }
       }
       throw new ProviderError(`Anthropic research still paused after ${budget.maxContinuations} continuations`, false);

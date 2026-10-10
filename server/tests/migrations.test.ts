@@ -15,14 +15,14 @@ const tables = Effect.gen(function* () {
 
 describe('migration files', () => {
   it('are numbered, parsed into inspectable steps and create every plan section 07 table', () => {
-    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     const created = migrations.flatMap(migration => migration.steps.map(step => step.object.table));
     expect(created).toEqual(
       expect.arrayContaining([
         'workspaces', 'principals', 'workspace_members', 'meetings', 'meeting_access', 'listeners', 'recording_chunks',
         'meeting_ranges', 'transcript_segments', 'speaker_tracks', 'voice_enrollments', 'profile_embeddings',
         'context_items', 'context_events', 'agent_credentials', 'integration_accounts', 'action_grants', 'actions', 'jobs',
-        'workspace_orgs', 'sync_cursors',
+        'workspace_orgs', 'sync_cursors', 'paid_model_calls',
       ]),
     );
   });

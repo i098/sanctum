@@ -12,7 +12,7 @@ import { createActionGrant, requestAction } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
 import { directRequest, makeSpeechGate, SpeechGate, speechController, type SpeechWindow } from '../src/media/speech-gate.ts';
-import { planActions } from '../src/planner.ts';
+import { planWork } from '../src/planner.ts';
 import { SpeechSynthesizer } from '../src/providers/speech.ts';
 import { actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { withDatabase } from './support/database.ts';
@@ -22,7 +22,7 @@ vi.mock('../src/integrations.ts', async importOriginal => {
   const { fakeIntegrations } = await import('./support/actions.ts');
   return fakeIntegrations(importOriginal as never);
 });
-vi.mock('../src/planner.ts', () => ({ planActions: vi.fn() }));
+vi.mock('../src/planner.ts', () => ({ planWork: vi.fn() }));
 
 const LISTENER = randomUUID() as ListenerId;
 const EPOCH = randomUUID() as CaptureEpochId;
@@ -287,7 +287,7 @@ describe('background work', () => {
         yield* Effect.flatMap(queuedJob(agent!.workspace_id, 'action.execute', ok.action_id), executeAction);
         provider.mode = 'reject';
         yield* Effect.flatMap(queuedJob(agent!.workspace_id, 'action.execute', rejected.action_id), executeAction);
-        vi.mocked(planActions).mockReturnValue(Effect.succeed([input('planned')]));
+        vi.mocked(planWork).mockReturnValue(Effect.succeed({ web_research: false, actions: [input('planned')] }));
         yield* runResearch({ ...(yield* queuedJob(agent!.workspace_id, 'action.execute', ok.action_id)), payload: { meeting_id: yield* seedMeeting(agent!.workspace_id, [agent!]), request: 'follow up' } });
         yield* session.onSegment(heard('Let us wrap up.', 3_000, 4_000));
         yield* Effect.sleep(`${endOfTurnMs * 2} millis`);

@@ -93,12 +93,13 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,liste
 
 ### models (T04, T15)
 
-Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{workers-ai,anthropic}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
+Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{workers-ai,anthropic,openai}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
 
 - `llm.ts`: `LlmClient` tag, `LlmLive: Layer<LlmClient, ConfigError>`, `fixtureLlm(responses)` for tests; missing keys fail with `Unavailable`.
 - `extraction.ts`: `extractCandidates(input: { meeting: Meeting; segments: ReadonlyArray<TranscriptSegment>; snapshot: ReadonlyArray<ContextItem>; epochs?: ReadonlyArray<EpochAnchor> }): Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient>`; fails `Unavailable` when a segment's epoch has no anchor (pass `capture_epochs` anchors).
 - `extraction.ts`: `summarizeMeeting(input: Omit<ExtractionInput, 'snapshot'>): Effect<MeetingNotes, Unavailable, LlmClient>`, the one canonical summary for notes, email sections and exports.
-- `planner.ts`: `planActions(access, input: { meeting_id; request: string }): Effect<ReadonlyArray<RequestActionInput>, Unavailable, LlmClient>`.
+- `planner.ts`: `planWork(access, input: { meeting_id; request: string; actions: ReadonlyArray<GetIntegrationActionOutput> }): Effect<{ web_research: boolean; actions: ReadonlyArray<RequestActionInput> }, Unavailable | Forbidden, LlmClient>`; offers only inspected actions whose missing fields it can fill, and never the `app` field.
+- `llm.ts`: `research(prompt, admit?)` sends one hosted web-search request (OpenAI Responses `web_search` by default) after `admit(model)` succeeds and never retries it in-process.
 - `planner.ts`: `respondToRequest(input: { request: string; context: ContextSnapshot }): Stream<string, Unavailable, LlmClient>` for requested speech.
 - `matcher.ts`: `rankMatches(access, query: { profile_id; kind: 'needs' | 'offers'; top_k: number }): Effect<ReadonlyArray<{ profile_id: ProfileId; score: number }>, NotFound, R>`.
 - Matching (integration-owned): `MatchingApi` (contracts `matching.ts`, `GET /api/v1/profiles/{profile_id}/matches`) and the `matching.rank` job live in server `matching.ts`; both call `rankMatches` after a `context:read` check, and the job stores its ranking as a workspace `document` artifact.
@@ -150,7 +151,7 @@ Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/contex
 
 ### actions (T18, T19 recovery, T20)
 
-Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech-gate.ts`, `server/src/speech-requests.ts`, `server/src/providers/speech.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migration `010_action_titles`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
+Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`, `server/src/media/speech-gate.ts`, `server/src/speech-requests.ts`, `server/src/providers/speech.ts`, `web-app/src/lib/capture/playback.ts`, the grant and action statements in `008_actions`, migrations `010_action_titles` and `021_paid_model_calls`, `ActionsApi` in contracts `actions-api.ts` (registered through api.ts only, never the index), speech control messages in contracts media.ts.
 
 - `actions.ts`: `requestAction(access, input: RequestActionInput): Effect<RequestActionOutput, Forbidden | NotFound | HashConflict, R>` (the third gateway).
 - `actions.ts`: `getActionReceipt(access, action_id): Effect<ActionReceipt, NotFound, R>`.
@@ -164,8 +165,8 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/media/speech
   The [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) owns the trigger and authorization contract.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
-- Known handler limit: `runResearch` supplies no inspected actions to `planActions`, so an authorized job succeeds with an empty action list.
-  It performs no hosted research or integration discovery; the authorized follow-up is [#95](https://github.com/i098/sanctum/issues/95).
+- `research.run` (`executor.ts` with `research.ts`): finds the requester's granted actions among `searchIntegrationActions` matches for the request, inspects each with its grant's account, lets `planWork` decide on web research and fill in actions, researches first, then requests each planned action through `requestAction`.
+  Web research reserves one of the workspace's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` paid calls in `paid_model_calls` before sending, records the provider's token usage, stores a `research` artifact once per job, and adds an `external` `research_observation` citing it; a spent allowance is a `refused` result, a rate limit pauses the job, and nothing to do is a reported `outcome`.
 - Known ASR timing limit: delayed finals across lane rotation can split a request prematurely or be ignored during an active reply.
   Sorting only restores segments collected before turn completion; the authorized follow-up is [#96](https://github.com/i098/sanctum/issues/96).
 

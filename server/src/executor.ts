@@ -11,7 +11,8 @@ import { type ActionRow, loadAction, requestAction } from './actions.ts';
 import { requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
-import { planActions } from './planner.ts';
+import { planWork } from './planner.ts';
+import { offeredActions, webResearch } from './research.ts';
 
 /** The claimed-job fields these handlers read; stated here so this module does not import the registry. */
 interface Job {
@@ -162,10 +163,11 @@ export const executeAction = (job: Job) =>
 const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), request: Schema.String.pipe(Schema.minLength(1)) });
 
 /**
- * `research.run`: plan the request and submit each planned action through the same grant
- * gateway as any agent. The planner's idempotency keys derive from each action's content, so a
- * retried job never requests the same action twice, whatever order the plan comes back in.
- * A rate-limited planner pauses the job until it may resume.
+ * `research.run`: find and inspect the requester's granted actions that match the request, let the
+ * planner decide on web research and fill in actions, then research before submitting each planned
+ * action through the same grant gateway as any agent. Research is stored once per job and planned
+ * idempotency keys derive from each action's content, so a retried or resumed job neither pays nor
+ * requests the same action twice. Nothing to do is reported as the outcome, never an empty success.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -174,23 +176,31 @@ export const runResearch = (job: Job) =>
     if (job.requested_by === null) return { status: 'succeeded', result: { skipped: 'Research needs a requesting principal; nobody asked for this run' } } as const;
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: job.requested_by });
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
-    const plan = yield* Effect.either(planActions(access, { meeting_id, request }));
-    if (plan._tag === 'Left') {
-      if (plan.left._tag === 'Forbidden') return yield* new JobFailure({ message: plan.left.message, retryable: false });
-      const { retryable, retry_after_ms, message } = plan.left;
-      if (retryable && retry_after_ms !== undefined) return { status: 'paused', resume_after_ms: retry_after_ms, reason: message } as const;
-      return yield* new JobFailure({ message, retryable });
-    }
-    const results = yield* Effect.forEach(plan.right, input =>
+    const offered = yield* offeredActions(access, meeting_id, request);
+    const plan = yield* planWork(access, { meeting_id, request, actions: offered });
+    const research = plan.web_research
+      ? yield* webResearch({ ...job, requested_by: job.requested_by }, meeting_id, request).pipe(Effect.catchTag('AllowanceSpent', error => Effect.succeed({ refused: error.message })))
+      : null;
+    const actions = yield* Effect.forEach(plan.actions, input =>
       requestAction(access, { ...input, meeting_id }).pipe(
         Effect.map(output => ({ action_key: input.action_key, ...output })),
         Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
       ),
     );
-    return { status: 'succeeded', result: { actions: results } } as const;
+    // `offered` already tells whether any granted action matched the request.
+    const outcome = research === null && actions.length === 0 ? 'Nothing to do: no offered action fits the request, and it asked for no web research' : null;
+    if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
+    return { status: 'succeeded', result: { offered: offered.map(action => action.action_key), research, actions, ...(outcome ? { outcome } : {}) } } as const;
   }).pipe(
     Effect.catchTags({
+      // A rate-limited model pauses the job until it may resume; any other model failure fails the attempt truthfully.
+      Unavailable: error =>
+        error.retryable && error.retry_after_ms !== undefined
+          ? Effect.succeed({ status: 'paused', resume_after_ms: error.retry_after_ms, reason: error.message } as const)
+          : Effect.fail(new JobFailure({ message: error.message, retryable: error.retryable })),
       Forbidden: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })),
       ParseError: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })),
+      ConfigError: error => Effect.fail(new JobFailure({ message: `Research settings: ${error}`, retryable: false })),
+      SqlError: storageFailure,
     }),
   );
