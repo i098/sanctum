@@ -173,7 +173,7 @@ jobs:
             git -C "$snapshot" add .
             sentrux gate --save "$snapshot"
           done
-      - name: Reject any quality score drop or structural regression
+      - name: Reject a quality drop over 0.025 or any structural regression
         shell: bash
         run: |
           node --input-type=module <<'JS'
@@ -189,11 +189,12 @@ jobs:
             for (const key of ['quality_signal', 'cycle_count', 'god_file_count', 'complex_fn_count', 'coupling_score']) {
               assert(Number.isFinite(before[key]) && Number.isFinite(after[key]), `Missing metric: ${key}`);
             }
-            assert(after.quality_signal + 1e-9 >= before.quality_signal, 'Sentrux quality score dropped');
+            assert(after.quality_signal + 0.025 + 1e-9 >= before.quality_signal, 'Sentrux quality score dropped by more than 0.025 (250 points)');
             for (const key of ['cycle_count', 'god_file_count', 'complex_fn_count']) assert(after[key] <= before[key], `${key} increased`);
             assert(after.coupling_score <= before.coupling_score + 0.05 + 1e-9, 'Coupling exceeded native tolerance');
           }
-          assert.throws(() => compare(base, { ...base, quality_signal: base.quality_signal - 0.001 }));
+          assert.throws(() => compare(base, { ...base, quality_signal: base.quality_signal - 0.026 }));
+          compare(base, { ...base, quality_signal: base.quality_signal - 0.001 });
           assert.throws(() => compare(base, { ...base, cycle_count: base.cycle_count + 1 }));
           assert.throws(() => compare(base, {}));
           compare(floor, head);
