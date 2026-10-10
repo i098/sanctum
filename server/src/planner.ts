@@ -20,11 +20,14 @@ export interface PlanInput {
   /**
    * Second pass after web research: only the `planned` actions are offered again, and the
    * untrusted research may change only their content fields; any other change rejects the plan.
+   * Its idempotency keys come from `job_id` and each action's non-content arguments, so a retried
+   * job maps an action to the same request whatever content the research pass writes.
    */
   readonly research?: {
     readonly text: string;
     readonly sources: ReadonlyArray<{ readonly url: string; readonly title: string | null }>;
     readonly planned: ReadonlyArray<ActionRequest>;
+    readonly job_id: string;
   };
 }
 
@@ -32,7 +35,7 @@ export interface Plan {
   /** The request asks to look something up on the web (a paid call). */
   readonly web_research: boolean;
   readonly actions: ReadonlyArray<ActionRequest>;
-  /** Why a second pass after web research was rejected; it then plans no action. */
+  /** Why proposals were dropped; after web research any drop or change rejects the whole plan, which then has no action. */
   readonly rejected?: string;
 }
 
@@ -105,15 +108,14 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
   Effect.gen(function* () {
     if (!access.scopes.includes('actions:request')) return yield* new Forbidden({ message: 'planning actions requires actions:request', required_scope: 'actions:request' });
     if (access.meetings.kind === 'allowlist' && !access.meetings.meeting_ids.includes(input.meeting_id)) return yield* new Forbidden({ message: 'meeting is outside this access scope' });
-    const planned = input.research?.planned;
+    const research = input.research;
     // An action whose missing fields were cut from the inspected output cannot be filled in.
     const fillable = input.actions.filter(
-      action => (planned === undefined || planned.some(first => first.action_key === action.action_key)) && action.missing.every(name => plannable(action).some(field => field.name === name)),
+      action => (research === undefined || research.planned.some(first => first.action_key === action.action_key)) && action.missing.every(name => plannable(action).some(field => field.name === name)),
     );
     const offered = new Map(fillable.map(action => [action.action_key, action]));
     const keys = [...offered.keys()];
     const catalog = [...offered.values()].map(action => ({ action_key: action.action_key, fields: plannable(action).map(({ name, type, required, description }) => ({ name, type, required, description })) }));
-    const research = input.research;
     const untrusted = research ? `${research.text}\n\nSources:\n${research.sources.map(source => `- ${source.title ?? source.url}: ${source.url}`).join('\n') || '(none)'}`.replaceAll(UNTRUSTED, '') : '';
     const researched = research
       ? `\n\nPlanned actions; keep every argument except ${[...CONTENT_FIELDS].join(', ')} exactly as given:\n${JSON.stringify(research.planned.map(action => ({ action_key: action.action_key, arguments: action.arguments })), null, 2)}\n\n<${UNTRUSTED}>\n${untrusted}\n</${UNTRUSTED}>`
@@ -124,7 +126,7 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
       const { value } = yield* llm.generate('planner', { name: 'research_plan', output: Schema.Struct({ web_research: Schema.Boolean }), system: PLANNER_SYSTEM, prompt });
       return { web_research: value.web_research, actions: [] };
     }
-    const actionKey = planned === undefined ? Schema.Literal(...(keys as [string, ...string[]])) : Schema.String;
+    const actionKey = research === undefined ? Schema.Literal(...(keys as [string, ...string[]])) : Schema.String;
     const output = Schema.Struct({
       web_research: Schema.Boolean,
       actions: Schema.Array(Schema.Struct({ action_key: actionKey, title: Schema.String, arguments: Schema.Array(Schema.Struct({ name: Schema.String, value_json: Schema.String })) })),
@@ -132,13 +134,14 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
     const { value } = yield* llm.generate('planner', { name: 'action_plan', output, system: PLANNER_SYSTEM, prompt });
     const results = value.actions.map(proposal => {
       const action = offered.get(proposal.action_key);
-      return action ? toRequest(proposal, action, access, input.meeting_id, planned === undefined && value.web_research) : `${proposal.action_key} was not planned`;
+      const result = action ? toRequest(proposal, action, access, input.meeting_id, research === undefined && value.web_research) : 'was not planned';
+      return typeof result === 'string' ? `${proposal.action_key} ${result}` : result;
     });
     const rejected = results.filter((result): result is string => typeof result === 'string');
     if (rejected.length > 0) yield* Effect.logWarning('planner dropped invalid proposals', rejected);
     const actions = results.filter((result): result is ActionRequest => typeof result !== 'string');
-    if (planned === undefined) return { web_research: value.web_research, actions };
-    const unmatched = [...planned];
+    if (research === undefined) return { web_research: value.web_research, actions, ...(rejected.length > 0 ? { rejected: rejected.join('; ') } : {}) };
+    const unmatched = [...research.planned];
     const kept: ActionRequest[] = [];
     const problems = [...rejected];
     for (const { title: _, ...action } of actions) {
@@ -148,7 +151,8 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
         continue;
       }
       const [first] = unmatched.splice(at, 1);
-      kept.push({ ...action, ...(first!.title ? { title: first!.title } : {}) });
+      const digest = createHash('sha256').update([access.workspace_id, input.meeting_id, research.job_id, action.action_key, action.version, targets(action.arguments)].join('\n')).digest('hex');
+      kept.push({ ...action, idempotency_key: `plan-${digest}`, ...(first!.title ? { title: first!.title } : {}) });
     }
     problems.push(...unmatched.map(action => `${action.action_key} was dropped`));
     if (problems.length === 0) return { web_research: value.web_research, actions: kept };

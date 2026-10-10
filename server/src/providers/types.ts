@@ -38,15 +38,17 @@ export interface ModelProvider {
   readonly research?: (request: ProviderRequest, budget: { maxSearches: number; maxContinuations: number }, signal: AbortSignal) => Promise<ResearchResult>;
 }
 
-/** Transport, HTTP or response-shape failure; `retryable` only when repeating the request can help. */
+/** Transport, HTTP or response-shape failure; `retryable` only when repeating the request can help, `usage` when a failed research call was still billed. */
 export class ProviderError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs: number | undefined;
+  readonly usage: ResearchUsage | undefined;
 
-  constructor(message: string, retryable: boolean, retryAfterMs?: number) {
+  constructor(message: string, retryable: boolean, retryAfterMs?: number, usage?: ResearchUsage) {
     super(message);
     this.retryable = retryable;
     this.retryAfterMs = retryAfterMs;
+    this.usage = usage;
   }
 }
 

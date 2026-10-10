@@ -65,18 +65,20 @@ export const anthropic = (options: AnthropicOptions): ModelProvider => {
       const usage = { input_tokens: 0, output_tokens: 0, web_searches: 0 };
       for (let turn = 0; turn <= budget.maxContinuations; turn++) {
         const messages: MessageParam[] = [{ role: 'user', content: request.prompt }, ...(content.length > 0 ? [{ role: 'assistant' as const, content }] : [])];
-        const message = await create({ ...params(request), messages, tools }, signal);
+        const message = await create({ ...params(request), messages, tools }, signal).catch((error: unknown) => {
+          throw turn > 0 && error instanceof ProviderError ? new ProviderError(error.message, error.retryable, error.retryAfterMs, usage) : error;
+        });
         content.push(...message.content);
         usage.input_tokens += message.usage.input_tokens;
         usage.output_tokens += message.usage.output_tokens;
         usage.web_searches += message.usage.server_tool_use?.web_search_requests ?? 0;
         if (message.stop_reason !== 'pause_turn') {
-          if (message.stop_reason === 'max_tokens') throw new ProviderError('Anthropic research was truncated at max_tokens', false);
+          if (message.stop_reason === 'max_tokens') throw new ProviderError('Anthropic research was truncated at max_tokens', false, undefined, usage);
           const sources = new Map(citationsOf(content).map(source => [source.url, source]));
           return { text: textOf(content), sources: [...sources.values()], usage };
         }
       }
-      throw new ProviderError(`Anthropic research still paused after ${budget.maxContinuations} continuations`, false);
+      throw new ProviderError(`Anthropic research still paused after ${budget.maxContinuations} continuations`, false, undefined, usage);
     },
   };
 };

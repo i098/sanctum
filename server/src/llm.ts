@@ -11,7 +11,7 @@ import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfi
 import { anthropic } from './providers/anthropic.ts';
 import { openAi } from './providers/openai.ts';
 import { workersAi } from './providers/workers-ai.ts';
-import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult } from './providers/types.ts';
+import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult, type ResearchUsage } from './providers/types.ts';
 
 /** Model output plus the model ID that produced it, recorded with generated artifacts. */
 export interface Generated<A> {
@@ -31,10 +31,15 @@ export interface Llm {
   readonly stream: (role: ModelRoleName, request: Prompt) => Stream.Stream<string, Unavailable>;
   /**
    * Hosted web research with cited sources (research role only). `admit` receives the selected
-   * model and runs right before the paid request; its failure sends nothing. Never retried here,
+   * model and runs right before the paid request; its failure sends nothing. `record` receives the
+   * usage the provider reported, also for a billed call that then failed. Never retried here,
    * so each paid request passes `admit` (a retry is a new job attempt).
    */
-  readonly research: <E = never, R = never>(request: Prompt, admit?: (model: string) => Effect.Effect<void, E, R>) => Effect.Effect<Generated<ResearchResult>, Unavailable | E, R>;
+  readonly research: <E = never, R = never>(
+    request: Prompt,
+    admit?: (model: string) => Effect.Effect<void, E, R>,
+    record?: (usage: ResearchUsage) => Effect.Effect<void, E, R>,
+  ) => Effect.Effect<Generated<ResearchResult>, Unavailable | E, R>;
 }
 
 export class LlmClient extends Context.Tag('sanctum/LlmClient')<LlmClient, Llm>() {}
@@ -104,16 +109,19 @@ export function makeLlm(
           );
         }),
       ),
-    research: (prompt, admit) => {
+    research: (prompt, admit, record) => {
       const timeoutMs = budget.timeoutMs * (budget.researchMaxContinuations + 1);
+      const settle = (usage: ResearchUsage | undefined) => (record && usage ? record(usage) : Effect.void);
       return Effect.flatMap(select('research'), ({ provider, base }) => {
         const research = provider.research;
         if (!research) return Effect.fail(new Unavailable({ message: 'research model: provider has no hosted web search', retryable: false }));
         const request = Effect.tryPromise({
           try: signal => research({ ...base, ...prompt }, { maxSearches: budget.researchMaxSearches, maxContinuations: budget.researchMaxContinuations }, signal),
-          catch: toUnavailable('research'),
+          catch: (error: unknown) => error,
         }).pipe(
           Effect.timeoutFail({ duration: timeoutMs, onTimeout: () => new Unavailable({ message: `research model timed out after ${timeoutMs} ms`, retryable: true }) }),
+          Effect.catchAll(error => Effect.zipRight(settle(error instanceof ProviderError ? error.usage : undefined), Effect.fail(toUnavailable('research')(error)))),
+          Effect.tap(value => settle(value.usage)),
           Effect.map(value => ({ value, model: base.model })),
         );
         return admit ? Effect.zipRight(admit(base.model), request) : request;

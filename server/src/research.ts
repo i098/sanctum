@@ -82,11 +82,15 @@ const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
     const llm = yield* LlmClient;
     const call_id = randomUUID();
     const prompt = `Today (UTC): ${new Date().toISOString().slice(0, 10)}\n\nRequest: ${request}`;
-    const { value, model } = yield* llm.research({ system: RESEARCH_SYSTEM, prompt }, model => reservePaidCall(job, call_id, model));
-    const { usage } = value;
-    yield* sql`UPDATE paid_model_calls SET finished_at = UTC_TIMESTAMP(6), input_tokens = ${usage.input_tokens}, output_tokens = ${usage.output_tokens},
-      web_searches = ${usage.web_searches} WHERE workspace_id = ${job.workspace_id} AND id = ${call_id}`;
-    yield* Effect.logInfo('paid web research call', { workspace_id: job.workspace_id, job_id: job.id, model, ...usage });
+    const { value, model } = yield* llm.research(
+      { system: RESEARCH_SYSTEM, prompt },
+      model => reservePaidCall(job, call_id, model),
+      usage => Effect.gen(function* () {
+        yield* sql`UPDATE paid_model_calls SET finished_at = UTC_TIMESTAMP(6), input_tokens = ${usage.input_tokens}, output_tokens = ${usage.output_tokens},
+          web_searches = ${usage.web_searches} WHERE workspace_id = ${job.workspace_id} AND id = ${call_id}`;
+        yield* Effect.logInfo('paid web research call', { workspace_id: job.workspace_id, job_id: job.id, ...usage });
+      }),
+    );
     const content = Schema.encodeSync(StoredResearch)({ text: value.text, sources: value.sources });
     const artifact_id = ArtifactId.make(randomUUID());
     yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)

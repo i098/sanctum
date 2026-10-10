@@ -297,11 +297,11 @@ describe('OpenAI research client', () => {
       });
     }));
 
-  it.scopedLive('never retries a paid request, sends nothing when not admitted, and fails an incomplete answer', () =>
+  it.scopedLive('never retries a paid request, sends nothing when not admitted, and fails an incomplete answer after recording its usage', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([
         json(429, { error: { message: 'Rate limit reached' } }, { 'retry-after': '7' }),
-        json(200, { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }),
+        json(200, { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [{ type: 'web_search_call' }], usage: { input_tokens: 9_000, output_tokens: 4_096 } }),
       ]);
       const llm = withOpenAi(server.url);
       expect(yield* Effect.flip(llm.research({ system: '', prompt: 'q' }))).toMatchObject({ retryable: true, retry_after_ms: 7_000, message: expect.stringMatching(/OpenAI HTTP 429/) });
@@ -309,7 +309,10 @@ describe('OpenAI research client', () => {
       const refused = yield* Effect.flip(llm.research({ system: '', prompt: 'q' }, () => Effect.fail('spent' as const)));
       expect(refused).toBe('spent');
       expect(server.seen).toHaveLength(1);
-      expect(yield* Effect.flip(llm.research({ system: '', prompt: 'q' }))).toMatchObject({ retryable: false, message: 'research model: OpenAI research ended incomplete: max_output_tokens' });
+      const recorded: unknown[] = [];
+      const incomplete = llm.research({ system: '', prompt: 'q' }, undefined, usage => Effect.sync(() => void recorded.push(usage)));
+      expect(yield* Effect.flip(incomplete)).toMatchObject({ retryable: false, message: 'research model: OpenAI research ended incomplete: max_output_tokens' });
+      expect(recorded).toEqual([{ input_tokens: 9_000, output_tokens: 4_096, web_searches: 1 }]);
       // OpenAI pays only for research: no text role can select it, and text calls on it fail visibly.
       expect((yield* Effect.flip(makeLlm({ ...roles, voice: { provider: 'openai', model: 'gpt-4.1-mini', reasoning: null } }, { openai: openAi({ apiKey: 'k', baseUrl: server.url }) }).generate('voice', ask))).message).toMatch(/no text generation/);
       expect(server.seen).toHaveLength(2);

@@ -191,6 +191,12 @@ describe('research.run', () => {
         yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', id), executeAction);
         expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ body: 'MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).' }) })]);
 
+        // A retried job reuses its research, and a research pass that words the email differently maps to the same request.
+        planner.answers = [email(null), email('MySQL 8.4 is the current LTS line, per https://dev.mysql.com/doc/.')];
+        yield* runResearch(yield* queuedJob(member.workspace_id, 'research.run', 'lts'));
+        expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
+        expect(provider.sent).toHaveLength(1);
+
         planner.answers = [email(null)];
         expect(yield* runResearch(yield* researchJob(member, meeting_id, 'lts-refused', request)).pipe(allowance(0))).toEqual({
           status: 'succeeded',
@@ -201,7 +207,7 @@ describe('research.run', () => {
             outcome: `No action requested: ${SEND} was planned together with the refused web research`,
           },
         });
-        expect(planner.requests).toHaveLength(3);
+        expect(planner.requests).toHaveLength(5);
         expect(openai.bodies).toHaveLength(1);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
       }).pipe(Effect.provide(services)),
@@ -282,6 +288,13 @@ describe('research.run', () => {
         });
         expect(planner.requests[0]!.prompt).toContain('Offered actions:\n(none)');
         expect(openai.bodies).toHaveLength(0);
+
+        // A proposal dropped for a missing recipient is reported with its reason, never as nothing to do.
+        planner.answers = [JSON.stringify({ web_research: false, actions: [{ action_key: SEND, title: 'Email the notes', arguments: [{ name: 'subject', value_json: '"Notes"' }] }] })];
+        expect(yield* runResearch(yield* researchJob(member, meeting_id, 'no-recipient', 'Email the rollout notes to Maria'))).toEqual({
+          status: 'succeeded',
+          result: { offered: [SEND], research: null, actions: [], dropped: `${SEND} missing required to` },
+        });
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));

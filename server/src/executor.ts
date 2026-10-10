@@ -168,10 +168,11 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
  * research are planned again from the cited research, which may change only their content fields,
  * and none is requested when research is refused or that pass changes anything else. Each planned
  * action is submitted through the same grant gateway as any agent. A job that stored its research
- * does not pay for it again, and each further paid attempt counts against the allowance; planned
- * idempotency keys derive from each action's content, so a retried or resumed job does not request
- * the same action twice. Nothing to do is
- * reported as the outcome, never an empty success.
+ * does not pay for it again, and each further paid attempt counts against the allowance. Planned
+ * idempotency keys derive from each action's arguments, and after research from the job and its
+ * non-content arguments, so a retried or resumed job does not request the same action twice.
+ * Dropped proposals are reported with their reasons, and nothing to do is reported as the outcome,
+ * never an empty success.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -186,25 +187,26 @@ export const runResearch = (job: Job) =>
     const found = plan.web_research
       ? yield* webResearch({ ...job, requested_by: job.requested_by }, meeting_id, request).pipe(Effect.catchTag('AllowanceSpent', error => Effect.succeed({ refused: error.message })))
       : null;
-    const final =
-      found === null || plan.actions.length === 0 ? plan
-      : 'refused' in found ? { ...plan, actions: [] }
-      : yield* planWork(access, { meeting_id, request, actions: offered, research: { text: found.text, sources: found.sources, planned: plan.actions } });
-    const actions = yield* Effect.forEach(final.actions, input =>
+    const second =
+      found !== null && !('refused' in found) && plan.actions.length > 0
+        ? yield* planWork(access, { meeting_id, request, actions: offered, research: { text: found.text, sources: found.sources, planned: plan.actions, job_id: job.id } })
+        : null;
+    const actions = yield* Effect.forEach(found === null ? plan.actions : (second?.actions ?? []), input =>
       requestAction(access, { ...input, meeting_id }).pipe(
         Effect.map(output => ({ action_key: input.action_key, ...output })),
         Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
       ),
     );
     const research = found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
-    // `offered` already tells whether any granted action matched the request.
+    // `offered` already tells whether any granted action matched the request; `dropped` tells why a proposal for one was not requested.
     const outcome =
       found !== null && 'refused' in found && plan.actions.length > 0 ? `No action requested: ${plan.actions.map(action => action.action_key).join(', ')} was planned together with the refused web research`
-      : final.rejected ? `No action requested: ${final.rejected}`
-      : found === null && actions.length === 0 ? 'Nothing to do: no offered action fits the request, and it asked for no web research'
+      : second?.rejected ? `No action requested: ${second.rejected}`
+      : found === null && actions.length === 0 && plan.rejected === undefined ? 'Nothing to do: no offered action fits the request, and it asked for no web research'
       : null;
     if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
-    return { status: 'succeeded', result: { offered: offered.map(action => action.action_key), research, actions, ...(outcome ? { outcome } : {}) } } as const;
+    const dropped = plan.rejected ? { dropped: plan.rejected } : {};
+    return { status: 'succeeded', result: { offered: offered.map(action => action.action_key), research, actions, ...dropped, ...(outcome ? { outcome } : {}) } } as const;
   }).pipe(
     Effect.catchTags({
       // A rate-limited model pauses the job until it may resume; any other model failure fails the attempt truthfully.
