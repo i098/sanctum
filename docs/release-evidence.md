@@ -50,8 +50,8 @@ The prefix is `eaffeeffedffe4ffe1ffeafffcff2500`; no RIFF, ID3, Ogg or FLAC head
 A forced MPEG decode with FFmpeg returned exit 69, zero decoded bytes, and `Header missing`.
 Adjacent PCM samples have correlation 0.971; peak amplitude is 11,431 and RMS is 1,529.
 Raw payload SHA-256: `0496c263ef0fa12171440b8095927f46a59152d70cf40e8a83e766a512699a69`.
-The listening sample is `screenshots/aura-2-byte-check.wav` in the repository.
-FFprobe reports `pcm_s16le`, 24,000 Hz, one channel and 2.480000 seconds for that WAV.
+FFprobe reported `pcm_s16le`, 24,000 Hz, one channel and 2.480000 seconds for a temporary WAV.
+The repository retains only the text evidence, not the audio sample.
 
 A temporary Playwright scenario passed these bytes through the actual Aura adapter and Chromium's `OfflineAudioContext`.
 Browser output matched all 59,520 PCM samples exactly.
