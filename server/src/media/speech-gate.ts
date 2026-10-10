@@ -162,7 +162,7 @@ const startsSeparateTurn = (
 
 /**
  * Per-socket speech ownership for media's session: feed every transcript segment and the
- * socket's end. `respond` streams the reply text for one direct request (planner role).
+ * socket's end. `respond` streams the reply text for one direct request (voice role).
  */
 export const speechController = (options: {
   readonly listener_id: ListenerId;

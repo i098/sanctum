@@ -24,9 +24,9 @@ The captain chose model judgment: "The model should be start enough to decide wh
 Accepted: after a completed direct spoken request during a live meeting, the planner model decides whether Sanctum should do background work.
 It returns only a boolean; keyword rules do not make this decision.
 Accepted work retains the original spoken request without model rewriting.
-A work request starts one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
+A work request enqueues one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
 The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
-Final segments are deduplicated by ID and ordered by source samples before either model receives the request.
+Final segments collected within a turn are deduplicated by ID and ordered by source samples before either model receives the request.
 The listener lock precedes transaction reads of current authorization, grants, and all job history.
 Answer-only requests still use the existing spoken reply path and start no research.
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
@@ -34,6 +34,7 @@ Before classification and enqueue, the listener owner must hold at least one act
 Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
 The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
 The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
+The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records the authorized handler and ASR timing limits.
 
 ## Still open
 

@@ -81,20 +81,7 @@ Both rails are bottom-anchored in the band from the status down to the footer an
 
 ## Spoken work requests
 
-A completed direct request such as "Sanctum, look up the train times" also asks the planner model whether background work is needed.
-The model decides from the request, not keyword rules, and returns only a boolean.
-Accepted work retains the original spoken request without model rewriting.
-A work request starts one durable research job for the listener's current meeting and owner, without changing the spoken reply path.
-The request window identifies the work, so duplicate finals and retries do not start another run.
-Final segments are deduplicated by ID and ordered by source samples before either model receives the request.
-The listener lock precedes transaction reads of current authorization, grants, and all job history.
-An answer-only request such as "Sanctum, what time is it" starts no background work.
-Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
-Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
-Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
-The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
-External actions still require stored grants through the shared gateway.
-The agent-work feed shows accepted actions and truthful states; background completion never opens a spoken-response window.
+See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) for the trigger, authorization requirements, and known limits.
 
 ## Secondary views
 

@@ -42,7 +42,8 @@ export const SpeechWorkRequestsLive = Layer.effect(
         const { value } = yield* llm.generate('planner', { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request });
         if (!value.work) return;
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
-        // Serialize on the listener and check completed rows too: enqueueJob otherwise re-arms active work.
+        // Lock before consistent reads so waiters see authorization changes and work committed by the prior lock holder.
+        // Check completed rows too: enqueueJob otherwise re-arms active work.
         yield* sql.withTransaction(Effect.gen(function* () {
           yield* ownedListener(current, listener_id, true);
           const latest = yield* refreshAccess;

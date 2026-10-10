@@ -4,13 +4,13 @@ An open-source TypeScript + Effect project for silent meeting capture, source-li
 
 [![CI and documentation](https://github.com/undeemed/sanctum/actions/workflows/ci.yml/badge.svg)](https://github.com/undeemed/sanctum/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: implementation blueprint](https://img.shields.io/badge/status-implementation%20blueprint-22d3c5)](tasks/todo.md)
+[![Status: implementation in progress](https://img.shields.io/badge/status-implementation%20in%20progress-22d3c5)](tasks/todo.md)
 
 [Read the blueprint](https://i098.github.io/sanctum/) · [Preview the interface](https://i098.github.io/sanctum/design/listener-reference.html) · [Build handoff](HANDOFF.md) · [Contribute](CONTRIBUTING.md)
 
-**Status: pre-implementation.**
-This repository contains the product specification, architecture, 26-task build plan, independent visual references, and working documentation CI/CD.
-The meeting recorder, model pipeline, integrations, SDKs, and MCP server are planned; they are not a released application yet.
+**Status: implementation in progress.**
+The specification, build plan, visual references, and documentation CI/CD guide the application code in `server/` and `web-app/`.
+The implementation is not a released application; [release evidence](docs/release-evidence.md) records verification and remaining gates.
 No legacy application code, recordings, or production data are included.
 
 ![Sanctum fullscreen listening interface: a quiet waveform on a dark background](design/listener-reference.svg)
@@ -32,6 +32,11 @@ Sanctum is designed to listen quietly while a team talks, preserve the source co
 Browser capture requires an open listener tab, an awake device, and microphone permission.
 Server-side work can continue after the tab closes.
 An installed desktop app is not required for the first version.
+
+## Request work while listening
+
+During a live meeting, say "Sanctum, look up the train times" to request work.
+See the [spoken work decision](docs/DECISIONS.md#spoken-work-decision---2026-10-10) for prerequisites, job submission, and links to known limits.
 
 ## Agent tools without context overload
 
