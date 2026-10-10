@@ -66,11 +66,11 @@ export const engineeringDefaults = {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
     extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
-    /** OpenAI Responses hosted web search, a paid call held to `paidResearchCallsPerDay`. */
+    /** OpenAI Responses hosted web search, a paid call held to `paidResearchAllowance`. */
     research: { provider: 'openai', model: 'gpt-4.1-mini-2025-04-14', reasoning: null },
   },
   /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
-  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
+  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 3, researchMaxContinuations: 3 },
   /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
   pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
   /** WorkOS Events API polling (`workos.sync`): time between runs, pages read per run, request timeout. */
@@ -127,11 +127,14 @@ export const workspacePurgeGraceDays = Config.integer('SANCTUM_WORKSPACE_PURGE_G
   Config.withDefault(7),
 );
 
-/** Paid web-research calls each workspace may start per UTC day; each is reserved before it is sent, and 0 turns them off. */
-export const paidResearchCallsPerDay = Config.integer('SANCTUM_PAID_RESEARCH_CALLS_PER_DAY').pipe(
-  Config.validate({ message: 'must be 0 or more', validation: calls => calls >= 0 }),
-  Config.withDefault(20),
-);
+/**
+ * Paid web-research calls started per UTC day, in each workspace and across all of them; each is
+ * reserved before it is sent, and 0 turns them off. docs/operations.md gives the worst-case monthly cost.
+ */
+export const paidResearchAllowance = Config.all({
+  perWorkspace: Config.integer('SANCTUM_PAID_RESEARCH_CALLS_PER_DAY').pipe(Config.validate({ message: 'must be 0 or more', validation: calls => calls >= 0 }), Config.withDefault(2)),
+  total: Config.integer('SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL').pipe(Config.validate({ message: 'must be 0 or more', validation: calls => calls >= 0 }), Config.withDefault(4)),
+});
 
 export const serverConfig = Config.all({
   environment: Config.literal('development', 'test', 'production')('SANCTUM_ENV').pipe(Config.withDefault('development')),

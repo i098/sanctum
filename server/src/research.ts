@@ -1,15 +1,15 @@
 /**
  * `research.run` work (plan section 10): the requester's granted actions found and inspected
  * through the same search and inspect gateways agents use (the catalog stays server-side), and
- * paid web research held to a per-workspace daily allowance reserved in `paid_model_calls`
- * before each request is sent. Research lands as a `research` artifact the meeting context cites.
+ * paid web research held to daily allowances per workspace and across all workspaces, reserved in
+ * `paid_model_calls` before each request is sent. Research lands as a `research` artifact the meeting context cites.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, ArtifactId, ContextItemId, type IntegrationAccountId, type JobId, type MeetingId, type PrincipalId, SEARCH_MAX_LIMIT, type WorkspaceId } from '@sanctum/contracts';
 import { Data, Effect, Schema } from 'effect';
 import { activeActionGrants } from './actions.ts';
-import { paidResearchCallsPerDay } from './config.ts';
+import { paidResearchAllowance } from './config.ts';
 import { lockMeeting, writeItem } from './context.ts';
 import { getIntegrationAction, searchIntegrationActions } from './integrations.ts';
 import { LlmClient } from './llm.ts';
@@ -41,16 +41,22 @@ export const offeredActions = (access: AccessScope, meeting_id: MeetingId, reque
 
 class AllowanceSpent extends Data.TaggedError('AllowanceSpent')<{ readonly message: string }> {}
 
-/** Claims one of the workspace's paid calls for today (UTC); the workspace lock serializes workers. */
+/**
+ * Claims one of today's (UTC) paid calls when neither the workspace's nor the install-wide allowance
+ * is spent; the locking read over today's calls serializes reservations from every workspace.
+ */
 const reservePaidCall = (job: ResearchJob, call_id: string, model: string) =>
   Effect.gen(function* () {
-    const allowance = yield* paidResearchCallsPerDay;
+    const { perWorkspace, total } = yield* paidResearchAllowance;
     const sql = yield* SqlClient.SqlClient;
     yield* sql.withTransaction(Effect.gen(function* () {
-      yield* sql`SELECT id FROM workspaces WHERE id = ${job.workspace_id} FOR UPDATE`;
-      const [today] = yield* sql<{ used: number }>`SELECT COUNT(*) AS used FROM paid_model_calls WHERE workspace_id = ${job.workspace_id} AND started_at >= UTC_DATE()`;
-      if (Number(today!.used) >= allowance) {
-        return yield* new AllowanceSpent({ message: `Paid web research allowance of ${allowance} calls per workspace per day (UTC) is spent` });
+      const [today] = yield* sql<{ used: number; workspace: number }>`SELECT COUNT(*) AS used, COALESCE(SUM(workspace_id = ${job.workspace_id}), 0) AS workspace
+        FROM paid_model_calls WHERE started_at >= UTC_DATE() FOR UPDATE`;
+      if (Number(today!.workspace) >= perWorkspace) {
+        return yield* new AllowanceSpent({ message: `Paid web research allowance of ${perWorkspace} calls per workspace per day (UTC) is spent` });
+      }
+      if (Number(today!.used) >= total) {
+        return yield* new AllowanceSpent({ message: `Paid web research allowance of ${total} calls per day (UTC) across all workspaces is spent` });
       }
       yield* sql`INSERT INTO paid_model_calls (id, workspace_id, job_id, model, started_at) VALUES (${call_id}, ${job.workspace_id}, ${job.id}, ${model}, UTC_TIMESTAMP(6))`;
     }));
@@ -121,5 +127,5 @@ export const webResearch = (job: ResearchJob, meeting_id: MeetingId, request: st
       }, { change: 'item_added', idempotency: { key, sha256: createHash('sha256').update(text).digest('hex') }, ...(lock ? { source_revision: lock.boundary_revision } : {}) });
       return item.id;
     }));
-    return { artifact_id: found.artifact_id, context_item_id, sources: found.sources };
+    return { artifact_id: found.artifact_id, context_item_id, text: found.text, sources: found.sources };
   });

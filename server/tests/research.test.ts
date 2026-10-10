@@ -92,7 +92,8 @@ const researchJob = (access: AccessScope, meeting_id: MeetingId, work_key: strin
     queuedJob(access.workspace_id, 'research.run', work_key),
   );
 
-const allowance = (calls: number) => Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_PAID_RESEARCH_CALLS_PER_DAY', String(calls)]])));
+const allowance = (perWorkspace: number, total = 4) =>
+  Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_PAID_RESEARCH_CALLS_PER_DAY', String(perWorkspace)], ['SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL', String(total)]])));
 
 describe('research.run', () => {
   it.effect('researches a lookup with cited sources, records the paid usage, and never pays twice for one job', () =>
@@ -123,24 +124,74 @@ describe('research.run', () => {
       { migrated: true },
     ));
 
-  it.effect('refuses paid research once the daily allowance is spent, counting a rate-limited call, and pauses on the rate limit', () =>
+  it.effect('refuses paid research once the workspace or install-wide daily allowance is spent, counting a rate-limited call, and pauses on the rate limit', () =>
     withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { member, meeting_id } = yield* setup;
-        planner.answers = Array.from({ length: 3 }, () => JSON.stringify({ web_research: true }));
-        openai.replies = [answered('First answer.'), () => Response.json({ error: { message: 'Rate limit reached' } }, { status: 429, headers: { 'retry-after': '7' } })];
-        const first = yield* runResearch(yield* researchJob(member, meeting_id, 'one', 'Look up the MySQL release')).pipe(allowance(2));
+        planner.answers = Array.from({ length: 5 }, () => JSON.stringify({ web_research: true }));
+        openai.replies = [answered('First answer.'), () => Response.json({ error: { message: 'Rate limit reached' } }, { status: 429, headers: { 'retry-after': '7' } }), answered('Other answer.')];
+        const first = yield* runResearch(yield* researchJob(member, meeting_id, 'one', 'Look up the MySQL release')).pipe(allowance(2, 3));
         expect(first).toMatchObject({ status: 'succeeded', result: { research: { sources: [expect.anything()] } } });
         const limited = yield* researchJob(member, meeting_id, 'two', 'Look up the Node release');
-        expect(yield* runResearch(limited).pipe(allowance(2))).toEqual({ status: 'paused', resume_after_ms: 7_000, reason: expect.stringMatching(/OpenAI HTTP 429/) });
-        expect(yield* runResearch(limited).pipe(allowance(2))).toEqual({
+        expect(yield* runResearch(limited).pipe(allowance(2, 3))).toEqual({ status: 'paused', resume_after_ms: 7_000, reason: expect.stringMatching(/OpenAI HTTP 429/) });
+        expect(yield* runResearch(limited).pipe(allowance(2, 3))).toEqual({
           status: 'succeeded',
           result: { offered: [], research: { refused: 'Paid web research allowance of 2 calls per workspace per day (UTC) is spent' }, actions: [] },
         });
-        expect(openai.bodies).toHaveLength(2);
+
+        // Another workspace has its own allowance, but all workspaces share the install-wide one.
+        const [other] = yield* seedWorkspace('Other', ['member']);
+        const elsewhere = yield* seedMeeting(other!.workspace_id, [other!]);
+        expect(yield* runResearch(yield* researchJob(other!, elsewhere, 'three', 'Look up the Deno release')).pipe(allowance(2, 3))).toMatchObject({ result: { research: { sources: [expect.anything()] } } });
+        expect(yield* runResearch(yield* researchJob(other!, elsewhere, 'four', 'Look up the Bun release')).pipe(allowance(2, 3))).toMatchObject({
+          result: { research: { refused: 'Paid web research allowance of 3 calls per day (UTC) across all workspaces is spent' } },
+        });
+        expect(openai.bodies).toHaveLength(3);
         const calls = yield* sql<{ input_tokens: number | null }>`SELECT input_tokens FROM paid_model_calls WHERE workspace_id = ${member.workspace_id} ORDER BY started_at`;
         expect(calls).toEqual([{ input_tokens: 8_300 }, { input_tokens: null }]);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.effect('plans an action again from the cited research, so the email carries the researched fact, and requests none when research is refused', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { member, meeting_id } = yield* setup;
+        const request = 'Look up the current MySQL LTS release and email it to a@example.com';
+        const email = (body: string) =>
+          JSON.stringify({
+            web_research: true,
+            actions: [{ action_key: SEND, title: 'Email the MySQL LTS release', arguments: [{ name: 'to', value_json: '["a@example.com"]' }, { name: 'subject', value_json: '"MySQL LTS release"' }, { name: 'body', value_json: JSON.stringify(body) }] }],
+          });
+        planner.answers = [email('MySQL 9.0 is the current LTS release.'), email('MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).')];
+        openai.replies = [answered('MySQL 8.4 is the current LTS release.')];
+        const result = yield* runResearch(yield* researchJob(member, meeting_id, 'lts', request));
+        expect(result).toMatchObject({ status: 'succeeded', result: { offered: [SEND], research: { sources: [{ url: 'https://dev.mysql.com/doc/' }] }, actions: [{ action_key: SEND, state: 'queued' }] } });
+        // Research ran between the two planner passes, and the second pass got its text and sources.
+        expect(planner.requests).toHaveLength(2);
+        expect(openai.bodies).toHaveLength(1);
+        expect(planner.requests[0]!.prompt).not.toContain('MySQL 8.4');
+        expect(planner.requests[1]!.prompt).toContain('MySQL 8.4 is the current LTS release.');
+        expect(planner.requests[1]!.prompt).toContain('https://dev.mysql.com/doc/');
+        const sql = yield* SqlClient.SqlClient;
+        const [{ id }] = (yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`) as [{ id: ActionId }];
+        yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', id), executeAction);
+        expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ body: 'MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).' }) })]);
+
+        planner.answers = [email('MySQL 9.0 is the current LTS release.')];
+        expect(yield* runResearch(yield* researchJob(member, meeting_id, 'lts-refused', request)).pipe(allowance(0))).toEqual({
+          status: 'succeeded',
+          result: {
+            offered: [SEND],
+            research: { refused: 'Paid web research allowance of 0 calls per workspace per day (UTC) is spent' },
+            actions: [],
+            outcome: `No action requested: ${SEND} needed the refused web research`,
+          },
+        });
+        expect(planner.requests).toHaveLength(3);
+        expect(openai.bodies).toHaveLength(1);
+        expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));

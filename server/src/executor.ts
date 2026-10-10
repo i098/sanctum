@@ -164,10 +164,12 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
 
 /**
  * `research.run`: find and inspect the requester's granted actions that match the request, let the
- * planner decide on web research and fill in actions, then research before submitting each planned
- * action through the same grant gateway as any agent. Research is stored once per job and planned
- * idempotency keys derive from each action's content, so a retried or resumed job neither pays nor
- * requests the same action twice. Nothing to do is reported as the outcome, never an empty success.
+ * planner decide on web research and fill in actions, then research first; actions planned with
+ * research are planned again from the cited research, and none is requested when research is
+ * refused. Each planned action is submitted through the same grant gateway as any agent. Research
+ * is stored once per job and planned idempotency keys derive from each action's content, so a
+ * retried or resumed job neither pays nor requests the same action twice. Nothing to do is
+ * reported as the outcome, never an empty success.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -178,17 +180,25 @@ export const runResearch = (job: Job) =>
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
     const offered = yield* offeredActions(access, meeting_id, request);
     const plan = yield* planWork(access, { meeting_id, request, actions: offered });
-    const research = plan.web_research
+    const found = plan.web_research
       ? yield* webResearch({ ...job, requested_by: job.requested_by }, meeting_id, request).pipe(Effect.catchTag('AllowanceSpent', error => Effect.succeed({ refused: error.message })))
       : null;
-    const actions = yield* Effect.forEach(plan.actions, input =>
+    const planned =
+      found === null || plan.actions.length === 0 ? plan.actions
+      : 'refused' in found ? []
+      : (yield* planWork(access, { meeting_id, request, actions: offered, research: found })).actions;
+    const actions = yield* Effect.forEach(planned, input =>
       requestAction(access, { ...input, meeting_id }).pipe(
         Effect.map(output => ({ action_key: input.action_key, ...output })),
         Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
       ),
     );
+    const research = found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
     // `offered` already tells whether any granted action matched the request.
-    const outcome = research === null && actions.length === 0 ? 'Nothing to do: no offered action fits the request, and it asked for no web research' : null;
+    const outcome =
+      found !== null && 'refused' in found && plan.actions.length > 0 ? `No action requested: ${plan.actions.map(action => action.action_key).join(', ')} needed the refused web research`
+      : found === null && actions.length === 0 ? 'Nothing to do: no offered action fits the request, and it asked for no web research'
+      : null;
     if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
     return { status: 'succeeded', result: { offered: offered.map(action => action.action_key), research, actions, ...(outcome ? { outcome } : {}) } } as const;
   }).pipe(

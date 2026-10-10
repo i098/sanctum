@@ -51,7 +51,9 @@ See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for 
 The captain approved the Cloudflare-first plan ("This is good") and asked not to overuse the paid OpenAI key.
 Accepted: the research role uses OpenAI `gpt-4.1-mini-2025-04-14` with the Responses API `web_search` tool through the server-only `OPENAI_API_KEY`; no other role can select OpenAI.
 The planner decides whether a request needs web research, so a request that needs no web search makes no paid call.
-Each workspace may start `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` paid calls per UTC day (default 20); each call is reserved before it is sent, a spent allowance refuses the next call with a truthful result, and every call records its token usage.
+Each workspace may start `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` paid calls per UTC day (default 2), and all workspaces together `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` (default 4), with at most 3 web searches per call; each call is reserved before it is sent, a spent allowance refuses the next call with a truthful result, and every call records its token usage.
+The caps bound the worst case at about 120 calls, about USD 5.50 a month ([operations.md](operations.md#configuration)).
+When a request needs both web research and actions, the planner plans the actions a second time from the cited research; when research is refused, no action is requested and the result says so.
 The plan estimated about USD 3.17 a month for all added inference at light use (40 meetings, 80 research runs), of which about USD 1.38 is this research; recorded usage, not the estimate, shows actual cost.
 Anthropic stays selectable for research with `RESEARCH_MODEL_PROVIDER=anthropic`.
 
