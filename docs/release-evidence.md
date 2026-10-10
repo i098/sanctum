@@ -75,12 +75,19 @@ Total: 24 calls.
 ## Workers AI planner - 2026-10-10
 
 The spoken-work tests use the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
-All 22 spoken-work cases pass, including one accepted job, answer-only silence, revoked grants, malformed decisions, membership changes and concurrent retry deduplication.
+The earlier implementation recorded 22 passing spoken-work cases; this review did not rerun them.
 Before the fix, the accepted-request case failed: Workers AI credentials without an Anthropic key produced zero jobs.
 A standalone service smoke used a local HTTP server and disposable MySQL database.
 It confirmed one job after duplicate acceptance, no jobs for answer-only, revoked or malformed requests, and preservation of the request and owner.
 Existing proposal tests validate inspected-action selection, argument checks and idempotency through the shared schema decoder.
 No live planner evaluation, research execution, deployment or real integration write ran for this slice.
+The two added Anthropic spoken-work regression cases remain unrun because the MySQL test server was unavailable.
+The earlier ponytail review named no cuts and said "Looks good. Ship.", but its wrapper returned exit 2.
+That result is not a clean ponytail exit.
+This review round passed 24 focused LLM and planner tests.
+A standalone `LlmLive` smoke passed with both the Anthropic planner default and an explicit model.
+The spoken-work job tests could not run: Docker first denied access, then the MySQL container's published port refused connections.
+The server TypeScript check passed.
 
 ## Unrun gates
 

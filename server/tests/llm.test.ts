@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Effect, Exit, Fiber, Layer, Schema, Stream } from 'effect';
 import { vi } from 'vitest';
-import { engineeringDefaults } from '../src/config.ts';
+import { engineeringDefaults, serverConfig } from '../src/config.ts';
 import { LlmClient, LlmLive, makeLlm } from '../src/llm.ts';
 import { anthropic } from '../src/providers/anthropic.ts';
 import { workersAi } from '../src/providers/workers-ai.ts';
@@ -67,6 +67,24 @@ const budget = { ...engineeringDefaults.modelRequest, timeoutMs: 400 };
 const roles = engineeringDefaults.modelRoles;
 const withWorkersAi = (url: string) => makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: `${url}/accounts/acct/ai`, apiToken: 'test-key' }) }, budget);
 const withAnthropic = (url: string) => makeLlm(roles, { anthropic: anthropic({ apiKey: 'test-key', baseUrl: url }) }, budget);
+
+describe('model provider configuration', () => {
+  for (const role of ['voice', 'extraction', 'planner', 'research'] as const) {
+    for (const provider of role === 'research' ? ['anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
+      it.effect(`uses a compatible default and preserves an explicit ${role} model on ${provider}`, () =>
+        Effect.gen(function* () {
+          const settings = new Map<string, string>([[`${role.toUpperCase()}_MODEL_PROVIDER`, provider]]);
+          const defaults = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
+          expect(defaults.modelRoles[role]).toMatchObject({
+            provider, model: provider === 'anthropic' ? roles.research.model : roles.voice.model,
+          });
+          settings.set(`${role.toUpperCase()}_MODEL`, 'explicit-model');
+          const explicit = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
+          expect(explicit.modelRoles[role]).toMatchObject({ provider, model: 'explicit-model' });
+        }));
+    }
+  }
+});
 
 describe('Workers AI client', () => {
   it.scopedLive('sends the role model, reasoning effort and a strict schema, then decodes the JSON answer', () =>

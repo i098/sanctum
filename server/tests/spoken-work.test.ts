@@ -42,8 +42,17 @@ const scenario = (text: string, answer: unknown, options: {
     });
     const segment = yield* speak(listener, epoch_id, 0, 2, text);
     const requests: Record<string, unknown>[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      requests.push(JSON.parse(String(init!.body)));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const request = JSON.parse(String(init!.body));
+      requests.push(request);
+      if (String(url).startsWith('https://api.anthropic.com/')) {
+        if (!request.model.startsWith('claude-')) {
+          return Response.json({ type: 'error', error: { type: 'not_found_error', message: 'Unknown model' } }, { status: 404 });
+        }
+        return Response.json({ id: 'msg_1', type: 'message', role: 'assistant', model: request.model,
+          content: [{ type: 'text', text: JSON.stringify(answer) }], stop_reason: 'end_turn',
+          stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } });
+      }
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] });
     });
     const config = Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))));
@@ -124,6 +133,30 @@ describe('spoken work', () => {
       expect(test.requests).toHaveLength(1);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
+
+  for (const model of [undefined, 'claude-custom-planner']) {
+    it.effect(`enqueues work with the configured Anthropic planner ${model ? 'model override' : 'default model'}`, () =>
+      withDatabase(Effect.gen(function* () {
+        const test = yield* scenario('Sanctum, send the notes', { work: true }, {
+          env: { ...configured, PLANNER_MODEL_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'synthetic-key',
+            ...(model ? { PLANNER_MODEL: model } : {}) },
+        });
+        yield* test.complete;
+        const rows = yield* test.jobs;
+        expect(rows).toHaveLength(1);
+        const payload = rows[0]!.payload;
+        expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({
+          meeting_id: test.meeting_id, request: 'send the notes',
+        });
+        expect(rows[0]!.requested_by).toBe(test.access.principal.id);
+        expect(test.requests).toEqual([expect.objectContaining({
+          model: model ?? engineeringDefaults.modelRoles.research.model,
+          output_config: { format: expect.objectContaining({ type: 'json_schema' }) },
+        })]);
+        expect(test.replies).toEqual(['send the notes']);
+        yield* test.controller.onEnd('disconnect');
+      }), { migrated: true }));
+  }
 
   it.effect('does not enqueue an answer-only direct request', () =>
     withDatabase(Effect.gen(function* () {
