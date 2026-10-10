@@ -112,6 +112,21 @@ A standalone `LlmLive` smoke passed with both the Anthropic planner default and 
 The spoken-work job tests could not run: Docker first denied access, then the MySQL container's published port refused connections.
 The server TypeScript check passed.
 
+## Cerebras spoken classifier - 2026-10-10
+
+The classifier alone defaults to Cerebras `gpt-oss-120b`; planning and synthesis keep Workers AI Qwen.
+The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) contains the supplied synthetic evaluation results.
+This implementation made no live model call.
+The local fetch fake exercised the production `LlmLive`, Cerebras adapter and `SpeechWorkRequestsLive` against an isolated MySQL database.
+The standalone runtime check produced three durable jobs: classifier success, HTTP failure with Qwen fallback, and missing-key Qwen fallback.
+Every job kept the original request; each fallback logged one line.
+The focused provider suite passed 28 tests; spoken-work and planner suites passed 33 tests.
+`npm run check:app` passed 712 Vitest tests, 98 Chromium checks, workspace types, both web builds, performance smoke and accelerated replay.
+The replay reported four meetings, 190 segments and zero unowned segments.
+`npm run docs:render`, `npm run check`, `npm run docs:build`, Fallow and Sentrux passed.
+The single ponytail review named no cuts and returned "Looks good. Ship."; its wrapper exited 2, so this is not a clean exit.
+No deployment, live secret change, production migration, live recording or real integration write ran.
+
 ## Unrun gates
 
 | Gate | Reason |

@@ -61,6 +61,6 @@ test('verified result is accepted only against complete verified hardware', () =
 });
 
 test('child environment forces test mode and drops provider credentials', () => {
-  const env = childEnv({ PATH: '/bin', SANCTUM_ENV: 'production', ANTHROPIC_API_KEY: 'x', OPENAI_API_KEY: 't', AWS_REGION: 'y', R2_BUCKET: 'z', PIPEDREAM_CLIENT_SECRET: 'w', WORKERS_AI_API_TOKEN: 'u', MY_AWS_NOTE: 'kept' });
+  const env = childEnv({ PATH: '/bin', SANCTUM_ENV: 'production', ANTHROPIC_API_KEY: 'x', OPENAI_API_KEY: 't', CEREBRAS_API_KEY: 'c', AWS_REGION: 'y', R2_BUCKET: 'z', PIPEDREAM_CLIENT_SECRET: 'w', WORKERS_AI_API_TOKEN: 'u', MY_AWS_NOTE: 'kept' });
   assert.deepEqual(env, { PATH: '/bin', SANCTUM_ENV: 'test', MY_AWS_NOTE: 'kept' });
 });

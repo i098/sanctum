@@ -18,6 +18,7 @@ import { seedWorkspace } from './support/fixtures.ts';
 const configured: Record<string, string> = {
   WORKERS_AI_ACCOUNT_ID: 'synthetic-account', WORKERS_AI_API_TOKEN: 'synthetic-token', PIPEDREAM_PROJECT_ID: 'synthetic-project',
   PIPEDREAM_CLIENT_ID: 'synthetic-client', PIPEDREAM_CLIENT_SECRET: 'synthetic-secret',
+  CEREBRAS_API_KEY: 'synthetic-cerebras-key',
 };
 
 afterEach(() => vi.restoreAllMocks());
@@ -25,6 +26,7 @@ afterEach(() => vi.restoreAllMocks());
 const scenario = (text: string, answer: unknown, options: {
   meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
   removeMembershipDuringClassification?: boolean;
+  classifierFailure?: boolean; classifierAnswer?: unknown;
 } = {}) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -45,6 +47,10 @@ const scenario = (text: string, answer: unknown, options: {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       const request = JSON.parse(String(init!.body));
       requests.push(request);
+      if (String(url).startsWith('https://api.cerebras.ai/')) {
+        if (options.classifierFailure) return Response.json({ error: { message: 'Synthetic failure' } }, { status: 401 });
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(options.classifierAnswer ?? answer) } }] });
+      }
       if (String(url).startsWith('https://api.anthropic.com/')) {
         if (!request.model.startsWith('claude-')) {
           return Response.json({ type: 'error', error: { type: 'not_found_error', message: 'Unknown model' } }, { status: 404 });
@@ -131,15 +137,17 @@ describe('spoken work', () => {
         work_key: `spoken:${test.listener_id}:${test.epoch_id}:${test.segment.id}`, rearmed: 0 });
       expect(test.replies).toEqual(['could you look up the train times?']);
       expect(test.requests).toHaveLength(1);
+      expect(test.requests[0]).toMatchObject({ model: 'gpt-oss-120b',
+        response_format: { type: 'json_schema', json_schema: { strict: true } } });
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
   for (const model of [undefined, 'claude-custom-planner']) {
-    it.effect(`enqueues work with the configured Anthropic planner ${model ? 'model override' : 'default model'}`, () =>
+    it.effect(`enqueues work with the configured Anthropic classifier ${model ? 'model override' : 'default model'}`, () =>
       withDatabase(Effect.gen(function* () {
         const test = yield* scenario('Sanctum, send the notes', { work: true }, {
-          env: { ...configured, PLANNER_MODEL_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'synthetic-key',
-            ...(model ? { PLANNER_MODEL: model } : {}) },
+          env: { ...configured, CLASSIFIER_MODEL_PROVIDER: 'anthropic',
+            PLANNER_MODEL_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'synthetic-key', ...(model ? { CLASSIFIER_MODEL: model } : {}) },
         });
         yield* test.complete;
         const rows = yield* test.jobs;
@@ -158,6 +166,26 @@ describe('spoken work', () => {
       }), { migrated: true }));
   }
 
+  for (const failure of ['missing key', 'HTTP failure', 'invalid decision'] as const) {
+    it.effect(`falls back to Qwen and retains the reply after a classifier ${failure}`, () => {
+      const messages: unknown[] = [];
+      return withDatabase(Effect.gen(function* () {
+        const test = yield* scenario('Sanctum, send the notes', { work: true }, {
+          ...(failure === 'missing key' ? { env: Object.fromEntries(Object.entries(configured).filter(([key]) => key !== 'CEREBRAS_API_KEY')) } : {}),
+          classifierFailure: failure === 'HTTP failure',
+          ...(failure === 'invalid decision' ? { classifierAnswer: { work: 'true' } } : {}),
+        });
+        yield* test.complete;
+        expect(yield* test.jobs).toHaveLength(1);
+        expect(test.requests.map(request => request.model)).toEqual(failure === 'missing key'
+          ? ['@cf/qwen/qwen3.8-27b'] : ['gpt-oss-120b', '@cf/qwen/qwen3.8-27b']);
+        expect(messages).toEqual([['Spoken work classifier unavailable; falling back to planner']]);
+        expect(test.replies).toEqual(['send the notes']);
+        yield* test.controller.onEnd('disconnect');
+      }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
+    });
+  }
+
   it.effect('does not enqueue an answer-only direct request', () =>
     withDatabase(Effect.gen(function* () {
       const test = yield* scenario('Sanctum, what time is it', { work: false });
@@ -167,16 +195,17 @@ describe('spoken work', () => {
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
-  it.effect('treats malformed model output as not work and logs the schema failure', () => {
+  it.effect('enqueues nothing when both classifier and planner return invalid decisions', () => {
     const messages: unknown[] = [];
     return withDatabase(Effect.gen(function* () {
       const test = yield* scenario('Sanctum, send the notes', { work: 'true' });
       yield* test.complete;
       expect(yield* test.jobs).toEqual([]);
-      expect(test.requests).toHaveLength(1);
-      expect(messages).toEqual([['Spoken research skipped', expect.objectContaining({
-        _tag: 'Unavailable', retryable: false, message: expect.stringMatching(/failed the spoken_work_intent schema/),
-      })]]);
+      expect(test.requests.map(request => request.model)).toEqual(['gpt-oss-120b', '@cf/qwen/qwen3.8-27b']);
+      expect(messages).toEqual([['Spoken work classifier unavailable; falling back to planner'],
+        ['Spoken research skipped', expect.objectContaining({
+          _tag: 'Unavailable', retryable: false, message: expect.stringMatching(/failed the spoken_work_intent schema/),
+        })]]);
       expect(test.replies).toEqual(['send the notes']);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));

@@ -163,6 +163,8 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-requests.ts `SpeechRepliesLive`), so a process without them stays silent.
 - `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller's independent work fiber.
   The [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) owns the trigger and authorization contract.
+  The `classifier` role decides work, defaulting to Cerebras GPT-OSS 120B; one warning precedes planner fallback on failure.
+  Planning and synthesis keep the `planner` role on Workers AI Qwen.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
 - `research.run` (`executor.ts` with `research.ts`): finds the requester's granted actions among the `searchIntegrationActions` matches for the request in each granted app (one search per app, so other usable apps cannot crowd them out), inspects each with its grant's account, lets `planWork` decide on web research and fill in actions, researches first, then requests each planned action through `requestAction`, which writes the job ID to `actions.research_job_id` with the action.

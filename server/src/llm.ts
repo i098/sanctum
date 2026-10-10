@@ -10,6 +10,7 @@ import { Unavailable } from '@sanctum/contracts';
 import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfig } from './config.ts';
 import { anthropic } from './providers/anthropic.ts';
 import { openAi } from './providers/openai.ts';
+import { cerebras } from './providers/cerebras.ts';
 import { workersAi } from './providers/workers-ai.ts';
 import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult, type ResearchUsage } from './providers/types.ts';
 
@@ -53,12 +54,12 @@ const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
 };
 
 /** Settings each provider needs, named in the `Unavailable` message when they are missing. */
-const providerSettings = { 'workers-ai': 'WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN', anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' } as const;
+const providerSettings = { 'workers-ai': 'WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN', anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', cerebras: 'CEREBRAS_API_KEY' } as const;
 
 /** Builds the service from explicit role settings and the providers that have keys. */
 export function makeLlm(
   roles: ServerConfig['modelRoles'],
-  providers: { readonly 'workers-ai'?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined; readonly openai?: ModelProvider | undefined },
+  providers: { readonly 'workers-ai'?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined; readonly openai?: ModelProvider | undefined; readonly cerebras?: ModelProvider | undefined },
   budget: Record<keyof typeof engineeringDefaults.modelRequest, number> = engineeringDefaults.modelRequest,
 ): Llm {
   const select = (role: ModelRoleName) => {
@@ -138,6 +139,7 @@ export const LlmLive = Layer.effect(
       'workers-ai': Option.getOrUndefined(Option.map(workersAiSettings, ({ baseUrl, apiToken }) => workersAi({ baseUrl, apiToken: Redacted.value(apiToken) }))),
       anthropic: Option.getOrUndefined(Option.map(modelKeys.anthropic, key => anthropic({ apiKey: Redacted.value(key) }))),
       openai: Option.getOrUndefined(Option.map(modelKeys.openai, key => openAi({ apiKey: Redacted.value(key) }))),
+      cerebras: Option.getOrUndefined(Option.map(modelKeys.cerebras, key => cerebras({ apiKey: Redacted.value(key) }))),
     }),
   ),
 );
@@ -162,5 +164,5 @@ export function fixtureLlm(responses: ReadonlyArray<string | Unavailable>, reque
     },
     research: async request => ({ text: next(request), sources: [], usage: { input_tokens: null, output_tokens: null, web_searches: 0 } }),
   };
-  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': provider, anthropic: provider, openai: provider }));
+  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': provider, anthropic: provider, openai: provider, cerebras: provider }));
 }

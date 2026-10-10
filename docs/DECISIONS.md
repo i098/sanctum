@@ -21,7 +21,7 @@
 ## Spoken work decision - 2026-10-10
 
 The captain chose model judgment: "The model should be start enough to decide whether or not to do something (recommended)".
-Accepted: after a completed direct spoken request during a live meeting, the planner model decides whether Sanctum should do background work.
+Accepted: after a completed direct spoken request during a live meeting, the classifier model decides whether Sanctum should do background work.
 It returns only a boolean; keyword rules do not make this decision.
 Accepted work retains the original spoken request without model rewriting.
 A work request enqueues one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
@@ -38,13 +38,33 @@ The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records
 
 ## Planner provider decision - 2026-10-10
 
-Accepted: the planner uses Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, with low reasoning, for spoken-work decisions and inspected action proposals.
-Both paths send strict JSON schemas and validate replies with the existing Effect Schema decoder.
+Accepted: the planner uses Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, with low reasoning, for inspected action proposals and research synthesis.
+The classifier now owns spoken-work decisions; see the [classifier decision](#spoken-classifier-provider-decision---2026-10-10).
+Both roles send strict JSON schemas and validate replies with the existing Effect Schema decoder.
 The [spoken work decision](#spoken-work-decision---2026-10-10) owns the trigger prerequisites.
 The [configuration guide](operations.md#configuration) owns provider credentials and overrides.
-Malformed decisions log a warning and enqueue nothing.
+If both classifier and planner return malformed decisions, Sanctum logs a warning and enqueues nothing.
 This slice changes no research execution or speech synthesis behavior.
 See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for local checks and unrun planner evaluation.
+
+## Spoken classifier provider decision - 2026-10-10
+
+Accepted: only the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
+Planning and synthesis keep Workers AI Qwen; research and its paid-call caps stay unchanged.
+The server-only `CEREBRAS_API_KEY` enables strict [JSON-schema chat completions](https://inference-docs.cerebras.ai/capabilities/structured-outputs).
+`CLASSIFIER_MODEL_PROVIDER` and `CLASSIFIER_MODEL` override the classifier without changing the planner.
+An absent key, provider failure or invalid decision logs one fallback line and sends the same decision request to the planner.
+The speech controller runs this work separately from the spoken reply.
+The 2026-10-10 evaluation used Sanctum's prompts with ten work cases, five planning cases and five fixed-source synthesis cases per model.
+
+| Model | Correct work /10 | Planning points /10 | Synthesis points /10 | All-call median s | Work median s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cerebras GPT-OSS 120B | 10 | 9 | 9 | 0.157 | 0.130 |
+| Workers AI Qwen 3.8 27B | 8 | 10 | 10 | 3.336 | 1.782 |
+
+The brief's approximate 0.16 s refers to the all-call median; the report records 0.130 s for work decisions alone.
+This small synthetic evaluation supports role selection, not production quality or latency guarantees.
+This change does not deploy the application or set a live secret.
 
 ## Web research provider decision - 2026-10-10
 
@@ -116,7 +136,7 @@ Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-
 Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
-The Cerebras client is removed; see the [configuration guide](operations.md#configuration) for Anthropic overrides.
+The general Cerebras client was removed; a decision-only client now serves the [spoken classifier](#spoken-classifier-provider-decision---2026-10-10).
 Research moved to OpenAI in the [web research provider decision](#web-research-provider-decision---2026-10-10).
 
 ## Sign-in and workspace management decision — 2026-10-08
