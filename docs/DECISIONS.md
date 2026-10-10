@@ -29,6 +29,7 @@ Answer-only requests still use the existing spoken reply path and start no resea
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
 Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
+The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
 The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
 
 ## Still open

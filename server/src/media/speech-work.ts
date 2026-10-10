@@ -2,6 +2,7 @@ import { SqlClient } from '@effect/sql';
 import { type AccessScope, type ListenerId } from '@sanctum/contracts';
 import { Effect, Layer, Option, Schema } from 'effect';
 import { activeActionGrants } from '../actions.ts';
+import { requireScope, resolveAccess } from '../auth.ts';
 import { serverConfig } from '../config.ts';
 import { enqueueJob } from '../jobs.ts';
 import { ownedListener } from '../listeners.ts';
@@ -30,9 +31,13 @@ export const SpeechWorkRequestsLive = Layer.effect(
     return (access: AccessScope, listener_id: ListenerId) => (request: string, window: SpeechWindow) =>
       Effect.gen(function* () {
         if (unavailable) return yield* Effect.logInfo('Spoken research skipped', unavailable);
-        const meeting = yield* listenerMeeting(access.workspace_id, listener_id);
+        const refreshAccess = resolveAccess({ workspace_id: access.workspace_id, principal_id: access.principal.id }).pipe(
+          Effect.tap(current => requireScope(current, 'capture:ingest')),
+        );
+        const current = yield* refreshAccess;
+        const meeting = yield* listenerMeeting(current.workspace_id, listener_id);
         if (Option.isNone(meeting)) return yield* Effect.logInfo('Spoken research skipped', 'No current meeting');
-        if ((yield* activeActionGrants(access)).length === 0) {
+        if ((yield* activeActionGrants(current)).length === 0) {
           return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
         }
         const { value } = yield* llm.generate('planner', { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request });
@@ -42,15 +47,16 @@ export const SpeechWorkRequestsLive = Layer.effect(
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
         // Serialize on the listener and check completed rows too: enqueueJob otherwise re-arms active work.
         yield* sql.withTransaction(Effect.gen(function* () {
-          yield* ownedListener(access, listener_id, true);
-          if ((yield* activeActionGrants(access)).length === 0) {
+          const latest = yield* refreshAccess;
+          yield* ownedListener(latest, listener_id, true);
+          if ((yield* activeActionGrants(latest)).length === 0) {
             return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
           }
-          const existing = yield* sql`SELECT id FROM jobs WHERE workspace_id = ${access.workspace_id}
+          const existing = yield* sql`SELECT id FROM jobs WHERE workspace_id = ${latest.workspace_id}
             AND kind = 'research.run' AND work_key = ${work_key} LIMIT 1`;
           if (existing.length > 0) return;
-          yield* enqueueJob({ workspace_id: access.workspace_id, kind: 'research.run', work_key,
-            payload: { meeting_id: meeting.value, request: normalized }, requested_by: access.principal.id });
+          yield* enqueueJob({ workspace_id: latest.workspace_id, kind: 'research.run', work_key,
+            payload: { meeting_id: meeting.value, request: normalized }, requested_by: latest.principal.id });
         }));
       }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),

@@ -89,6 +89,7 @@ An answer-only request such as "Sanctum, what time is it" starts no background w
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
 Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
+The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
 External actions still require stored grants through the shared gateway.
 The agent-work feed shows accepted actions and truthful states; background completion never opens a spoken-response window.
 

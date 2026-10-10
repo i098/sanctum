@@ -8,6 +8,7 @@ import { fixtureLlm, LlmClient } from '../src/llm.ts';
 import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/media/speech-work.ts';
 import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
+import { setMembership } from '../src/store.ts';
 import type { ProviderRequest } from '../src/providers/types.ts';
 import { seedAccount, seedMeeting } from './support/actions.ts';
 import { seedEpoch, seedListener, speak } from './support/capture.ts';
@@ -21,6 +22,7 @@ const configured: Record<string, string> = {
 
 const scenario = (text: string, answer: unknown, options: {
   meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
+  removeMembershipDuringClassification?: boolean;
 } = {}) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -40,10 +42,19 @@ const scenario = (text: string, answer: unknown, options: {
     const requests: ProviderRequest[] = [];
     const llm = yield* Effect.provide(LlmClient, fixtureLlm(Array.from({ length: 4 }, () => JSON.stringify(answer)), requests));
     const service = yield* Effect.provide(SpeechWorkRequests, SpeechWorkRequestsLive.pipe(
-      Layer.provide(Layer.succeed(LlmClient, options.revokeDuringClassification ? LlmClient.of({
+      Layer.provide(Layer.succeed(LlmClient, options.revokeDuringClassification || options.removeMembershipDuringClassification ? LlmClient.of({
         ...llm,
-        generate: (role, input) => llm.generate(role, input).pipe(Effect.tap(() =>
-          sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${grant!.id}`.pipe(Effect.orDie))),
+        generate: (role, input) => llm.generate(role, input).pipe(Effect.tap(() => Effect.gen(function* () {
+          if (options.revokeDuringClassification) {
+            yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${grant!.id}`.pipe(Effect.orDie);
+          }
+          if (options.removeMembershipDuringClassification) {
+            yield* setMembership('fixture-issuer', access.workspace_id, access.principal.id, access.role).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
+            yield* setMembership('fixture-issuer', access.workspace_id, access.principal.id, null).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
+          }
+        }))),
       }) : llm)),
       Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))))),
     ));
@@ -171,6 +182,27 @@ describe('spoken work', () => {
       expect(test.requests).toHaveLength(1);
       expect(yield* test.jobs).toEqual([]);
       expect(test.replies).toEqual(['send the notes']);
+      yield* test.controller.onEnd('disconnect');
+    }), { migrated: true }));
+
+  it.effect('does not classify or enqueue after membership removal on an existing listener connection', () =>
+    withDatabase(Effect.gen(function* () {
+      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' });
+      yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, test.access.role);
+      yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, null);
+      yield* test.complete;
+      expect(test.requests).toEqual([]);
+      expect(yield* test.jobs).toEqual([]);
+      yield* test.controller.onEnd('disconnect');
+    }), { migrated: true }));
+
+  it.effect('does not enqueue if membership is removed during classification', () =>
+    withDatabase(Effect.gen(function* () {
+      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+        { removeMembershipDuringClassification: true });
+      yield* test.complete;
+      expect(test.requests).toHaveLength(1);
+      expect(yield* test.jobs).toEqual([]);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 });
