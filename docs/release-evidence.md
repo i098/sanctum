@@ -114,16 +114,7 @@ The server TypeScript check passed.
 
 ## Cerebras spoken classifier - 2026-10-10
 
-The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection and fallback behavior.
-The supplied 2026-10-10 evaluation used Sanctum's prompts with ten work cases, five planning cases and five fixed-source synthesis cases per model.
-
-| Model | Correct work /10 | Planning points /10 | Synthesis points /10 | All-call median s | Work median s |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Cerebras GPT-OSS 120B | 10 | 9 | 9 | 0.157 | 0.130 |
-| Workers AI Qwen 3.8 27B | 8 | 10 | 10 | 3.336 | 1.782 |
-
-The decision brief gives approximately 0.16 s; the supplied table separates all-call and work-only medians.
-This small synthetic evaluation supports role selection, not production quality or latency guarantees.
+The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection, fallback behavior, and the supplied Firstmate evaluation results and limits.
 
 This implementation made no live model call.
 The local fetch fake exercised the production `LlmLive`, Cerebras adapter and `SpeechWorkRequestsLive` against an isolated MySQL database.

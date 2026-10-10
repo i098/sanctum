@@ -55,7 +55,19 @@ See the [configuration guide](operations.md#configuration) for server-only crede
 An absent key, provider failure or invalid decision logs one fallback line and sends the same decision request to the planner.
 If the planner also fails, Sanctum logs the failure and enqueues nothing.
 The speech controller runs this work separately from the spoken reply.
-See [classifier evidence](release-evidence.md#cerebras-spoken-classifier---2026-10-10) for the supplied evaluation results and limits.
+Source: "Firstmate evaluation 2026-10-10, 20 fixed cases per model, 120 calls".
+The captain supplied the results from a report outside this repository.
+Each model answered ten work cases, five planning cases and five fixed-source synthesis cases using Sanctum's prompts.
+
+| Model | Correct work /10 | Planning points /10 | Synthesis points /10 | All-call median s | Work median s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cerebras `gpt-oss-120b` | 10 | 9 | 9 | 0.157 | 0.130 |
+| Workers AI `@cf/qwen/qwen3.8-27b` | 8 | 10 | 10 | 3.336 | 1.782 |
+
+The work medians cover only the ten work decisions: 0.130 s for Cerebras and 1.782 s for Workers AI Qwen.
+The all-call medians cover all 20 cases per model; Cerebras's 0.157 s explains the brief's approximate 0.16 s.
+This small synthetic evaluation supports role selection, not production quality or latency guarantees.
+See [classifier evidence](release-evidence.md#cerebras-spoken-classifier---2026-10-10) for local implementation checks and unrun live checks.
 This change does not deploy the application or set a live secret.
 
 ## Web research provider decision - 2026-10-10
