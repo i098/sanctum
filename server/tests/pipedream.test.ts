@@ -538,6 +538,27 @@ describe('Pipedream Connect client', () => {
       expect(yield* Effect.flip(unconfigured.searchActions({ q: 'x', app: 'gmail', limit: 3 }))).toMatchObject({ message: 'Pipedream is not configured', retryable: false });
     }),
   );
+
+  it.scoped('lists every Connect account across pages', () =>
+    Effect.gen(function*() {
+      const accounts = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ id: `apn_${prefix}${index}`, app: { name_slug: 'gmail' } }));
+      const connect = yield* fakeConnectServer(request => {
+        if (request.url === '/v1/oauth/token') return { status: 200, body: { access_token: 'token-1', expires_in: 3_600 } };
+        const after = new URL(request.url, 'http://fake').searchParams.get('after');
+        if (after === null) return { status: 200, body: { data: accounts('a', 100), page_info: { end_cursor: 'c1' } } };
+        if (after === 'c1') return { status: 200, body: { data: accounts('b', 2), page_info: { end_cursor: 'c2' } } };
+        return { status: 500, body: {} };
+      });
+      const client = makePipedreamClient(
+        { apiUrl: connect.url, environment: 'development', credentials: Option.some({ projectId: 'proj', clientId: 'cid', clientSecret: Redacted.make('secret') }) },
+        30_000,
+      );
+      const listed = yield* client.listAccounts('ext-1');
+      expect(listed).toHaveLength(102);
+      expect(listed.at(-1)).toEqual({ id: 'apn_b1', app: 'gmail', dead: false });
+      expect(connect.requests.filter(request => request.url.includes('/accounts?')).map(request => new URL(request.url, connect.url).searchParams.get('after'))).toEqual([null, 'c1']);
+    }),
+  );
 });
 
 describe('integrations HTTP API', () => {
@@ -614,7 +635,7 @@ describe('integration connect flow', () => {
       expect(link.body).toEqual({ url: 'https://pipedream.com/_static/connect.html?token=ctok_1&connectLink=true&app=gmail' });
       expect(link.text).not.toContain('client-secret');
       const tokenRequest = pipedream.requests.find(request => request.url.endsWith('/tokens'))!;
-      expect(JSON.parse(tokenRequest.body.toString())).toEqual({ external_user_id: external, expires_in: 900 });
+      expect(JSON.parse(tokenRequest.body.toString())).toEqual({ external_user_id: external, expires_in: 900, scope: 'connect:accounts:write connect:apps:*' });
       expect(tokenRequest.headers).toMatchObject({ authorization: 'Bearer token-1', 'x-pd-environment': 'development' });
       expect((yield* call('/connect', { headers: signedIn, body: { app: 'Not An App' } })).status).toBe(400);
 
@@ -649,6 +670,16 @@ describe('integration connect flow', () => {
       const memberSession = yield* Effect.provide(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }), db);
       expect((yield* call('/accounts', { method: 'GET', headers: { cookie: `sanctum_session=${memberSession.token}` } })).body).toEqual({ configured: true, accounts: [] });
       expect((yield* call(`/accounts/${account}/disconnect`, { headers: { cookie: `sanctum_session=${memberSession.token}`, 'x-csrf-token': memberSession.csrf_token } })).status).toBe(404);
+
+      // An account removed at Pipedream stops counting on the next sync; reconnecting it restores the row.
+      const removed = connected;
+      connected = [];
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body).toEqual({ configured: true, accounts: [] });
+      expect((yield* rows())[0]).toMatchObject({ status: 'disconnected' });
+      expect(yield* Effect.provide(activeActionGrants(member!), db)).toHaveLength(0);
+      connected = removed;
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body.accounts).toEqual([expect.objectContaining({ id: account, app: 'gmail' })]);
+      expect(yield* Effect.provide(activeActionGrants(member!), db)).toHaveLength(1);
 
       // Disconnect deletes the account at Pipedream, then stops listing it; its grant no longer counts.
       expect((yield* call(`/accounts/${account}/disconnect`, { headers: { cookie } })).status).toBe(403);

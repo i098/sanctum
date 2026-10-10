@@ -68,7 +68,7 @@ const connectIntegration = (access: AccessScope, app: string) =>
 
 /**
  * Stores the accounts the caller connected at Pipedream; idempotent, and a row changes only when its
- * state does. An account Pipedream reports dead is stored as disconnected.
+ * state does. An account Pipedream reports dead, or no longer lists, is stored as disconnected.
  */
 const syncAccounts = (access: AccessScope) =>
   Effect.gen(function* () {
@@ -77,7 +77,8 @@ const syncAccounts = (access: AccessScope) =>
     const client = yield* PipedreamClient;
     if (client.configured) {
       const external = externalUserId(access);
-      for (const account of yield* client.listAccounts(external).pipe(Effect.mapError(unavailable))) {
+      const listed = yield* client.listAccounts(external).pipe(Effect.mapError(unavailable));
+      for (const account of listed) {
         yield* sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
           VALUES (${randomUUID()}, ${access.workspace_id}, ${access.principal.id}, ${external}, ${account.id}, ${account.app},
             ${account.dead ? 'disconnected' : 'active'}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) AS incoming
@@ -85,6 +86,9 @@ const syncAccounts = (access: AccessScope) =>
             updated_at = IF(integration_accounts.status = incoming.status, integration_accounts.updated_at, UTC_TIMESTAMP(6)),
             status = incoming.status`;
       }
+      yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = UTC_TIMESTAMP(6)
+        WHERE workspace_id = ${access.workspace_id} AND external_user_id = ${external} AND status = 'active'
+          ${listed.length === 0 ? sql`` : sql`AND provider_account_id NOT IN ${sql.in(listed.map(account => account.id))}`}`;
     }
     return yield* listAccounts(access);
   });

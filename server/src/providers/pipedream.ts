@@ -66,6 +66,7 @@ const TokenResponse = Schema.Struct({ access_token: Schema.String, expires_in: S
 const ConnectTokenResponse = Schema.Struct({ connect_link_url: Schema.String });
 const AccountsResponse = Schema.Struct({
   data: Schema.Array(Schema.Struct({ id: Schema.String, dead: Schema.optional(Schema.NullOr(Schema.Boolean)), app: Schema.Struct({ name_slug: Schema.String }) })),
+  page_info: Schema.Struct({ end_cursor: Schema.optional(Schema.NullOr(Schema.String)) }),
 });
 
 /** One account an external user connected; `dead`: Pipedream no longer holds working credentials for it. */
@@ -79,6 +80,8 @@ export interface ConnectedAccount {
 const ACCOUNTS_PAGE = 100;
 /** Connect token lifetime: one connection in the hosted Connect Link page (Pipedream's default is four hours). */
 const CONNECT_TOKEN_TTL_SECONDS = 900;
+/** The hosted Connect Link only creates the account and reads app metadata; never actions or the proxy. */
+const CONNECT_TOKEN_SCOPE = 'connect:accounts:write connect:apps:*';
 
 /** One component call on behalf of a connected account's external user. */
 interface ComponentRequest {
@@ -116,6 +119,7 @@ export interface PipedreamService {
   readonly proxy: (request: ProxyRequest) => Effect.Effect<Uint8Array, IntegrationFailure>;
   /** A short-lived Connect token for one external user; only its hosted Connect Link URL is returned. */
   readonly createConnectToken: (external_user_id: string) => Effect.Effect<{ readonly connect_link_url: string }, IntegrationFailure>;
+  /** Every account of the external user, across all pages. */
   readonly listAccounts: (external_user_id: string) => Effect.Effect<ReadonlyArray<ConnectedAccount>, IntegrationFailure>;
   /** Deletes the account and its credentials at Pipedream; an account already gone succeeds. */
   readonly deleteAccount: (account_id: string) => Effect.Effect<void, IntegrationFailure>;
@@ -265,12 +269,19 @@ export const makePipedreamClient = (config: PipedreamOptions, timeoutMs: number)
         });
       }),
     createConnectToken: external_user_id =>
-      api(ConnectTokenResponse, '/tokens', { json: { external_user_id, expires_in: CONNECT_TOKEN_TTL_SECONDS } }),
+      api(ConnectTokenResponse, '/tokens', { json: { external_user_id, expires_in: CONNECT_TOKEN_TTL_SECONDS, scope: CONNECT_TOKEN_SCOPE } }),
     listAccounts: external_user_id =>
-      // ponytail: one page of ACCOUNTS_PAGE; follow `page_info.end_cursor` if a person ever connects more.
-      api(AccountsResponse, `/accounts?${new URLSearchParams({ external_user_id, limit: String(ACCOUNTS_PAGE) })}`).pipe(
-        Effect.map(response => response.data.map(account => ({ id: account.id, app: account.app.name_slug, dead: account.dead === true }))),
-      ),
+      Effect.gen(function*() {
+        const accounts: Array<ConnectedAccount> = [];
+        let after: string | null | undefined;
+        do {
+          const query = new URLSearchParams({ external_user_id, limit: String(ACCOUNTS_PAGE), ...(after ? { after } : {}) });
+          const page = yield* api(AccountsResponse, `/accounts?${query}`);
+          accounts.push(...page.data.map(account => ({ id: account.id, app: account.app.name_slug, dead: account.dead === true })));
+          after = page.data.length === ACCOUNTS_PAGE && page.page_info.end_cursor !== after ? page.page_info.end_cursor : null;
+        } while (after);
+        return accounts;
+      }),
     deleteAccount: account_id =>
       Effect.gen(function*() {
         const bearer = yield* accessToken;
