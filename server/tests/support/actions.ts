@@ -46,13 +46,13 @@ export const fakeIntegrations = async (importOriginal: () => Promise<typeof impo
   };
 };
 
-export const seedAccount = (owner: AccessScope, status: 'active' | 'disconnected' = 'active') =>
+export const seedAccount = (owner: AccessScope, status: 'active' | 'disconnected' = 'active', app = 'gmail') =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = IntegrationAccountId.make(randomUUID());
     yield* sql`
       INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
-      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`user-${id}`}, ${`apn_${id}`}, 'gmail', ${status}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`user-${id}`}, ${`apn_${id}`}, ${app}, ${status}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
     return id;
   });
 

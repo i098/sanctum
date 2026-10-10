@@ -7,7 +7,7 @@
  * Qwen 3.8 takes `reasoning_effort` `low`/`medium`/`xhigh`; `chat_template_kwargs.enable_thinking`
  * `false` disables reasoning.
  */
-import { type ModelProvider, ProviderError, type ProviderRequest, retryableStatus, retryAfterMs } from './types.ts';
+import { type ModelProvider, ProviderError, type ProviderRequest, postJson } from './types.ts';
 
 interface Completion {
   readonly choices?: ReadonlyArray<{ readonly finish_reason?: string | null; readonly message?: { readonly content?: string | null }; readonly delta?: { readonly content?: string | null } }>;
@@ -25,26 +25,6 @@ const body = (request: ProviderRequest, stream: boolean) => ({
   ...(request.reasoning === 'none' ? { chat_template_kwargs: { enable_thinking: false } } : request.reasoning ? { reasoning_effort: request.reasoning } : {}),
   ...(request.json ? { response_format: { type: 'json_schema', json_schema: { name: request.json.name, strict: true, schema: request.json.schema } } } : {}),
 });
-
-async function post(options: WorkersAiOptions, payload: object, signal: AbortSignal): Promise<Response> {
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${options.apiToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal,
-    });
-  } catch (error) {
-    if (signal.aborted) throw error;
-    throw new ProviderError(`Workers AI request failed: ${String(error)}`, true);
-  }
-  if (!response.ok) {
-    const detail = (await response.text().catch(() => '')).slice(0, 300);
-    throw new ProviderError(`Workers AI HTTP ${response.status}: ${detail}`, retryableStatus(response.status), retryAfterMs(response.headers.get('retry-after')));
-  }
-  return response;
-}
 
 /** `data:` payloads of a server-sent event stream. */
 async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
@@ -67,14 +47,14 @@ export interface WorkersAiOptions {
 
 export const workersAi = (options: WorkersAiOptions): ModelProvider => ({
   complete: async (request, signal) => {
-    const completion = (await (await post(options, body(request, false), signal)).json()) as Completion;
+    const completion = (await (await postJson('Workers AI', `${options.baseUrl}/v1/chat/completions`, options.apiToken, body(request, false), signal)).json()) as Completion;
     const choice = completion.choices?.[0];
     if (choice?.finish_reason === 'length') throw new ProviderError('Workers AI output was truncated at max_completion_tokens', false);
     if (typeof choice?.message?.content !== 'string') throw new ProviderError('Workers AI response had no message content', false);
     return choice.message.content;
   },
   stream: async function* (request, signal) {
-    const response = await post(options, body(request, true), signal);
+    const response = await postJson('Workers AI', `${options.baseUrl}/v1/chat/completions`, options.apiToken, body(request, true), signal);
     for await (const data of sseData(response.body!)) {
       if (data === '[DONE]') return;
       const chunk = JSON.parse(data) as Completion;

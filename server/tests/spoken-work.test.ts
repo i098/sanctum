@@ -150,7 +150,7 @@ describe('spoken work', () => {
         });
         expect(rows[0]!.requested_by).toBe(test.access.principal.id);
         expect(test.requests).toEqual([expect.objectContaining({
-          model: model ?? engineeringDefaults.modelRoles.research.model,
+          model: model ?? 'claude-sonnet-5-5',
           output_config: { format: expect.objectContaining({ type: 'json_schema' }) },
         })]);
         expect(test.replies).toEqual(['send the notes']);

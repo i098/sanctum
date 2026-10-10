@@ -46,6 +46,19 @@ Malformed decisions log a warning and enqueue nothing.
 This slice changes no research execution or speech synthesis behavior.
 See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for local checks and unrun planner evaluation.
 
+## Web research provider decision - 2026-10-10
+
+The captain approved the Cloudflare-first plan ("This is good") and asked not to overuse the paid OpenAI key.
+Accepted: the research role uses OpenAI `gpt-4.1-mini-2025-04-14` with the Responses API `web_search` tool through the server-only `OPENAI_API_KEY`; no other role can select OpenAI.
+The planner decides whether a request needs web research, so a request that needs no web search makes no paid call.
+Each workspace may start `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` paid calls per UTC day (default 2), and all workspaces together `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` (default 4), with at most 3 web searches per call; each call is reserved before it is sent, a spent allowance refuses the next call with a truthful result, and every call records its token usage.
+The caps bound the worst case at about 120 calls, about USD 5.50 a month ([operations.md](operations.md#configuration)).
+When a request needs both web research and actions, the first pass proposes the actions with their recipients and other targets from the request and may leave content fields for the research; the planner then fills the actions a second time from the cited research. When research is refused, no action is requested and the result says so.
+Web research is untrusted: the second pass is offered only the actions the first pass planned from the request, may change only their content fields, and any changed recipient, destination, account or other argument, or any added or dropped action, means no action is requested and the result says why.
+Both planner passes use the `planner` role; this slice merges after the planner swap (`fm/sanctum-planner-qwen`), which makes that role Workers AI Qwen.
+The plan estimated about USD 3.17 a month for all added inference at light use (40 meetings, 80 research runs), of which about USD 1.38 is this research; recorded usage, not the estimate, shows actual cost.
+Anthropic stays selectable for research with `RESEARCH_MODEL_PROVIDER=anthropic`.
+
 ## Still open
 
 ### Saved-meeting retention
@@ -104,7 +117,7 @@ Its model schema lists strict `json_schema` output with `name`, `schema` and `st
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
 The Cerebras client is removed; see the [configuration guide](operations.md#configuration) for Anthropic overrides.
-Research stays on Anthropic until the separate research execution slice replaces it.
+Research moved to OpenAI in the [web research provider decision](#web-research-provider-decision---2026-10-10).
 
 ## Sign-in and workspace management decision — 2026-10-08
 

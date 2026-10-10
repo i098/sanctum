@@ -27,6 +27,7 @@ export const PURGED_TABLES = [
   'context_processed_segments',
   'context_items',
   'artifacts',
+  'paid_model_calls',
   'actions',
   'action_grants',
   'integration_accounts',

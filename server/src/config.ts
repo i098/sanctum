@@ -32,7 +32,7 @@ export const engineeringDefaults = {
       'transcript.reconcile': 20 * 60_000,
       /** Above pyannote's poll budget (maxPolls × pollIntervalMs = 10 min) plus audio preparation. */
       'speakers.refine': 20 * 60_000,
-      /** Above one research call with transport retries (3 × 4 min) plus planning. */
+      /** Above one research call (4 min, never retried in-process) plus discovery and planning. */
       'research.run': 20 * 60_000,
       /** Object deletes are idempotent, so a hit keeps its progress and the next attempt continues. */
       'workspace.purge': 30 * 60_000,
@@ -66,10 +66,11 @@ export const engineeringDefaults = {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
     extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
-    research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
+    /** OpenAI Responses hosted web search, a paid call held to `paidResearchAllowance`. */
+    research: { provider: 'openai', model: 'gpt-4.1-mini-2025-04-14', reasoning: null },
   },
   /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
-  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 5, researchMaxContinuations: 3 },
+  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 3, researchMaxContinuations: 3 },
   /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
   pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
   /** WorkOS Events API polling (`workos.sync`): time between runs, pages read per run, request timeout. */
@@ -78,18 +79,19 @@ export const engineeringDefaults = {
 
 export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
 
-/** Research needs Anthropic's hosted web search, so only its model is configurable. */
+/** Default model for each provider when `<ROLE>_MODEL` is unset; research chooses among the providers that host web search. */
+const providerModels = { 'workers-ai': engineeringDefaults.modelRoles.voice.model, anthropic: 'claude-sonnet-5-5', openai: engineeringDefaults.modelRoles.research.model } as const;
+
 const modelRole = (role: ModelRoleName) => {
   const fallback = engineeringDefaults.modelRoles[role];
-  const providers = role === 'research' ? (['anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
+  const providers = role === 'research' ? (['openai', 'anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
   const prefix = role.toUpperCase();
   return Config.all({
     provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
     model: Config.option(Config.string(`${prefix}_MODEL`)),
   }).pipe(Config.map(({ provider, model }) => ({
     provider,
-    model: Option.getOrElse(model, () =>
-      provider === 'anthropic' ? engineeringDefaults.modelRoles.research.model : engineeringDefaults.modelRoles.voice.model),
+    model: Option.getOrElse(model, () => providerModels[provider]),
     reasoning: fallback.reasoning,
   })));
 };
@@ -124,6 +126,15 @@ export const workspacePurgeGraceDays = Config.integer('SANCTUM_WORKSPACE_PURGE_G
   Config.validate({ message: 'must be at least 1 day', validation: days => days >= 1 }),
   Config.withDefault(7),
 );
+
+/**
+ * Paid web-research calls started per UTC day, in each workspace and across all of them; each is
+ * reserved before it is sent, and 0 turns them off. docs/operations.md gives the worst-case monthly cost.
+ */
+export const paidResearchAllowance = Config.all({
+  perWorkspace: Config.integer('SANCTUM_PAID_RESEARCH_CALLS_PER_DAY').pipe(Config.validate({ message: 'must be 0 or more', validation: calls => calls >= 0 }), Config.withDefault(2)),
+  total: Config.integer('SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL').pipe(Config.validate({ message: 'must be 0 or more', validation: calls => calls >= 0 }), Config.withDefault(4)),
+});
 
 export const serverConfig = Config.all({
   environment: Config.literal('development', 'test', 'production')('SANCTUM_ENV').pipe(Config.withDefault('development')),
@@ -165,8 +176,8 @@ export const serverConfig = Config.all({
     selfServeWorkspaces: Config.boolean('SANCTUM_SELF_SERVE_WORKSPACES').pipe(Config.withDefault(false)),
   }),
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
-  /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
-  modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
+  /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. `OPENAI_API_KEY` is server-only and pays for research. */
+  modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')), openai: Config.option(Config.redacted('OPENAI_API_KEY')) }),
   /** Server-only Workers AI credentials shared by speech-to-text, requested speech, and text models. */
   workersAi: Config.option(
     Config.all({

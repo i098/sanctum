@@ -9,8 +9,9 @@ import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema,
 import { Unavailable } from '@sanctum/contracts';
 import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfig } from './config.ts';
 import { anthropic } from './providers/anthropic.ts';
+import { openAi } from './providers/openai.ts';
 import { workersAi } from './providers/workers-ai.ts';
-import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult } from './providers/types.ts';
+import { type ModelProvider, ProviderError, type ProviderRequest, type ResearchResult, type ResearchUsage } from './providers/types.ts';
 
 /** Model output plus the model ID that produced it, recorded with generated artifacts. */
 export interface Generated<A> {
@@ -28,8 +29,17 @@ export interface Llm {
   readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I> }) => Effect.Effect<Generated<A>, Unavailable>;
   /** Text deltas; interruption aborts the request, and a stalled stream fails. Never retried, so no text repeats. */
   readonly stream: (role: ModelRoleName, request: Prompt) => Stream.Stream<string, Unavailable>;
-  /** Hosted web research with cited sources (research role only). */
-  readonly research: (request: Prompt) => Effect.Effect<Generated<ResearchResult>, Unavailable>;
+  /**
+   * Hosted web research with cited sources (research role only). `admit` receives the selected
+   * model and runs right before the paid request; its failure sends nothing. `record` receives the
+   * usage the provider reported, also for a billed call that then failed. Never retried here,
+   * so each paid request passes `admit` (a retry is a new job attempt).
+   */
+  readonly research: <E = never, R = never>(
+    request: Prompt,
+    admit?: (model: string) => Effect.Effect<void, E, R>,
+    record?: (usage: ResearchUsage) => Effect.Effect<void, E, R>,
+  ) => Effect.Effect<Generated<ResearchResult>, Unavailable | E, R>;
 }
 
 export class LlmClient extends Context.Tag('sanctum/LlmClient')<LlmClient, Llm>() {}
@@ -43,12 +53,12 @@ const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
 };
 
 /** Settings each provider needs, named in the `Unavailable` message when they are missing. */
-const providerSettings = { 'workers-ai': 'WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN', anthropic: 'ANTHROPIC_API_KEY' } as const;
+const providerSettings = { 'workers-ai': 'WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN', anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' } as const;
 
 /** Builds the service from explicit role settings and the providers that have keys. */
 export function makeLlm(
   roles: ServerConfig['modelRoles'],
-  providers: { readonly 'workers-ai'?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined },
+  providers: { readonly 'workers-ai'?: ModelProvider | undefined; readonly anthropic?: ModelProvider | undefined; readonly openai?: ModelProvider | undefined },
   budget: Record<keyof typeof engineeringDefaults.modelRequest, number> = engineeringDefaults.modelRequest,
 ): Llm {
   const select = (role: ModelRoleName) => {
@@ -75,7 +85,10 @@ export function makeLlm(
   return {
     generate: (role, { name, output, ...prompt }) => {
       const { $schema: _, ...schema }: Record<string, unknown> = { ...JSONSchema.make(output) };
-      return call(role, budget.timeoutMs, (provider, base, signal) => provider.complete({ ...base, ...prompt, json: { name, schema } }, signal)).pipe(
+      return call(role, budget.timeoutMs, (provider, base, signal) => {
+        if (!provider.complete) throw new ProviderError('provider has no text generation', false);
+        return provider.complete({ ...base, ...prompt, json: { name, schema } }, signal);
+      }).pipe(
         Effect.flatMap(({ value, model }) =>
           Schema.decodeUnknown(Schema.parseJson(output))(value).pipe(
             Effect.mapError(error => new Unavailable({ message: `${role} model output failed the ${name} schema: ${error.message.slice(0, 400)}`, retryable: false })),
@@ -88,6 +101,7 @@ export function makeLlm(
       Stream.unwrapScoped(
         Effect.gen(function* () {
           const { provider, base } = yield* select(role);
+          if (!provider.stream) return yield* new Unavailable({ message: `${role} model: provider has no text streaming`, retryable: false });
           const controller = new AbortController();
           yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()));
           return Stream.fromAsyncIterable(provider.stream({ ...base, ...prompt }, controller.signal), toUnavailable(role)).pipe(
@@ -95,11 +109,24 @@ export function makeLlm(
           );
         }),
       ),
-    research: prompt =>
-      call('research', budget.timeoutMs * (budget.researchMaxContinuations + 1), (provider, base, signal) => {
-        if (!provider.research) throw new ProviderError('research provider has no hosted web search', false);
-        return provider.research({ ...base, ...prompt }, { maxSearches: budget.researchMaxSearches, maxContinuations: budget.researchMaxContinuations }, signal);
-      }),
+    research: (prompt, admit, record) => {
+      const timeoutMs = budget.timeoutMs * (budget.researchMaxContinuations + 1);
+      const settle = (usage: ResearchUsage | undefined) => (record && usage ? record(usage) : Effect.void);
+      return Effect.flatMap(select('research'), ({ provider, base }) => {
+        const research = provider.research;
+        if (!research) return Effect.fail(new Unavailable({ message: 'research model: provider has no hosted web search', retryable: false }));
+        const request = Effect.tryPromise({
+          try: signal => research({ ...base, ...prompt }, { maxSearches: budget.researchMaxSearches, maxContinuations: budget.researchMaxContinuations }, signal),
+          catch: (error: unknown) => error,
+        }).pipe(
+          Effect.timeoutFail({ duration: timeoutMs, onTimeout: () => new Unavailable({ message: `research model timed out after ${timeoutMs} ms`, retryable: true }) }),
+          Effect.catchAll(error => Effect.zipRight(settle(error instanceof ProviderError ? error.usage : undefined), Effect.fail(toUnavailable('research')(error)))),
+          Effect.tap(value => settle(value.usage)),
+          Effect.map(value => ({ value, model: base.model })),
+        );
+        return admit ? Effect.zipRight(admit(base.model), request) : request;
+      });
+    },
   };
 }
 
@@ -110,6 +137,7 @@ export const LlmLive = Layer.effect(
     makeLlm(modelRoles, {
       'workers-ai': Option.getOrUndefined(Option.map(workersAiSettings, ({ baseUrl, apiToken }) => workersAi({ baseUrl, apiToken: Redacted.value(apiToken) }))),
       anthropic: Option.getOrUndefined(Option.map(modelKeys.anthropic, key => anthropic({ apiKey: Redacted.value(key) }))),
+      openai: Option.getOrUndefined(Option.map(modelKeys.openai, key => openAi({ apiKey: Redacted.value(key) }))),
     }),
   ),
 );
@@ -132,7 +160,7 @@ export function fixtureLlm(responses: ReadonlyArray<string | Unavailable>, reque
     stream: async function* (request) {
       yield* next(request).split(/(?<= )/);
     },
-    research: async request => ({ text: next(request), sources: [] }),
+    research: async request => ({ text: next(request), sources: [], usage: { input_tokens: null, output_tokens: null, web_searches: 0 } }),
   };
-  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': provider, anthropic: provider }));
+  return Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': provider, anthropic: provider, openai: provider }));
 }

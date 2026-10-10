@@ -21,6 +21,7 @@ import {
   Forbidden,
   HashConflict,
   IntegrationAccountId,
+  type JobId,
   type ListenerId,
   MeetingId,
   NotFound,
@@ -147,7 +148,7 @@ export const loadAction = (workspace_id: WorkspaceId, id: ActionId, lock = false
     })(undefined);
   });
 
-const findByIdempotencyKey = (access: AccessScope, key: string) =>
+export const findByIdempotencyKey = (access: AccessScope, key: string) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
     return yield* SqlSchema.findOne({
@@ -189,8 +190,15 @@ const matchGrant = (access: AccessScope, input: ActionRequest) =>
     return grant;
   });
 
-/** The third integration gateway: validate, authorize, persist and enqueue one requested action. */
-export const requestAction = (access: AccessScope, input: ActionRequest): Effect.Effect<typeof RequestActionOutput.Type, Forbidden | NotFound | HashConflict, SqlClient.SqlClient> =>
+/**
+ * The third integration gateway: validate, authorize, persist and enqueue one requested action.
+ * `research_job_id` records the `research.run` job that planned it, in the same transaction.
+ */
+export const requestAction = (
+  access: AccessScope,
+  input: ActionRequest,
+  research_job_id: JobId | null = null,
+): Effect.Effect<typeof RequestActionOutput.Type, Forbidden | NotFound | HashConflict, SqlClient.SqlClient> =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
     yield* requireScope(access, 'actions:request');
@@ -205,10 +213,10 @@ export const requestAction = (access: AccessScope, input: ActionRequest): Effect
         Effect.gen(function*() {
           yield* sql`
                         INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, account_id, idempotency_key, args, args_sha256, configuration_ref,
-                            version, grant_id, grant_version, state, provider_idempotency_key, title, created_at, updated_at)
+                            version, grant_id, grant_version, state, provider_idempotency_key, title, research_job_id, created_at, updated_at)
                         VALUES (${id}, ${access.workspace_id}, ${input.meeting_id}, ${access.principal.id}, ${input.action_key}, ${grant.account_id}, ${input.idempotency_key},
                             ${JSON.stringify(input.arguments)}, ${Buffer.from(sha256, 'hex')}, ${input.configuration_ref}, ${input.version}, ${grant.id}, ${grant.version},
-                            'queued', ${`sanctum:${id}`}, ${input.title ?? null}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+                            'queued', ${`sanctum:${id}`}, ${input.title ?? null}, ${research_job_id}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
           yield* enqueueJob({ workspace_id: access.workspace_id, kind: 'action.execute', work_key: id, payload: { action_id: id }, requested_by: access.principal.id });
         }),
       )
@@ -220,6 +228,16 @@ export const requestAction = (access: AccessScope, input: ActionRequest): Effect
     const raced = yield* findByIdempotencyKey(access, input.idempotency_key);
     return yield* replay(Option.getOrThrow(raced), sha256);
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
+
+/** The actions a `research.run` job requested, oldest first. */
+export const researchJobActions = (workspace_id: WorkspaceId, research_job_id: JobId) =>
+  Effect.flatMap(SqlClient.SqlClient, sql =>
+    SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Schema.Struct({ action_id: ActionId, action_key: Schema.String, state: ActionState }),
+      execute: () => sql`SELECT id AS action_id, action_key, state FROM actions WHERE workspace_id = ${workspace_id} AND research_job_id = ${research_job_id} ORDER BY created_at, id`,
+    })(undefined),
+  );
 
 /** Actions on a meeting this principal may see: its own requests, or every request for workspace owners/admins. */
 const visibleTo = (sql: SqlClient.SqlClient, access: AccessScope) =>
