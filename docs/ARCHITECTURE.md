@@ -112,7 +112,7 @@ Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, `server/
 - `integrations.ts`: `searchIntegrationActions(access, input: SearchIntegrationActionsInput): Effect<SearchIntegrationActionsOutput, Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `getIntegrationAction(access, input: GetIntegrationActionInput): Effect<GetIntegrationActionOutput, NotFound | Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `executeIntegrationAction(input: { access; account_id; action_key; version; configuration_ref; arguments; provider_idempotency_key }): Effect<{ receipt: Record<string, unknown> }, IntegrationFailure, R | PipedreamClient>`; `IntegrationFailure.ambiguous` marks unknown outcomes.
-- `integration-accounts.ts`: `IntegrationAccountsLive`, Settings' website-only connect flow (`/api/v1/integrations/connect`, `/integrations/accounts`, `/sync`, `/{id}/disconnect`); the Pipedream external user is `<workspace_id>.<principal_id>` from the session, never client input. Sync upserts the caller's Pipedream accounts and grants nothing.
+- `integration-accounts.ts`: `IntegrationAccountsLive`, Settings' website-only connect flow (`/api/v1/integrations/connect`, `/integrations/accounts`, `/sync`, `/{id}/disconnect`); the Pipedream external user is `<workspace_id>.<principal_id>` from the session, never client input. Sync upserts the caller's Pipedream accounts, stores accounts Pipedream reports dead or no longer lists as disconnected, and grants nothing.
 
 ### media (T08, server half of T09, T10, T11)
 
