@@ -77,12 +77,13 @@ Before this decision, nobody could read a detected meeting, so Review, the liste
 
 ## Speech output decision - 2026-10-10
 
-Accepted: requested speech uses Cloudflare Workers AI Aura-2 (`@cf/deepgram/aura-2-en`) with the existing server-only Workers AI credentials.
+Accepted: requested speech uses Cloudflare Workers AI Aura-2 (`@cf/deepgram/aura-2-en`).
+See [operations configuration](operations.md#configuration) for the shared server-only credentials.
 The Luna speaker returns mono PCM16 little-endian at 24 kHz with `encoding: linear16` and `container: none`.
-One real REST call returned these bytes despite an `audio/mpeg` header; [release evidence](release-evidence.md#workers-ai-speech-output) records the check.
+The [release evidence](release-evidence.md#workers-ai-speech-output) records the live byte check and the response header discrepancy.
 The adapter keeps each request abortable before headers and during streaming.
 The request window, sentence generation, generation checks and browser cancellation remain unchanged.
-Missing credentials or provider errors produce unavailable speech, with no replacement audio.
+The [provider failure policy](operations.md#configuration) applies to speech output too.
 No deployment or secret change forms part of this cutover.
 
 ## Text model provider decision — 2026-10-08

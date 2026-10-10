@@ -114,7 +114,7 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Planner and research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations, wrapped at the provider boundary. |
 | Transcription | Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) over REST | Server-side requests per short live chunk and per archived chunk, verified PCM encoding, source alignment and batch gap recovery. |
 | Speaker attribution | pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades; Whisper returns no speaker labels | Correctable speaker tracks; names require enrollment or user confirmation. |
-| Speech output | Cloudflare Workers AI Aura-2 (`@cf/deepgram/aura-2-en`), raw PCM16 at 24 kHz | Requested output only, with response IDs and interruptible browser playback. |
+| Speech output | [Speech output decision](../docs/DECISIONS.md#speech-output-decision---2026-10-10) | Requested output only, with response IDs and interruptible browser playback. |
 | Integrations | Pipedream Connect + Proxy/component APIs from TypeScript | One account-scoped client; search, inspect and request gateways. |
 | Human authentication | `openid-client` for OIDC | Issuer selected by configuration: WorkOS AuthKit hosted, embedded Better Auth self-hosted (docs/DECISIONS.md); use verified identity plus explicit Sanctum membership. |
 | Remote agents | Official `@modelcontextprotocol/sdk` TypeScript server over Streamable HTTP | Explicit tools calling the same Effect services and authorization as REST. |
@@ -220,7 +220,7 @@ MySQL is the only structured production database.
 
 ### Live media and speech ownership
 
-Implement concrete TypeScript adapters for Workers AI Whisper, Workers AI Aura-2 and optional pyannote cloud APIs.
+Implement concrete TypeScript adapters for Workers AI Whisper, the [selected speech output provider](../docs/DECISIONS.md#speech-output-decision---2026-10-10), and optional pyannote cloud APIs.
 A socket connection ID identifies a transport attempt, never a meeting or speaker identity.
 For each provider request or connection, persist the source epoch/track/sample anchor and offset used to align returned timestamps.
 Whisper has no connection: each live chunk is one request anchored at its first sample, and its segment times are relative to the chunk.
@@ -480,7 +480,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | Planner | Explicit role setting; retain explicitly configured Claude provider until Qwen passes action-selection replay. | No unauthorized action or material regression in labeled fixtures. |
 | Research executor | Use Anthropic-hosted search with correct tool continuation handling initially. | A provider URL swap cannot replace hosted web search or `pause_turn`. |
 | Speech transcription | Workers AI Whisper, with explicit model/version; live audio in short chunks. | Word timing and recall on actual room/laptop audio. |
-| TTS | Workers AI Aura-2, Luna speaker, `linear16`, container `none`, 24 kHz. | All output must pass the request-only speech gate. |
+| TTS | See the [speech output decision](../docs/DECISIONS.md#speech-output-decision---2026-10-10). | All output must pass the request-only speech gate. |
 
 Make provider/model selection explicit by role; do not select a provider merely because its API key happens to exist.
 Use small concrete client functions and validated result models, not a universal agent framework.
