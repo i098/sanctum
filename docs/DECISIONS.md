@@ -40,10 +40,11 @@ The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records
 
 Accepted: the planner uses Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, with low reasoning, for spoken-work decisions and inspected action proposals.
 Both paths send strict JSON schemas and validate replies with the existing Effect Schema decoder.
-The spoken-work trigger checks planner credentials, Pipedream configuration and active grants; it no longer requires an Anthropic research key.
+The [spoken work decision](#spoken-work-decision---2026-10-10) owns the trigger prerequisites.
+The [configuration guide](operations.md#configuration) owns provider credentials and overrides.
 Malformed decisions log a warning and enqueue nothing.
 This slice changes no research execution or speech synthesis behavior.
-Local fake-provider checks prove routing and authorization; live planner quality remains unverified.
+See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for local checks and unrun planner evaluation.
 
 ## Still open
 
@@ -91,7 +92,7 @@ Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-
 Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
-The Cerebras client is removed; Anthropic stays selectable with `<ROLE>_MODEL_PROVIDER=anthropic`.
+The Cerebras client is removed; see the [configuration guide](operations.md#configuration) for Anthropic overrides.
 Research stays on Anthropic until the separate research execution slice replaces it.
 
 ## Sign-in and workspace management decision — 2026-10-08
