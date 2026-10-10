@@ -12,6 +12,7 @@ import { engineeringDefaults, serverConfig } from '../src/config.ts';
 import { LlmClient, LlmLive, makeLlm } from '../src/llm.ts';
 import { anthropic } from '../src/providers/anthropic.ts';
 import { openAi } from '../src/providers/openai.ts';
+import { cerebras } from '../src/providers/cerebras.ts';
 import { workersAi } from '../src/providers/workers-ai.ts';
 
 interface Seen {
@@ -72,9 +73,10 @@ const withAnthropic = (url: string) =>
   makeLlm({ ...roles, research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null } }, { anthropic: anthropic({ apiKey: 'test-key', baseUrl: url }) }, budget);
 
 describe('model provider configuration', () => {
-  const defaultModels = { 'workers-ai': '@cf/qwen/qwen3.8-27b', anthropic: 'claude-sonnet-5-5', openai: 'gpt-4.1-mini-2025-04-14' } as const;
-  for (const role of ['voice', 'extraction', 'planner', 'research'] as const) {
-    for (const provider of role === 'research' ? ['openai', 'anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
+  const defaultModels = { 'workers-ai': '@cf/qwen/qwen3.8-27b', anthropic: 'claude-sonnet-5-5', openai: 'gpt-4.1-mini-2025-04-14', cerebras: 'gpt-oss-120b' } as const;
+  for (const role of ['voice', 'extraction', 'planner', 'classifier', 'research'] as const) {
+    for (const provider of role === 'research' ? ['openai', 'anthropic'] as const
+      : role === 'classifier' ? ['cerebras', 'workers-ai', 'anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
       it.effect(`uses a compatible default and preserves an explicit ${role} model on ${provider}`, () =>
         Effect.gen(function* () {
           const settings = new Map<string, string>([[`${role.toUpperCase()}_MODEL_PROVIDER`, provider]]);
@@ -317,6 +319,38 @@ describe('OpenAI research client', () => {
       expect((yield* Effect.flip(makeLlm({ ...roles, voice: { provider: 'openai', model: 'gpt-4.1-mini', reasoning: null } }, { openai: openAi({ apiKey: 'k', baseUrl: server.url }) }).generate('voice', ask))).message).toMatch(/no text generation/);
       expect(server.seen).toHaveLength(2);
     }));
+});
+
+describe('Cerebras classifier client', () => {
+  it.scopedLive('decodes a strict work decision and keeps planning on Qwen', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([completion('{"work":true}'), completion('{"work":false}')]);
+      const llm = makeLlm(roles, {
+        cerebras: cerebras({ apiKey: 'test-key', baseUrl: server.url }),
+        'workers-ai': workersAi({ apiToken: 'qwen-key', baseUrl: `${server.url}/ai` }),
+      }, budget);
+      const input = { name: 'spoken_work_intent', output: Schema.Struct({ work: Schema.Boolean }), system: 'Decide.', prompt: 'Send the notes' };
+      expect(yield* llm.generate('classifier', input)).toEqual({ model: 'gpt-oss-120b', value: { work: true } });
+      expect(yield* llm.generate('planner', input)).toEqual({ model: '@cf/qwen/qwen3.8-27b', value: { work: false } });
+      expect(server.seen[0]).toMatchObject({ path: '/v1/chat/completions', headers: { authorization: 'Bearer test-key' },
+        body: { model: 'gpt-oss-120b', reasoning_effort: 'low', response_format: {
+          type: 'json_schema', json_schema: { name: 'spoken_work_intent', strict: true,
+            schema: { type: 'object', properties: { work: { type: 'boolean' } }, required: ['work'], additionalProperties: false } },
+        } } });
+      expect(server.seen[1]).toMatchObject({ path: '/ai/v1/chat/completions', body: { model: '@cf/qwen/qwen3.8-27b' } });
+    }));
+
+  for (const [reply, reason] of [
+    [completion('{"work":true}', 'length'), 'truncated'],
+    [json(200, { choices: [{ message: { content: null } }] }), 'no message content'],
+  ] as const) {
+    it.scopedLive(`rejects a Cerebras response with ${reason}`, () =>
+      Effect.gen(function* () {
+        const server = yield* replayServer([reply]);
+        const llm = makeLlm(roles, { cerebras: cerebras({ apiKey: 'k', baseUrl: server.url }) }, budget);
+        expect((yield* Effect.flip(llm.generate('classifier', ask))).message).toContain(reason);
+      }));
+  }
 });
 
 describe('LlmLive', () => {

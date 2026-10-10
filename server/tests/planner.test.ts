@@ -66,7 +66,7 @@ describe('planWork', () => {
         rejected:
           'gmail-send-email undeclared or repeated argument bcc; gmail-send-email undeclared or repeated argument gmail; gmail-send-email missing required subject; gmail-send-email argument subject is not JSON',
       });
-      expect(requests[0]).toMatchObject({ json: { name: 'action_plan' } });
+      expect(requests[0]).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', reasoning: 'low', json: { name: 'action_plan' } });
       const schema = requests[0]!.json!.schema as { properties: { actions: { items: { properties: { action_key: unknown } } } } };
       expect(schema.properties.actions.items.properties.action_key).toEqual({ type: 'string', enum: ['gmail-send-email'] });
       expect(requests[0]!.prompt).not.toContain('google_calendar-create-event');

@@ -65,7 +65,13 @@ export const SpeechWorkRequestsLive = Layer.effect(
         if ((yield* activeActionGrants(current)).length === 0) {
           return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
         }
-        const { value } = yield* llm.generate('planner', { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request });
+        const intent = { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request };
+        const { value } = yield* llm.generate('classifier', intent).pipe(
+          Effect.catchAll(() => Effect.zipRight(
+            Effect.logWarning('Spoken work classifier unavailable; falling back to planner'),
+            llm.generate('planner', intent),
+          )),
+        );
         if (!value.work) return;
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
         // Lock before consistent reads so waiters see authorization changes and work committed by the prior lock holder.

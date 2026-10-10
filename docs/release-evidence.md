@@ -97,7 +97,7 @@ Total: 24 calls.
 
 ## Workers AI planner - 2026-10-10
 
-The spoken-work tests use the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
+At that revision, the spoken-work tests used the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
 The earlier implementation recorded 22 passing spoken-work cases; this review did not rerun them.
 Before the fix, the accepted-request case failed: Workers AI credentials without an Anthropic key produced zero jobs.
 A standalone service smoke used a local HTTP server and disposable MySQL database.
@@ -111,6 +111,21 @@ This review round passed 24 focused LLM and planner tests.
 A standalone `LlmLive` smoke passed with both the Anthropic planner default and an explicit model.
 The spoken-work job tests could not run: Docker first denied access, then the MySQL container's published port refused connections.
 The server TypeScript check passed.
+
+## Cerebras spoken classifier - 2026-10-10
+
+The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection, fallback behavior, and the supplied Firstmate evaluation results and limits.
+
+This implementation made no live model call.
+The local fetch fake exercised the production `LlmLive`, Cerebras adapter and `SpeechWorkRequestsLive` against an isolated MySQL database.
+The standalone runtime check produced three durable jobs: classifier success, HTTP failure with Qwen fallback, and missing-key Qwen fallback.
+Every job kept the original request; each fallback logged one line.
+The focused provider suite passed 28 tests; spoken-work and planner suites passed 33 tests.
+`npm run check:app` passed 712 Vitest tests, 98 Chromium checks, workspace types, both web builds, performance smoke and accelerated replay.
+The replay reported four meetings, 190 segments and zero unowned segments.
+`npm run docs:render`, `npm run check`, `npm run docs:build`, Fallow and Sentrux passed.
+The single ponytail review named no cuts and returned "Looks good. Ship."; its wrapper exited 2, so this is not a clean exit.
+No deployment, live secret change, production migration, live recording or real integration write ran.
 
 ## Unrun gates
 

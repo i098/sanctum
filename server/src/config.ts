@@ -59,13 +59,14 @@ export const engineeringDefaults = {
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
   /**
-   * Plan section 09 initial model per role, checked against provider docs on 2026-10-08, plus
-   * the reasoning effort per role (`none` disables it). `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override.
+   * Initial model and reasoning effort per role (`none` disables it); docs/DECISIONS.md owns provider selection.
+   * `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override these defaults.
    */
   modelRoles: {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
     extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
+    classifier: { provider: 'cerebras', model: 'gpt-oss-120b', reasoning: 'low' },
     /** OpenAI Responses hosted web search, a paid call held to `paidResearchAllowance`. */
     research: { provider: 'openai', model: 'gpt-4.1-mini-2025-04-14', reasoning: null },
   },
@@ -80,11 +81,12 @@ export const engineeringDefaults = {
 export type ModelRoleName = keyof typeof engineeringDefaults.modelRoles;
 
 /** Default model for each provider when `<ROLE>_MODEL` is unset; research chooses among the providers that host web search. */
-const providerModels = { 'workers-ai': engineeringDefaults.modelRoles.voice.model, anthropic: 'claude-sonnet-5-5', openai: engineeringDefaults.modelRoles.research.model } as const;
+const providerModels = { 'workers-ai': engineeringDefaults.modelRoles.voice.model, anthropic: 'claude-sonnet-5-5', openai: engineeringDefaults.modelRoles.research.model, cerebras: engineeringDefaults.modelRoles.classifier.model } as const;
 
 const modelRole = (role: ModelRoleName) => {
   const fallback = engineeringDefaults.modelRoles[role];
-  const providers = role === 'research' ? (['openai', 'anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
+  const providers = role === 'research' ? (['openai', 'anthropic'] as const)
+    : role === 'classifier' ? (['cerebras', 'workers-ai', 'anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
   const prefix = role.toUpperCase();
   return Config.all({
     provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
@@ -175,9 +177,9 @@ export const serverConfig = Config.all({
     /** A signed-in user with no membership may create a workspace (with a WorkOS organization). */
     selfServeWorkspaces: Config.boolean('SANCTUM_SELF_SERVE_WORKSPACES').pipe(Config.withDefault(false)),
   }),
-  modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
-  /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. `OPENAI_API_KEY` is server-only and pays for research. */
-  modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')), openai: Config.option(Config.redacted('OPENAI_API_KEY')) }),
+  modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), classifier: modelRole('classifier'), research: modelRole('research') }),
+  /** Server-only provider keys. The spoken classifier alone can fall back to the planner (speech-requests.ts). */
+  modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')), openai: Config.option(Config.redacted('OPENAI_API_KEY')), cerebras: Config.option(Config.redacted('CEREBRAS_API_KEY')) }),
   /** Server-only Workers AI credentials shared by speech-to-text, requested speech, and text models. */
   workersAi: Config.option(
     Config.all({
