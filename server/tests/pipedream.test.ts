@@ -13,10 +13,10 @@ import {
   SearchIntegrationActionsInput,
   Unauthenticated,
 } from '@sanctum/contracts';
-import { Context, Effect, Either, JSONSchema, Layer, Option, Redacted, Schema } from 'effect';
-import { Authenticator, resolveAccess } from '../src/auth.ts';
+import { ConfigProvider, Context, Effect, Either, JSONSchema, Layer, Option, Redacted, Schema } from 'effect';
+import { Authenticator, openSession, resolveAccess } from '../src/auth.ts';
 import { engineeringDefaults } from '../src/config.ts';
-import { requestAction, revokeActionGrant } from '../src/actions.ts';
+import { activeActionGrants, createActionGrant, requestAction, revokeActionGrant } from '../src/actions.ts';
 import { dbLayer } from '../src/db.ts';
 import { executeAction } from '../src/executor.ts';
 import { executeIntegrationAction, getIntegrationAction, IntegrationFailure, searchIntegrationActions, uploadDriveFile } from '../src/integrations.ts';
@@ -538,6 +538,27 @@ describe('Pipedream Connect client', () => {
       expect(yield* Effect.flip(unconfigured.searchActions({ q: 'x', app: 'gmail', limit: 3 }))).toMatchObject({ message: 'Pipedream is not configured', retryable: false });
     }),
   );
+
+  it.scoped('lists every Connect account across pages', () =>
+    Effect.gen(function*() {
+      const accounts = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ id: `apn_${prefix}${index}`, app: { name_slug: 'gmail' } }));
+      const connect = yield* fakeConnectServer(request => {
+        if (request.url === '/v1/oauth/token') return { status: 200, body: { access_token: 'token-1', expires_in: 3_600 } };
+        const after = new URL(request.url, 'http://fake').searchParams.get('after');
+        if (after === null) return { status: 200, body: { data: accounts('a', 100), page_info: { end_cursor: 'c1' } } };
+        if (after === 'c1') return { status: 200, body: { data: accounts('b', 2), page_info: { end_cursor: 'c2' } } };
+        return { status: 500, body: {} };
+      });
+      const client = makePipedreamClient(
+        { apiUrl: connect.url, environment: 'development', credentials: Option.some({ projectId: 'proj', clientId: 'cid', clientSecret: Redacted.make('secret') }) },
+        30_000,
+      );
+      const listed = yield* client.listAccounts('ext-1');
+      expect(listed).toHaveLength(102);
+      expect(listed.at(-1)).toEqual({ id: 'apn_b1', app: 'gmail', dead: false });
+      expect(connect.requests.filter(request => request.url.includes('/accounts?')).map(request => new URL(request.url, connect.url).searchParams.get('after'))).toEqual([null, 'c1']);
+    }),
+  );
 });
 
 describe('integrations HTTP API', () => {
@@ -557,11 +578,117 @@ describe('integrations HTTP API', () => {
         });
 
       expect(yield* call('?intent=send%20email')).toEqual({ status: 200, body: { matches: [], refinement_hint: expect.stringMatching(/No connected integration/) } });
+      const accounts = yield* Effect.promise(() => fetch(base.replace(/actions$/, 'accounts'), { headers: { authorization: 'Bearer fixture' } }).then(response => response.json()));
+      expect(accounts).toEqual({ configured: false, accounts: [] });
       expect(yield* call('?intent=send&app=gmail')).toEqual({ status: 503, body: expect.objectContaining({ code: 'unavailable', message: 'Pipedream is not configured', retryable: false }) });
       expect((yield* call('?intent=send&limit=6')).status).toBe(400);
       expect((yield* call('/gmail-send-email/schema', { method: 'POST', body: '{}' })).status).toBe(503);
       const anonymous = yield* Effect.promise(() => fetch(`${base}?intent=x`));
       expect(anonymous.status).toBe(401);
+    }),
+  );
+});
+
+describe('integration connect flow', () => {
+  it.scoped('issues a Connect Link for the session principal only, syncs accounts idempotently and disconnects them', () =>
+    Effect.gen(function*() {
+      const db = dbLayer(database.mysql);
+      const [owner, member] = yield* Effect.provide(seedWorkspace('Connect', ['owner', 'member']), db);
+      const session = yield* Effect.provide(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }), db);
+      const external = `${owner!.workspace_id}.${owner!.principal.id}`;
+      let connected = [{ id: 'apn_mail', app: { name_slug: 'gmail', name: 'Gmail' }, dead: false }];
+      const pipedream = yield* fakeConnectServer(request => {
+        if (request.url === '/v1/oauth/token') return { status: 200, body: { access_token: 'token-1', expires_in: 3_600 } };
+        if (request.url === '/v1/connect/proj_test/tokens') {
+          return { status: 200, body: { token: 'ctok_1', expires_at: '2026-10-10T00:15:00Z', connect_link_url: 'https://pipedream.com/_static/connect.html?token=ctok_1&connectLink=true' } };
+        }
+        if (request.url.startsWith('/v1/connect/proj_test/accounts?')) return { status: 200, body: { data: connected, page_info: { count: connected.length } } };
+        if (request.method === 'DELETE' && request.url === '/v1/connect/proj_test/accounts/apn_mail') return { status: 204, body: undefined };
+        return { status: 500, body: {} };
+      });
+      const env = new Map([['PIPEDREAM_API_URL', pipedream.url], ['PIPEDREAM_PROJECT_ID', 'proj_test'], ['PIPEDREAM_CLIENT_ID', 'cid'], ['PIPEDREAM_CLIENT_SECRET', 'client-secret']]);
+      const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql })).pipe(
+        Effect.withConfigProvider(ConfigProvider.fromMap(env).pipe(ConfigProvider.orElse(ConfigProvider.fromEnv))),
+      );
+      const address = Context.get(context, HttpServer.HttpServer).address;
+      const base = `http://127.0.0.1:${address._tag === 'TcpAddress' ? address.port : 0}/api/v1/integrations`;
+      const cookie = `sanctum_session=${session.token}`;
+      const call = (path: string, init: { method?: string; headers?: Record<string, string>; body?: unknown } = {}) =>
+        Effect.promise(async () => {
+          const response = await fetch(`${base}${path}`, {
+            method: init.method ?? 'POST',
+            headers: { 'content-type': 'application/json', ...init.headers },
+            ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+          });
+          const text = await response.text();
+          return { status: response.status, body: text ? JSON.parse(text) : null, text };
+        });
+      const signedIn = { cookie, 'x-csrf-token': session.csrf_token };
+
+      // The token endpoint needs a session and its CSRF token; the external user comes from the session, never the body.
+      expect((yield* call('/connect', { body: { app: 'gmail' } })).status).toBe(401);
+      expect((yield* call('/connect', { headers: { cookie }, body: { app: 'gmail' } })).status).toBe(403);
+      expect((yield* call('/connect', { headers: { cookie, 'x-csrf-token': 'wrong' }, body: { app: 'gmail' } })).status).toBe(403);
+      expect(pipedream.requests.filter(request => request.url.endsWith('/tokens'))).toHaveLength(0);
+      const link = yield* call('/connect', { headers: signedIn, body: { app: 'gmail', external_user_id: 'someone-else' } });
+      expect(link.status).toBe(200);
+      expect(link.body).toEqual({ url: 'https://pipedream.com/_static/connect.html?token=ctok_1&connectLink=true&app=gmail' });
+      expect(link.text).not.toContain('client-secret');
+      const tokenRequest = pipedream.requests.find(request => request.url.endsWith('/tokens'))!;
+      expect(JSON.parse(tokenRequest.body.toString())).toEqual({ external_user_id: external, expires_in: 900, scope: 'connect:accounts:write connect:apps:*' });
+      expect(tokenRequest.headers).toMatchObject({ authorization: 'Bearer token-1', 'x-pd-environment': 'development' });
+      expect((yield* call('/connect', { headers: signedIn, body: { app: 'Not An App' } })).status).toBe(400);
+
+      // Sync stores the account once; a repeat leaves the same row untouched; nothing is granted.
+      expect((yield* call('/accounts/sync', { headers: { cookie } })).status).toBe(403);
+      const first = yield* call('/accounts/sync', { headers: signedIn });
+      expect(first.body).toEqual({ configured: true, accounts: [{ id: expect.any(String), app: 'gmail', grants: [] }] });
+      const listed = pipedream.requests.find(request => request.url.startsWith('/v1/connect/proj_test/accounts?'))!;
+      expect(new URL(listed.url, pipedream.url).searchParams.get('external_user_id')).toBe(external);
+      const rows = () =>
+        Effect.provide(
+          Effect.flatMap(SqlClient.SqlClient, sql => sql<{ id: string; status: string; owner_principal_id: string; external_user_id: string; updated_at: Date }>`
+            SELECT id, status, owner_principal_id, external_user_id, updated_at FROM integration_accounts WHERE workspace_id = ${owner!.workspace_id}`),
+          db,
+        );
+      const stored = yield* rows();
+      expect(stored).toEqual([expect.objectContaining({ status: 'active', owner_principal_id: owner!.principal.id, external_user_id: external })]);
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body).toEqual(first.body);
+      expect(yield* rows()).toEqual(stored);
+      const grants = yield* Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`SELECT 1 FROM action_grants WHERE workspace_id = ${owner!.workspace_id}`), db);
+      expect(grants).toHaveLength(0);
+
+      // The owner's grant shows under the account; another member sees none of the owner's accounts.
+      const account = IntegrationAccountId.make(stored[0]!.id);
+      yield* Effect.provide(
+        createActionGrant(owner!, { grantee: member!.principal.id, action_key: sendEmail.key, account_id: account, meeting_id: null, restrictions: {}, expires_at: null }),
+        db,
+      );
+      expect((yield* call('/accounts', { method: 'GET', headers: { cookie } })).body.accounts[0].grants).toEqual([
+        { id: expect.any(String), action_key: sendEmail.key, grantee_name: 'Connect member' },
+      ]);
+      const memberSession = yield* Effect.provide(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }), db);
+      expect((yield* call('/accounts', { method: 'GET', headers: { cookie: `sanctum_session=${memberSession.token}` } })).body).toEqual({ configured: true, accounts: [] });
+      expect((yield* call(`/accounts/${account}/disconnect`, { headers: { cookie: `sanctum_session=${memberSession.token}`, 'x-csrf-token': memberSession.csrf_token } })).status).toBe(404);
+
+      // An account removed at Pipedream stops counting on the next sync; reconnecting it restores the row.
+      const removed = connected;
+      connected = [];
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body).toEqual({ configured: true, accounts: [] });
+      expect((yield* rows())[0]).toMatchObject({ status: 'disconnected' });
+      expect(yield* Effect.provide(activeActionGrants(member!), db)).toHaveLength(0);
+      connected = removed;
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body.accounts).toEqual([expect.objectContaining({ id: account, app: 'gmail' })]);
+      expect(yield* Effect.provide(activeActionGrants(member!), db)).toHaveLength(1);
+
+      // Disconnect deletes the account at Pipedream, then stops listing it; its grant no longer counts.
+      expect((yield* call(`/accounts/${account}/disconnect`, { headers: { cookie } })).status).toBe(403);
+      expect((yield* call(`/accounts/${account}/disconnect`, { headers: signedIn })).body).toEqual({ configured: true, accounts: [] });
+      expect(pipedream.requests.filter(request => request.method === 'DELETE').map(request => request.url)).toEqual(['/v1/connect/proj_test/accounts/apn_mail']);
+      expect((yield* rows())[0]).toMatchObject({ status: 'disconnected' });
+      expect(yield* Effect.provide(activeActionGrants(member!), db)).toHaveLength(0);
+      connected = [];
+      expect((yield* call('/accounts/sync', { headers: signedIn })).body).toEqual({ configured: true, accounts: [] });
     }),
   );
 });

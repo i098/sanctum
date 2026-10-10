@@ -4,6 +4,7 @@ import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { accountLabel, connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
 import { Dialog } from './Dialog.tsx';
 import { InputPicker } from './InputPicker.tsx';
+import { Integrations } from './Integrations.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
 import { WorkspaceDeletion } from './WorkspaceDeletion.tsx';
 
@@ -223,6 +224,11 @@ function accountRows(signIn: SignInState, onSignInChange: () => void): ReadonlyA
   return [['Profile', <ProfileEdit />], workspace];
 }
 
+/** The connect flow needs a session; until then the row says what is missing, as the Workspace row does. */
+function IntegrationsRow({ signIn }: { signIn: SignInState }) {
+  return signIn.status === 'signed_in' ? <Integrations /> : <span>{WORKSPACE[signIn.status]}</span>;
+}
+
 /** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
   const rows: ReadonlyArray<Row> = [
@@ -230,7 +236,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
     ...accountRows(signIn, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
-    ['Integrations', 'Unavailable: integrations are not connected yet'],
+    ['Integrations', <IntegrationsRow signIn={signIn} />],
     ['Retention', 'Not selected: nothing is deleted automatically'],
     ...(onWelcome ? [['Welcome', <WithAction text="What Sanctum records and how to set it up" label="Show welcome again" onClick={onWelcome} />] as const] : []),
   ];

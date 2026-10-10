@@ -6,7 +6,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@effect/platform';
 import { Schema } from 'effect';
 import { AgentsApi, Authenticated, SessionApi } from './auth.ts';
 import { ListenersApi } from './capture.ts';
-import { IntegrationsApi } from './integrations.ts';
+import { IntegrationAccountsApi, IntegrationsApi } from './integrations.ts';
 import { ContextApi } from './context.ts';
 import { ActionsApi } from './actions-api.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
@@ -28,6 +28,7 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(MeetingsApi)
   .add(ContextApi.middleware(Authenticated))
   .add(IntegrationsApi)
+  .add(IntegrationAccountsApi)
   .add(ActionsApi)
   .add(MatchingApi.middleware(Authenticated))
   .add(AgentsApi)

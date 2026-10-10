@@ -15,6 +15,7 @@ import { ListenersLive } from './listeners-api.ts';
 import { MatchingLive } from './matching.ts';
 import { MeetingsLive } from './meetings-api.ts';
 import { OnboardingLive } from './onboarding.ts';
+import { IntegrationAccountsLive } from './integration-accounts.ts';
 import { IntegrationsLive } from './integrations.ts';
 import type { Migration } from './migrate.ts';
 import { WorkspaceLive } from './workspaces.ts';
@@ -32,6 +33,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       MeetingsLive,
       ContextLive,
       IntegrationsLive,
+      IntegrationAccountsLive,
       ActionsLive,
       MatchingLive,
       AgentsLive,

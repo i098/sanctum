@@ -151,7 +151,7 @@
 }
 
 /* A grid column's automatic minimum is its widest content; the long input names must not push the row past the dialog. */
-.listen-settings dd:has(.listen-input-picker) {
+.listen-settings dd:has(.listen-input-picker, .listen-integrations) {
   min-width: 0;
 }
 
@@ -167,6 +167,48 @@
 .listen-settings .listen-input-check {
   max-width: 100%;
   font-size: inherit;
+}
+
+/* Integrations: connected apps, one per line with its action, then the connect form; all of the value column. */
+.listen-integrations {
+  display: grid;
+  flex-basis: 100%;
+  gap: 12px;
+  min-width: 0;
+}
+
+.listen-integrations ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listen-integrations li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.listen-integrations p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* The field and its button share one height; a narrow dialog puts the button on its own line. */
+.listen-integration-connect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px 12px;
+}
+
+.listen-integration-connect .listen-input {
+  flex: 1 1 12rem;
+  padding: 5px 10px;
+  cursor: text;
 }
 
 .listen-footer {

@@ -498,6 +498,13 @@ const workspaceGroup = HttpApiBuilder.group(SanctumApi, 'workspace', handlers =>
 const onboardingGroup = HttpApiBuilder.group(SanctumApi, 'onboarding', handlers =>
   handlers.handle('getOnboarding', () => unmodeled).handle('completeOnboarding', () => unmodeled).handle('renameWorkspace', () => unmodeled),
 );
+const integrationAccountsGroup = HttpApiBuilder.group(SanctumApi, 'integrationAccounts', handlers =>
+  handlers
+    .handle('listIntegrationAccounts', () => unmodeled)
+    .handle('syncIntegrationAccounts', () => unmodeled)
+    .handle('disconnectIntegrationAccount', () => unmodeled)
+    .handle('connectIntegration', () => unmodeled),
+);
 const FakeWorkspaceOwner = Layer.effect(WorkspaceOwner, Effect.map(Authenticator, authenticator => Effect.flatMap(HttpServerRequest.HttpServerRequest, authenticator.authenticate)));
 
 export function fakeDomain() {
@@ -565,6 +572,9 @@ export const fakeApi = <R = SqlClient.SqlClient>(
   domain: ReturnType<typeof fakeDomain>,
   health: Layer.Layer<HttpApiGroup.ApiGroup<'sanctum', 'health'>, never, R> = HealthLive(loadMigrations()) as never,
 ) =>
-  HttpApiBuilder.api(SanctumApi).pipe(Layer.provide([health, SessionLive, workspaceGroup, onboardingGroup, domain.groups]), Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]));
+  HttpApiBuilder.api(SanctumApi).pipe(
+    Layer.provide([health, SessionLive, workspaceGroup, onboardingGroup, integrationAccountsGroup, domain.groups]),
+    Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]),
+  );
 
 const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));
