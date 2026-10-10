@@ -8,7 +8,7 @@ import { SqlClient } from '@effect/sql';
 import { ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Either, Fiber, Option, Schedule, Schema } from 'effect';
 import { type ActionRow, loadAction, requestAction } from './actions.ts';
-import { requireScope, resolveAccess } from './auth.ts';
+import { authorizeMeeting, requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
 import { planWork } from './planner.ts';
@@ -167,9 +167,10 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
  * planner decide on web research and fill in actions, then research first; actions planned with
  * research are planned again from the cited research, which may change only their content fields,
  * and none is requested when research is refused or that pass changes anything else. Each planned
- * action is submitted through the same grant gateway as any agent. Research
- * is stored once per job and planned idempotency keys derive from each action's content, so a
- * retried or resumed job neither pays nor requests the same action twice. Nothing to do is
+ * action is submitted through the same grant gateway as any agent. A job that stored its research
+ * does not pay for it again, and each further paid attempt counts against the allowance; planned
+ * idempotency keys derive from each action's content, so a retried or resumed job does not request
+ * the same action twice. Nothing to do is
  * reported as the outcome, never an empty success.
  */
 export const runResearch = (job: Job) =>
@@ -179,6 +180,7 @@ export const runResearch = (job: Job) =>
     if (job.requested_by === null) return { status: 'succeeded', result: { skipped: 'Research needs a requesting principal; nobody asked for this run' } } as const;
     const access = yield* resolveAccess({ workspace_id: job.workspace_id, principal_id: job.requested_by });
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
+    yield* authorizeMeeting(access, meeting_id, 'write');
     const offered = yield* offeredActions(access, meeting_id, request);
     const plan = yield* planWork(access, { meeting_id, request, actions: offered });
     const found = plan.web_research
@@ -197,7 +199,7 @@ export const runResearch = (job: Job) =>
     const research = found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
     // `offered` already tells whether any granted action matched the request.
     const outcome =
-      found !== null && 'refused' in found && plan.actions.length > 0 ? `No action requested: ${plan.actions.map(action => action.action_key).join(', ')} needed the refused web research`
+      found !== null && 'refused' in found && plan.actions.length > 0 ? `No action requested: ${plan.actions.map(action => action.action_key).join(', ')} was planned together with the refused web research`
       : final.rejected ? `No action requested: ${final.rejected}`
       : found === null && actions.length === 0 ? 'Nothing to do: no offered action fits the request, and it asked for no web research'
       : null;
@@ -211,6 +213,7 @@ export const runResearch = (job: Job) =>
           ? Effect.succeed({ status: 'paused', resume_after_ms: error.retry_after_ms, reason: error.message } as const)
           : Effect.fail(new JobFailure({ message: error.message, retryable: error.retryable })),
       Forbidden: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })),
+      NotFound: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })),
       ParseError: error => Effect.fail(new JobFailure({ message: error.message, retryable: false })),
       ConfigError: error => Effect.fail(new JobFailure({ message: `Research settings: ${error}`, retryable: false })),
       SqlError: storageFailure,

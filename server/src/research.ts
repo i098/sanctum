@@ -69,8 +69,9 @@ Answer in a few short plain-text paragraphs, cite the pages you used, and say so
 const StoredResearch = Schema.parseJson(Schema.Struct({ text: Schema.String, sources: Schema.Array(Schema.Struct({ url: Schema.String, title: Schema.NullOr(Schema.String) })) }));
 
 /**
- * Web research for the original request, stored once per job: a retried job reuses its artifact
- * and never pays again. Fails with `AllowanceSpent` before sending when today's allowance is used.
+ * Web research for the original request, stored once per job: a retried job that stored its
+ * research reuses the artifact without paying again; each further paid attempt counts against the
+ * allowance. Fails with `AllowanceSpent` before sending when today's allowance is used.
  */
 const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
   Effect.gen(function* () {
