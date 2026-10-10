@@ -9,7 +9,7 @@
 import type { AccessScope, CaptureEpochId, ListenerId, SpeechCancelMessage, SpeechCancelReason, SpeechChunkMessage, TranscriptSegment, Unavailable } from '@sanctum/contracts';
 import { Context, Effect, Fiber, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
-import { SPEECH_SAMPLE_RATE, SpeechSynthesizer } from '../providers/cartesia.ts';
+import { SPEECH_SAMPLE_RATE, SpeechSynthesizer } from '../providers/speech.ts';
 
 export interface SpeechWindow {
   readonly listener_id: ListenerId;

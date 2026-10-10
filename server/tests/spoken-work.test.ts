@@ -7,7 +7,7 @@ import { engineeringDefaults } from '../src/config.ts';
 import { fixtureLlm, LlmClient } from '../src/llm.ts';
 import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/speech-requests.ts';
-import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
+import { SpeechSynthesizer } from '../src/providers/speech.ts';
 import { setMembership } from '../src/store.ts';
 import { seedAccount, seedMeeting } from './support/actions.ts';
 import { seedEpoch, seedListener, speak } from './support/capture.ts';
