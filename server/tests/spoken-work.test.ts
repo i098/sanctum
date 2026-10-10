@@ -4,13 +4,11 @@ import { type AccessScope, ListenerId } from '@sanctum/contracts';
 import { ConfigProvider, Deferred, Effect, Fiber, Layer, Logger, Stream, TestClock } from 'effect';
 import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
-import { ownedListener } from '../src/listeners.ts';
 import { fixtureLlm, LlmClient } from '../src/llm.ts';
 import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
-import { SpeechWorkRequestsLive } from '../src/media/speech-work.ts';
+import { SpeechWorkRequestsLive } from '../src/speech-requests.ts';
 import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
 import { setMembership } from '../src/store.ts';
-import type { ProviderRequest } from '../src/providers/types.ts';
 import { seedAccount, seedMeeting } from './support/actions.ts';
 import { seedEpoch, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
@@ -40,11 +38,11 @@ const scenario = (text: string, answer: { work: boolean }, options: {
       meeting_id: null, restrictions: {}, expires_at: null,
     });
     const segment = yield* speak(listener, epoch_id, 0, 2, text);
-    const requests: ProviderRequest[] = [];
+    const requests: NonNullable<Parameters<typeof fixtureLlm>[1]> = [];
     const llm = yield* Effect.provide(LlmClient, fixtureLlm(
       Array.from({ length: 4 }, () => JSON.stringify(answer)), requests));
     const service = yield* Effect.provide(SpeechWorkRequests, SpeechWorkRequestsLive.pipe(
-      Layer.provide(Layer.succeed(LlmClient, options.revokeDuringClassification || options.removeMembershipDuringClassification ? LlmClient.of({
+      Layer.provide(Layer.succeed(LlmClient, LlmClient.of({
         ...llm,
         generate: (role, input) => llm.generate(role, input).pipe(Effect.tap(() => Effect.gen(function* () {
           if (options.revokeDuringClassification) {
@@ -57,7 +55,7 @@ const scenario = (text: string, answer: { work: boolean }, options: {
               Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
           }
         }))),
-      }) : llm)),
+      }))),
       Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))))),
     ));
     const finished = yield* Deferred.make<void>();
@@ -83,7 +81,7 @@ const holdListener = (access: AccessScope, listener_id: ListenerId) =>
     const acquired = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const holder = yield* Effect.forkScoped(sql.withTransaction(Effect.gen(function* () {
-      yield* ownedListener(access, listener_id, true);
+      yield* sql`SELECT id FROM listeners WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id} FOR UPDATE`;
       yield* Deferred.succeed(acquired, undefined);
       yield* Deferred.await(release);
     })));

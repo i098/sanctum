@@ -1,14 +1,41 @@
+/** Process-bound reply and work services for direct spoken requests on a listener. */
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, type ListenerId } from '@sanctum/contracts';
-import { Effect, Layer, Option, Schema } from 'effect';
-import { activeActionGrants } from '../actions.ts';
-import { requireScope, resolveAccess } from '../auth.ts';
-import { serverConfig } from '../config.ts';
-import { enqueueJob } from '../jobs.ts';
-import { ownedListener } from '../listeners.ts';
-import { LlmClient } from '../llm.ts';
-import { listenerMeeting } from '../meeting-store.ts';
-import { SpeechWorkRequests, type SpeechWindow } from './speech-gate.ts';
+import { type AccessScope, type ListenerId, Unavailable } from '@sanctum/contracts';
+import { Effect, Layer, Option, Schema, Stream } from 'effect';
+import { activeActionGrants } from './actions.ts';
+import { requireScope, resolveAccess } from './auth.ts';
+import { serverConfig } from './config.ts';
+import { getContextSnapshot } from './context.ts';
+import { enqueueJob } from './jobs.ts';
+import { ownedListener } from './listeners.ts';
+import { LlmClient } from './llm.ts';
+import { listenerMeeting } from './meeting-store.ts';
+import { respondToRequest } from './planner.ts';
+import { SpeechReplies, SpeechWorkRequests, type SpeechWindow } from './media/speech-gate.ts';
+
+const unavailable = (message: string) => new Unavailable({ message, retryable: false });
+
+/** Captures the process's database and model client, so replies can run in the speech gate's own fiber. */
+export const SpeechRepliesLive = Layer.effect(
+  SpeechReplies,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const llm = yield* Effect.serviceOption(LlmClient);
+    return (access: AccessScope, listener_id: ListenerId) => (request: string): Stream.Stream<string, Unavailable> =>
+      Option.isNone(llm)
+        ? Stream.fail(unavailable('No voice model is configured'))
+        : Stream.unwrap(
+            Effect.gen(function* () {
+              const meeting = yield* listenerMeeting(access.workspace_id, listener_id);
+              if (Option.isNone(meeting)) return yield* unavailable('No open meeting on this listener');
+              const context = yield* getContextSnapshot(access, meeting.value);
+              return respondToRequest({ request, context });
+            }).pipe(
+              Effect.mapError(error => (error instanceof Unavailable ? error : unavailable(`Reply context unavailable: ${error._tag}`))),
+            ),
+          ).pipe(Stream.provideService(SqlClient.SqlClient, sql), Stream.provideService(LlmClient, llm.value));
+  }),
+);
 
 const WorkIntent = Schema.Struct({ work: Schema.Boolean });
 const SYSTEM = `Decide whether this direct spoken request asks Sanctum to do background work, rather than only answer or acknowledge.

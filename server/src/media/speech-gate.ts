@@ -70,7 +70,7 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
 export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
 /** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
-/** Reply text for one direct request on one listener; provided by the API entrypoint (speech-reply.ts). */
+/** Reply text for one direct request on one listener; provided by the API entrypoint (speech-requests.ts). */
 export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
   SpeechReplies,
   (access: AccessScope, listener_id: ListenerId) => (request: string) => Stream.Stream<string, Unavailable>
