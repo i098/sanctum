@@ -2,9 +2,10 @@ import { describe, expect, it } from '@effect/vitest';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, ListenerId } from '@sanctum/contracts';
 import { ConfigProvider, Deferred, Effect, Fiber, Layer, Logger, Stream, TestClock } from 'effect';
+import { afterEach, vi } from 'vitest';
 import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
-import { fixtureLlm, LlmClient } from '../src/llm.ts';
+import { LlmClient, LlmLive } from '../src/llm.ts';
 import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/speech-requests.ts';
 import { SpeechSynthesizer } from '../src/providers/speech.ts';
@@ -15,11 +16,13 @@ import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const configured: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'synthetic-key', PIPEDREAM_PROJECT_ID: 'synthetic-project',
+  WORKERS_AI_ACCOUNT_ID: 'synthetic-account', WORKERS_AI_API_TOKEN: 'synthetic-token', PIPEDREAM_PROJECT_ID: 'synthetic-project',
   PIPEDREAM_CLIENT_ID: 'synthetic-client', PIPEDREAM_CLIENT_SECRET: 'synthetic-secret',
 };
 
-const scenario = (text: string, answer: { work: boolean }, options: {
+afterEach(() => vi.restoreAllMocks());
+
+const scenario = (text: string, answer: unknown, options: {
   meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
   removeMembershipDuringClassification?: boolean;
 } = {}) =>
@@ -38,9 +41,22 @@ const scenario = (text: string, answer: { work: boolean }, options: {
       meeting_id: null, restrictions: {}, expires_at: null,
     });
     const segment = yield* speak(listener, epoch_id, 0, 2, text);
-    const requests: NonNullable<Parameters<typeof fixtureLlm>[1]> = [];
-    const llm = yield* Effect.provide(LlmClient, fixtureLlm(
-      Array.from({ length: 4 }, () => JSON.stringify(answer)), requests));
+    const requests: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const request = JSON.parse(String(init!.body));
+      requests.push(request);
+      if (String(url).startsWith('https://api.anthropic.com/')) {
+        if (!request.model.startsWith('claude-')) {
+          return Response.json({ type: 'error', error: { type: 'not_found_error', message: 'Unknown model' } }, { status: 404 });
+        }
+        return Response.json({ id: 'msg_1', type: 'message', role: 'assistant', model: request.model,
+          content: [{ type: 'text', text: JSON.stringify(answer) }], stop_reason: 'end_turn',
+          stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] });
+    });
+    const config = Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))));
+    const llm = yield* Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(config)));
     const service = yield* Effect.provide(SpeechWorkRequests, SpeechWorkRequestsLive.pipe(
       Layer.provide(Layer.succeed(LlmClient, LlmClient.of({
         ...llm,
@@ -56,7 +72,7 @@ const scenario = (text: string, answer: { work: boolean }, options: {
           }
         }))),
       }))),
-      Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))))),
+      Layer.provide(config),
     ));
     const finished = yield* Deferred.make<void>();
     const replies: string[] = [];
@@ -118,6 +134,30 @@ describe('spoken work', () => {
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
+  for (const model of [undefined, 'claude-custom-planner']) {
+    it.effect(`enqueues work with the configured Anthropic planner ${model ? 'model override' : 'default model'}`, () =>
+      withDatabase(Effect.gen(function* () {
+        const test = yield* scenario('Sanctum, send the notes', { work: true }, {
+          env: { ...configured, PLANNER_MODEL_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'synthetic-key',
+            ...(model ? { PLANNER_MODEL: model } : {}) },
+        });
+        yield* test.complete;
+        const rows = yield* test.jobs;
+        expect(rows).toHaveLength(1);
+        const payload = rows[0]!.payload;
+        expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({
+          meeting_id: test.meeting_id, request: 'send the notes',
+        });
+        expect(rows[0]!.requested_by).toBe(test.access.principal.id);
+        expect(test.requests).toEqual([expect.objectContaining({
+          model: model ?? engineeringDefaults.modelRoles.research.model,
+          output_config: { format: expect.objectContaining({ type: 'json_schema' }) },
+        })]);
+        expect(test.replies).toEqual(['send the notes']);
+        yield* test.controller.onEnd('disconnect');
+      }), { migrated: true }));
+  }
+
   it.effect('does not enqueue an answer-only direct request', () =>
     withDatabase(Effect.gen(function* () {
       const test = yield* scenario('Sanctum, what time is it', { work: false });
@@ -126,6 +166,21 @@ describe('spoken work', () => {
       expect(test.replies).toEqual(['what time is it']);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
+
+  it.effect('treats malformed model output as not work and logs the schema failure', () => {
+    const messages: unknown[] = [];
+    return withDatabase(Effect.gen(function* () {
+      const test = yield* scenario('Sanctum, send the notes', { work: 'true' });
+      yield* test.complete;
+      expect(yield* test.jobs).toEqual([]);
+      expect(test.requests).toHaveLength(1);
+      expect(messages).toEqual([['Spoken research skipped', expect.objectContaining({
+        _tag: 'Unavailable', retryable: false, message: expect.stringMatching(/failed the spoken_work_intent schema/),
+      })]]);
+      expect(test.replies).toEqual(['send the notes']);
+      yield* test.controller.onEnd('disconnect');
+    }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
+  });
 
   it.effect('ignores duplicate finals before and after the reply and deduplicates retries after job completion', () =>
     withDatabase(Effect.gen(function* () {
@@ -152,9 +207,9 @@ describe('spoken work', () => {
     }), { migrated: true }));
 
   for (const [name, options, reason] of [
-    ['no research key', { env: Object.fromEntries(Object.entries(configured).filter(([key]) => key !== 'ANTHROPIC_API_KEY')) }, 'Anthropic research key is missing'],
-    ['no planner key', { env: { ...configured, PLANNER_MODEL_PROVIDER: 'workers-ai' } }, 'Planner model key is missing'],
-    ['no Pipedream', { env: { ANTHROPIC_API_KEY: 'synthetic-key' } }, 'Pipedream is not configured'],
+    ['no planner key', { env: Object.fromEntries(Object.entries(configured).filter(([key]) => !key.startsWith('WORKERS_AI_'))) }, 'Planner model key is missing'],
+    ['no Anthropic planner key', { env: { ...configured, PLANNER_MODEL_PROVIDER: 'anthropic' } }, 'Planner model key is missing'],
+    ['no Pipedream', { env: { WORKERS_AI_ACCOUNT_ID: 'synthetic-account', WORKERS_AI_API_TOKEN: 'synthetic-token' } }, 'Pipedream is not configured'],
     ['no meeting', { meeting: false }, 'No current meeting'],
     ['no grant', { grant: false }, 'No active integration grant for listener owner'],
   ] as const) {

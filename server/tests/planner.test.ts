@@ -49,7 +49,7 @@ describe('planActions', () => {
           title: 'Email Maria the rollout notes',
         },
       ]);
-      expect(requests[0]).toMatchObject({ model: 'claude-sonnet-5-5', json: { name: 'action_plan' } });
+      expect(requests[0]).toMatchObject({ json: { name: 'action_plan' } });
       const schema = requests[0]!.json!.schema as { properties: { actions: { items: { properties: { action_key: unknown } } } } };
       expect(schema.properties.actions.items.properties.action_key).toEqual({ type: 'string', enum: ['gmail-send-email'] });
       expect(requests[0]!.prompt).not.toContain('google_calendar-create-event');

@@ -28,7 +28,7 @@ Secrets come from the environment only; none are committed.
 | MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
 | Recordings (R2) | `R2_ENDPOINT`, `R2_BUCKET`, `R2_PREFIX`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_TIMEOUT_MS` |
 | Speech | Requested output shares the Workers AI credentials in the Models row; see the [speech output decision](DECISIONS.md#speech-output-decision---2026-10-10). Optional diarization uses `PYANNOTE_API_KEY`. |
-| Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (server-only token with Workers AI permission, shared by Whisper, Aura-2 and text models), `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, research |
+| Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (server-only token with Workers AI permission, shared by Whisper, Aura-2, voice, extraction and planner), `ANTHROPIC_API_KEY`, `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`; research remains `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, research |
 | Integrations | `PIPEDREAM_API_URL`, `PIPEDREAM_ENVIRONMENT`, `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` |
 | Sign-in | `SANCTUM_OIDC_ISSUER` (exact ID token `iss`; discovery at `/.well-known/openid-configuration` under it), `SANCTUM_OIDC_CLIENT_ID`, `SANCTUM_OIDC_REDIRECT_URI` (`https://<host>/auth/callback`); sign-in is enabled only when all three are set, otherwise `/auth/login` answers `503`; `SANCTUM_OIDC_CLIENT_SECRET` (omit for a public client, which uses PKCE), `SANCTUM_OIDC_SCOPES` (default `openid profile email`), `SANCTUM_EMBEDDED_ISSUER` (`better-auth` serves the self-hosted issuer at `/idp`; reported by `GET /auth/config`), `BETTER_AUTH_SECRET` (at least 32 characters, needed when the embedded issuer is selected) |
 | Remote MCP | `SANCTUM_MCP_ISSUER`, `SANCTUM_MCP_JWKS_URL`, `SANCTUM_MCP_RESOURCE`, `SANCTUM_MCP_DEFAULT_SCOPES` (comma list granted only to tokens that name no Sanctum scope, such as WorkOS DCR/CIMD clients; always narrowed by role and never `workspace:admin` or `capture:ingest`; empty by default; when set, metadata and challenges stop naming scopes) |
@@ -38,6 +38,10 @@ The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does n
 With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
 
 A missing provider key never falls back to another provider or to invented output: the affected call fails as `Unavailable`, jobs record the failure, and no audio is spoken.
+See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) for the trigger prerequisites.
+With `PLANNER_MODEL_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` set, the planner defaults to `claude-sonnet-5-5`.
+An explicit `<ROLE>_MODEL` stays unchanged; otherwise the selected provider supplies the default for each role.
+See the [planner provider decision](DECISIONS.md#planner-provider-decision---2026-10-10) for malformed output and the research boundary.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime, meeting idle close) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
 The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech when ASR finished that much audio past the last speech, or when its listener is paused or stopped for that long with nothing left to transcribe or upload; it never closes while ASR or upload lags. The close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only MySQL ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
 
@@ -99,7 +103,7 @@ On deploy, Cloudflare creates the DNS record and certificate for each custom dom
   R2 uses `R2_ENDPOINT`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, limited to the private bucket.
   Sign-in uses `SANCTUM_OIDC_CLIENT_SECRET` for the WorkOS OAuth application.
   Set the provider credentials listed under [Configuration](#configuration).
-  Optional keys: `ANTHROPIC_API_KEY` (planner and research), `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` (actions), `PYANNOTE_API_KEY` with `SANCTUM_DIARIZATION=pyannote` (diarization), `WORKOS_API_KEY` (organization sync).
+  Optional keys: `ANTHROPIC_API_KEY` (research and explicit Anthropic model overrides), `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` (actions), `PYANNOTE_API_KEY` with `SANCTUM_DIARIZATION=pyannote` (diarization), `WORKOS_API_KEY` (organization sync).
   Non-secret settings, including `WORKERS_AI_ACCOUNT_ID` and `SANCTUM_SELF_SERVE_WORKSPACES`, are `vars` in [wrangler.jsonc](../deploy/cloudflare/wrangler.jsonc).
   The Worker forwards only [listed settings](../deploy/cloudflare/src/settings.ts), including model choices; an unset setting keeps the application default.
 - **Migrate** before deploying a new schema, with the image's own entrypoint and the CA mounted read-only: `docker run --rm --env-file <(...) -v "$CA:/ca.pem:ro" <image> sh -c 'MYSQL_CA_CERT="$(cat /ca.pem)" exec node server/dist/migrate.js'`, where the env file holds the same `MYSQL_*` values. The job worker refuses to start while migrations are pending.

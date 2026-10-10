@@ -65,7 +65,7 @@ export const engineeringDefaults = {
   modelRoles: {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
     extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
-    planner: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
+    planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
   },
   /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
@@ -85,9 +85,13 @@ const modelRole = (role: ModelRoleName) => {
   const prefix = role.toUpperCase();
   return Config.all({
     provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
-    model: Config.string(`${prefix}_MODEL`).pipe(Config.withDefault(fallback.model)),
-    reasoning: Config.succeed(fallback.reasoning),
-  });
+    model: Config.option(Config.string(`${prefix}_MODEL`)),
+  }).pipe(Config.map(({ provider, model }) => ({
+    provider,
+    model: Option.getOrElse(model, () =>
+      provider === 'anthropic' ? engineeringDefaults.modelRoles.research.model : engineeringDefaults.modelRoles.voice.model),
+    reasoning: fallback.reasoning,
+  })));
 };
 
 /** Decisions in docs/DECISIONS.md an operator lists in `SANCTUM_SELECTED_DECISIONS`; each unlisted one blocks production. */
