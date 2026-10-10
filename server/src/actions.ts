@@ -307,7 +307,7 @@ export const listenerFeed = (access: AccessScope, listener_id: ListenerId) =>
     return { meeting_id, actions: rows.toReversed().map(row => ({ action_id: row.id, action_key: row.action_key, state: row.state, title: actionTitle(row) })) };
   }).pipe(Effect.catchTag('NotFound', () => Effect.succeed({ meeting_id: null, actions: [] })));
 
-const requireHuman = (access: AccessScope, what: string) =>
+export const requireHuman = (access: AccessScope, what: string) =>
   access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
 
 /** A person records the checked outcome of an `unknown` action, signed with who and when; automatic replay never does. */

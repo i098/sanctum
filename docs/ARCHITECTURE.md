@@ -106,12 +106,13 @@ Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `ser
 
 ### pipedream (T17)
 
-Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, the `integration_accounts` statement in `008_actions`, `IntegrationsApi` in `packages/contracts/src/integrations.ts`.
+Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, `server/src/integration-accounts.ts`, `web-app/src/pages/listen/Integrations.tsx`, the `integration_accounts` statement in `008_actions`, `IntegrationsApi` and `IntegrationAccountsApi` in `packages/contracts/src/integrations.ts`.
 
 - `providers/pipedream.ts`: `PipedreamClient` tag, `PipedreamLive`, `fixturePipedream(catalog)` (10,000-entry fixture support).
 - `integrations.ts`: `searchIntegrationActions(access, input: SearchIntegrationActionsInput): Effect<SearchIntegrationActionsOutput, Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `getIntegrationAction(access, input: GetIntegrationActionInput): Effect<GetIntegrationActionOutput, NotFound | Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `executeIntegrationAction(input: { access; account_id; action_key; version; configuration_ref; arguments; provider_idempotency_key }): Effect<{ receipt: Record<string, unknown> }, IntegrationFailure, R | PipedreamClient>`; `IntegrationFailure.ambiguous` marks unknown outcomes.
+- `integration-accounts.ts`: `IntegrationAccountsLive`, Settings' website-only connect flow (`/api/v1/integrations/connect`, `/integrations/accounts`, `/sync`, `/{id}/disconnect`); the Pipedream external user is `<workspace_id>.<principal_id>` from the session, never client input. Sync upserts the caller's Pipedream accounts and grants nothing.
 
 ### media (T08, server half of T09, T10, T11)
 

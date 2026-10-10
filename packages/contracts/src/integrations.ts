@@ -2,9 +2,9 @@
  * The only three integration gateways that enter model context (plan section 10).
  * `action_key` names a catalog operation; `ActionId` names Sanctum's persisted request.
  */
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from '@effect/platform';
 import { Schema } from 'effect';
-import { ActionId, IdempotencyKey, IntegrationAccountId, MeetingId } from './common.ts';
+import { ActionGrantId, ActionId, IdempotencyKey, IntegrationAccountId, MeetingId } from './common.ts';
 import { ActionState } from './actions.ts';
 import { Authenticated } from './auth.ts';
 
@@ -105,4 +105,31 @@ export class IntegrationsApi extends HttpApiGroup.make('integrations')
       .addSuccess(GetIntegrationActionOutput),
   )
   .middleware(Authenticated)
+  .prefix('/api/v1') {}
+
+/** One active grant on the caller's connected account; `grantee_name` is null when the issuer reported no name or email. */
+export const AccountGrant = Schema.Struct({ id: ActionGrantId, action_key: Schema.String, grantee_name: Schema.NullOr(Schema.String) });
+
+export const ConnectedIntegrationAccount = Schema.Struct({ id: IntegrationAccountId, app: Schema.String, grants: Schema.Array(AccountGrant) });
+export type ConnectedIntegrationAccount = typeof ConnectedIntegrationAccount.Type;
+
+/** The caller's own active connected accounts; `configured` is false when the server has no Pipedream settings. */
+export const IntegrationAccounts = Schema.Struct({ configured: Schema.Boolean, accounts: Schema.Array(ConnectedIntegrationAccount) });
+export type IntegrationAccounts = typeof IntegrationAccounts.Type;
+
+/**
+ * Settings' connect flow, website only (not in OpenAPI, the SDKs or MCP). Connecting issues a
+ * Pipedream Connect Link for the caller; sync stores the accounts the caller connected there.
+ * A connected account grants nothing: grants stay the owner's explicit `createActionGrant`.
+ */
+export class IntegrationAccountsApi extends HttpApiGroup.make('integrationAccounts')
+  .add(HttpApiEndpoint.get('listIntegrationAccounts', '/integrations/accounts').addSuccess(IntegrationAccounts))
+  .add(HttpApiEndpoint.post('syncIntegrationAccounts', '/integrations/accounts/sync').addSuccess(IntegrationAccounts))
+  .add(
+    HttpApiEndpoint.post('disconnectIntegrationAccount')`/integrations/accounts/${HttpApiSchema.param('account_id', IntegrationAccountId)}/disconnect`
+      .addSuccess(IntegrationAccounts),
+  )
+  .add(HttpApiEndpoint.post('connectIntegration', '/integrations/connect').setPayload(Schema.Struct({ app: AppSlug })).addSuccess(Schema.Struct({ url: Schema.String })))
+  .middleware(Authenticated)
+  .annotate(OpenApi.Exclude, true)
   .prefix('/api/v1') {}

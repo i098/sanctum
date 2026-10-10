@@ -1,7 +1,8 @@
 /**
  * The one account-scoped Pipedream Connect client (plan section 10), shared by API and worker.
  * Wraps the documented Connect REST endpoints: action search, retrieval, dynamic props, remote
- * options, execution and the authenticated proxy (used for raw-byte Google Drive uploads).
+ * options, execution, the authenticated proxy (used for raw-byte Google Drive uploads), and the
+ * Connect tokens and connected accounts behind the website's connect flow.
  * The catalog never leaves the server; integrations.ts decides what reaches a model.
  */
 import { Context, Data, Effect, Layer, Option, Redacted, Schema } from 'effect';
@@ -62,6 +63,22 @@ const RunResponse = Schema.Struct({
   os: Schema.optional(Schema.Array(Schema.Struct({ err: Schema.optional(Schema.Unknown), msg: Schema.optional(Schema.String) }))),
 });
 const TokenResponse = Schema.Struct({ access_token: Schema.String, expires_in: Schema.Number });
+const ConnectTokenResponse = Schema.Struct({ connect_link_url: Schema.String });
+const AccountsResponse = Schema.Struct({
+  data: Schema.Array(Schema.Struct({ id: Schema.String, dead: Schema.optional(Schema.NullOr(Schema.Boolean)), app: Schema.Struct({ name_slug: Schema.String }) })),
+});
+
+/** One account an external user connected; `dead`: Pipedream no longer holds working credentials for it. */
+export interface ConnectedAccount {
+  readonly id: string;
+  readonly app: string;
+  readonly dead: boolean;
+}
+
+/** Connect accounts listed per request; Sanctum asks for one external user, who connects a handful. */
+const ACCOUNTS_PAGE = 100;
+/** Connect token lifetime: one connection in the hosted Connect Link page (Pipedream's default is four hours). */
+const CONNECT_TOKEN_TTL_SECONDS = 900;
 
 /** One component call on behalf of a connected account's external user. */
 interface ComponentRequest {
@@ -84,6 +101,8 @@ export interface ProxyRequest {
 }
 
 export interface PipedreamService {
+  /** False when the server has no Pipedream credentials; every call then fails. */
+  readonly configured: boolean;
   readonly searchActions: (query: { readonly q: string; readonly app: string; readonly limit: number }) => Effect.Effect<ReadonlyArray<ActionComponent>, IntegrationFailure>;
   /** Current definition, or null when the action no longer exists. */
   readonly getAction: (key: string) => Effect.Effect<ActionComponent | null, IntegrationFailure>;
@@ -95,6 +114,11 @@ export interface PipedreamService {
   readonly runAction: (request: ComponentRequest) => Effect.Effect<{ readonly exports: unknown; readonly ret: unknown }, IntegrationFailure>;
   /** Upstream response body; non-2xx upstream responses fail. */
   readonly proxy: (request: ProxyRequest) => Effect.Effect<Uint8Array, IntegrationFailure>;
+  /** A short-lived Connect token for one external user; only its hosted Connect Link URL is returned. */
+  readonly createConnectToken: (external_user_id: string) => Effect.Effect<{ readonly connect_link_url: string }, IntegrationFailure>;
+  readonly listAccounts: (external_user_id: string) => Effect.Effect<ReadonlyArray<ConnectedAccount>, IntegrationFailure>;
+  /** Deletes the account and its credentials at Pipedream; an account already gone succeeds. */
+  readonly deleteAccount: (account_id: string) => Effect.Effect<void, IntegrationFailure>;
 }
 
 export class PipedreamClient extends Context.Tag('sanctum/PipedreamClient')<PipedreamClient, PipedreamService>() {}
@@ -106,7 +130,18 @@ const failure = (message: string, status: number | null, retryable: boolean, amb
 
 const unconfigured: PipedreamService = (() => {
   const refuse = () => Effect.fail(failure('Pipedream is not configured', null, false, false));
-  return { searchActions: refuse, getAction: refuse, reloadProps: refuse, configureProp: refuse, runAction: refuse, proxy: refuse };
+  return {
+    configured: false,
+    searchActions: refuse,
+    getAction: refuse,
+    reloadProps: refuse,
+    configureProp: refuse,
+    runAction: refuse,
+    proxy: refuse,
+    createConnectToken: refuse,
+    listAccounts: refuse,
+    deleteAccount: refuse,
+  };
 })();
 
 const componentBody = (request: ComponentRequest) => ({
@@ -183,6 +218,7 @@ export const makePipedreamClient = (config: PipedreamOptions, timeoutMs: number)
     });
 
   return {
+    configured: true,
     searchActions: ({ q, app, limit }) =>
       api(ListResponse, `/actions?${new URLSearchParams({ q, app, limit: String(limit) })}`).pipe(Effect.map(response => response.data)),
     getAction: key =>
@@ -228,5 +264,17 @@ export const makePipedreamClient = (config: PipedreamOptions, timeoutMs: number)
           bearer,
         });
       }),
+    createConnectToken: external_user_id =>
+      api(ConnectTokenResponse, '/tokens', { json: { external_user_id, expires_in: CONNECT_TOKEN_TTL_SECONDS } }),
+    listAccounts: external_user_id =>
+      // ponytail: one page of ACCOUNTS_PAGE; follow `page_info.end_cursor` if a person ever connects more.
+      api(AccountsResponse, `/accounts?${new URLSearchParams({ external_user_id, limit: String(ACCOUNTS_PAGE) })}`).pipe(
+        Effect.map(response => response.data.map(account => ({ id: account.id, app: account.app.name_slug, dead: account.dead === true }))),
+      ),
+    deleteAccount: account_id =>
+      Effect.gen(function*() {
+        const bearer = yield* accessToken;
+        yield* send(`${project}/accounts/${encodeURIComponent(account_id)}`, { method: 'DELETE', write: true, bearer });
+      }).pipe(Effect.catchIf(error => error.status === 404, () => Effect.void)),
   };
 };

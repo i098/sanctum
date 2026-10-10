@@ -14,7 +14,7 @@ export interface FixtureAction extends ActionComponent {
   readonly ret?: unknown;
 }
 
-type Operation = keyof PipedreamService;
+type Operation = Exclude<keyof PipedreamService, 'configured'>;
 
 /** One recorded fixture call, typed by operation. */
 type FixtureCall = { [K in Operation]: { readonly operation: K; readonly request: Parameters<PipedreamService[K]>[0] } }[Operation];
@@ -62,6 +62,7 @@ export const fixturePipedream = (catalog: ReadonlyArray<FixtureAction>): Pipedre
   };
 
   const service: PipedreamService = {
+    configured: true,
     searchActions: query =>
       call('searchActions', query, () => {
         const terms = words(query.q);
@@ -91,6 +92,9 @@ export const fixturePipedream = (catalog: ReadonlyArray<FixtureAction>): Pipedre
       }),
     runAction: request => call('runAction', request, () => ({ exports: { $summary: `ran ${request.id}` }, ret: found(request.id).ret ?? null })),
     proxy: request => call('proxy', request, () => new TextEncoder().encode(JSON.stringify(proxyResponse(request)))),
+    createConnectToken: user => call('createConnectToken', user, () => ({ connect_link_url: 'https://pipedream.com/_static/connect.html?token=ctok_fixture&connectLink=true' })),
+    listAccounts: user => call('listAccounts', user, () => []),
+    deleteAccount: account => call('deleteAccount', account, () => undefined),
   };
 
   return {
