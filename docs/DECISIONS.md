@@ -29,12 +29,21 @@ The listener, capture epoch and request ID identify the work, so duplicate final
 Final segments collected within a turn are deduplicated by ID and ordered by source samples before either model receives the request.
 The listener lock precedes transaction reads of current authorization, grants, and all job history.
 Answer-only requests still use the existing spoken reply path and start no research.
-Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
+Missing planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
 Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
 The trigger resolves current membership and requires capture scope before classification and again before enqueue, including on an existing socket.
 The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
 The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records the authorized handler and ASR timing limits.
+
+## Planner provider decision - 2026-10-10
+
+Accepted: the planner uses Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, with low reasoning, for spoken-work decisions and inspected action proposals.
+Both paths send strict JSON schemas and validate replies with the existing Effect Schema decoder.
+The spoken-work trigger checks planner credentials, Pipedream configuration and active grants; it no longer requires an Anthropic research key.
+Malformed decisions log a warning and enqueue nothing.
+This slice changes no research execution or speech synthesis behavior.
+Local fake-provider checks prove routing and authorization; live planner quality remains unverified.
 
 ## Still open
 
@@ -82,7 +91,8 @@ Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-
 Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
-The Cerebras client is removed; Anthropic stays selectable with `<ROLE>_MODEL_PROVIDER=anthropic`, and planner and research stay on Anthropic.
+The Cerebras client is removed; Anthropic stays selectable with `<ROLE>_MODEL_PROVIDER=anthropic`.
+Research stays on Anthropic until the separate research execution slice replaces it.
 
 ## Sign-in and workspace management decision — 2026-10-08
 

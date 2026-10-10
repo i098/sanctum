@@ -111,7 +111,8 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Recording archive | Cloudflare R2 S3 API through `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner` | Private audio, manifests and scoped short-lived playback URLs. |
 | Background work | Node.js worker using Effect + MySQL job/lease table | Restart-safe accepted work, coalescing and fenced completion; no additional queue service. |
 | Fast LLM | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, through its OpenAI-compatible chat completions endpoint | Requested speech and structured notes/memory on the account Sanctum already runs on; smoke-compared on synthetic fixtures (see `docs/release-evidence.md`), not a measured winner. |
-| Planner and research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations, wrapped at the provider boundary. |
+| Planner | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, strict JSON schema, low reasoning | Spoken-work decisions and inspected action proposals; live planner quality remains unverified. |
+| Research | Official Anthropic TypeScript SDK with an explicit model | Hosted search and tool continuations; execution changes belong to a separate slice. |
 | Transcription | Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) over REST | Server-side requests per short live chunk and per archived chunk, verified PCM encoding, source alignment and batch gap recovery. |
 | Speaker attribution | pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades; Whisper returns no speaker labels | Correctable speaker tracks; names require enrollment or user confirmation. |
 | Speech output | Cartesia Sonic-3 streaming API | Requested output only, with response IDs and interruptible browser playback. |
@@ -476,7 +477,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | --- | --- | --- |
 | Requested voice response | Workers AI `@cf/qwen/qwen3.8-27b` (OpenAI-compatible chat completions), thinking disabled, short streamed response. | Compare first audible response and tool fidelity against labeled behavior fixtures. |
 | Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning. | Grounding, omissions, contradictions, names, and date resolution. |
-| Planner | Explicit role setting; retain explicitly configured Claude provider until Qwen passes action-selection replay. | No unauthorized action or material regression in labeled fixtures. |
+| Planner | Workers AI `@cf/qwen/qwen3.8-27b`, strict `json_schema`, low reasoning. | Fake-provider action and authorization replays; live quality evaluation remains unrun. |
 | Research executor | Use Anthropic-hosted search with correct tool continuation handling initially. | A provider URL swap cannot replace hosted web search or `pause_turn`. |
 | Speech transcription | Workers AI Whisper, with explicit model/version; live audio in short chunks. | Word timing and recall on actual room/laptop audio. |
 | TTS | Use Cartesia initially. | All output must pass the request-only speech gate. |

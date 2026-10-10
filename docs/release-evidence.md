@@ -72,6 +72,16 @@ Total: 24 calls.
   - gemma answered "The test group gets pilot access." after 4 s.
 - Limits: one small synthetic fixture and 1–4 runs per model, with no repeated-trial statistics. This is a smoke-level comparison, not a quality benchmark. Real meeting audio and transcripts, repeated trials and the planner role were not evaluated.
 
+## Workers AI planner - 2026-10-10
+
+The spoken-work tests use the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
+All 22 spoken-work cases pass, including one accepted job, answer-only silence, revoked grants, malformed decisions, membership changes and concurrent retry deduplication.
+Before the fix, the accepted-request case failed: Workers AI credentials without an Anthropic key produced zero jobs.
+A standalone service smoke used a local HTTP server and disposable MySQL database.
+It confirmed one job after duplicate acceptance, no jobs for answer-only, revoked or malformed requests, and preservation of the request and owner.
+Existing proposal tests validate inspected-action selection, argument checks and idempotency through the shared schema decoder.
+No live planner evaluation, research execution, deployment or real integration write ran for this slice.
+
 ## Unrun gates
 
 | Gate | Reason |

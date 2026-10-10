@@ -51,8 +51,7 @@ export const SpeechWorkRequestsLive = Layer.effect(
     const config = yield* serverConfig;
     const plannerConfigured = config.modelRoles.planner.provider === 'anthropic'
       ? Option.isSome(config.modelKeys.anthropic) : Option.isSome(config.workersAi);
-    const unavailable = Option.isNone(config.modelKeys.anthropic) ? 'Anthropic research key is missing'
-      : !plannerConfigured ? 'Planner model key is missing'
+    const unavailable = !plannerConfigured ? 'Planner model key is missing'
       : Option.isNone(config.pipedream.credentials) ? 'Pipedream is not configured' : null;
     return (access: AccessScope, listener_id: ListenerId) => (request: string, window: SpeechWindow) =>
       Effect.gen(function* () {

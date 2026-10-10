@@ -173,7 +173,7 @@ describe('Anthropic client', () => {
   it.scopedLive('requests structured output with output_config and decodes it', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([message([{ type: 'text', text: '{"kind":"decision","text":"Use MySQL","quote":null}' }])]);
-      const result = yield* withAnthropic(server.url).generate('planner', ask);
+      const result = yield* withAnthropic(server.url).generate('research', ask);
       expect(result).toEqual({ model: 'claude-sonnet-5-5', value: { kind: 'decision', text: 'Use MySQL', quote: null } });
       const [request] = server.seen;
       expect(request!.path).toBe('/v1/messages');

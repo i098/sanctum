@@ -65,7 +65,7 @@ export const engineeringDefaults = {
   modelRoles: {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
     extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
-    planner: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
+    planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     research: { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoning: null },
   },
   /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
@@ -168,7 +168,7 @@ export const serverConfig = Config.all({
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), research: modelRole('research') }),
   /** Absent keys stay absent: calls for that provider fail visibly and no other provider is chosen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')) }),
-  /** Cloudflare Workers AI REST base for this account and a token with only Workers AI permission: speech-to-text and the voice and extraction models. */
+  /** Cloudflare Workers AI REST base and a token with only Workers AI permission: speech-to-text, voice, extraction and planning. */
   workersAi: Config.option(
     Config.all({
       baseUrl: Config.string('WORKERS_AI_ACCOUNT_ID').pipe(Config.map(account => `https://api.cloudflare.com/client/v4/accounts/${account}/ai`)),
