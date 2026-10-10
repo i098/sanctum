@@ -59,8 +59,8 @@ export const engineeringDefaults = {
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
   /**
-   * Plan section 09 initial model per role, checked against provider docs on 2026-10-08, plus
-   * the reasoning effort per role (`none` disables it). `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override.
+   * Initial model and reasoning effort per role (`none` disables it); docs/DECISIONS.md owns provider selection.
+   * `<ROLE>_MODEL_PROVIDER` / `<ROLE>_MODEL` override these defaults.
    */
   modelRoles: {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },

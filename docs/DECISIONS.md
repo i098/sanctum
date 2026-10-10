@@ -40,10 +40,9 @@ The [actions architecture](ARCHITECTURE.md#actions-t18-t19-recovery-t20) records
 
 Accepted: the planner uses Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, with low reasoning, for inspected action proposals and research synthesis.
 The classifier now owns spoken-work decisions; see the [classifier decision](#spoken-classifier-provider-decision---2026-10-10).
-Both roles send strict JSON schemas and validate replies with the existing Effect Schema decoder.
+The planner sends strict JSON schemas and validates replies with the existing Effect Schema decoder.
 The [spoken work decision](#spoken-work-decision---2026-10-10) owns the trigger prerequisites.
 The [configuration guide](operations.md#configuration) owns provider credentials and overrides.
-If both classifier and planner return malformed decisions, Sanctum logs a warning and enqueues nothing.
 This slice changes no research execution or speech synthesis behavior.
 See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for local checks and unrun planner evaluation.
 
@@ -51,19 +50,12 @@ See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for 
 
 Accepted: only the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
 Planning and synthesis keep Workers AI Qwen; research and its paid-call caps stay unchanged.
-The server-only `CEREBRAS_API_KEY` enables strict [JSON-schema chat completions](https://inference-docs.cerebras.ai/capabilities/structured-outputs).
-`CLASSIFIER_MODEL_PROVIDER` and `CLASSIFIER_MODEL` override the classifier without changing the planner.
+The classifier uses strict [JSON-schema chat completions](https://inference-docs.cerebras.ai/capabilities/structured-outputs) and the existing Effect Schema decoder.
+See the [configuration guide](operations.md#configuration) for server-only credentials and independent classifier overrides.
 An absent key, provider failure or invalid decision logs one fallback line and sends the same decision request to the planner.
+If the planner also fails, Sanctum logs the failure and enqueues nothing.
 The speech controller runs this work separately from the spoken reply.
-The 2026-10-10 evaluation used Sanctum's prompts with ten work cases, five planning cases and five fixed-source synthesis cases per model.
-
-| Model | Correct work /10 | Planning points /10 | Synthesis points /10 | All-call median s | Work median s |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Cerebras GPT-OSS 120B | 10 | 9 | 9 | 0.157 | 0.130 |
-| Workers AI Qwen 3.8 27B | 8 | 10 | 10 | 3.336 | 1.782 |
-
-The brief's approximate 0.16 s refers to the all-call median; the report records 0.130 s for work decisions alone.
-This small synthetic evaluation supports role selection, not production quality or latency guarantees.
+See [classifier evidence](release-evidence.md#cerebras-spoken-classifier---2026-10-10) for the supplied evaluation results and limits.
 This change does not deploy the application or set a live secret.
 
 ## Web research provider decision - 2026-10-10

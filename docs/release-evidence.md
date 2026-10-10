@@ -97,7 +97,7 @@ Total: 24 calls.
 
 ## Workers AI planner - 2026-10-10
 
-The spoken-work tests use the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
+At that revision, the spoken-work tests used the production `LlmLive` and Workers AI adapter with fake HTTP responses and isolated MySQL databases.
 The earlier implementation recorded 22 passing spoken-work cases; this review did not rerun them.
 Before the fix, the accepted-request case failed: Workers AI credentials without an Anthropic key produced zero jobs.
 A standalone service smoke used a local HTTP server and disposable MySQL database.
@@ -114,8 +114,17 @@ The server TypeScript check passed.
 
 ## Cerebras spoken classifier - 2026-10-10
 
-The classifier alone defaults to Cerebras `gpt-oss-120b`; planning and synthesis keep Workers AI Qwen.
-The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) contains the supplied synthetic evaluation results.
+The [decision record](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection and fallback behavior.
+The supplied 2026-10-10 evaluation used Sanctum's prompts with ten work cases, five planning cases and five fixed-source synthesis cases per model.
+
+| Model | Correct work /10 | Planning points /10 | Synthesis points /10 | All-call median s | Work median s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cerebras GPT-OSS 120B | 10 | 9 | 9 | 0.157 | 0.130 |
+| Workers AI Qwen 3.8 27B | 8 | 10 | 10 | 3.336 | 1.782 |
+
+The decision brief gives approximately 0.16 s; the supplied table separates all-call and work-only medians.
+This small synthetic evaluation supports role selection, not production quality or latency guarantees.
+
 This implementation made no live model call.
 The local fetch fake exercised the production `LlmLive`, Cerebras adapter and `SpeechWorkRequestsLive` against an isolated MySQL database.
 The standalone runtime check produced three durable jobs: classifier success, HTTP failure with Qwen fallback, and missing-key Qwen fallback.

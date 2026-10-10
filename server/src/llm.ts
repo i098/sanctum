@@ -2,8 +2,8 @@
  * Model roles (plan section 09): `LlmClient` routes each role to its explicitly configured
  * provider and model, bounds every attempt with a timeout, retries only transient transport
  * failures a bounded number of times, and decodes structured output with Effect Schema.
- * A missing key or provider failure is a visible `Unavailable`; no other provider, fixture or
- * demo content is ever substituted.
+ * This service reports a missing key or provider failure as `Unavailable`; it never substitutes output.
+ * The spoken-work caller owns the classifier fallback (docs/DECISIONS.md).
  */
 import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
 import { Unavailable } from '@sanctum/contracts';

@@ -38,13 +38,12 @@ The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does n
 With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
 
 Missing provider keys fail as `Unavailable`; Sanctum never invents output.
-The spoken classifier is the only fallback: an absent key, failure or invalid decision logs one line and retries the decision with the planner.
-It defaults to Cerebras `gpt-oss-120b`; `CLASSIFIER_MODEL_PROVIDER` and `CLASSIFIER_MODEL` select overrides.
-Planning and synthesis keep Workers AI Qwen, and the spoken reply runs separately from classification.
+See the [classifier provider decision](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) for the only cross-provider fallback.
+`CLASSIFIER_MODEL_PROVIDER` and `CLASSIFIER_MODEL` override the classifier without changing the planner.
 See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) for the trigger prerequisites.
 With `PLANNER_MODEL_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` set, the planner defaults to `claude-sonnet-5-5`.
 An explicit `<ROLE>_MODEL` stays unchanged; otherwise the selected provider supplies the default for each role.
-See the [planner provider decision](DECISIONS.md#planner-provider-decision---2026-10-10) for malformed output and the research boundary.
+See the [planner provider decision](DECISIONS.md#planner-provider-decision---2026-10-10) for the planning and research boundary.
 Paid web research is capped by those two daily allowances and by `researchMaxSearches` (3 web searches per call) in `engineeringDefaults`; a spent allowance refuses the call before anything is sent and the job result says so.
 Worst case with the defaults: 4 calls a day is about 120 calls a month. At GPT-4.1-mini prices one call costs at most about USD 0.046 (3 searches at USD 0.01, 24,000 search-content input tokens at USD 0.40 per million, 4,096 output tokens at USD 1.60 per million), plus its short prompt, so about USD 5.50 a month at most.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime, meeting idle close) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).

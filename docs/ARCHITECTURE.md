@@ -93,7 +93,7 @@ Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,liste
 
 ### models (T04, T15)
 
-Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{workers-ai,anthropic,openai}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
+Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `server/src/extraction.ts`, `server/src/providers/{workers-ai,anthropic,openai,cerebras}.ts`, migration `009_matching`, `scripts/benchmark-matching.ts`, and adds `modelRoles` to config.ts.
 
 - `llm.ts`: `LlmClient` tag, `LlmLive: Layer<LlmClient, ConfigError>`, `fixtureLlm(responses)` for tests; missing keys fail with `Unavailable`.
 - `extraction.ts`: `extractCandidates(input: { meeting: Meeting; segments: ReadonlyArray<TranscriptSegment>; snapshot: ReadonlyArray<ContextItem>; epochs?: ReadonlyArray<EpochAnchor> }): Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient>`; fails `Unavailable` when a segment's epoch has no anchor (pass `capture_epochs` anchors).
@@ -163,8 +163,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-requests.ts `SpeechRepliesLive`), so a process without them stays silent.
 - `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller's independent work fiber.
   The [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) owns the trigger and authorization contract.
-  The `classifier` role decides work, defaulting to Cerebras GPT-OSS 120B; one warning precedes planner fallback on failure.
-  Planning and synthesis keep the `planner` role on Workers AI Qwen.
+  The [classifier provider decision](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection and planner fallback.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
 - `research.run` (`executor.ts` with `research.ts`): finds the requester's granted actions among the `searchIntegrationActions` matches for the request in each granted app (one search per app, so other usable apps cannot crowd them out), inspects each with its grant's account, lets `planWork` decide on web research and fill in actions, researches first, then requests each planned action through `requestAction`, which writes the job ID to `actions.research_job_id` with the action.

@@ -112,7 +112,7 @@ Pin exact compatible versions during implementation rather than copying unverifi
 | Background work | Node.js worker using Effect + MySQL job/lease table | Restart-safe accepted work, coalescing and fenced completion; no additional queue service. |
 | Fast LLM | Cloudflare Workers AI `@cf/qwen/qwen3.8-27b`, through its OpenAI-compatible chat completions endpoint | Requested speech and structured notes/memory on the account Sanctum already runs on; smoke-compared on synthetic fixtures (see `docs/release-evidence.md`), not a measured winner. |
 | Planner | See the planner provider decision in `docs/DECISIONS.md`. | Inspected action proposals and research synthesis; see `docs/release-evidence.md` for verification. |
-| Spoken classifier | Cerebras `gpt-oss-120b`, strict JSON schema, low reasoning (docs/DECISIONS.md). | Boolean work decision only; a failure falls back to the planner without blocking speech. |
+| Spoken classifier | See the classifier provider decision in `docs/DECISIONS.md`. | See the spoken work contract in `docs/DECISIONS.md`. |
 | Web research | OpenAI Responses API hosted `web_search` with `gpt-4.1-mini`, server-only key, over `fetch` | Cited sources and recorded token usage under daily paid-call allowances per workspace and across all workspaces (docs/DECISIONS.md). |
 | Transcription | Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) over REST | Server-side requests per short live chunk and per archived chunk, verified PCM encoding, source alignment and batch gap recovery. |
 | Speaker attribution | pyannote Live-1 and Precision-3 cloud APIs as evaluated upgrades; Whisper returns no speaker labels | Correctable speaker tracks; names require enrollment or user confirmation. |
@@ -480,7 +480,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | Requested voice response | Workers AI `@cf/qwen/qwen3.8-27b` (OpenAI-compatible chat completions), thinking disabled, short streamed response. | Compare first audible response and tool fidelity against labeled behavior fixtures. |
 | Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning. | Grounding, omissions, contradictions, names, and date resolution. |
 | Planner | See the planner provider decision in `docs/DECISIONS.md`. | No unauthorized action or material regression in labeled fixtures; see `docs/release-evidence.md` for verification. |
-| Spoken classifier | Cerebras `gpt-oss-120b`; see the classifier decision in `docs/DECISIONS.md`. | Boolean work decisions with planner fallback; synthetic evaluation: 10/10, not a production guarantee. |
+| Spoken classifier | See the classifier provider decision in `docs/DECISIONS.md`. | See `docs/release-evidence.md` for classifier evaluation results and limits. |
 | Research executor | OpenAI Responses `web_search` with GPT-4.1-mini, chosen 2026-10-10 (docs/DECISIONS.md); Anthropic hosted search stays selectable. | The planner decides when to research; each paid call passes the daily allowance first and records usage. |
 | Speech transcription | Workers AI Whisper, with explicit model/version; live audio in short chunks. | Word timing and recall on actual room/laptop audio. |
 | TTS | See the [speech output decision](../docs/DECISIONS.md#speech-output-decision---2026-10-10). | All output must pass the request-only speech gate. |
