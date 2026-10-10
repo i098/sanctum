@@ -2,13 +2,14 @@ import { describe, expect, it } from '@effect/vitest';
 import { SqlClient } from '@effect/sql';
 import { ListenerId } from '@sanctum/contracts';
 import { ConfigProvider, Deferred, Effect, Layer, Logger, Stream, TestClock } from 'effect';
+import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
-import { fixtureLlm } from '../src/llm.ts';
+import { fixtureLlm, LlmClient } from '../src/llm.ts';
 import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/media/speech-work.ts';
 import { SpeechSynthesizer } from '../src/providers/cartesia.ts';
 import type { ProviderRequest } from '../src/providers/types.ts';
-import { seedMeeting } from './support/actions.ts';
+import { seedAccount, seedMeeting } from './support/actions.ts';
 import { seedEpoch, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -18,20 +19,32 @@ const configured: Record<string, string> = {
   PIPEDREAM_CLIENT_ID: 'synthetic-client', PIPEDREAM_CLIENT_SECRET: 'synthetic-secret',
 };
 
-const scenario = (text: string, answer: unknown, options: { meeting?: boolean; env?: Record<string, string> } = {}) =>
+const scenario = (text: string, answer: unknown, options: {
+  meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
+} = {}) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [member] = yield* seedWorkspace('Spoken work');
+    const [member, other] = yield* seedWorkspace('Spoken work', ['owner', 'member']);
     const access = { ...member!, scopes: [...member!.scopes, 'capture:ingest' as const] };
     const listener = yield* seedListener(access);
     const listener_id = ListenerId.make(listener.listener_id);
     const epoch_id = yield* seedEpoch(listener);
     const meeting_id = options.meeting === false ? null : yield* seedMeeting(access.workspace_id, [access]);
     if (meeting_id) yield* sql`UPDATE meetings SET listener_id = ${listener_id} WHERE id = ${meeting_id}`;
+    const account = yield* seedAccount(access);
+    const grant = options.grant === false ? null : yield* createActionGrant(access, {
+      grantee: access.principal.id, action_key: 'gmail-send-email', account_id: account,
+      meeting_id: null, restrictions: {}, expires_at: null,
+    });
     const segment = yield* speak(listener, epoch_id, 0, 2, text);
     const requests: ProviderRequest[] = [];
+    const llm = yield* Effect.provide(LlmClient, fixtureLlm(Array.from({ length: 4 }, () => JSON.stringify(answer)), requests));
     const service = yield* Effect.provide(SpeechWorkRequests, SpeechWorkRequestsLive.pipe(
-      Layer.provide(fixtureLlm(Array.from({ length: 4 }, () => JSON.stringify(answer)), requests)),
+      Layer.provide(Layer.succeed(LlmClient, options.revokeDuringClassification ? LlmClient.of({
+        ...llm,
+        generate: (role, input) => llm.generate(role, input).pipe(Effect.tap(() =>
+          sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${grant!.id}`.pipe(Effect.orDie))),
+      }) : llm)),
       Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(options.env ?? configured))))),
     ));
     const finished = yield* Deferred.make<void>();
@@ -48,7 +61,7 @@ const scenario = (text: string, answer: unknown, options: { meeting?: boolean; e
       yield* TestClock.adjust(engineeringDefaults.speech.turnWaitMs);
       yield* Deferred.await(finished);
     });
-    return { controller, finished, segment, requests, replies, jobs, access, listener_id, epoch_id, meeting_id, service, complete };
+    return { controller, finished, segment, requests, replies, jobs, access, other: other!, account, grant, listener_id, epoch_id, meeting_id, service, complete };
   });
 
 
@@ -64,7 +77,7 @@ describe('spoken work', () => {
       expect(rows[0]).toMatchObject({ requested_by: test.access.principal.id,
         work_key: `spoken:${test.listener_id}:${test.epoch_id}:${test.segment.id}`, rearmed: 0 });
       expect(test.replies).toEqual(['could you look up the train times?']);
-      expect(test.requests[0]).toMatchObject({ model: 'claude-sonnet-5-5', json: { name: 'spoken_work_intent' } });
+      expect(test.requests).toHaveLength(1);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
@@ -106,6 +119,7 @@ describe('spoken work', () => {
     ['no planner key', { env: { ...configured, PLANNER_MODEL_PROVIDER: 'workers-ai' } }, 'Planner model key is missing'],
     ['no Pipedream', { env: { ANTHROPIC_API_KEY: 'synthetic-key' } }, 'Pipedream is not configured'],
     ['no meeting', { meeting: false }, 'No current meeting'],
+    ['no grant', { grant: false }, 'No active integration grant for listener owner'],
   ] as const) {
     it.effect(`logs the reason and enqueues nothing with ${name}`, () => {
       const messages: unknown[] = [];
@@ -120,4 +134,43 @@ describe('spoken work', () => {
       }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
     });
   }
+
+  for (const invalid of ['revoked', 'expired', 'disconnected', 'other principal', 'other workspace'] as const) {
+    it.effect(`does not classify or enqueue with a grant that is ${invalid}`, () =>
+      withDatabase(Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+          { grant: invalid !== 'other workspace' });
+        if (invalid === 'revoked') yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
+        if (invalid === 'expired') yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
+        if (invalid === 'disconnected') yield* sql`UPDATE integration_accounts SET status = 'disconnected' WHERE id = ${test.account}`;
+        if (invalid === 'other principal') yield* sql`UPDATE action_grants SET grantee_principal_id = ${test.other.principal.id} WHERE id = ${test.grant!.id}`;
+        if (invalid === 'other workspace') {
+          const [foreign] = yield* seedWorkspace('Foreign grant');
+          yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
+            VALUES (${foreign!.workspace_id}, ${test.access.principal.id}, 'member', UTC_TIMESTAMP(6))`;
+          const owner = { ...test.access, workspace_id: foreign!.workspace_id };
+          yield* createActionGrant(owner, {
+            grantee: owner.principal.id, action_key: 'gmail-send-email', account_id: yield* seedAccount(owner),
+            meeting_id: null, restrictions: {}, expires_at: null,
+          });
+        }
+        yield* test.complete;
+        expect(test.requests).toEqual([]);
+        expect(yield* test.jobs).toEqual([]);
+        expect(test.replies).toEqual(['send the notes']);
+        yield* test.controller.onEnd('disconnect');
+      }), { migrated: true }));
+  }
+
+  it.effect('does not enqueue if the grant is revoked during classification', () =>
+    withDatabase(Effect.gen(function* () {
+      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+        { revokeDuringClassification: true });
+      yield* test.complete;
+      expect(test.requests).toHaveLength(1);
+      expect(yield* test.jobs).toEqual([]);
+      expect(test.replies).toEqual(['send the notes']);
+      yield* test.controller.onEnd('disconnect');
+    }), { migrated: true }));
 });

@@ -27,6 +27,8 @@ A work request starts one durable `research.run` for the listener's current meet
 The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
 Answer-only requests still use the existing spoken reply path and start no research.
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
+Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
+Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
 The existing `requestAction` gateway still requires stored grants for external actions; background completion never speaks.
 
 ## Still open

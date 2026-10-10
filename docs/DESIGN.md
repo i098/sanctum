@@ -87,6 +87,8 @@ A work request starts one durable research job for the listener's current meetin
 The request window identifies the work, so duplicate finals and retries do not start another run.
 An answer-only request such as "Sanctum, what time is it" starts no background work.
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
+Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
+Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
 External actions still require stored grants through the shared gateway.
 The agent-work feed shows accepted actions and truthful states; background completion never opens a spoken-response window.
 

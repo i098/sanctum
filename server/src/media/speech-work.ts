@@ -1,7 +1,7 @@
-/** Model-selected work from a completed live request; speech and grant enforcement stay separate. */
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, type ListenerId } from '@sanctum/contracts';
 import { Effect, Layer, Option, Schema } from 'effect';
+import { activeActionGrants } from '../actions.ts';
 import { serverConfig } from '../config.ts';
 import { enqueueJob } from '../jobs.ts';
 import { ownedListener } from '../listeners.ts';
@@ -32,6 +32,9 @@ export const SpeechWorkRequestsLive = Layer.effect(
         if (unavailable) return yield* Effect.logInfo('Spoken research skipped', unavailable);
         const meeting = yield* listenerMeeting(access.workspace_id, listener_id);
         if (Option.isNone(meeting)) return yield* Effect.logInfo('Spoken research skipped', 'No current meeting');
+        if ((yield* activeActionGrants(access)).length === 0) {
+          return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
+        }
         const { value } = yield* llm.generate('planner', { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request });
         if (!value.work) return;
         const normalized = value.request.trim();
@@ -40,6 +43,9 @@ export const SpeechWorkRequestsLive = Layer.effect(
         // Serialize on the listener and check completed rows too: enqueueJob otherwise re-arms active work.
         yield* sql.withTransaction(Effect.gen(function* () {
           yield* ownedListener(access, listener_id, true);
+          if ((yield* activeActionGrants(access)).length === 0) {
+            return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
+          }
           const existing = yield* sql`SELECT id FROM jobs WHERE workspace_id = ${access.workspace_id}
             AND kind = 'research.run' AND work_key = ${work_key} LIMIT 1`;
           if (existing.length > 0) return;
