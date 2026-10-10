@@ -185,21 +185,22 @@ jobs:
           const base = load(`${temp}/sentrux-base/.sentrux/baseline.json`);
           const head = load(`${temp}/sentrux-head/.sentrux/baseline.json`);
           const committed = load('.sentrux/baseline.json');
-          function compare(before, after) {
+          function compare(before, after, tolerance) {
             for (const key of ['quality_signal', 'cycle_count', 'god_file_count', 'complex_fn_count', 'coupling_score']) {
               assert(Number.isFinite(before[key]) && Number.isFinite(after[key]), `Missing metric: ${key}`);
             }
-            assert(after.quality_signal + 0.025 + 1e-9 >= before.quality_signal, 'Sentrux quality score dropped by more than 0.025 (250 points)');
+            assert(after.quality_signal + tolerance + 1e-9 >= before.quality_signal, `Sentrux quality score dropped by more than ${tolerance} (${tolerance * 10000} points)`);
             for (const key of ['cycle_count', 'god_file_count', 'complex_fn_count']) assert(after[key] <= before[key], `${key} increased`);
             assert(after.coupling_score <= before.coupling_score + 0.05 + 1e-9, 'Coupling exceeded native tolerance');
           }
-          assert.throws(() => compare(base, { ...base, quality_signal: base.quality_signal - 0.026 }));
-          compare(base, { ...base, quality_signal: base.quality_signal - 0.001 });
-          assert.throws(() => compare(base, { ...base, cycle_count: base.cycle_count + 1 }));
-          assert.throws(() => compare(base, {}));
-          compare(floor, head);
-          compare(base, head);
-          compare(floor, committed);
+          assert.throws(() => compare(base, { ...base, quality_signal: base.quality_signal - 0.026 }, 0.025));
+          compare(base, { ...base, quality_signal: base.quality_signal - 0.001 }, 0.025);
+          assert.throws(() => compare(floor, { ...floor, quality_signal: floor.quality_signal - 0.001 }, 0));
+          assert.throws(() => compare(base, { ...base, cycle_count: base.cycle_count + 1 }, 0.025));
+          assert.throws(() => compare(base, {}, 0.025));
+          compare(floor, head, 0.025);
+          compare(base, head, 0.025);
+          compare(floor, committed, 0);
           console.log(JSON.stringify({ floor, base, head, result: 'pass' }));
           JS
 
