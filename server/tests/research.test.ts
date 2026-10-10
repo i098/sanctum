@@ -65,6 +65,7 @@ const services = Layer.merge(
 
 beforeEach(() => {
   provider.reset();
+  (pipedream.calls as unknown[]).length = 0;
   planner.answers = [];
   planner.requests = [];
   openai.replies = [];
