@@ -153,6 +153,13 @@ const speak = (
     if (expired && message) yield* io.send(message);
   }).pipe(Effect.catchAll(error => Effect.logWarning('Requested speech failed', error.message)));
 
+const startsSeparateTurn = (
+  turn: Pick<TranscriptSegment['source'], 'epoch_id' | 'sample_start' | 'sample_end'>,
+  source: TranscriptSegment['source'],
+  minimumGap: number,
+) => turn.epoch_id !== source.epoch_id || source.sample_start - turn.sample_end >= minimumGap
+  || turn.sample_start - source.sample_end >= minimumGap;
+
 /**
  * Per-socket speech ownership for media's session: feed every transcript segment and the
  * socket's end. `respond` streams the reply text for one direct request (planner role).
@@ -197,8 +204,7 @@ export const speechController = (options: {
     const extendTurn = (segment: TranscriptSegment) =>
       Effect.gen(function* () {
         const { epoch_id, sample_start, sample_end } = segment.source;
-        if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples
-          || turn.sample_start - sample_end >= endOfTurnSamples)) yield* completeTurn;
+        if (turn && startsSeparateTurn(turn, segment.source, endOfTurnSamples)) yield* completeTurn;
         if (turn) {
           turn.segments.push(segment);
           turn.sample_start = Math.min(turn.sample_start, sample_start);

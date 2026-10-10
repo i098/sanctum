@@ -21,7 +21,7 @@ const configured: Record<string, string> = {
   PIPEDREAM_CLIENT_ID: 'synthetic-client', PIPEDREAM_CLIENT_SECRET: 'synthetic-secret',
 };
 
-const scenario = (text: string, answer: unknown, options: {
+const scenario = (text: string, answer: { work: boolean }, options: {
   meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
   removeMembershipDuringClassification?: boolean;
 } = {}) =>
@@ -42,7 +42,7 @@ const scenario = (text: string, answer: unknown, options: {
     const segment = yield* speak(listener, epoch_id, 0, 2, text);
     const requests: ProviderRequest[] = [];
     const llm = yield* Effect.provide(LlmClient, fixtureLlm(
-      (Array.isArray(answer) ? answer : Array.from({ length: 4 }, () => answer)).map(value => JSON.stringify(value)), requests));
+      Array.from({ length: 4 }, () => JSON.stringify(answer)), requests));
     const service = yield* Effect.provide(SpeechWorkRequests, SpeechWorkRequestsLive.pipe(
       Layer.provide(Layer.succeed(LlmClient, options.revokeDuringClassification || options.removeMembershipDuringClassification ? LlmClient.of({
         ...llm,
@@ -107,12 +107,12 @@ const waitForListenerLocks = (count: number) =>
 describe('spoken work', () => {
   it.effect('enqueues model-selected work for the current meeting and listener owner, without changing the reply', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, could you look up the train times?', { work: true, request: ' Look up the train times ' });
+      const test = yield* scenario('Sanctum, could you look up the train times?', { work: true });
       yield* test.complete;
       const rows = yield* test.jobs;
       expect(rows).toHaveLength(1);
       const payload = rows[0]!.payload;
-      expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({ meeting_id: test.meeting_id, request: 'Look up the train times' });
+      expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({ meeting_id: test.meeting_id, request: 'could you look up the train times?' });
       expect(rows[0]).toMatchObject({ requested_by: test.access.principal.id,
         work_key: `spoken:${test.listener_id}:${test.epoch_id}:${test.segment.id}`, rearmed: 0 });
       expect(test.replies).toEqual(['could you look up the train times?']);
@@ -122,7 +122,7 @@ describe('spoken work', () => {
 
   it.effect('does not enqueue an answer-only direct request', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, what time is it', { work: false, request: '' });
+      const test = yield* scenario('Sanctum, what time is it', { work: false });
       yield* test.complete;
       expect(yield* test.jobs).toEqual([]);
       expect(test.replies).toEqual(['what time is it']);
@@ -132,7 +132,7 @@ describe('spoken work', () => {
   it.effect('ignores duplicate finals before and after the reply and deduplicates retries after job completion', () =>
     withDatabase(Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const test = yield* scenario('Sanctum, prepare the follow-up', { work: true, request: 'Prepare the follow-up' });
+      const test = yield* scenario('Sanctum, prepare the follow-up', { work: true });
       yield* test.controller.onSegment(test.segment);
       yield* test.controller.onSegment(test.segment);
       yield* TestClock.adjust(engineeringDefaults.speech.turnWaitMs);
@@ -163,7 +163,7 @@ describe('spoken work', () => {
     it.effect(`logs the reason and enqueues nothing with ${name}`, () => {
       const messages: unknown[] = [];
       return withDatabase(Effect.gen(function* () {
-        const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' }, options);
+        const test = yield* scenario('Sanctum, send the notes', { work: true }, options);
         yield* test.complete;
         expect(yield* test.jobs).toEqual([]);
         expect(test.requests).toEqual([]);
@@ -178,7 +178,7 @@ describe('spoken work', () => {
     it.effect(`does not classify or enqueue with a grant that is ${invalid}`, () =>
       withDatabase(Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+        const test = yield* scenario('Sanctum, send the notes', { work: true },
           { grant: invalid !== 'other workspace' });
         if (invalid === 'revoked') yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
         if (invalid === 'expired') yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
@@ -204,7 +204,7 @@ describe('spoken work', () => {
 
   it.effect('does not enqueue if the grant is revoked during classification', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+      const test = yield* scenario('Sanctum, send the notes', { work: true },
         { revokeDuringClassification: true });
       yield* test.complete;
       expect(test.requests).toHaveLength(1);
@@ -215,7 +215,7 @@ describe('spoken work', () => {
 
   it.effect('does not classify or enqueue after membership removal on an existing listener connection', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' });
+      const test = yield* scenario('Sanctum, send the notes', { work: true });
       yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, test.access.role);
       yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, null);
       yield* test.complete;
@@ -226,7 +226,7 @@ describe('spoken work', () => {
 
   it.effect('does not enqueue if membership is removed during classification', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' },
+      const test = yield* scenario('Sanctum, send the notes', { work: true },
         { removeMembershipDuringClassification: true });
       yield* test.complete;
       expect(test.requests).toHaveLength(1);
@@ -236,18 +236,14 @@ describe('spoken work', () => {
 
   it.live('keeps the first accepted request when first-time retries wait for the listener lock', () =>
     withDatabase(Effect.scoped(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', [
-        { work: true, request: 'Send the meeting notes' },
-        { work: true, request: 'Send the notes' },
-      ]);
+      const test = yield* scenario('Sanctum, send the meeting notes', { work: true });
       const release = yield* holdListener(test.access, test.listener_id);
       yield* Effect.gen(function* () {
         const window = { listener_id: test.listener_id, epoch_id: test.epoch_id, request_id: test.segment.id,
           generation: 1, sample_end: test.segment.source.sample_end, expires_at: Date.now() + 30_000 };
-        const retry = test.service(test.access, test.listener_id)('send the notes', window);
-        const first = yield* Effect.forkScoped(retry);
+        const first = yield* Effect.forkScoped(test.service(test.access, test.listener_id)('send the meeting notes', window));
         yield* waitForListenerLocks(1);
-        const second = yield* Effect.forkScoped(retry);
+        const second = yield* Effect.forkScoped(test.service(test.access, test.listener_id)('send the notes', window));
         yield* waitForListenerLocks(2);
         yield* release;
         yield* Fiber.join(first);
@@ -256,7 +252,7 @@ describe('spoken work', () => {
         expect(rows).toHaveLength(1);
         const payload = rows[0]!.payload;
         expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({
-          meeting_id: test.meeting_id, request: 'Send the meeting notes',
+          meeting_id: test.meeting_id, request: 'send the meeting notes',
         });
         expect(rows[0]!.rearmed).toBe(0);
         yield* test.controller.onEnd('disconnect');
@@ -267,7 +263,7 @@ describe('spoken work', () => {
     it.live(`does not enqueue when ${change} while waiting for the listener lock`, () =>
       withDatabase(Effect.scoped(Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const test = yield* scenario('Sanctum, send the notes', { work: true, request: 'Send the notes' });
+        const test = yield* scenario('Sanctum, send the notes', { work: true });
         if (change === 'membership removed') {
           yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, test.access.role);
         }

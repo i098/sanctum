@@ -22,7 +22,8 @@
 
 The captain chose model judgment: "The model should be start enough to decide whether or not to do something (recommended)".
 Accepted: after a completed direct spoken request during a live meeting, the planner model decides whether Sanctum should do background work.
-It returns a boolean and a short normalized request; keyword rules do not make this decision.
+It returns only a boolean; keyword rules do not make this decision.
+Accepted work retains the original spoken request without model rewriting.
 A work request starts one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
 The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
 Final segments are deduplicated by ID and ordered by source samples before either model receives the request.

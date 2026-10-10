@@ -10,11 +10,10 @@ import { LlmClient } from '../llm.ts';
 import { listenerMeeting } from '../meeting-store.ts';
 import { SpeechWorkRequests, type SpeechWindow } from './speech-gate.ts';
 
-const WorkIntent = Schema.Struct({ work: Schema.Boolean, request: Schema.String });
+const WorkIntent = Schema.Struct({ work: Schema.Boolean });
 const SYSTEM = `Decide whether this direct spoken request asks Sanctum to do background work, rather than only answer or acknowledge.
 Work includes looking something up, preparing something, sending, scheduling, or following up.
-Return work as a boolean and request as a short normalized request that preserves the person's intent and stated details.
-Do not invent recipients, dates, permissions, or work the person did not ask for. For an answer or acknowledgement, return work false and an empty request.`;
+Return work as a boolean. For an answer or acknowledgement, return work false.`;
 
 /** Captures database, model and configuration for the speech controller's independent work fiber. */
 export const SpeechWorkRequestsLive = Layer.effect(
@@ -42,8 +41,6 @@ export const SpeechWorkRequestsLive = Layer.effect(
         }
         const { value } = yield* llm.generate('planner', { name: 'spoken_work_intent', output: WorkIntent, system: SYSTEM, prompt: request });
         if (!value.work) return;
-        const normalized = value.request.trim();
-        if (!normalized) return yield* Effect.logWarning('Spoken research skipped', 'Model returned an empty work request');
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
         // Serialize on the listener and check completed rows too: enqueueJob otherwise re-arms active work.
         yield* sql.withTransaction(Effect.gen(function* () {
@@ -56,7 +53,7 @@ export const SpeechWorkRequestsLive = Layer.effect(
             AND kind = 'research.run' AND work_key = ${work_key} LIMIT 1`;
           if (existing.length > 0) return;
           yield* enqueueJob({ workspace_id: latest.workspace_id, kind: 'research.run', work_key,
-            payload: { meeting_id: meeting.value, request: normalized }, requested_by: latest.principal.id });
+            payload: { meeting_id: meeting.value, request }, requested_by: latest.principal.id });
         }));
       }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),

@@ -82,7 +82,8 @@ Both rails are bottom-anchored in the band from the status down to the footer an
 ## Spoken work requests
 
 A completed direct request such as "Sanctum, look up the train times" also asks the planner model whether background work is needed.
-The model decides from the request, not keyword rules, and returns a boolean plus a short normalized request.
+The model decides from the request, not keyword rules, and returns only a boolean.
+Accepted work retains the original spoken request without model rewriting.
 A work request starts one durable research job for the listener's current meeting and owner, without changing the spoken reply path.
 The request window identifies the work, so duplicate finals and retries do not start another run.
 Final segments are deduplicated by ID and ordered by source samples before either model receives the request.
