@@ -147,7 +147,7 @@ export const loadAction = (workspace_id: WorkspaceId, id: ActionId, lock = false
     })(undefined);
   });
 
-const findByIdempotencyKey = (access: AccessScope, key: string) =>
+export const findByIdempotencyKey = (access: AccessScope, key: string) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
     return yield* SqlSchema.findOne({

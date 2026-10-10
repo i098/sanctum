@@ -99,6 +99,14 @@ const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
     return { artifact_id, text: value.text, sources: value.sources };
   });
 
+/** Stored web research for a job and the context item that cites it. */
+export interface WebResearch {
+  readonly artifact_id: ArtifactId;
+  readonly context_item_id: ContextItemId;
+  readonly text: string;
+  readonly sources: ReadonlyArray<{ readonly url: string; readonly title: string | null }>;
+}
+
 /**
  * Researches the request and adds the answer to the meeting context once per job, as an external
  * observation citing its artifact. Like extraction, the worker is the author and the requester the actor.

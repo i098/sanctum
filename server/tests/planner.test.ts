@@ -149,6 +149,13 @@ describe('planWork', () => {
         expect.stringMatching(/: gmail-send-email was dropped$/),
       ]);
       expect(requests[0]!.prompt).not.toContain('"action_key": "gmail-create-draft"');
+      // Two planned emails to the same recipient stay two requests.
+      const twice = yield* Effect.provide(planWork(access, { meeting_id, request, actions: offered }), fixtureLlm([plan(email.slice(0, 2), email.slice(0, 2))]));
+      const both = yield* Effect.provide(
+        planWork(access, { meeting_id, request, actions: offered, research: { ...research, planned: twice.actions } }),
+        fixtureLlm([plan(researched, [...researched.slice(0, 2), argument('body', 'Also MySQL 9.7 is an innovation release.')])]),
+      );
+      expect(new Set(both.actions.map(action => action.idempotency_key)).size).toBe(2);
     }));
 });
 

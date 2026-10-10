@@ -20,8 +20,8 @@ export interface PlanInput {
   /**
    * Second pass after web research: only the `planned` actions are offered again, and the
    * untrusted research may change only their content fields; any other change rejects the plan.
-   * Its idempotency keys come from `job_id` and each action's non-content arguments, so a retried
-   * job maps an action to the same request whatever content the research pass writes.
+   * Its idempotency keys come from `job_id`, each action's non-content arguments and its position among
+   * planned actions with the same ones, so a retried job maps an action to the same request whatever content the research pass writes.
    */
   readonly research?: {
     readonly text: string;
@@ -97,6 +97,45 @@ function toRequest(
 }
 
 /**
+ * The research pass's actions when each keeps a planned action's key and every non-content argument,
+ * with that action's title and a key from the job, its non-content arguments and its position among
+ * planned actions with the same ones; otherwise no action and why.
+ */
+function keepPlanned(access: AccessScope, meeting_id: MeetingId, research: NonNullable<PlanInput['research']>, actions: ReadonlyArray<ActionRequest>, rejected: ReadonlyArray<string>) {
+  const unmatched = [...research.planned];
+  const kept: ActionRequest[] = [];
+  const problems = [...rejected];
+  for (const { title: _, ...action } of actions) {
+    const at = unmatched.findIndex(first => first.action_key === action.action_key && targets(first.arguments) === targets(action.arguments));
+    if (at === -1) {
+      problems.push(`${action.action_key} changed a non-content field or was added`);
+      continue;
+    }
+    const [first] = unmatched.splice(at, 1);
+    const ordinal = research.planned.slice(0, research.planned.indexOf(first!)).filter(earlier => earlier.action_key === action.action_key && targets(earlier.arguments) === targets(action.arguments)).length;
+    const digest = createHash('sha256').update([access.workspace_id, meeting_id, research.job_id, action.action_key, action.version, targets(action.arguments), ordinal].join('\n')).digest('hex');
+    kept.push({ ...action, idempotency_key: `plan-${digest}`, ...(first!.title ? { title: first!.title } : {}) });
+  }
+  problems.push(...unmatched.map(action => `${action.action_key} was dropped`));
+  return problems.length === 0 ? { actions: kept } : { actions: [], rejected: `the plan made with web research changed the planned actions beyond their content: ${problems.join('; ')}` };
+}
+
+/** The planned actions and the cited research as a delimited untrusted block, for the research pass's prompt. */
+function researchBlock(research: NonNullable<PlanInput['research']>) {
+  const sources = research.sources.map(source => `- ${source.title ?? source.url}: ${source.url}`).join('\n') || '(none)';
+  const untrusted = `${research.text}\n\nSources:\n${sources}`.replaceAll(UNTRUSTED, '');
+  const planned = JSON.stringify(research.planned.map(action => ({ action_key: action.action_key, arguments: action.arguments })), null, 2);
+  return `\n\nPlanned actions; keep every argument except ${[...CONTENT_FIELDS].join(', ')} exactly as given:\n${planned}\n\n<${UNTRUSTED}>\n${untrusted}\n</${UNTRUSTED}>`;
+}
+
+/** Planning needs `actions:request` and access to the meeting. */
+function authorizePlanning(access: AccessScope, meeting_id: MeetingId) {
+  if (!access.scopes.includes('actions:request')) return Effect.fail(new Forbidden({ message: 'planning actions requires actions:request', required_scope: 'actions:request' }));
+  if (access.meetings.kind === 'allowlist' && !access.meetings.meeting_ids.includes(meeting_id)) return Effect.fail(new Forbidden({ message: 'meeting is outside this access scope' }));
+  return Effect.void;
+}
+
+/**
  * The web-research decision and action request proposals for a direct request. The model may
  * only pick offered action keys and declared fields; the meeting, configuration and idempotency
  * key come from code. Without offered actions the model still decides on web research, and a plan
@@ -106,8 +145,7 @@ function toRequest(
  */
 export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<Plan, Unavailable | Forbidden, LlmClient> =>
   Effect.gen(function* () {
-    if (!access.scopes.includes('actions:request')) return yield* new Forbidden({ message: 'planning actions requires actions:request', required_scope: 'actions:request' });
-    if (access.meetings.kind === 'allowlist' && !access.meetings.meeting_ids.includes(input.meeting_id)) return yield* new Forbidden({ message: 'meeting is outside this access scope' });
+    yield* authorizePlanning(access, input.meeting_id);
     const research = input.research;
     // An action whose missing fields were cut from the inspected output cannot be filled in.
     const fillable = input.actions.filter(
@@ -116,11 +154,7 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
     const offered = new Map(fillable.map(action => [action.action_key, action]));
     const keys = [...offered.keys()];
     const catalog = [...offered.values()].map(action => ({ action_key: action.action_key, fields: plannable(action).map(({ name, type, required, description }) => ({ name, type, required, description })) }));
-    const untrusted = research ? `${research.text}\n\nSources:\n${research.sources.map(source => `- ${source.title ?? source.url}: ${source.url}`).join('\n') || '(none)'}`.replaceAll(UNTRUSTED, '') : '';
-    const researched = research
-      ? `\n\nPlanned actions; keep every argument except ${[...CONTENT_FIELDS].join(', ')} exactly as given:\n${JSON.stringify(research.planned.map(action => ({ action_key: action.action_key, arguments: action.arguments })), null, 2)}\n\n<${UNTRUSTED}>\n${untrusted}\n</${UNTRUSTED}>`
-      : '';
-    const prompt = `Request: ${input.request}${researched}\n\nOffered actions:\n${keys.length === 0 ? '(none)' : JSON.stringify(catalog, null, 2)}`;
+    const prompt = `Request: ${input.request}${research ? researchBlock(research) : ''}\n\nOffered actions:\n${keys.length === 0 ? '(none)' : JSON.stringify(catalog, null, 2)}`;
     const llm = yield* LlmClient;
     if (keys.length === 0) {
       const { value } = yield* llm.generate('planner', { name: 'research_plan', output: Schema.Struct({ web_research: Schema.Boolean }), system: PLANNER_SYSTEM, prompt });
@@ -141,22 +175,7 @@ export const planWork = (access: AccessScope, input: PlanInput): Effect.Effect<P
     if (rejected.length > 0) yield* Effect.logWarning('planner dropped invalid proposals', rejected);
     const actions = results.filter((result): result is ActionRequest => typeof result !== 'string');
     if (research === undefined) return { web_research: value.web_research, actions, ...(rejected.length > 0 ? { rejected: rejected.join('; ') } : {}) };
-    const unmatched = [...research.planned];
-    const kept: ActionRequest[] = [];
-    const problems = [...rejected];
-    for (const { title: _, ...action } of actions) {
-      const at = unmatched.findIndex(first => first.action_key === action.action_key && targets(first.arguments) === targets(action.arguments));
-      if (at === -1) {
-        problems.push(`${action.action_key} changed a non-content field or was added`);
-        continue;
-      }
-      const [first] = unmatched.splice(at, 1);
-      const digest = createHash('sha256').update([access.workspace_id, input.meeting_id, research.job_id, action.action_key, action.version, targets(action.arguments)].join('\n')).digest('hex');
-      kept.push({ ...action, idempotency_key: `plan-${digest}`, ...(first!.title ? { title: first!.title } : {}) });
-    }
-    problems.push(...unmatched.map(action => `${action.action_key} was dropped`));
-    if (problems.length === 0) return { web_research: value.web_research, actions: kept };
-    return { web_research: value.web_research, actions: [], rejected: `the plan made with web research changed the planned actions beyond their content: ${problems.join('; ')}` };
+    return { web_research: value.web_research, ...keepPlanned(access, input.meeting_id, research, actions, rejected) };
   });
 
 /** Most recent context items given to a spoken reply. */

@@ -191,9 +191,10 @@ describe('research.run', () => {
         yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', id), executeAction);
         expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ body: 'MySQL 8.4 is the current LTS release (https://dev.mysql.com/doc/).' }) })]);
 
-        // A retried job reuses its research, and a research pass that words the email differently maps to the same request.
+        // A retried job reuses its research; a research pass that words the email differently is reported as the request an earlier attempt made.
         planner.answers = [email(null), email('MySQL 8.4 is the current LTS line, per https://dev.mysql.com/doc/.')];
-        yield* runResearch(yield* queuedJob(member.workspace_id, 'research.run', 'lts'));
+        const retried = yield* runResearch(yield* queuedJob(member.workspace_id, 'research.run', 'lts'));
+        expect(retried).toMatchObject({ status: 'succeeded', result: { actions: [{ action_key: SEND, action_id: id, state: (yield* actionRow(member.workspace_id, id)).state, already_requested: true }] } });
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
         expect(provider.sent).toHaveLength(1);
 
