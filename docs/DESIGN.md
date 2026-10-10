@@ -85,6 +85,8 @@ A completed direct request such as "Sanctum, look up the train times" also asks 
 The model decides from the request, not keyword rules, and returns a boolean plus a short normalized request.
 A work request starts one durable research job for the listener's current meeting and owner, without changing the spoken reply path.
 The request window identifies the work, so duplicate finals and retries do not start another run.
+Final segments are deduplicated by ID and ordered by source samples before either model receives the request.
+The listener lock precedes transaction reads of current authorization, grants, and all job history.
 An answer-only request such as "Sanctum, what time is it" starts no background work.
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.

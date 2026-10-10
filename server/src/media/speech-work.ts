@@ -47,8 +47,8 @@ export const SpeechWorkRequestsLive = Layer.effect(
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
         // Serialize on the listener and check completed rows too: enqueueJob otherwise re-arms active work.
         yield* sql.withTransaction(Effect.gen(function* () {
+          yield* ownedListener(current, listener_id, true);
           const latest = yield* refreshAccess;
-          yield* ownedListener(latest, listener_id, true);
           if ((yield* activeActionGrants(latest)).length === 0) {
             return yield* Effect.logInfo('Spoken research skipped', 'No active integration grant for listener owner');
           }

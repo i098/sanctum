@@ -25,6 +25,8 @@ Accepted: after a completed direct spoken request during a live meeting, the pla
 It returns a boolean and a short normalized request; keyword rules do not make this decision.
 A work request starts one durable `research.run` for the listener's current meeting, on behalf of the listener owner.
 The listener, capture epoch and request ID identify the work, so duplicate finals and retries cannot start another run.
+Final segments are deduplicated by ID and ordered by source samples before either model receives the request.
+The listener lock precedes transaction reads of current authorization, grants, and all job history.
 Answer-only requests still use the existing spoken reply path and start no research.
 Missing research or planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.

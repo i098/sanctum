@@ -169,8 +169,8 @@ export const speechController = (options: {
     const synthesizer = yield* SpeechSynthesizer;
     const { listener_id, send, requestWork = () => Effect.void } = options;
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
-    let turn: { epoch_id: CaptureEpochId; request_id: string; texts: string[]; sample_end: number } | null = null;
-    let lastFinal: { epoch_id: CaptureEpochId; sample_end: number } | null = null;
+    let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
+    const seenFinals = new Set<TranscriptSegment['id']>();
     let turnTimer: Fiber.RuntimeFiber<void> | null = null;
     let speaking: Fiber.RuntimeFiber<void> | null = null;
 
@@ -184,9 +184,11 @@ export const speechController = (options: {
     const completeTurn = Effect.gen(function* () {
       const finished = turn;
       turn = null;
-      const request = finished ? directRequest(finished.texts.join(' ')) : null;
-      if (!finished || request === null) return;
-      const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.request_id, sample_end: finished.sample_end });
+      if (!finished) return;
+      finished.segments.sort((a, b) => a.source.sample_start - b.source.sample_start);
+      const request = directRequest(finished.segments.map(segment => segment.text).join(' '));
+      if (request === null) return;
+      const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.segments[0]!.id, sample_end: finished.sample_end });
       speaking = yield* Effect.forkDaemon(speak({ gate, synthesizer, listener_id, send, reply: options.respond(request) }, window));
       yield* Effect.forkDaemon(requestWork(request, window));
     });
@@ -195,10 +197,15 @@ export const speechController = (options: {
     const extendTurn = (segment: TranscriptSegment) =>
       Effect.gen(function* () {
         const { epoch_id, sample_start, sample_end } = segment.source;
-        if (lastFinal?.epoch_id === epoch_id && sample_end <= lastFinal.sample_end) return;
-        lastFinal = segment.source;
-        if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples)) yield* completeTurn;
-        turn = turn ? { ...turn, texts: [...turn.texts, segment.text], sample_end } : { epoch_id, request_id: segment.id, texts: [segment.text], sample_end };
+        if (turn && (turn.epoch_id !== epoch_id || sample_start - turn.sample_end >= endOfTurnSamples
+          || turn.sample_start - sample_end >= endOfTurnSamples)) yield* completeTurn;
+        if (turn) {
+          turn.segments.push(segment);
+          turn.sample_start = Math.min(turn.sample_start, sample_start);
+          turn.sample_end = Math.max(turn.sample_end, sample_end);
+        } else {
+          turn = { epoch_id, segments: [segment], sample_start, sample_end };
+        }
         if (turnTimer) yield* Fiber.interrupt(turnTimer);
         turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
       });
@@ -206,6 +213,10 @@ export const speechController = (options: {
     return {
       onSegment: (segment: TranscriptSegment) =>
         Effect.gen(function* () {
+          if (segment.status === 'final') {
+            if (seenFinals.has(segment.id)) return;
+            seenFinals.add(segment.id);
+          }
           const role = segmentRole(gate, listener_id, segment);
           if (role === 'ignore') return;
           if (role === 'interrupt') yield* cancel('barge_in');
