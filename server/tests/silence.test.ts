@@ -11,7 +11,7 @@ import { vi } from 'vitest';
 import { createActionGrant, requestAction } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
-import { directRequest, makeSpeechGate, SpeechGate, speechController, type SpeechWindow } from '../src/media/speech-gate.ts';
+import { directRequest, makeSpeechGate, SpeechGate, speechController, type SpeechWindow, WORK_ACKNOWLEDGEMENT } from '../src/media/speech-gate.ts';
 import { planWork } from '../src/planner.ts';
 import { SpeechSynthesizer } from '../src/providers/speech.ts';
 import { actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
@@ -54,7 +54,7 @@ const fakeSynthesizer = SpeechSynthesizer.of({
 });
 
 /** A controller on a fake wall clock; `reply` streams the planner's answer for a request. */
-const listen = (reply: (request: string) => Stream.Stream<string>, gate = makeSpeechGate(() => clock.now)) =>
+const listen = (reply: (request: string) => Stream.Stream<string>, gate = makeSpeechGate(() => clock.now), started = false) =>
   Effect.gen(function* () {
     const sent: Array<SpeechChunkMessage | SpeechCancelMessage> = [];
     const requests: string[] = [];
@@ -64,7 +64,7 @@ const listen = (reply: (request: string) => Stream.Stream<string>, gate = makeSp
       sample_rate: RATE,
       send: message => Effect.sync(() => void sent.push(message)),
       respond: request => (requests.push(request), reply(request)),
-      requestWork: (request, window) => Effect.sync(() => { work.push({ request, window }); }),
+      requestWork: (request, window) => Effect.sync(() => { work.push({ request, window }); return started; }),
     }).pipe(Effect.provideService(SpeechGate, gate), Effect.provideService(SpeechSynthesizer, fakeSynthesizer));
     const chunks = () => sent.filter((message): message is SpeechChunkMessage => message._tag === 'speech_chunk');
     return { ...controller, gate, sent, requests, work, chunks };
@@ -137,6 +137,17 @@ describe('speech gate', () => {
         yield* session.onEnd('disconnect');
       }));
   }
+
+  it.effect('speaks the acknowledgement instead of the answer when the request started work', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.make('Should not be heard.'), makeSpeechGate(() => clock.now), true);
+      yield* session.onSegment(heard('Sanctum, look up the latest release', 20_000, 21_000));
+      yield* settle(turnWaitMs);
+      expect(session.requests).toEqual([]);
+      expect(session.chunks()).toHaveLength(2);
+      expect(synthesized.slice(-1)).toEqual([WORK_ACKNOWLEDGEMENT]);
+      yield* session.onEnd('disconnect');
+    }));
 
   it.effect('accepts unseen finals with earlier or equal sample ends', () =>
     Effect.gen(function* () {

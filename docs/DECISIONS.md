@@ -29,6 +29,7 @@ The listener, capture epoch and request ID identify the work, so duplicate final
 Final segments collected within a turn are deduplicated by ID and ordered by source samples before either model receives the request.
 The listener lock precedes transaction reads of current authorization, grants, and all job history.
 Answer-only requests still use the existing spoken reply path and start no research.
+A request that starts research is spoken as "Looking that up." instead of the answer; the work decision runs first, and any skip or failure keeps the normal answer.
 Missing planner credentials, missing Pipedream configuration, or no current meeting prevents enqueue and logs the reason.
 Before classification and enqueue, the listener owner must hold at least one active integration grant in the workspace.
 Expired or revoked grants and disconnected accounts do not qualify; no qualifying grant logs the reason and starts no research.
