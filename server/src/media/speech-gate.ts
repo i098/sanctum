@@ -76,11 +76,17 @@ export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
   (access: AccessScope, listener_id: ListenerId) => (request: string) => Stream.Stream<string, Unavailable>
 >() {}
 
-/** Work detection runs independently of requested speech and never emits audio. */
+/**
+ * Work detection runs independently of requested speech and never emits audio. It resolves true
+ * when research is running for this request (started now or earlier), false when nothing started.
+ */
 export class SpeechWorkRequests extends Context.Tag('sanctum/SpeechWorkRequests')<
   SpeechWorkRequests,
-  (access: AccessScope, listener_id: ListenerId) => (request: string, window: SpeechWindow) => Effect.Effect<void>
+  (access: AccessScope, listener_id: ListenerId) => (request: string, window: SpeechWindow) => Effect.Effect<boolean>
 >() {}
+
+/** Spoken instead of the answer when a direct request started research. */
+export const WORK_ACKNOWLEDGEMENT = 'Looking that up.';
 
 export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
 
@@ -169,12 +175,12 @@ export const speechController = (options: {
   readonly sample_rate: number;
   readonly send: (message: SpeechMessage) => Effect.Effect<void>;
   readonly respond: (request: string) => Stream.Stream<string, Unavailable>;
-  readonly requestWork?: (request: string, window: SpeechWindow) => Effect.Effect<void>;
+  readonly requestWork?: (request: string, window: SpeechWindow) => Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const gate = yield* SpeechGate;
     const synthesizer = yield* SpeechSynthesizer;
-    const { listener_id, send, requestWork = () => Effect.void } = options;
+    const { listener_id, send, requestWork = () => Effect.succeed(false) } = options;
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
     let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
     const seenFinals = new Set<TranscriptSegment['id']>();
@@ -196,8 +202,11 @@ export const speechController = (options: {
       const request = directRequest(finished.segments.map(segment => segment.text).join(' '));
       if (request === null) return;
       const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.segments[0]!.id, sample_end: finished.sample_end });
-      speaking = yield* Effect.forkDaemon(speak({ gate, synthesizer, listener_id, send, reply: options.respond(request) }, window));
-      yield* Effect.forkDaemon(requestWork(request, window));
+      // The work decision runs in its own daemon fiber so barge-in, which interrupts `speaking`, never aborts an enqueue.
+      const work = yield* Effect.forkDaemon(requestWork(request, window));
+      speaking = yield* Effect.forkDaemon(Effect.flatMap(
+        Fiber.join(work).pipe(Effect.timeoutTo({ duration: engineeringDefaults.speech.workDecisionWaitMs, onSuccess: started => started, onTimeout: () => false })),
+        started => speak({ gate, synthesizer, listener_id, send, reply: started ? Stream.make(WORK_ACKNOWLEDGEMENT) : options.respond(request) }, window)));
     });
 
     /** Extends the open turn, or completes it first when this segment starts after a pause or in a new epoch. */

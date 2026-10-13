@@ -162,7 +162,8 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 - `actions.ts`: `listenerFeed(access, listener_id)` returns the listener's open meeting and its agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
 - Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from MySQL every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-requests.ts `SpeechRepliesLive`), so a process without them stays silent.
-- `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller's independent work fiber.
+- `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller, which runs it in its own daemon fiber before speaking.
+  It resolves `true` when research was enqueued or already exists for the request; the controller then speaks `WORK_ACKNOWLEDGEMENT` instead of the reply.
   The [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) owns the trigger and authorization contract.
   The [classifier provider decision](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) owns model selection and planner fallback.
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.

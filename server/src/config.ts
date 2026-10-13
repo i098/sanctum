@@ -53,9 +53,10 @@ export const engineeringDefaults = {
   /**
    * Requested speech: open window, quiet audio that ends a direct-request turn, and echo memory
    * after playback. Finals arrive once per live chunk, so a turn waits `turnWaitMs` for the next
-   * chunk's finals before it ends, and echo memory outlasts one chunk and its request.
+   * chunk's finals before it ends, and echo memory outlasts one chunk and its request. The reply
+   * waits at most `workDecisionWaitMs` for the work decision, then speaks the normal answer.
    */
-  speech: { windowMs: 30_000, endOfTurnMs: 700, turnWaitMs: 5_000, echoTailMs: 5_000 },
+  speech: { windowMs: 30_000, endOfTurnMs: 700, turnWaitMs: 5_000, echoTailMs: 5_000, workDecisionWaitMs: 1_500 },
   /** No automatic expiry until a retention policy is selected (docs/DECISIONS.md). */
   recordingExpiry: null,
   /**

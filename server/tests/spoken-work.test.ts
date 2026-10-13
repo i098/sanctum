@@ -6,7 +6,7 @@ import { afterEach, vi } from 'vitest';
 import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { LlmClient, LlmLive } from '../src/llm.ts';
-import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests } from '../src/media/speech-gate.ts';
+import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests, WORK_ACKNOWLEDGEMENT } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/speech-requests.ts';
 import { SpeechSynthesizer } from '../src/providers/speech.ts';
 import { setMembership } from '../src/store.ts';
@@ -22,6 +22,8 @@ const configured: Record<string, string> = {
 };
 
 afterEach(() => vi.restoreAllMocks());
+
+const ANSWER = 'The answer.';
 
 const scenario = (text: string, answer: unknown, options: {
   meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
@@ -82,19 +84,21 @@ const scenario = (text: string, answer: unknown, options: {
     ));
     const finished = yield* Deferred.make<void>();
     const replies: string[] = [];
+    const spoken: string[] = [];
     const controller = yield* speechController({ listener_id, sample_rate: 16_000, send: () => Effect.void,
-      respond: request => (replies.push(request), Stream.empty),
+      respond: request => (replies.push(request), Stream.make(ANSWER)),
       requestWork: (request, window) => service(access, listener_id)(request, window).pipe(Effect.ensuring(Deferred.succeed(finished, undefined))),
     }).pipe(Effect.provideService(SpeechGate, makeSpeechGate()),
-      Effect.provideService(SpeechSynthesizer, SpeechSynthesizer.of({ synthesize: () => Stream.empty })));
+      Effect.provideService(SpeechSynthesizer, SpeechSynthesizer.of({ synthesize: text => Stream.suspend(() => (spoken.push(text), Stream.empty)) })));
     const jobs = sql<{ payload: unknown; requested_by: string; work_key: string; rearmed: number }>`SELECT payload, requested_by, work_key, rearmed
       FROM jobs WHERE workspace_id = ${access.workspace_id} AND kind = 'research.run'`;
     const complete = Effect.gen(function* () {
       yield* controller.onSegment(segment);
       yield* TestClock.adjust(engineeringDefaults.speech.turnWaitMs);
       yield* Deferred.await(finished);
+      yield* Effect.repeatN(Effect.yieldNow(), 20); // the speaking fiber follows the work decision
     });
-    return { controller, finished, segment, requests, replies, jobs, access, other: other!, account, grant, listener_id, epoch_id, meeting_id, service, complete };
+    return { controller, finished, segment, requests, replies, spoken, jobs, access, other: other!, account, grant, listener_id, epoch_id, meeting_id, service, complete };
   });
 
 const holdListener = (access: AccessScope, listener_id: ListenerId) =>
@@ -135,7 +139,8 @@ describe('spoken work', () => {
       expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({ meeting_id: test.meeting_id, request: 'could you look up the train times?' });
       expect(rows[0]).toMatchObject({ requested_by: test.access.principal.id,
         work_key: `spoken:${test.listener_id}:${test.epoch_id}:${test.segment.id}`, rearmed: 0 });
-      expect(test.replies).toEqual(['could you look up the train times?']);
+      expect(test.replies).toEqual([]);
+      expect(test.spoken).toEqual([WORK_ACKNOWLEDGEMENT]);
       expect(test.requests).toHaveLength(1);
       expect(test.requests[0]).toMatchObject({ model: 'gpt-oss-120b',
         response_format: { type: 'json_schema', json_schema: { strict: true } } });
@@ -161,7 +166,8 @@ describe('spoken work', () => {
           model: model ?? 'claude-sonnet-5-5',
           output_config: { format: expect.objectContaining({ type: 'json_schema' }) },
         })]);
-        expect(test.replies).toEqual(['send the notes']);
+        expect(test.replies).toEqual([]);
+        expect(test.spoken).toEqual([WORK_ACKNOWLEDGEMENT]);
         yield* test.controller.onEnd('disconnect');
       }), { migrated: true }));
   }
@@ -180,7 +186,8 @@ describe('spoken work', () => {
         expect(test.requests.map(request => request.model)).toEqual(failure === 'missing key'
           ? ['@cf/qwen/qwen3.8-27b'] : ['gpt-oss-120b', '@cf/qwen/qwen3.8-27b']);
         expect(messages).toEqual([['Spoken work classifier unavailable; falling back to planner']]);
-        expect(test.replies).toEqual(['send the notes']);
+        expect(test.replies).toEqual([]);
+        expect(test.spoken).toEqual([WORK_ACKNOWLEDGEMENT]);
         yield* test.controller.onEnd('disconnect');
       }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
     });
@@ -192,6 +199,7 @@ describe('spoken work', () => {
       yield* test.complete;
       expect(yield* test.jobs).toEqual([]);
       expect(test.replies).toEqual(['what time is it']);
+      expect(test.spoken).toEqual([ANSWER]);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
@@ -207,6 +215,7 @@ describe('spoken work', () => {
           _tag: 'Unavailable', retryable: false, message: expect.stringMatching(/failed the spoken_work_intent schema/),
         })]]);
       expect(test.replies).toEqual(['send the notes']);
+      expect(test.spoken).toEqual([ANSWER]);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
   });
@@ -221,7 +230,9 @@ describe('spoken work', () => {
       yield* Deferred.await(test.finished);
       yield* test.controller.onSegment(test.segment);
       yield* TestClock.adjust(engineeringDefaults.speech.turnWaitMs);
-      expect(test.replies).toEqual(['prepare the follow-up']);
+      yield* Effect.repeatN(Effect.yieldNow(), 20);
+      expect(test.replies).toEqual([]);
+      expect(test.spoken).toEqual([WORK_ACKNOWLEDGEMENT]);
       expect(test.requests).toHaveLength(1);
       const window = { listener_id: test.listener_id, epoch_id: test.epoch_id, request_id: test.segment.id,
         generation: 1, sample_end: test.segment.source.sample_end, expires_at: Date.now() + 30_000 };
@@ -251,6 +262,7 @@ describe('spoken work', () => {
         expect(test.requests).toEqual([]);
         expect(messages).toEqual([['Spoken research skipped', reason]]);
         expect(test.replies).toEqual(['send the notes']);
+        expect(test.spoken).toEqual([ANSWER]);
         yield* test.controller.onEnd('disconnect');
       }), { migrated: true }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, Logger.make(({ message }) => { messages.push(message); }))));
     });
