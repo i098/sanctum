@@ -149,6 +149,24 @@ describe('speech gate', () => {
       yield* session.onEnd('disconnect');
     }));
 
+  it.effect('speaks the normal answer within the bound when the work decision hangs', () =>
+    Effect.gen(function* () {
+      const sent: Array<SpeechChunkMessage | SpeechCancelMessage> = [];
+      const controller = yield* speechController({
+        listener_id: LISTENER, sample_rate: RATE,
+        send: message => Effect.sync(() => void sent.push(message)),
+        respond: () => Stream.make('Normal answer.'),
+        requestWork: () => Effect.never,
+      }).pipe(Effect.provideService(SpeechGate, makeSpeechGate(() => clock.now)), Effect.provideService(SpeechSynthesizer, fakeSynthesizer));
+      yield* controller.onSegment(heard('Sanctum, look up the latest release', 30_000, 31_000));
+      yield* settle(turnWaitMs);
+      expect(synthesized.slice(-1)).not.toEqual(['Normal answer.']);
+      yield* settle(engineeringDefaults.speech.workDecisionWaitMs);
+      expect(synthesized.slice(-1)).toEqual(['Normal answer.']);
+      expect(sent.filter(message => message._tag === 'speech_chunk')).toHaveLength(2);
+      yield* controller.onEnd('disconnect');
+    }));
+
   it.effect('accepts unseen finals with earlier or equal sample ends', () =>
     Effect.gen(function* () {
       const session = yield* listen(() => Stream.empty);

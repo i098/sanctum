@@ -204,8 +204,9 @@ export const speechController = (options: {
       const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.segments[0]!.id, sample_end: finished.sample_end });
       // The work decision runs in its own daemon fiber so barge-in, which interrupts `speaking`, never aborts an enqueue.
       const work = yield* Effect.forkDaemon(requestWork(request, window));
-      speaking = yield* Effect.forkDaemon(Effect.flatMap(Fiber.join(work), started =>
-        speak({ gate, synthesizer, listener_id, send, reply: started ? Stream.make(WORK_ACKNOWLEDGEMENT) : options.respond(request) }, window)));
+      speaking = yield* Effect.forkDaemon(Effect.flatMap(
+        Fiber.join(work).pipe(Effect.timeoutTo({ duration: engineeringDefaults.speech.workDecisionWaitMs, onSuccess: started => started, onTimeout: () => false })),
+        started => speak({ gate, synthesizer, listener_id, send, reply: started ? Stream.make(WORK_ACKNOWLEDGEMENT) : options.respond(request) }, window)));
     });
 
     /** Extends the open turn, or completes it first when this segment starts after a pause or in a new epoch. */
