@@ -5,7 +5,7 @@ import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, Listener
 import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsSection } from './AgentsSection.tsx';
 import { Dialog } from './Dialog.tsx';
-import { DisplaySection, useFullscreen, useIdle } from './Fullscreen.tsx';
+import { useFullscreen, useIdle } from './Fullscreen.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
@@ -360,8 +360,7 @@ export function ListenPage() {
   const sections = [
     { id: 'review', label: 'Review', body: <ReviewSection client={client} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
-    { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
-    { id: 'display', label: 'Display', body: <DisplaySection fullscreen={fullscreen} onToggle={toggleFullscreen} onDone={close} /> },
+    { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} fullscreen={{ active: fullscreen, toggle: () => { toggleFullscreen(); if (!fullscreen) close(); } }} /> },
   ];
 
   return (

@@ -1,7 +1,7 @@
-/** Fullscreen belongs to the Menu's Display section and the F key; in fullscreen the footer steps back when nothing moves. */
+/** Fullscreen belongs to the Menu's Settings (Display row) and the F key; in fullscreen the footer steps back when nothing moves. */
 import { expect, test, type Page } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
-import { menuSection, openMenu } from './menu.ts';
+import { openMenu } from './menu.ts';
 
 const fullscreen = (page: Page) => page.evaluate(() => document.fullscreenElement !== null);
 const footer = (page: Page) => page.locator('.listen-footer');
@@ -27,16 +27,14 @@ test('F toggles fullscreen, except while typing in a control, and the footer has
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
 });
 
-test('the Display section enters fullscreen and closes the panel; F leaves it', async ({ page }) => {
+test('the Display row in Settings enters fullscreen and closes the panel; F leaves it', async ({ page }) => {
   await openListening(page);
-  const display = await openMenu(page, 'Display');
-  await display.getByRole('button', { name: 'Enter fullscreen' }).click();
+  const settings = await openMenu(page, 'Settings');
+  await settings.getByRole('button', { name: 'Enter fullscreen' }).click();
   await expect.poll(() => fullscreen(page)).toBe(true);
   await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden();
 
-  await page.getByRole('button', { name: 'Menu' }).click();
-  await page.getByRole('dialog', { name: 'Menu' }).getByRole('navigation', { name: 'Menu sections' }).getByRole('button', { name: 'Display' }).click();
-  await expect(menuSection(page, 'Display').getByRole('button', { name: 'Exit fullscreen' })).toHaveAttribute('aria-pressed', 'true');
+  await expect((await openMenu(page, 'Settings')).getByRole('button', { name: 'Exit fullscreen' })).toBeVisible();
   await page.keyboard.press('Escape');
   await page.keyboard.press('f');
   await expect.poll(() => fullscreen(page)).toBe(false);
