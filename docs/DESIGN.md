@@ -46,8 +46,10 @@ After End meeting, the helper line says that the meeting ended and that its note
 | Live dot / done | Lime `#c6f24e` |
 | Failed | Red `#ff5d5d` |
 
-Use the system sans-serif stack for readable content and a system monospace stack for tiny state/navigation labels.
-Header labels are roughly 10–14 px; status below the waveform is roughly 12 px.
+Use Inter (self-hosted variable font, no CDN) for all text and JetBrains Mono only for code, IDs and tokens.
+The scale lives in `web-app/src/styles.css`: body 15 px with line height 1.5, secondary 14 px, section headings 13 px semibold in sentence case, titles 18 px semibold. No tiny all-caps letter-spaced labels.
+Buttons are 14 px medium in sentence case, in four kinds (`web-app/src/pages/listen/listen.css`): one filled primary per area (`data-primary`), a quiet secondary fill for other buttons in a dialog, plain-text tertiary for low-weight actions (`data-quiet`, Close, tabs, rail items), and quiet red text for destructive actions (`data-danger`); only a final confirm fills red. No outlined buttons.
+On the listening view the header, status and footer stay as approved; only the font family and the footer and rail text sizes follow the scale.
 Muted information remains readable; do not use unreadably low opacity as the only way to make the screen quiet.
 
 ## Waveform geometry

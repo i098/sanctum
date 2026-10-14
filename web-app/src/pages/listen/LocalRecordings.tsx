@@ -63,7 +63,7 @@ function RecordingList({ recordings, stranded, id, onExport, onDiscard }: Record
           )))}
           <div className="listen-local-actions">
             {recording.parts.map((part, number) => (
-              <button key={part.sampleStart} type="button" data-primary aria-describedby={`${id}-${index}`} onClick={() => onExport(recording, number)}>
+              <button key={part.sampleStart} type="button" aria-describedby={`${id}-${index}`} onClick={() => onExport(recording, number)}>
                 {recording.parts.length === 1
                   ? 'Export WAV'
                   : `Export part ${number + 1} of ${recording.parts.length} · ${since(recording, part.sampleStart)}–${since(recording, part.sampleEnd)}`}

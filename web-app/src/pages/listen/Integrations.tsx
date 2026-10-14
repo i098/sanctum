@@ -21,7 +21,7 @@ function ConnectedApps({ list, onDisconnect }: { list: ReadonlyArray<ConnectedIn
               {account.grants.length === 0 ? 'No grants yet' : account.grants.map(grant => `${grant.action_key} for ${grant.grantee_name ?? 'a member'}`).join('; ')}
             </span>
           </span>
-          <button type="button" onClick={() => onDisconnect(account.id)} aria-label={`Disconnect ${appName(account.app)}`}>Disconnect</button>
+          <button type="button" data-danger onClick={() => onDisconnect(account.id)} aria-label={`Disconnect ${appName(account.app)}`}>Disconnect</button>
         </li>
       ))}
     </ul>

@@ -6,13 +6,14 @@
   --accent-10: #5b8fff;
   --color-background: #12161e;
   --color-panel-solid: #171c26;
+  --default-font-family: var(--font-sans);
 }
 
 .listen-team h3 {
   margin: 24px 0 8px;
   color: #e7ecf3;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-secondary);
+  font-weight: var(--weight-semibold);
 }
 
 .listen-team section:first-of-type h3 {

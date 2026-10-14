@@ -200,7 +200,7 @@ test('WorkOS: an owner manages the team in the widgets over Settings, and closin
   await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
   const settings = await openSettings(page);
   // The closed Team dialog sits in the row, so compare the rendered text (buttons render uppercase).
-  await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet\nTEAM', { useInnerText: true });
+  await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet\nTeam', { useInnerText: true });
   await settings.getByRole('button', { name: 'Team' }).click();
   const team = page.getByRole('dialog', { name: 'Team' });
   await expect(team.getByRole('region', { name: 'Members' })).toContainText('grace@example.test');

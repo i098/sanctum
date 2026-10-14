@@ -109,7 +109,7 @@ function AskForMicrophone({ onAllowed }: { onAllowed: () => void }) {
       <div className="listen-onboarding-mic"><Meter value={0} /></div>
       <div className="listen-onboarding-check">
         <p role="status" data-access={access}>{ACCESS[access]}</p>
-        {access !== 'asking' && <button type="button" data-primary onClick={ask}>{access === 'idle' ? 'Allow microphone' : 'Try again'}</button>}
+        {access !== 'asking' && <button type="button" onClick={ask}>{access === 'idle' ? 'Allow microphone' : 'Try again'}</button>}
       </div>
     </>
   );
@@ -187,7 +187,7 @@ function StepActions({ step, busy, form, idle, onBack }: { step: number; busy: b
   const label = step < LAST ? 'Next' : idle ? 'Start listening' : 'Done';
   return (
     <div className="listen-end-actions">
-      {step > 0 && <button type="button" onClick={onBack}>Back</button>}
+      {step > 0 && <button type="button" data-quiet onClick={onBack}>Back</button>}
       <button type="submit" form={form} data-primary disabled={busy}>{label}</button>
     </div>
   );

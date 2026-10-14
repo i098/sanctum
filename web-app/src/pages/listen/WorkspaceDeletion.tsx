@@ -27,7 +27,7 @@ function ConfirmDeletion({ name, busy, onCancel, onConfirm }: ConfirmProps) {
         <input value={typed} onChange={event => setTyped(event.target.value)} autoComplete="off" spellCheck={false} autoFocus />
       </label>
       <div className="listen-local-actions">
-        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="button" data-quiet onClick={onCancel}>Cancel</button>
         <button type="submit" data-danger disabled={busy || typed !== name}>Delete workspace</button>
       </div>
     </form>
