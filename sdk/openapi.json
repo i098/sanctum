@@ -4302,7 +4302,7 @@
               "minLength": 1,
               "maxLength": 500
             },
-            "required": true,
+            "required": false,
             "description": "a string at most 500 character(s) long"
           },
           {
@@ -4316,6 +4316,58 @@
             },
             "required": false,
             "description": "a Universally Unique Identifier"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "decision",
+                "commitment",
+                "constraint",
+                "project_fact",
+                "preference",
+                "open_question",
+                "research_observation"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 512 character(s) long",
+              "title": "maxLength(512)",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "required": false,
+            "description": "a string at most 512 character(s) long"
           },
           {
             "name": "limit",
@@ -4335,7 +4387,8 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "items"
+                    "items",
+                    "next_cursor"
                   ],
                   "properties": {
                     "items": {
@@ -4611,6 +4664,20 @@
                         },
                         "additionalProperties": false
                       }
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "a string at most 512 character(s) long",
+                          "title": "maxLength(512)",
+                          "minLength": 1,
+                          "maxLength": 512
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "additionalProperties": false

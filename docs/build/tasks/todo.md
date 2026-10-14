@@ -233,7 +233,7 @@ Depends on: T10, T19.
 - [x] Add Notes/Transcript/Recording/Memory/Context/Activity overlays with source navigation.
 - [x] Keep capture independent of overlay visibility; implement focus, keyboard, reduced-motion, and error behavior.
 
-Files: `web-app/src/pages/listen/engine.ts`, `web-app/src/pages/listen/waveform.ts`, `web-app/src/pages/listen/index.tsx`, `web-app/src/pages/listen/listen.css`, `web-app/src/pages/listen/ReviewDialog.tsx`.
+Files: `web-app/src/pages/listen/engine.ts`, `web-app/src/pages/listen/waveform.ts`, `web-app/src/pages/listen/index.tsx`, `web-app/src/pages/listen/listen.css`, `web-app/src/pages/listen/ReviewSection.tsx`.
 Verify: accepted-preview visual comparison, 1280×720 and narrow layout, overlay open/close, source seek, capture interruption truthfulness.
 Depends on: T06, T13, T16, T20.
 
@@ -253,7 +253,7 @@ Depends on: T16, T18.
 - [x] Wire delegated OAuth to a maintained authorization server with durable grants, resource metadata, audience checks and scope mapping; issuer configuration remains an explicit live gate.
 - [x] Add agent permission/revoke UI and test real MCP clients with different principals.
 
-Files: `server/src/mcp.ts`, `server/src/auth.ts`, `web-app/src/pages/listen/AgentsDialog.tsx`, `server/tests/mcp.test.ts`, `sdk/examples/`.
+Files: `server/src/mcp.ts`, `server/src/auth.ts`, `web-app/src/pages/listen/AgentsSection.tsx`, `web-app/src/pages/listen/AgentWork.tsx`, `web-app/src/pages/listen/AccessTokens.tsx`, `server/tests/mcp.test.ts`, `sdk/examples/`.
 Verify: auth/discovery/schema/read/write/conflict/revoke; client-version compatibility; no admin/capture routes auto-exposed.
 Depends on: T05, T21, T22.
 

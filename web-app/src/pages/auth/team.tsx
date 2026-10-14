@@ -7,7 +7,6 @@
 import type { AccessScope } from '@sanctum/sdk';
 import { type FormEvent, type SelectHTMLAttributes, useCallback, useEffect, useState } from 'react';
 import { SIGN_IN_URL } from '../../lib/session.ts';
-import { Dialog } from '../listen/Dialog.tsx';
 import { auth } from './index.tsx';
 
 type Role = 'member' | 'admin' | 'owner';
@@ -93,14 +92,14 @@ function MemberRow({ member, access, team, busy, change }: RowProps & { member: 
       <span className="min-w-0">
         <span className="text-ink">{member.user.name}</span>
         {member.user.id === team.me && <span className="text-ink-muted"> (you)</span>}
-        <span className="block truncate text-xs text-ink-muted">{member.user.email}</span>
+        <span className="block truncate text-sm text-ink-muted">{member.user.email}</span>
       </span>
       {editable(member, team.me, access.role) ? (
         <span className="flex items-center gap-3">
           <RoleSelect
             roles={assignable(access.role)}
             aria-label={`Role of ${member.user.name}`}
-            className={`${field} py-1 text-xs`}
+            className={`${field} py-1 text-sm`}
             value={member.role}
             disabled={busy}
             onChange={event => change(() => auth.organization.updateMemberRole({ memberId: member.id, role: event.target.value as Role, organizationId }))}
@@ -108,13 +107,13 @@ function MemberRow({ member, access, team, busy, change }: RowProps & { member: 
           <button type="button" disabled={busy} onClick={remove}>Remove</button>
         </span>
       ) : (
-        <span className="pr-2 font-mono text-xs text-ink-muted">{member.role}</span>
+        <span className="pr-2 text-sm text-ink-muted">{member.role}</span>
       )}
     </li>
   );
 }
 
-/** Email and role in; the new invitation's link out, shown until the dialog closes. */
+/** Email and role in; the new invitation's link out, shown until the panel closes. */
 function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
   const [invited, setInvited] = useState<{ id: string; email: string } | null>(null);
   const invite = (event: FormEvent<HTMLFormElement>) => {
@@ -139,14 +138,14 @@ function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
         <RoleSelect roles={INVITABLE} name="role" aria-label="Role" defaultValue="member" className={field} />
         <button type="submit" data-primary disabled={busy}>Invite</button>
       </form>
-      <p className="mt-2 text-xs text-ink-muted">Whoever has the link and signs up with that email address joins, so share it only with that person. Only owners and admins see pending invitations. An owner is made by changing a member's role.</p>
+      <p className="mt-2 text-sm text-ink-muted">Whoever has the link and signs up with that email address joins, so share it only with that person. Only owners and admins see pending invitations. An owner is made by changing a member's role.</p>
       {invited && (
         <div role="status" className="mt-3 rounded bg-surface px-3 py-2.5">
-          <p className="text-xs text-ink-secondary">
+          <p className="text-sm text-ink-secondary">
             Link for <span className="text-ink">{invited.email}</span>, valid for 48 hours. Sanctum sends no email, so send it yourself.
           </p>
           <div className="mt-1.5 flex items-center gap-2">
-            <code className="min-w-0 flex-1 truncate font-mono text-xs text-ink select-all">{inviteLink(invited.id)}</code>
+            <code className="min-w-0 flex-1 truncate font-mono text-sm text-ink select-all">{inviteLink(invited.id)}</code>
             <CopyLink id={invited.id} />
           </div>
         </div>
@@ -161,7 +160,7 @@ function PendingRow({ invitation, busy, change }: { invitation: Invitation; busy
     <li className={row}>
       <span className="min-w-0">
         <span className="text-ink">{invitation.email}</span>
-        <span className="block text-xs text-ink-muted">{invitation.role} · expires {expires}</span>
+        <span className="block text-sm text-ink-muted">{invitation.role} · expires {expires}</span>
       </span>
       <span className="flex shrink-0 items-center gap-1">
         <CopyLink id={invitation.id} />
@@ -209,16 +208,13 @@ function NoTeam({ access, busy, change }: Omit<RowProps, 'team'>) {
   );
 }
 
-export function TeamDialog({ access, open, onClose }: { access: AccessScope; open: boolean; onClose: () => void }) {
+/** Team for the self-hosted issuer, inline in Settings or in the welcome's Team dialog; it reads the team when it mounts. */
+export function TeamPanel({ access }: { access: AccessScope }) {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => readTeam(access.workspace_id).then(setView, (failure: Error) => setError(failure.message)), [access.workspace_id]);
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    void load();
-  }, [open, load]);
+  useEffect(() => void load(), [load]);
 
   const change: Change = action => {
     setBusy(true);
@@ -237,10 +233,10 @@ export function TeamDialog({ access, open, onClose }: { access: AccessScope; ope
     team: () => view.kind === 'team' && <TeamList access={access} team={view.team} busy={busy} change={change} />,
   };
   return (
-    <Dialog title="Team" open={open} onClose={onClose}>
+    <>
       {error && <p role="alert" className="mb-3 text-warning">{error}</p>}
       {body[view.kind]()}
-    </Dialog>
+    </>
   );
 }
 
@@ -265,7 +261,7 @@ function ProfileForms({ name, onNotice }: { name: string; onNotice: (notice: Not
     <div className="listen-panel grid gap-2">
       <form onSubmit={submit(form => auth.updateUser({ name: String(new FormData(form).get('name')).trim() }), 'Name saved. Sanctum shows it after your next sign-in.')}>
         <label className="grid gap-1">
-          <span className="text-xs text-ink-muted">Display name</span>
+          <span className="text-sm text-ink-muted">Display name</span>
           <span className="flex gap-2">
             <input name="name" required maxLength={200} defaultValue={name} autoComplete="name" className={`${field} flex-1`} />
             <button type="submit" data-primary disabled={busy}>Save</button>
@@ -288,17 +284,15 @@ function ProfileForms({ name, onNotice }: { name: string; onNotice: (notice: Not
   );
 }
 
-export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Reads the signed-in name when it mounts. */
+export function ProfilePanel() {
   const [name, setName] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  useEffect(() => {
-    setNotice(null);
-    if (open) void auth.getSession().then(({ data }) => setName(data?.user.name ?? null));
-  }, [open]);
+  useEffect(() => void auth.getSession().then(({ data }) => setName(data?.user.name ?? null)), []);
   return (
-    <Dialog title="Profile" open={open} onClose={onClose}>
+    <>
       {notice && <NoticeLine notice={notice} />}
       {name === null ? <SignedOutNote task="edit your profile" /> : <ProfileForms name={name} onNotice={setNotice} />}
-    </Dialog>
+    </>
   );
 }

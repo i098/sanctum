@@ -163,6 +163,36 @@ layer(migratedDatabase, { timeout: 120_000 })('context items', it => {
       expect(yield* Effect.flip(searchContext(agent!, { q: 'budget', meeting_id: restricted.meeting_id }))).toMatchObject({ _tag: 'NotFound' });
     }));
 
+  it.effect('filters search by time range and kind and pages it newest first without gaps', () =>
+    Effect.gen(function*() {
+      const [owner, agent, device] = yield* seedWorkspace('SearchRange', ['owner', 'agent', 'device']);
+      const open = yield* seedMeeting(device!, { started_at: STARTED });
+      const restricted = yield* seedMeeting(device!, { started_at: STARTED, visibility: 'restricted' });
+      yield* grantMeeting(owner!, restricted, 'write');
+      for (const minute of [1, 2, 3, 4, 5]) {
+        const segment = yield* seedSegment(open, minute * 60, minute * 60 + 1, `Launch fact ${minute}.`);
+        yield* addContextItem(agent!, { ...decision(open.meeting_id, segment, `range-${minute}`, minute - 1), text: `Launch fact ${minute}`, kind: minute === 4 ? 'commitment' : 'decision' });
+      }
+      const hidden = yield* seedSegment(restricted, 60, 61, 'Launch secret.');
+      yield* addContextItem(owner!, { ...decision(restricted.meeting_id, hidden, 'range-hidden'), text: 'Launch secret' });
+      const texts = (params: Parameters<typeof searchContext>[1]) => searchContext(agent!, params).pipe(Effect.map(page => page.items.map(item => item.text)));
+
+      expect(yield* texts({ q: 'launch' })).toEqual(['Launch fact 5', 'Launch fact 4', 'Launch fact 3', 'Launch fact 2', 'Launch fact 1']);
+      expect(yield* texts({ from: '2026-09-26T17:02:00Z' as never, to: '2026-09-26T17:04:00Z' as never })).toEqual(['Launch fact 3', 'Launch fact 2']);
+      expect(yield* texts({ q: 'launch', kind: 'commitment' })).toEqual(['Launch fact 4']);
+      expect(yield* texts({ kind: 'open_question' })).toEqual([]);
+
+      const seen: Array<string> = [];
+      let cursor: string | undefined;
+      do {
+        const page = yield* searchContext(agent!, { q: 'launch', limit: 2, cursor });
+        seen.push(...page.items.map(item => item.text));
+        cursor = page.next_cursor ?? undefined;
+      } while (cursor !== undefined);
+      expect(seen).toEqual(['Launch fact 5', 'Launch fact 4', 'Launch fact 3', 'Launch fact 2', 'Launch fact 1']);
+      expect(yield* Effect.flip(searchContext(agent!, { q: 'launch', cursor: 'bogus' }))).toMatchObject({ _tag: 'NotFound' });
+    }));
+
   it.effect('serves snapshots per revision and re-checks access after revocation', () =>
     Effect.gen(function*() {
       const [owner, agent, device] = yield* seedWorkspace('Cache', ['owner', 'agent', 'device']);

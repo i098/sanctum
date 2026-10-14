@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { CaptureView, ListenerState, PermissionState } from '../../lib/capture/view.ts';
 import { type InputLevel, useInputLevel } from './input-level.ts';
 
@@ -13,13 +13,22 @@ const CHECK: Record<InputLevel['state'], string> = {
   sound: 'This input is sending sound.',
   silent: 'This input is sending no sound.',
 };
+const BUILT_IN = /built-in|macbook/i;
+
+function Hint({ input }: { input: InputLevel }) {
+  const closed = input.state === 'silent' && !input.issue && BUILT_IN.test(input.label);
+  return closed ? <span className="listen-input-hint">If your laptop is closed, choose another microphone.</span> : null;
+}
 
 /** Whether the input hears anything, from one `useInputLevel` reading; the welcome draws its level from the same reading. */
 export function InputCheckText({ input }: { input: InputLevel }) {
   return (
-    <span className="listen-input-check" data-state={input.issue ? 'silent' : input.state}>
-      {input.issue ? 'This input cannot be opened.' : CHECK[input.state]}
-    </span>
+    <>
+      <span className="listen-input-check" data-state={input.issue ? 'silent' : input.state}>
+        {input.issue ? 'This input cannot be opened.' : CHECK[input.state]}
+      </span>
+      <Hint input={input} />
+    </>
   );
 }
 
@@ -39,17 +48,20 @@ function defaultLabel(inputs: readonly MediaDeviceInfo[]): string {
 }
 
 /** Audio inputs with labels, which browsers give once permission is granted or capture opens an input; read again as devices come and go. */
-function useLabelledInputs(permission: PermissionState, inputLabel: string | null): MediaDeviceInfo[] {
+function useLabelledInputs(permission: PermissionState, inputLabel: string | null): [MediaDeviceInfo[], () => void] {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
-  useEffect(() => {
+  const read = useCallback((): void => {
     const media = navigator.mediaDevices;
     if (media?.enumerateDevices === undefined) return;
-    const read = (): void => void media.enumerateDevices().then(all => setInputs(all.filter(device => device.kind === 'audioinput' && device.label !== '')), () => {});
+    void media.enumerateDevices().then(all => setInputs(all.filter(device => device.kind === 'audioinput' && device.label !== '')), () => {});
+  }, []);
+  useEffect(() => {
     read();
-    media.addEventListener('devicechange', read);
-    return () => media.removeEventListener('devicechange', read);
-  }, [permission, inputLabel]);
-  return inputs;
+    const media = navigator.mediaDevices;
+    media?.addEventListener('devicechange', read);
+    return () => media?.removeEventListener('devicechange', read);
+  }, [permission, inputLabel, read]);
+  return [inputs, read];
 }
 
 /**
@@ -58,14 +70,17 @@ function useLabelledInputs(permission: PermissionState, inputLabel: string | nul
  */
 export function InputPicker({ engine, check = false }: { engine: CaptureView; check?: boolean }) {
   const { inputId, inputLabel, permission, listener } = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
-  const inputs = useLabelledInputs(permission, inputLabel);
+  const [inputs, refresh] = useLabelledInputs(permission, inputLabel);
   if (inputs.length === 0) return null;
   return (
     <span className="listen-input-picker">
-      <select className="listen-input" aria-label="Microphone" value={inputId ?? ''} onChange={event => void engine.chooseInput(event.target.value || null)}>
-        <option value="">{defaultLabel(inputs)}</option>
-        {inputs.filter(device => device.deviceId !== 'default').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label}</option>)}
-      </select>
+      <span className="listen-input-row">
+        <select className="listen-input" aria-label="Microphone" value={inputId ?? ''} onChange={event => void engine.chooseInput(event.target.value || null)}>
+          <option value="">{defaultLabel(inputs)}</option>
+          {inputs.filter(device => device.deviceId !== 'default').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label}</option>)}
+        </select>
+        <button type="button" className="listen-input-refresh" onClick={refresh}>Refresh</button>
+      </span>
       {check && <InputCheck deviceId={inputId} listener={listener} />}
     </span>
   );

@@ -19,7 +19,9 @@ const next = () => {
 };
 
 const input = 'w-full rounded border border-divider bg-surface px-3 py-2 text-ink outline-none focus-visible:border-accent';
-const primary = 'rounded bg-accent px-4 py-2 font-medium text-ink disabled:opacity-60';
+const button = 'inline-flex min-h-9 items-center justify-center rounded-lg px-4 font-medium disabled:opacity-60';
+const primary = `${button} bg-(--btn-primary) text-white not-disabled:hover:bg-(--btn-primary-hover)`;
+const secondary = `${button} bg-(--btn-secondary) text-ink not-disabled:hover:bg-(--btn-secondary-hover)`;
 
 type Failure = { readonly message?: string | undefined } | null;
 
@@ -124,7 +126,7 @@ export function ConsentPage() {
       <p className="mb-3 text-ink-secondary">
         <span className="text-ink">{client}</span> asks for:
       </p>
-      <ul className="mb-5 list-disc pl-5 font-mono text-xs">
+      <ul className="mb-5 list-disc pl-5 font-mono text-sm">
         {(query.get('scope') ?? '').split(' ').filter(Boolean).map(scope => (
           <li key={scope}>{scope}</li>
         ))}
@@ -133,7 +135,7 @@ export function ConsentPage() {
         <button className={primary} type="button" disabled={busy} onClick={() => void answer(true)}>
           Allow
         </button>
-        <button className="rounded border border-divider px-4 py-2" type="button" disabled={busy} onClick={() => void answer(false)}>
+        <button className={secondary} type="button" disabled={busy} onClick={() => void answer(false)}>
           Deny
         </button>
       </div>
@@ -143,8 +145,6 @@ export function ConsentPage() {
 
 interface Invitation { readonly organizationName: string; readonly inviterEmail: string; readonly role: string }
 type InvitePageState = { readonly kind: 'loading' | 'signed_out' } | { readonly kind: 'open'; readonly email: string; readonly invitation: Invitation | null };
-
-const secondary = 'rounded border border-divider px-4 py-2';
 
 function InviteSignedOut({ back }: { back: string }) {
   return (
@@ -189,7 +189,7 @@ function InviteOpen({ id, back, email, invitation, onError }: { id: string; back
           Use another account
         </button>
       </div>
-      <p className="mt-4 text-xs text-ink-muted">Signed in as {email}.</p>
+      <p className="mt-4 text-sm text-ink-muted">Signed in as {email}.</p>
     </>
   );
 }

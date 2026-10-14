@@ -20,6 +20,7 @@ No package is published yet.
 - **Idempotency.** Repeating a write with the same key and payload returns the original result. The same key with different content fails with `hash_conflict`.
 - **Conflicts.** A stale `expected_revision` fails with `revision_conflict` and `body.current_revision`. Re-read, rebase your change, and write again with a new key; never overwrite blindly.
 - **Pagination.** Lists return `{ items, next_cursor }`. Pass `next_cursor` back as `cursor`; `pages()` does this until the cursor is null. Change cursors from `get_context`/`getContextChanges` are durable, so a consumer can resume from the last one it stored.
+- **Searching context.** `searchContext` (MCP `search_context`) lists current items newest first by event time. All parameters are optional: `q` (keywords; every word of three or more characters must appear, so send keywords, not a question), `meeting_id`, `kind` (`decision`, `commitment`, ...), `from` (inclusive) and `to` (exclusive) as UTC timestamps, `limit` (default 20, at most 200) and `cursor`. Without `q` it lists everything the caller may read that matches the other filters. The reply is `{ items, next_cursor }`; page with `pages(client, 'context.searchContext', { from, to })` (TypeScript) or `pages("context.searchContext", {...})` (Python). Callers that send only `q`, `meeting_id` and `limit` are unchanged apart from the extra `next_cursor` field.
 - **Cancellation and timeouts.** TypeScript takes an `AbortSignal` per call; aborting stops the request and the server-side work. Python uses `timeout` (seconds, default 30) and task cancellation on `AsyncClient`.
 - **Actions.** `requestAction` only records the request; execution needs a stored grant. An optional `title` names the request for people; the listening view's agent-work feed shows it. `waitForAction` polls the receipt until `succeeded`, `failed`, `cancelled` or `unknown` (submitted but unreconciled; do not resubmit).
 - **Revocation.** A revoked credential fails its next call with `unauthenticated`.
@@ -32,6 +33,18 @@ SANCTUM_URL=https://sanctum.example SANCTUM_TOKEN=... PYTHONPATH=sdk/python/src 
 ```
 
 Each reads a meeting, cites a transcript segment, appends research, recovers from a conflict, consumes changes, requests an action and reads its receipt, then creates and revokes a read-only agent.
+
+## Querying the soak workspace
+
+Any agent with a bearer token can read the soak meetings; the run and its pass bars are in [operations](../docs/operations.md#24-hour-soak).
+
+| Need | Call | Notes |
+| --- | --- | --- |
+| Search by keyword | `GET /api/v1/context/search?q=launch+date` (TypeScript `client.context.searchContext({ q })`, Python `context.searchContext`) | Needs `context:read`. Every term of 3+ letters must appear in one item, so send keywords. Newest first, no relevance ranking. |
+| Time range or timeline | same route with `from`, `to`, `kind`; omit `q` to list the range | Page with `next_cursor` as `cursor`. Every item carries `event_at`; the latest fact wins by `event_at`, not by server supersession. |
+| Meetings in a range | `GET /api/v1/meetings?from=&to=` | A detected meeting is private to its capturing principal until it is shared with the workspace (`POST /api/v1/meetings/{id}/share`). |
+| Transcript and cited source | `GET /api/v1/meetings/{id}/transcript`, `GET /api/v1/sources/{id}` | Needs `recordings:read`. |
+| Soak results | `GET /report.json` on the results page | Verdict per metric and checkpoint; no token. |
 
 ## MCP
 

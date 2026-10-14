@@ -52,7 +52,7 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   expect((await stored).status()).toBe(200);
   await openMenu(page, 'Settings');
   await menuSection(page, 'Settings').getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
+  const team = menuSection(page, 'Settings').locator('.listen-team');
   const members = team.getByRole('region', { name: 'Members' });
   await expect(members).toContainText('grace@example.test');
   await expect(team.getByRole('region', { name: 'Your profile' })).toContainText('Ada Lovelace');
@@ -75,6 +75,15 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   const styles = await page.evaluate(() => window.styleTexts.join('\n'));
   for (const marker of ['data-radix-scroll-area-viewport', 'data-radix-select-viewport', 'data-scroll-locked']) expect(styles).toContain(marker);
   expect(await page.evaluate(() => window.cspViolations)).toEqual([]);
-  // Radix Themes' stylesheet applied: the widgets' accent is Sanctum's blue.
-  expect(await team.getByRole('button', { name: 'Invite user' }).evaluate(button => getComputedStyle(button).backgroundColor)).toBe('rgb(61, 125, 255)');
+  // Radix Themes' stylesheet applied (its buttons are inline-flex), and the widgets wear the app's own primary button color.
+  const inviteButton = team.getByRole('button', { name: 'Invite user' });
+  expect(await inviteButton.evaluate(button => getComputedStyle(button).display)).toBe('inline-flex');
+  const [actual, primary] = await inviteButton.evaluate(button => {
+    const probe = Object.assign(document.createElement('i'), { style: 'background: var(--btn-primary)' });
+    document.body.append(probe);
+    const colors = [getComputedStyle(button).backgroundColor, getComputedStyle(probe).backgroundColor];
+    probe.remove();
+    return colors;
+  });
+  expect(actual).toBe(primary);
 });

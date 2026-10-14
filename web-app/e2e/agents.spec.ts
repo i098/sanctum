@@ -42,6 +42,7 @@ test('creates a scoped agent, shows its token once, and revokes it', async ({ pa
   await page.goto('/e2e/harness/agents.html');
   await page.getByRole('button', { name: 'Agents' }).click();
   const dialog = page.getByRole('dialog', { name: 'Agents' });
+  await dialog.getByRole('tab', { name: 'Access tokens' }).click();
   await expect(dialog.getByText('No agents yet.')).toBeVisible();
 
   await dialog.getByLabel('Agent name').fill('Research bot');
@@ -73,6 +74,7 @@ test('shows a refused create as an error and keeps the list unchanged', async ({
   await page.goto('/e2e/harness/agents.html');
   await page.getByRole('button', { name: 'Agents' }).click();
   const dialog = page.getByRole('dialog', { name: 'Agents' });
+  await dialog.getByRole('tab', { name: 'Access tokens' }).click();
   await dialog.getByLabel('Agent name').fill('Denied');
   await dialog.getByRole('button', { name: 'Create agent' }).click();
   await expect(dialog.getByRole('alert')).toHaveText('Requires workspace:admin; nothing was changed.');

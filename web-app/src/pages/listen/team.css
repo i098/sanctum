@@ -6,13 +6,60 @@
   --accent-10: #5b8fff;
   --color-background: #12161e;
   --color-panel-solid: #171c26;
+  --default-font-family: var(--font-sans);
+}
+
+/* The widgets' buttons wear the app's two looks: solid primary, quiet secondary. */
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft, .rt-variant-solid) {
+  border-radius: var(--btn-r);
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  background: var(--btn-secondary);
+  color: #e7ecf3;
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft):hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-secondary-hover);
+}
+
+.listen-team .rt-Button.rt-variant-solid {
+  background: var(--btn-primary);
+  color: #fff;
+}
+
+.listen-team .rt-Button.rt-variant-solid:hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-primary-hover);
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft)[data-accent-color='red'] {
+  background: none;
+  color: var(--btn-danger);
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft)[data-accent-color='red']:hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-danger-hover);
+}
+
+.listen-team .rt-Button.rt-variant-solid[data-accent-color='red'] {
+  background: var(--btn-confirm);
+  color: #fff;
+}
+
+.listen-team .rt-Button.rt-variant-solid[data-accent-color='red']:hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-confirm-hover);
+}
+
+.listen-team .rt-Button:is(:disabled, [data-disabled]) {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .listen-team h3 {
   margin: 24px 0 8px;
   color: #e7ecf3;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-secondary);
+  font-weight: var(--weight-semibold);
 }
 
 .listen-team section:first-of-type h3 {
@@ -20,8 +67,9 @@
 }
 
 /*
- * Team covers Settings at every width: while Team is open, the Settings box behind it is hidden
- * and only its backdrop stays, so the page dims as before. Team itself (a DOM child) stays visible.
+ * The welcome's Team dialog covers the welcome at every width: while it is open, the welcome's box behind
+ * it is hidden and only its backdrop stays, so the page dims as before. Team itself (a DOM child) stays visible.
+ * In Settings, Team renders inline and none of these dialog rules match.
  */
 .listen-dialog:has(.listen-dialog[open] > .listen-team) {
   visibility: hidden;
@@ -33,7 +81,7 @@
 }
 
 @media (max-width: 640px) {
-  /* Team takes the whole phone screen, so the members table and profile get its full width. */
+  /* The welcome's Team takes the whole phone screen, so the members table and profile get its full width. */
   .listen-dialog:has(> .listen-team) {
     box-sizing: border-box;
     width: 100vw;

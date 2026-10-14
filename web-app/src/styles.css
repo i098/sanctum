@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 
 @theme {
   --color-canvas: #0a0c10;
@@ -12,11 +14,40 @@
   --color-state: #22d3c5;
   --color-warning: #f2a23b;
   --color-wave: #b9c4f9;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* The type scale: Tailwind's text-sm / text-base / text-lg land on these sizes. */
+  --text-sm: 14px;
+  --text-sm--line-height: 1.5;
+  --text-base: 15px;
+  --text-base--line-height: 1.5;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.35;
 }
 
 @layer base {
+  :root {
+    /* One scale for every screen: body 15, secondary 14, section heading 13 semibold, title 18. */
+    --type-body: 15px;
+    --type-secondary: 14px;
+    --type-heading: 13px;
+    --type-title: 18px;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    /* Buttons: solid primary, quiet secondary, quiet red danger that only a final confirm fills. */
+    --btn-h: 36px;
+    --btn-r: 8px;
+    --btn-px: 16px;
+    --btn-primary: #2f6df0;
+    --btn-primary-hover: #4a82f5;
+    --btn-secondary: #222a39;
+    --btn-secondary-hover: #2c3547;
+    --btn-danger: #ff8a8a;
+    --btn-danger-hover: rgb(255 93 93 / 0.14);
+    --btn-confirm: #c93a3a;
+    --btn-confirm-hover: #d94a4a;
+  }
+
   html,
   body,
   #root {
@@ -30,5 +61,8 @@
     background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
+    font-size: var(--type-body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
 }
