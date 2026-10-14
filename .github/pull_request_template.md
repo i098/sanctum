@@ -19,7 +19,7 @@ Closes #
 ## Checklist
 
 - [ ] One concern in this PR.
-- [ ] The title uses the commit format, for example `docs: link handoff files under docs/build`, and is 72 characters or fewer.
+- [ ] The title uses the commit format, for example `docs: link handoff files from the README`, and is 72 characters or fewer.
 - [ ] Types check (`npm run typecheck`).
 - [ ] Tests pass (`npm test`).
 - [ ] Handoff check passes (`npm run check`), and the generated files are current (`npm run docs:render`) if their sources changed.
