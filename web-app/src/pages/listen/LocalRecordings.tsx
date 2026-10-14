@@ -69,7 +69,7 @@ function RecordingList({ recordings, stranded, id, onExport, onDiscard }: Record
                   : `Export part ${number + 1} of ${recording.parts.length} · ${since(recording, part.sampleStart)}–${since(recording, part.sampleEnd)}`}
               </button>
             ))}
-            <button type="button" aria-describedby={`${id}-${index}`} onClick={() => onDiscard(recording)}>Discard</button>
+            <button type="button" data-danger aria-describedby={`${id}-${index}`} onClick={() => onDiscard(recording)}>Discard</button>
           </div>
         </li>
       ))}
@@ -120,14 +120,14 @@ export function LocalRecordings({ engine }: LocalRecordingsProps) {
       {failure && <p role="alert" className="listen-local-gap">{failure}</p>}
       <Dialog title="Discard local recording?" open={confirming !== null} onClose={() => setConfirming(null)}>
         {confirming && (
-          <div className="listen-panel">
+          <div className="listen-panel listen-confirm">
             <p>
               Permanently deletes the recording from {describe(confirming)} from this device. It was never uploaded, so it cannot be recovered.
               Export it first to keep a copy. Other recordings and pending uploads are not touched.
             </p>
             <div className="listen-local-actions">
-              <button type="button" onClick={() => setConfirming(null)}>Cancel</button>
-              <button type="button" onClick={() => discard(confirming)}>Discard recording</button>
+              <button type="button" data-quiet onClick={() => setConfirming(null)}>Cancel</button>
+              <button type="button" data-danger onClick={() => discard(confirming)}>Discard recording</button>
             </div>
           </div>
         )}

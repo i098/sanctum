@@ -126,7 +126,7 @@
   background: #0b0e14;
   color: #e7ecf3;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--type-secondary);
   color-scheme: dark;
   cursor: pointer;
 }
@@ -731,7 +731,7 @@
 .listen-role {
   margin-left: 4px;
   color: #8b919c;
-  font-size: 13px;
+  font-size: var(--type-secondary);
 }
 
 .listen a[data-primary] {
@@ -781,7 +781,7 @@
   gap: 4px 12px;
   margin: 10px 0 0;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--type-secondary);
 }
 
 .listen-signin-notice dt {
@@ -815,7 +815,7 @@
 
 .listen-source {
   color: #8b919c;
-  font-size: 13px;
+  font-size: var(--type-secondary);
 }
 
 .listen-panel h3 {
@@ -1015,7 +1015,7 @@
 
 .listen-recording p {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: var(--type-secondary);
 }
 
 /* Phones: status tucks under the line, the rails stack full width above a two-row footer. */

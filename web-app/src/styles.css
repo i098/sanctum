@@ -16,9 +16,7 @@
   --color-wave: #b9c4f9;
   --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  /* The type scale: Tailwind's text-xs / text-sm / text-base / text-lg land on these sizes. */
-  --text-xs: 13px;
-  --text-xs--line-height: 1.45;
+  /* The type scale: Tailwind's text-sm / text-base / text-lg land on these sizes. */
   --text-sm: 14px;
   --text-sm--line-height: 1.5;
   --text-base: 15px;

@@ -124,7 +124,7 @@ export function ConsentPage() {
       <p className="mb-3 text-ink-secondary">
         <span className="text-ink">{client}</span> asks for:
       </p>
-      <ul className="mb-5 list-disc pl-5 font-mono text-xs">
+      <ul className="mb-5 list-disc pl-5 font-mono text-sm">
         {(query.get('scope') ?? '').split(' ').filter(Boolean).map(scope => (
           <li key={scope}>{scope}</li>
         ))}
@@ -189,7 +189,7 @@ function InviteOpen({ id, back, email, invitation, onError }: { id: string; back
           Use another account
         </button>
       </div>
-      <p className="mt-4 text-xs text-ink-muted">Signed in as {email}.</p>
+      <p className="mt-4 text-sm text-ink-muted">Signed in as {email}.</p>
     </>
   );
 }
