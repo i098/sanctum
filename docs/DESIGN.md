@@ -18,7 +18,7 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text. While browser captions run, a second helper line, at most 300 px wide, says that live captions use the browser's speech service (in Chrome, Google's). After a recognition error that stops captions for the capture session, the same line says, while capture runs, that word-by-word captions are not available in this browser (`network`, `service-not-allowed`, `not-allowed`) or for this language (`language-not-supported`), and that lines appear after each phrase.
 - Footer sits approximately 24–32 px from the bottom and sides.
 - Lower left: a tiny state dot and brief capture/context health text.
-- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu.
+- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu (also Ctrl/⌘+K).
 - Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 
@@ -85,8 +85,8 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 ## Secondary views
 
-Review, Agents, and Settings live in one central Menu panel that opens only on request: the footer's Menu button or Ctrl/⌘+K, with a section rail (Review, Agents, Settings) beside the active section.
-Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
+Review, Agents, and Settings are sections of one central Menu panel, opened only on request by the Menu button or Ctrl/⌘+K, with a section rail beside the active section.
+Use a restrained dark overlay and the same tokens; closing it returns to the listening screen without stopping capture.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
