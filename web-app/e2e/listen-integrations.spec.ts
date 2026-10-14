@@ -36,7 +36,7 @@ test('Apps shows not configured, nothing connected, and each connected app with 
   body = { configured: true, accounts: [GMAIL, CALENDAR] };
   await openMenu(page, 'Apps');
   const connected = section.getByRole('list').first().getByRole('listitem');
-  await expect(connected).toHaveText(['Gmailgmail-send-email for a memberDisconnect', 'Google CalendarNo grants yetDisconnect']);
+  await expect(connected).toHaveText(['GmailSend email · membersDisconnect', 'Google CalendarNo grants yetDisconnect']);
   await expect(section.getByRole('button', { name: 'Connect Gmail', exact: true })).toHaveCount(0);
   await expect(section.getByRole('button', { name: 'Connect Slack' })).toBeVisible();
 });
@@ -71,7 +71,7 @@ test('Connect opens the Connect Link in a new tab, keeps this tab capturing, and
 
   accounts = [GMAIL];
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(section.getByRole('listitem').filter({ hasText: 'Disconnect' })).toHaveText(['Gmailgmail-send-email for a memberDisconnect']);
+  await expect(section.getByRole('listitem').filter({ hasText: 'Disconnect' })).toHaveText(['GmailSend email · membersDisconnect']);
 
   await section.getByRole('button', { name: 'Disconnect Gmail' }).click();
   await expect(section.getByRole('button', { name: 'Disconnect Gmail' })).toHaveCount(0);

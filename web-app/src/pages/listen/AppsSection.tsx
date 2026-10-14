@@ -1,6 +1,7 @@
 import type { ConnectedIntegrationAccount, IntegrationAccounts } from '@sanctum/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 import { post, type SignInState } from '../../lib/session.ts';
+import { actionLabel } from '../../lib/action-label.ts';
 import { WORKSPACE } from './SettingsSection.tsx';
 
 /** Offered as tiles until connected; any other Pipedream app slug can be typed in "Any other app". */
@@ -14,12 +15,15 @@ const SUGGESTED_APPS: Readonly<Record<string, string>> = {
   github: 'Issues, pull requests',
 };
 
-const appName = (slug: string) => slug.split(/[_-]+/).filter(Boolean).map(word => word[0]!.toUpperCase() + word.slice(1)).join(' ');
+/** Slugs whose title-cased words are not the brand's spelling. */
+const BRAND: Readonly<Record<string, string>> = { github: 'GitHub' };
+
+const appName = (slug: string) => BRAND[slug] ?? slug.split(/[_-]+/).filter(Boolean).map(word => word[0]!.toUpperCase() + word.slice(1)).join(' ');
 
 const accounts = async (response: Promise<Response>): Promise<IntegrationAccounts> => (await response).json();
 
 const grantText = ({ grants }: ConnectedIntegrationAccount) =>
-  grants.length === 0 ? 'No grants yet' : grants.map(grant => `${grant.action_key} for ${grant.grantee_name ?? 'a member'}`).join('; ');
+  grants.length === 0 ? 'No grants yet' : grants.map(grant => `${actionLabel(grant.action_key)} · ${grant.grantee_name ?? 'members'}`).join('; ');
 
 const STATUS = {
   checking: 'Checking',
