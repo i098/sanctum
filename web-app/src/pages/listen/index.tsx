@@ -10,6 +10,7 @@ import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engin
 import { deviceName, InputPicker } from './InputPicker.tsx';
 import { MeetingsSection } from './MeetingsSection.tsx';
 import { MenuPanel } from './MenuPanel.tsx';
+import { menuCommands, useMenuSection, useMenuShortcut } from './menu.ts';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
 import { SettingsSection } from './SettingsSection.tsx';
 import { startWaveform } from './waveform.ts';
@@ -331,7 +332,7 @@ export function ListenPage() {
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
-  const [section, setSection] = useState(notice ? 'settings' : 'meetings');
+  const { section, chosenMeeting, select, openMeeting } = useMenuSection(overlay === 'menu', notice ? 'settings' : 'meetings');
   const menuRef = useRef<HTMLButtonElement>(null);
   const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
   const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
@@ -345,23 +346,14 @@ export function ListenPage() {
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      // Lowercase: Caps Lock (or Shift) reports an uppercase K.
-      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
-      event.preventDefault();
-      // Focus first: a native dialog returns focus to whatever had it when it opened.
-      menuRef.current?.focus();
-      setOverlay(open => open ?? 'menu');
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  useMenuShortcut(menuRef, setOverlay, 'menu');
   const sections = [
-    { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} /> },
+    { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} meetingId={chosenMeeting} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
   ];
+
+  const commands = menuCommands(signIn, refreshSignIn);
 
   return (
     <main aria-label="Sanctum" className="listen">
@@ -384,7 +376,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} menuRef={menuRef} onMenu={() => setOverlay('menu')} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
-      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} />
+      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={select} client={client} commands={commands} onMeeting={openMeeting} />
       {/* After the menu, so the menu has closed before the welcome it opens (from Settings) takes the modal layer. */}
       <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>

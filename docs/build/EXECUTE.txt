@@ -770,7 +770,7 @@ The preview waveform is illustrative; production must never simulate input or sh
 
 Keep capture lifecycle outside overlay mount/unmount.
 The Menu is one central overlay for Meetings (with Review), Agents, and Settings, with accessible focus handling and Escape-to-close.
-The main screen contains pause/resume, fullscreen, and Menu controls only.
+The main screen contains pause/resume, end meeting, fullscreen, and Menu controls only.
 No automatic sound effects, greetings, completion notices, or sign-offs.
 Every TTS response requires a direct-request speech gate; explicit recording playback remains available.
 

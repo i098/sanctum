@@ -628,7 +628,7 @@
 .listen-menu[open] {
   display: grid;
   grid-template-columns: 200px 1fr;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
 }
 
 .listen-menu .listen-dialog-header {
@@ -636,6 +636,88 @@
   margin: 0;
   padding: 12px 20px;
   border-bottom: 1px solid #222936;
+}
+
+.listen-menu-search {
+  grid-column: 1 / -1;
+  padding: 10px 20px;
+  border-bottom: 1px solid #222936;
+}
+
+.listen-menu-search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #222936;
+  border-radius: 4px;
+  background: #0b0e14;
+  color: #e7ecf3;
+  font: inherit;
+}
+
+.listen-menu-search input:focus-visible {
+  outline: none;
+  border-color: #3d7dff;
+}
+
+.listen-menu-results {
+  grid-column: 1 / -1;
+  min-height: 0;
+  padding: 8px 20px 16px;
+  overflow: auto;
+}
+
+.listen-menu-results ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listen-menu-results li {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr auto;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 9px 10px;
+  border-radius: 4px;
+  color: #e7ecf3;
+  cursor: pointer;
+}
+
+.listen-menu-results li[aria-selected='true'] {
+  background: #171c26;
+}
+
+.listen-menu-results li[aria-disabled='true'] {
+  cursor: default;
+}
+
+.listen-result-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a93a3;
+}
+
+.listen-result-detail {
+  font-size: 12px;
+  color: #8a93a3;
+}
+
+.listen-result-note {
+  padding: 10px 10px 0;
+  font-size: 12px;
+  color: #8a93a3;
+}
+
+.listen-result-note p {
+  margin: 4px 0;
+}
+
+.listen-result-note [role='alert'] {
+  color: #e8b65c;
 }
 
 .listen-menu-rail {
@@ -1191,11 +1273,24 @@
 
   .listen-menu[open] {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto auto 1fr;
   }
 
   .listen-menu .listen-dialog-header {
     padding: 12px 16px;
+  }
+
+  .listen-menu-search {
+    padding: 10px 16px;
+  }
+
+  .listen-menu-results {
+    grid-row: 3 / -1;
+    padding: 8px 10px 16px;
+  }
+
+  .listen-menu-results li {
+    grid-template-columns: 1fr;
   }
 
   .listen-menu-rail {

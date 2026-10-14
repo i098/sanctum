@@ -89,6 +89,7 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 The Menu is the one central overlay for everything beyond listening; it opens only on request, from its footer button or Ctrl/⌘+K, and holds Meetings, Agents and Settings as sections in a rail beside the active section.
 Meetings is the first section: a paged list of meetings with the live meeting on top, and any meeting opens the same Review beside it.
+A search box at the top of the Menu replaces the rail while it holds text; it finds decisions, commitments, meetings and commands (Open a section, Fullscreen, Sign out), not transcript text. A meeting result opens that meeting in Meetings.
 Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.

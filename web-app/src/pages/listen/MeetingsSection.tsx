@@ -110,9 +110,18 @@ function MeetingList({ state, selected, onSelect }: { state: MeetingsState; sele
 
 const newest = (meetings: ReadonlyArray<Meeting> | null): Meeting | null => meetings?.find(isLive) ?? meetings?.[0] ?? null;
 
-/** The open meeting: the one chosen, else side by side the live (else newest) one, as Review always did, and on a phone none, so the list shows first. */
-function useSelection(meetings: ReadonlyArray<Meeting> | null): [Meeting | null, (meeting: Meeting | null) => void] {
+/**
+ * The open meeting: a search result (`meetingId`) once read, else the one chosen, else side by side the live
+ * (else newest) one, as Review always did, and on a phone none, so the list shows first.
+ */
+function useSelection(client: SanctumClient, meetings: ReadonlyArray<Meeting> | null, meetingId: string | undefined): [Meeting | null, (meeting: Meeting | null) => void] {
   const [chosen, choose] = useState<Meeting | null | undefined>(undefined);
+  useEffect(() => {
+    if (meetingId === undefined) return;
+    const controller = new AbortController();
+    void settle(client.meetings.getMeeting({ meeting_id: meetingId }, { signal: controller.signal })).then(found => controller.signal.aborted || found.status !== 'ok' || choose(found.data));
+    return () => controller.abort();
+  }, [client, meetingId]);
   const fallback = window.matchMedia(WIDE).matches ? newest(meetings) : null;
   return [chosen === undefined ? fallback : chosen, choose];
 }
@@ -122,9 +131,9 @@ function useSelection(meetings: ReadonlyArray<Meeting> | null): [Meeting | null,
  * opens its six Review tabs beside the list (over it on a phone). Opening or closing it never
  * touches capture.
  */
-export function MeetingsSection({ client }: { client: SanctumClient }) {
+export function MeetingsSection({ client, meetingId }: { client: SanctumClient; meetingId?: string | undefined }) {
   const state = useMeetings(client);
-  const [selected, choose] = useSelection(state.meetings);
+  const [selected, choose] = useSelection(client, state.meetings, meetingId);
   return (
     <div className="listen-meetings" data-open={selected ? 'true' : undefined}>
       <MeetingList state={state} selected={selected} onSelect={choose} />
