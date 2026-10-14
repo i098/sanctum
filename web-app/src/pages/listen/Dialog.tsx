@@ -7,6 +7,8 @@ interface DialogProps {
   children: ReactNode;
   /** The header's close control; a flow the person may leave at any step says Skip. */
   closeLabel?: string;
+  /** Extra class on the `<dialog>`, for an overlay that is not the narrow default. */
+  className?: string;
 }
 
 /**
@@ -31,7 +33,7 @@ function wrapFocus(event: KeyboardEvent<HTMLDialogElement>): void {
  * close (Escape) reports `onClose`: a close because `open` turned false (one overlay replacing
  * another) must not close what replaced it.
  */
-export function Dialog({ title, open, onClose, children, closeLabel = 'Close' }: DialogProps) {
+export function Dialog({ title, open, onClose, children, closeLabel = 'Close', className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -41,7 +43,7 @@ export function Dialog({ title, open, onClose, children, closeLabel = 'Close' }:
     else dialog.close();
   }, [open]);
   return (
-    <dialog ref={ref} className="listen-dialog" aria-labelledby={titleId} onClose={event => open && event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
+    <dialog ref={ref} className={className ? `listen-dialog ${className}` : 'listen-dialog'} aria-labelledby={titleId} onClose={event => open && event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
       <header className="listen-dialog-header">
         <h2 id={titleId}>{title}</h2>
         <button type="button" onClick={onClose}>{closeLabel}</button>

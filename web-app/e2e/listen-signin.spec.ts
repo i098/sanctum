@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { fakeWorkosWidgets, openListening, serveListening, type FakeSignIn } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 const ACCESS = {
   workspace_id: '00000000-0000-4000-8000-000000000001',
@@ -11,8 +12,8 @@ const ACCESS = {
 };
 
 async function openSettings(page: Page) {
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   await expect(settings).toBeVisible();
   return settings;
 }
@@ -50,7 +51,7 @@ test('a return from sign-in with a session confirms it once, without opening Set
   const status = page.locator('.listen-status');
   await expect(status).toContainText('Signed in as Ada Lovelace');
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
+  await expect(menuSection(page, 'Settings')).toBeHidden();
   await page.reload();
   const settings = await openSettings(page);
   await expect(row(settings, 'Sign-in').locator('.listen-account-name')).toHaveText('Ada Lovelace owner');
@@ -68,7 +69,7 @@ test('a return from sign-in without a session confirms nothing and offers sign-i
   await page.goto('/?signin=ok');
   await expect(page.getByRole('link', { name: 'Sign in to listen' })).toBeVisible();
   await expect(page.locator('.listen-status')).not.toContainText('Signed in as');
-  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
+  await expect(menuSection(page, 'Settings')).toBeHidden();
 });
 
 for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -102,14 +103,14 @@ test('signed in: name, email, role label, keyboard focus, sign out', async ({ pa
   await expect(row(settings, 'Sign-in').locator('.listen-account-email')).toHaveText('ada@example.test');
   await expect(row(settings, 'Sign-in').locator('.listen-avatar')).toHaveText('AL');
 
-  // Tab reaches each sign-in control and stays inside the dialog.
+  // Tab reaches the panel's close and rail and each sign-in control, and stays inside the panel.
   const reached = new Set<string>();
-  for (let press = 0; press < 6; press++) {
+  for (let press = 0; press < 12; press++) {
     await page.keyboard.press('Tab');
-    expect(await settings.evaluate(element => element.contains(document.activeElement))).toBe(true);
+    expect(await page.getByRole('dialog', { name: 'Menu' }).evaluate(element => element.contains(document.activeElement))).toBe(true);
     reached.add(await page.evaluate(() => document.activeElement?.textContent ?? ''));
   }
-  expect(reached).toEqual(new Set(['Close', 'Connect sign-in', 'Sign out']));
+  expect([...reached]).toEqual(expect.arrayContaining(['Close', 'Review', 'Connect sign-in', 'Sign out']));
 
   await settings.getByRole('button', { name: 'Sign out' }).press('Enter');
   await expect(row(settings, 'Sign-in')).toHaveText('Signed outSign in');
@@ -281,7 +282,7 @@ test('WorkOS: the owner of an unlinked workspace sets up the team, and an admin 
 test('not a member: Settings opens with the issuer and subject for the operator', async ({ page }) => {
   await serveListening(page, { configured: true, access: null });
   await page.goto('/?signin=not_member&issuer=https%3A%2F%2Fexample.authkit.app&subject=user_01FIXTURE');
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const settings = menuSection(page, 'Settings');
   await expect(settings.getByRole('status')).toContainText('not a member of a workspace');
   await expect(settings.getByRole('status').getByRole('definition')).toHaveText(['https://example.authkit.app', 'user_01FIXTURE']);
   await expect(page).toHaveURL(/\/$/);
@@ -299,7 +300,7 @@ test('not a member with self-serve on: Create workspace signs in again and the f
     return route.fulfill({ status: 302, headers: { location: new URL(login).searchParams.get('return_to')! } });
   });
   await page.goto('/?signin=not_member&issuer=https%3A%2F%2Fexample.authkit.app&subject=user_01FIXTURE');
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const settings = menuSection(page, 'Settings');
   // The browser's zone is the default, even an alias such as `UTC` that the canonical zone list omits.
   await expect(settings.getByLabel('Timezone')).toHaveValue(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone));
   await settings.getByLabel('Workspace name').fill('  Acme Research ');
@@ -310,12 +311,12 @@ test('not a member with self-serve on: Create workspace signs in again and the f
   expect(new URL(login).search).toBe('?return_to=%2F%3Fsignin%3Dok&workspace_name=Acme+Research&timezone=Europe%2FBerlin');
   await expect(page).toHaveURL(/\/$/);
   await page.reload();
-  await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Menu' })).toBeVisible();
   await expect(status).not.toContainText('Signed in as');
 });
 
 test('a failed sign-in callback says so', async ({ page }) => {
   await serveListening(page, { configured: true, access: null });
   await page.goto('/?signin=failed');
-  await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('status')).toHaveText('Sign-in did not finish. Try again.');
+  await expect(menuSection(page, 'Settings').getByRole('status')).toHaveText('Sign-in did not finish. Try again.');
 });

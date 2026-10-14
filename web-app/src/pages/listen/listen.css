@@ -515,6 +515,51 @@
   color: #a7adb8;
 }
 
+/* Menu: one central panel, a section rail beside the active section's body. */
+.listen-menu {
+  width: min(1200px, calc(100vw - 240px));
+  height: min(740px, calc(100vh - 144px));
+  padding: 0;
+  overflow: hidden;
+}
+
+.listen-menu[open] {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-rows: auto 1fr;
+}
+
+.listen-menu .listen-dialog-header {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid #222936;
+}
+
+.listen-menu-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  border-right: 1px solid #222936;
+}
+
+.listen-menu-rail button {
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.listen-menu-rail button[aria-current='page'] {
+  background: #171c26;
+  color: #e7ecf3;
+}
+
+.listen-menu-body {
+  min-height: 0;
+  padding: 20px 28px;
+  overflow: auto;
+}
+
 /* Direct rows only: Team's dialog and widgets render inside the Workspace row. */
 .listen-settings > div {
   display: grid;
@@ -963,7 +1008,7 @@
     margin: 0 -8px;
   }
 
-  /* No room beside the other five: End meeting takes the line above them, so their row stays as it is. */
+  /* No room beside the other three: End meeting takes the line above them, so their row stays as it is. */
   .listen-end {
     order: -1;
     flex: 0 0 100%;
@@ -990,5 +1035,36 @@
     max-height: none;
     border: 0;
     border-radius: 0;
+  }
+
+  /* The menu takes the whole screen; its rail becomes a row of sections above the body. */
+  .listen-menu {
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .listen-menu[open] {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+  }
+
+  .listen-menu .listen-dialog-header {
+    padding: 12px 16px;
+  }
+
+  .listen-menu-rail {
+    flex-direction: row;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid #222936;
+  }
+
+  .listen-menu-body {
+    padding: 16px;
   }
 }

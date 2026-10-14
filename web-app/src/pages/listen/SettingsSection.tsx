@@ -46,8 +46,6 @@ const WORKSPACE: Record<SignInState['status'], string> = {
 };
 
 interface SettingsProps {
-  open: boolean;
-  onClose: () => void;
   permission: PermissionState;
   engine: CaptureView;
   signIn: SignInState;
@@ -229,8 +227,8 @@ function IntegrationsRow({ signIn }: { signIn: SignInState }) {
   return signIn.status === 'signed_in' ? <Integrations /> : <span>{WORKSPACE[signIn.status]}</span>;
 }
 
-/** Settings overlay: real device and session facts, and the unselected policies stated as unselected. */
-export function SettingsDialog({ open, onClose, permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
+/** Settings section: real device and session facts, and the unselected policies stated as unselected. */
+export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
   const rows: ReadonlyArray<Row> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
     ...accountRows(signIn, onSignInChange),
@@ -241,7 +239,7 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
     ...(onWelcome ? [['Welcome', <WithAction text="What Sanctum records and how to set it up" label="Show welcome again" onClick={onWelcome} />] as const] : []),
   ];
   return (
-    <Dialog title="Settings" open={open} onClose={onClose}>
+    <>
       {notice && <Notice notice={notice} selfServe={signIn.status === 'signed_out' && signIn.selfServe} />}
       <dl className="listen-panel listen-settings">
         {rows.map(([term, value]) => (
@@ -253,6 +251,6 @@ export function SettingsDialog({ open, onClose, permission, engine, client, sign
       </dl>
       <LocalRecordings engine={engine} />
       <WorkspaceDeletion client={client} onDeleted={() => void engine.pause()} />
-    </Dialog>
+    </>
   );
 }

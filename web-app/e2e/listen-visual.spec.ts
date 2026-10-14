@@ -42,7 +42,7 @@ test('1280 × 720 matches the reference composition', async ({ page }, testInfo)
     ['Product sync', page.locator('.listen-meeting'), 'right'],
     ['listening', page.locator('.listen-state'), 'centerX'],
     ['Speak to Sanctum when you need it.', page.locator('.listen-helper'), 'centerX'],
-    ['PAUSE    REVIEW    AGENTS    FULLSCREEN    SETTINGS', page.getByRole('button', { name: 'Settings' }), 'right'],
+    ['PAUSE    REVIEW    AGENTS    FULLSCREEN    SETTINGS', page.getByRole('button', { name: 'Menu' }), 'right'],
   ];
   for (const [text, locator, anchor] of pairs) {
     const want = reference[text]!;
@@ -95,7 +95,7 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap, live 
   expect(transcript.x + transcript.width).toBeLessThan(helper.x);
   const controls = await page.getByRole('navigation', { name: 'Listening controls' }).getByRole('button').all();
   const rows = new Set(await Promise.all(controls.map(async control => (await control.boundingBox())!.y)));
-  // With the meeting open, End meeting joins Pause, Review, Agents, Fullscreen and Settings on the one row.
-  expect(controls).toHaveLength(6);
+  // With the meeting open, End meeting joins Pause, Fullscreen and Menu on the one row.
+  expect(controls).toHaveLength(4);
   expect(rows.size).toBe(1);
 });

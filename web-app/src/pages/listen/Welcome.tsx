@@ -11,7 +11,7 @@ import { completeOnboarding, readOnboarding, renameWorkspace, type SignInState }
 import { Dialog } from './Dialog.tsx';
 import { useInputLevel } from './input-level.ts';
 import { InputCheckText, InputPicker } from './InputPicker.tsx';
-import { TeamButton } from './SettingsDialog.tsx';
+import { TeamButton } from './SettingsSection.tsx';
 
 type SignedIn = Extract<SignInState, { status: 'signed_in' }>;
 

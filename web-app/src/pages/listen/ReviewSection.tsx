@@ -1,28 +1,26 @@
 import type { SanctumClient } from '@sanctum/sdk';
 import { useEffect, useState, type KeyboardEvent } from 'react';
-import { Dialog } from './Dialog.tsx';
 import { loadReview, type ReviewState } from './review-data.ts';
 import { ReviewPanel, type Seek, show, TABS } from './ReviewPanels.tsx';
 
 /**
- * Review overlay over the most recent readable meeting: six tabs, each truthful about its own
+ * Review section over the most recent readable meeting: six tabs, each truthful about its own
  * source. A note or item's source time opens its transcript segment; the segment's Play opens
  * authorized playback at that point. Opening or closing it never touches capture.
  */
-export function ReviewDialog({ client, open, onClose }: { client: SanctumClient; open: boolean; onClose: () => void }) {
+export function ReviewSection({ client }: { client: SanctumClient }) {
   const [selected, setSelected] = useState(0);
   const [review, setReview] = useState<ReviewState>({ status: 'loading' });
   const [focus, setFocus] = useState<string | null>(null);
   const [seek, setSeek] = useState<Seek | null>(null);
   useEffect(() => {
-    if (!open) return;
     const controller = new AbortController();
     setReview({ status: 'loading' });
     setFocus(null);
     setSeek(null);
     void loadReview(client, controller.signal, state => controller.signal.aborted || setReview(state));
     return () => controller.abort();
-  }, [client, open]);
+  }, [client]);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const move = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
     if (move === undefined) return;
@@ -45,7 +43,7 @@ export function ReviewDialog({ client, open, onClose }: { client: SanctumClient;
   };
   const tab = TABS[selected]!;
   return (
-    <Dialog title="Review" open={open} onClose={onClose}>
+    <>
       {review.status === 'ok' && (
         <p className="listen-source">
           {review.data.meeting.title ?? 'Untitled meeting'} · {review.data.meeting.state} · started {new Date(review.data.meeting.started_at).toLocaleString([], { timeZone: review.data.meeting.timezone })}
@@ -70,6 +68,6 @@ export function ReviewDialog({ client, open, onClose }: { client: SanctumClient;
       <div role="tabpanel" id="review-panel" aria-labelledby={`review-tab-${selected}`} className="listen-panel">
         {review.status === 'empty' ? <p>No meetings yet.</p> : show(tab, review, data => <ReviewPanel tab={tab} review={data} navigation={navigation} />)}
       </div>
-    </Dialog>
+    </>
   );
 }

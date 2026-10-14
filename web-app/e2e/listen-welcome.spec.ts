@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { fakeWorkosWidgets, serveListening, type ListenOptions } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 // Chromium's synthetic microphone (it beeps) with its permission prompt auto-accepted, for the microphone step.
 test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] } });
@@ -74,8 +75,8 @@ test('finishing walks every step by keyboard, renames the workspace, and Start l
 test('Settings opens the welcome again after it was done', async ({ page }) => {
   await serveListening(page, firstVisit({ onboarding: { completed: true, workspace_name: 'Acme' } }));
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   await settings.getByRole('button', { name: 'Show welcome again' }).click();
   const welcome = page.getByRole('dialog', { name: 'Welcome to Sanctum' });
   await expect(welcome).toBeVisible();

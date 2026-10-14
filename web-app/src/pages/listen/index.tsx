@@ -1,28 +1,29 @@
 import type { Meeting } from '@sanctum/sdk';
-import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
 import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
-import { AgentsDialog } from './AgentsDialog.tsx';
+import { AgentsSection } from './AgentsSection.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
+import { MenuPanel } from './MenuPanel.tsx';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
-import { ReviewDialog } from './ReviewDialog.tsx';
-import { SettingsDialog } from './SettingsDialog.tsx';
+import { ReviewSection } from './ReviewSection.tsx';
+import { SettingsSection } from './SettingsSection.tsx';
 import { startWaveform } from './waveform.ts';
 import { useOnboarding, Welcome } from './Welcome.tsx';
 import './listen.css';
 
-type Overlay = 'review' | 'agents' | 'settings' | 'welcome';
+type Overlay = 'menu' | 'welcome';
 
 const client = sessionClient();
 
 /** Read once per page load: `/auth/callback` lands here with `?signin=<code>`; `ok` is SIGN_IN_URL's own return. */
 const landing = takeSignInNotice(window.location, window.history);
 const notice = typeof landing === 'object' ? landing : null;
-const firstOverlay: Overlay | null = notice ? 'settings' : null;
+const firstOverlay: Overlay | null = notice ? 'menu' : null;
 
 const HELPER: Record<ListenerState, string> = {
   stopped: 'Choose Listen to start the microphone.',
@@ -239,13 +240,15 @@ function EndMeeting({ meeting, onEnd }: { meeting: string | null; onEnd: (meetin
 interface FooterProps {
   engine: CaptureView;
   snapshot: CaptureSnapshot;
-  onOpen: (overlay: Overlay) => void;
+  /** The MENU button: ⌘K / Ctrl+K focuses it first, so closing the panel always returns focus here. */
+  menuRef: RefObject<HTMLButtonElement | null>;
+  onMenu: () => void;
   onFailure: (message: string | null) => void;
   /** Controls shown right after Pause or Resume. */
   children: ReactNode;
 }
 
-function Footer({ engine, snapshot, onOpen, onFailure, children }: FooterProps) {
+function Footer({ engine, snapshot, menuRef, onMenu, onFailure, children }: FooterProps) {
   const control = toggle(engine, snapshot.listener);
   const run = (): void => {
     onFailure(null);
@@ -258,10 +261,8 @@ function Footer({ engine, snapshot, onOpen, onFailure, children }: FooterProps) 
       <nav aria-label="Listening controls" className="listen-controls">
         <button type="button" onClick={run} disabled={snapshot.listener === 'starting'}>{control.label}</button>
         {children}
-        <button type="button" onClick={() => onOpen('review')}>Review</button>
-        <button type="button" onClick={() => onOpen('agents')}>Agents</button>
         {document.fullscreenEnabled && <FullscreenButton />}
-        <button type="button" onClick={() => onOpen('settings')}>Settings</button>
+        <button ref={menuRef} type="button" aria-keyshortcuts="Control+K Meta+K" onClick={onMenu}>Menu</button>
       </nav>
     </footer>
   );
@@ -330,6 +331,8 @@ export function ListenPage() {
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
+  const [section, setSection] = useState(notice ? 'settings' : 'review');
+  const menuRef = useRef<HTMLButtonElement>(null);
   const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
   const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
   // A capture issue may mean the session ended, so each new issue reads the session again.
@@ -342,6 +345,22 @@ export function ListenPage() {
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      // Focus first: a native dialog returns focus to whatever had it when it opened.
+      menuRef.current?.focus();
+      setOverlay(open => open ?? 'menu');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  const sections = [
+    { id: 'review', label: 'Review', body: <ReviewSection client={client} /> },
+    { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
+    { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
+  ];
 
   return (
     <main aria-label="Sanctum" className="listen">
@@ -361,13 +380,11 @@ export function ListenPage() {
         </InputHelp>
       </section>
       <Rails live={snapshot.listener === 'listening'} capturing={capturing} onCaptions={setCaptions} />
-      <Footer engine={engine} snapshot={snapshot} onOpen={setOverlay} onFailure={setFailure}>
+      <Footer engine={engine} snapshot={snapshot} menuRef={menuRef} onMenu={() => setOverlay('menu')} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
-      <ReviewDialog client={client} open={overlay === 'review'} onClose={close} />
-      <AgentsDialog client={client} open={overlay === 'agents'} onClose={close} />
-      <SettingsDialog open={overlay === 'settings'} onClose={close} permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} />
-      {/* After Settings, so Settings has closed before the welcome it opens takes the modal layer. */}
+      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} />
+      {/* After the menu, so the menu has closed before the welcome it opens (from Settings) takes the modal layer. */}
       <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>
   );
