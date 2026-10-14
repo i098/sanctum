@@ -9,9 +9,11 @@ export interface InputLevel {
   readonly state: 'checking' | 'sound' | 'silent';
   /** Why the input could not open, else null. */
   readonly issue: CaptureIssue | null;
+  /** Label of the opened input's track, else empty. */
+  readonly label: string;
 }
 
-const CHECKING: InputLevel = { level: 0, state: 'checking', issue: null };
+const CHECKING: InputLevel = { level: 0, state: 'checking', issue: null, label: '' };
 /** The level is shown at this pace; a change of state shows at once. */
 const LEVEL_MS = 100;
 
@@ -22,9 +24,9 @@ function inputState(heard: boolean, dead: number): InputLevel['state'] {
 }
 
 /** A new level shows only when `full`; a change of state shows at once. */
-function nextInput(prev: InputLevel, peak: number, state: InputLevel['state'], full: boolean): InputLevel {
+function nextInput(prev: InputLevel, peak: number, state: InputLevel['state'], full: boolean, label: string): InputLevel {
   const level = full ? Math.round((peak / 0x8000) * 100) / 100 : prev.level;
-  return prev.level === level && prev.state === state ? prev : { level, state, issue: null };
+  return prev.level === level && prev.state === state ? prev : { level, state, issue: null, label };
 }
 
 /**
@@ -50,6 +52,7 @@ export function useInputLevel(deviceId: string | null): InputLevel {
       const analyser = new AnalyserNode(context, { fftSize: 2048 });
       context.createMediaStreamSource(stream).connect(analyser);
       const samples = new Float32Array(analyser.fftSize);
+      const label = stream.getAudioTracks()[0]?.label ?? '';
       let heard = false;
       let dead = 0;
       let last = performance.now();
@@ -68,7 +71,7 @@ export function useInputLevel(deviceId: string | null): InputLevel {
         const full = now - shown >= LEVEL_MS;
         if (full) shown = now;
         const state = inputState(heard, dead);
-        setInput(prev => nextInput(prev, peak, state, full));
+        setInput(prev => nextInput(prev, peak, state, full, label));
         frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(tick);

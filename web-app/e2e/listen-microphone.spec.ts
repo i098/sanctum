@@ -11,8 +11,8 @@ declare global {
     __level(id: string, gain: number): void;
     /** Removes an input and ends its open streams, as unplugging a device does. */
     __unplug(id: string): void;
-    /** Adds an input and fires `devicechange`. */
-    __plug(id: string, input: { label: string; gain: number }): void;
+    /** Adds an input; `announce` (default true) also fires the browser's `devicechange`. */
+    __plug(id: string, input: { label: string; gain: number }, announce?: boolean): void;
   }
 }
 
@@ -30,6 +30,10 @@ function installInputs(inputs: Record<string, { label: string; gain: number; fai
   const tracks = new Map<string, MediaStreamTrack[]>();
   window.__requests = [];
   window.__level = (id, gain) => levels.get(id)?.forEach(node => (node.gain.value = gain));
+  window.__plug = (id, input, announce = true) => {
+    inputs[id] = input;
+    if (announce) navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  };
   navigator.mediaDevices.getUserMedia = async (constraints) => {
     const audio = constraints?.audio as MediaTrackConstraints;
     window.__requests.push(audio);
@@ -55,10 +59,6 @@ function installInputs(inputs: Record<string, { label: string; gain: number; fai
   window.__unplug = (id) => {
     delete inputs[id];
     tracks.get(id)?.forEach(track => (track.stop(), track.dispatchEvent(new Event('ended'))));
-  };
-  window.__plug = (id, input) => {
-    inputs[id] = input;
-    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
   };
 }
 
@@ -156,4 +156,44 @@ test('the picker on the listening page opens no probe stream while capture is st
   await expect(picker).toHaveValue('iphone');
   await expect(page.locator('.listen-input-check')).toHaveCount(0);
   expect(await page.evaluate(() => window.__requests)).toMatchObject([{}]);
+});
+
+test('a new input appears on devicechange or Refresh, and the chosen input stays chosen', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const picker = settings.getByRole('combobox', { name: 'Microphone' });
+  await picker.selectOption({ label: '萧 Microphone' });
+  await expect(picker.locator('option')).toHaveCount(4);
+
+  await page.evaluate(() => window.__plug('usb', { label: 'USB Microphone', gain: 0.1 }, true));
+  await expect(picker.locator('option', { hasText: 'USB Microphone' })).toHaveCount(1);
+  await expect(picker).toHaveValue('iphone');
+
+  await page.evaluate(() => window.__plug('desk', { label: 'Desk Microphone', gain: 0.1 }, false));
+  await expect(picker.locator('option', { hasText: 'Desk Microphone' })).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Refresh' }).click();
+  await expect(picker.locator('option', { hasText: 'Desk Microphone' })).toHaveCount(1);
+  await expect(picker).toHaveValue('iphone');
+});
+
+test('a silent input says what to do when the laptop is closed', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' }).locator('.listen-input-hint')).toHaveText('If your laptop is closed, choose another microphone.', { timeout: 6_000 });
+});
+
+test('a silent input that is not the built-in microphone gets no laptop hint', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('combobox', { name: 'Microphone' }).selectOption({ label: 'LoomAudioDevice' });
+  await expect(settings.locator('.listen-input-check')).toHaveText('This input is sending no sound.', { timeout: 6_000 });
+  await expect(settings.locator('.listen-input-hint')).toHaveCount(0);
 });

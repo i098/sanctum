@@ -147,8 +147,31 @@
   gap: 8px;
 }
 
+.listen-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.listen-input-row .listen-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.listen-input-row button {
+  flex: none;
+  font-size: 11px;
+}
+
 .listen-input-check {
   font-size: var(--type-secondary);
+}
+
+.listen-input-hint {
+  color: #8b919c;
+  font-size: 11px;
 }
 
 .listen-input-check[data-state='sound'] {
@@ -1233,8 +1256,17 @@
   font-size: inherit;
 }
 
-.listen-onboarding-mic .listen-input-check {
+.listen-onboarding-mic .listen-input-check,
+.listen-onboarding-mic .listen-input-hint {
   font-size: inherit;
+}
+
+.listen-onboarding-mic .listen-input-row {
+  display: flex;
+}
+
+.listen-onboarding-mic .listen-input-row button {
+  font-size: 12px;
 }
 
 .listen-meter {
