@@ -13,28 +13,37 @@ const ACCESS = {
 const GMAIL = { id: '00000000-0000-4000-8000-0000000000a1', app: 'gmail', grants: [{ id: '00000000-0000-4000-8000-0000000000b1', action_key: 'gmail-send-email', grantee_name: null }] };
 const CALENDAR = { id: '00000000-0000-4000-8000-0000000000a2', app: 'google_calendar', grants: [] };
 
-const integrations = async (page: Page) => {
+const apps = async (page: Page) => {
   await openListening(page, { configured: true, access: ACCESS });
-  await openMenu(page, 'Settings');
-  return menuSection(page, 'Settings').locator('.listen-settings > div').filter({ has: page.getByRole('term').getByText('Integrations', { exact: true }) });
+  await openMenu(page, 'Apps');
+  return menuSection(page, 'Apps');
 };
 
-test('Integrations shows not configured, nothing connected, and each connected app with its grants', async ({ page }) => {
+test('Apps shows not configured, nothing connected, and each connected app with its grants', async ({ page }) => {
   let body: object = { configured: false, accounts: [] };
   await page.route(/\/api\/v1\/integrations\/accounts(\/sync)?$/, route => route.fulfill({ json: body }));
-  const row = await integrations(page);
-  await expect(row.getByRole('definition')).toHaveText('Not configured: this server has no Pipedream settings');
+  const section = await apps(page);
+  await expect(section).toHaveText('Not configured: this server has no Pipedream settings');
   await page.getByRole('button', { name: 'Close' }).click();
 
   body = { configured: true, accounts: [] };
-  await openMenu(page, 'Settings');
-  await expect(row.getByRole('definition')).toContainText('No apps connected');
-  await expect(row.getByRole('button', { name: 'Connect an app' })).toBeVisible();
+  await openMenu(page, 'Apps');
+  await expect(section).toContainText('No apps connected');
+  await expect(section.getByRole('button', { name: 'Connect an app' })).toBeVisible();
+  await expect(section.getByRole('button', { name: 'Connect Notion' })).toBeVisible();
   await page.getByRole('button', { name: 'Close' }).click();
 
   body = { configured: true, accounts: [GMAIL, CALENDAR] };
-  await openMenu(page, 'Settings');
-  await expect(row.getByRole('listitem')).toHaveText(['Gmailgmail-send-email for a memberDisconnect', 'Google CalendarNo grants yetDisconnect']);
+  await openMenu(page, 'Apps');
+  const connected = section.getByRole('list').first().getByRole('listitem');
+  await expect(connected).toHaveText(['Gmailgmail-send-email for a memberDisconnect', 'Google CalendarNo grants yetDisconnect']);
+  await expect(section.getByRole('button', { name: 'Connect Gmail', exact: true })).toHaveCount(0);
+  await expect(section.getByRole('button', { name: 'Connect Slack' })).toBeVisible();
+});
+
+test('Settings no longer holds Integrations', async ({ page }) => {
+  await openListening(page, { configured: true, access: ACCESS });
+  await expect(await openMenu(page, 'Settings')).not.toContainText('Integrations');
 });
 
 test('Connect opens the Connect Link in a new tab, keeps this tab capturing, and stores the account on return; Disconnect removes it', async ({ page, context }) => {
@@ -50,26 +59,29 @@ test('Connect opens the Connect Link in a new tab, keeps this tab capturing, and
     return route.fulfill({ json: { configured: true, accounts } });
   });
   await context.route('**/connect-link-fixture?*', route => route.fulfill({ contentType: 'text/html', body: '<title>Connect Link</title>' }));
-  const row = await integrations(page);
-  await expect(row.getByRole('definition')).toContainText('No apps connected');
+  const section = await apps(page);
+  await expect(section).toContainText('No apps connected');
 
-  await row.getByRole('combobox', { name: 'App to connect' }).fill('gmail');
-  const [tab] = await Promise.all([context.waitForEvent('page'), row.getByRole('button', { name: 'Connect an app' }).click()]);
+  await section.getByRole('textbox', { name: 'App to connect' }).fill('gmail');
+  const [tab] = await Promise.all([context.waitForEvent('page'), section.getByRole('button', { name: 'Connect an app' }).click()]);
   await expect(tab).toHaveURL(/\/connect-link-fixture\?app=gmail$/);
   expect(await tab.evaluate(() => window.opener)).toBeNull();
-  await expect(row).toContainText('Finish in the Pipedream tab.');
+  await expect(section).toContainText('Finish in the Pipedream tab.');
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
 
   accounts = [GMAIL];
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(row.getByRole('listitem')).toHaveText(['Gmailgmail-send-email for a memberDisconnect']);
+  await expect(section.getByRole('listitem').filter({ hasText: 'Disconnect' })).toHaveText(['Gmailgmail-send-email for a memberDisconnect']);
 
-  await row.getByRole('button', { name: 'Disconnect Gmail' }).click();
-  await expect(row.getByRole('listitem')).toHaveCount(0);
+  await section.getByRole('button', { name: 'Disconnect Gmail' }).click();
+  await expect(section.getByRole('button', { name: 'Disconnect Gmail' })).toHaveCount(0);
+  const [tileTab] = await Promise.all([context.waitForEvent('page'), section.getByRole('button', { name: 'Connect Notion' }).click()]);
+  await expect(tileTab).toHaveURL(/\/connect-link-fixture\?app=gmail$/);
   // Dev StrictMode runs Settings' effects twice, so only the non-sync writes are compared exactly.
   expect(writes.every(write => write.csrf === 'csrf-fixture')).toBe(true);
   expect(writes.filter(write => write.path !== '/accounts/sync')).toEqual([
     { path: '/connect', body: { app: 'gmail' }, csrf: 'csrf-fixture' },
     { path: `/accounts/${GMAIL.id}/disconnect`, body: null, csrf: 'csrf-fixture' },
+    { path: '/connect', body: { app: 'notion' }, csrf: 'csrf-fixture' },
   ]);
 });
