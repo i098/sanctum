@@ -1,6 +1,7 @@
 {
   "name": "@sanctum/sdk",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "Promise-based TypeScript client for the Sanctum API",
   "exports": {

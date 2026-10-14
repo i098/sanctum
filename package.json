@@ -1,6 +1,7 @@
 {
   "name": "sanctum-handoff",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "Sanctum application workspaces and handoff documentation tools",
   "engines": {
