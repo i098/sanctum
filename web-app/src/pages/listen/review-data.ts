@@ -1,5 +1,5 @@
 /**
- * Review dialog data read through the same v1 SDK the agents use. Each frame settles on its
+ * Review data read through the same v1 SDK the agents use. Each frame settles on its
  * own: a failing source shows its real error and never blanks or fakes the others.
  */
 import {

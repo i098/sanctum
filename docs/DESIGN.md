@@ -85,8 +85,9 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 ## Secondary views
 
-Review, Agents, and Settings are sections of one central Menu panel, opened only on request by the Menu button or Ctrl/⌘+K, with a section rail beside the active section.
-Use a restrained dark overlay and the same tokens; closing it returns to the listening screen without stopping capture.
+The Menu is the one central overlay for everything beyond listening; it opens only on request, from its footer button or Ctrl/⌘+K, and holds Meetings, Agents and Settings as sections in a rail beside the active section.
+Meetings is the first section: a paged list of meetings with the live meeting on top, and any meeting opens the same Review beside it.
+Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
@@ -95,7 +96,7 @@ Signed in, the Integrations row lists the person's connected apps, each with the
 Connect an app opens Pipedream's hosted Connect Link in a new tab, so the listening tab keeps capturing; coming back to the listening tab stores what was connected. Connecting grants nothing.
 Signed out, an outlined Sign in to listen button replaces the helper line under the status; the landing page header also has a Sign in link.
 Both sign-in links, and the self-serve Create workspace sign-in, return to `/?signin=ok`, where a signed-in session shows "Signed in as <name>" (the email when the issuer gave no name) under the helper line until the next load, even when the issuer redirects back at once; Settings keeps showing the identity.
-A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
+A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens the Menu on Settings once with the reason; `not_member` shows the issuer and subject for the operator.
 With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open a dialog over Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
 A person's first signed-in visit opens Welcome to Sanctum over the listening view, on the Settings tokens and rows: one step at a time with Back and Next, focus on each step's heading, and Skip in the header (and Escape) at every step.
 The steps are what Sanctum records and who sees it; a microphone check (permission, the input picker and a level meter of a preview stream that is never recorded, saying so after 3 s without any sound); the workspace name, which owners and admins rename there, with the server's Team (Invite teammates, or Set up team for the owner of an unlinked hosted workspace); and Start listening, which closes it and starts capture.
