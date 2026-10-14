@@ -1,124 +1,110 @@
-# Sanctum — AI meeting notes and shared agent memory
+<h1 align="center">🎙️ Sanctum</h1>
 
-An open-source TypeScript + Effect project for silent meeting capture, source-linked memory, and shared context through MCP and SDKs.
+<div align="center">
 
-[![CI and documentation](https://github.com/undeemed/sanctum/actions/workflows/ci.yml/badge.svg)](https://github.com/undeemed/sanctum/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: implementation in progress](https://img.shields.io/badge/status-implementation%20in%20progress-22d3c5)](docs/build/tasks/todo.md)
+**Quiet AI meeting notes and shared agent memory, from one browser tab.**
 
-[Read the blueprint](https://i098.github.io/sanctum/) · [Preview the interface](https://i098.github.io/sanctum/design/listener-reference.html) · [Build handoff](docs/build/HANDOFF.md) · [Contribute](CONTRIBUTING.md)
+[![CI](https://img.shields.io/github/actions/workflow/status/i098/sanctum/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/i098/sanctum/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/i098/sanctum?style=for-the-badge&logo=github&label=&color=2563eb)](https://github.com/i098/sanctum/releases/latest)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/FSL--1.1--ALv2-0d9488?style=for-the-badge)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/i098/sanctum?style=for-the-badge&logo=github&color=d97706)](https://github.com/i098/sanctum/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/i098/sanctum?style=for-the-badge&logo=git&logoColor=white&label=updated&color=6b7280)](https://github.com/i098/sanctum/commits/main)
+[![Sponsor](https://img.shields.io/badge/Sponsor-db61a2?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/i098)
 
-**Status: implementation in progress.**
-The specification, build plan, visual references, and documentation CI/CD guide the application code in `server/` and `web-app/`.
-The implementation is not a released application; [release evidence](docs/release-evidence.md) records verification and remaining gates.
-No legacy application code, recordings, or production data are included.
+[Try it](https://sanctum.42nights.dev) · [Self-host](#self-host) · [Docs](https://i098.github.io/sanctum/) · [Contribute](CONTRIBUTING.md)
 
-![Sanctum fullscreen listening interface: a quiet waveform on a dark background](design/listener-reference.svg)
+<img src=".github/assets/listen.png" alt="The Sanctum Listen screen while recording: a lively teal waveform on a dark background, with Pause, Review, Agents, Fullscreen and Settings at the bottom">
 
-The reference shows the intended interface, not a running recorder.
-Its animated preview does not access your microphone.
+*The Listen screen while recording: fullscreen and silent, with the waveform following the live microphone.*
 
-## What Sanctum will do
+</div>
 
-Sanctum is designed to listen quietly while a team talks, preserve the source conversation, and keep useful context available to people and their agents.
+Sanctum is fair-source AI meeting notes and meeting transcription for teams and their agents.
+It listens through your browser microphone, keeps the full transcript and private recording, and works as a voice assistant only when someone asks.
+It turns the meeting into time-aware agent memory that people and agents share through an API, TypeScript and Python SDKs, and a remote Model Context Protocol (MCP) server.
 
-- **Ambient meeting notes:** browser microphone capture with a fullscreen waveform; silent unless directly addressed.
-- **Automatic meeting sessions:** detect boundaries and allow manual split, merge, and correction.
-- **Complete source evidence:** full transcripts and private audio recordings in Cloudflare R2.
-- **Selective, time-aware memory:** decisions, commitments, and project facts linked to speakers, timestamps, and source passages.
-- **Shared agent context:** one versioned API for the website, TypeScript/Python SDKs, and a remote Model Context Protocol (MCP) server.
-- **Controlled integrations:** Pipedream actions discovered on demand, with stored permissions and execution receipts.
+## Features
 
-Browser capture requires an open listener tab, an awake device, and microphone permission.
-Server-side work can continue after the tab closes.
-An installed desktop app is not required for the first version.
+- **[Silent capture](docs/DESIGN.md):** browser microphone capture with a fullscreen waveform. Sanctum never speaks unless you address it directly.
+- **[Spoken requests](docs/DECISIONS.md#spoken-work-decision---2026-10-10):** say "Sanctum, look up the train times". Sanctum answers "Looking that up." and files a cited answer in Review.
+- **[Full transcripts and recordings](docs/operations.md#configuration):** the complete transcript and the private audio stay in Cloudflare R2, separate from selective memory.
+- **[Shared agent memory](docs/ARCHITECTURE.md#interfaces-t22-t23):** decisions, commitments and facts linked to speakers, timestamps and source passages. One versioned API serves the website, the [SDKs](sdk/README.md) and remote MCP.
+- **[Integrations with per-action grants](docs/ARCHITECTURE.md#pipedream-t17):** Pipedream actions are found on demand. An action runs only with a stored grant, and each run leaves a truthful receipt.
+- **[Teams and workspaces](docs/operations.md#sign-in):** sign in with WorkOS, or self-host the embedded issuer. Access follows workspace membership everywhere.
 
-## Request work while listening
+The capture tab must stay open and the device must stay awake.
+Sanctum does not record after the browser closes or the device sleeps.
+Server-side work continues after the tab closes.
 
-During a live meeting, say "Sanctum, look up the train times" to request work.
-See the [spoken work decision](docs/DECISIONS.md#spoken-work-decision---2026-10-10) for prerequisites, job submission, and links to known limits.
+## Quick start
 
-## Agent tools without context overload
+**Try it:** open [sanctum.42nights.dev](https://sanctum.42nights.dev), sign in, allow the microphone, and choose Listen.
 
-The planned integration interface exposes three fixed tools:
+<a id="self-host"></a>
 
-1. `search_integration_actions` returns up to five short matches.
-2. `get_integration_action` resolves only the selected action's inputs and configuration.
-3. `request_action` checks authorization and queues work with an idempotency key.
-
-The full Pipedream catalog stays server-side.
-Tool discovery does not grant permission to execute an action.
-See [the implementation contract](docs/build/tasks/plan.md) for scopes, source provenance, concurrent writes, and failure handling.
-
-## Start building
-
-Give your coding agent this instruction:
-
-> Read AGENTS.md and docs/build/HANDOFF.md, then implement docs/build/tasks/plan.md using docs/build/tasks/todo.md. Build from scratch; do not import the old application. Match docs/DESIGN.md and design/listener-reference.html closely. Complete reversible implementation and local validation, and report unresolved live-deployment requirements separately.
-
-| Document | Purpose |
-| --- | --- |
-| [HANDOFF.md](docs/build/HANDOFF.md) | The execution brief for one integrated implementation run. |
-| [Implementation plan](docs/build/tasks/plan.md) | Architecture, storage, APIs, MCP, SDKs, auth, recovery, and deployment. |
-| [26-task checklist](docs/build/tasks/todo.md) | Ordered work with acceptance criteria and verification. |
-| [Design contract](docs/DESIGN.md) | Layout, colors, waveform shape, motion, and accessibility. |
-| [Decisions](docs/DECISIONS.md) | Confirmed scope, the sign-in decision and remaining recording policies. |
-| [EXECUTE.txt](docs/build/EXECUTE.txt) | Combined handoff, plan, and checklist. |
-
-## Planned technology stack
-
-| Layer | Choice |
-| --- | --- |
-| Website | React, TypeScript, Vite, Tailwind CSS, Canvas, Web Audio |
-| Live audio | AudioWorklet + authenticated WebSocket PCM ingest |
-| API and workers | Node.js 24 LTS, TypeScript, stable Effect v3 |
-| Contracts and SQL | Effect Schema, HttpApi, `@effect/sql-mysql2` |
-| Structured storage | MySQL 8.4 LTS / InnoDB |
-| Recording storage | Cloudflare R2 |
-| Agent interfaces | Official TypeScript MCP SDK; Promise-based TypeScript and thin Python clients |
-| Integrations | Pipedream Connect |
-
-One Node.js image runs separate API and worker processes; MySQL stores durable jobs.
-Python is only a client SDK option, not a server dependency.
-Performance target: optimized TypeScript with workload-specific Rust comparisons; no parity result is claimed before implementation and measurement.
-Model and speaker-attribution choices remain evaluation-gated; provider claims are not application benchmarks.
-The full selection is in [plan section 04](docs/build/tasks/plan.md#04-chosen-technology-stack-and-runtime).
-
-## Run the documentation locally
-
-Requires Node.js 24.12+; CI uses Node.js 24 LTS.
+**Self-host:** you need Docker, a MySQL password, and Node.js 24.12 or later. The stack runs MySQL, the API, the worker, and Caddy from one image.
 
 ```bash
 git clone https://github.com/i098/sanctum.git
 cd sanctum
-npm ci
-npm run check
-npm run docs:build
+export MYSQL_PASSWORD=...        # choose a strong password
+export SANCTUM_ENV=development   # production needs every decision selected
+docker compose up -d mysql
+docker compose run --rm api node server/dist/migrate.js
+docker compose up -d api worker caddy
 ```
 
-Open `_site/index.html` in a browser, or use the [published documentation](https://i098.github.io/sanctum/).
-After source edits, run `npm run docs:render` before checking and committing generated files.
-These commands validate and assemble documentation, not the future meeting application.
-Markdown and visual references work offline; enhanced diagram and code rendering load CDN assets.
+[Operations](docs/operations.md) lists every setting, sign-in option, migration step, and recovery step.
 
-## CI/CD
+## How it works
 
-Pull requests and pushes validate the handoff, relative links, SVG/JSON references, JavaScript syntax, and generated-file consistency.
-Successful pushes to `main` publish the documentation to [GitHub Pages](https://i098.github.io/sanctum/).
-Fallow blocks new code findings; Sentrux blocks structural regressions against the committed floor and base revision.
-Conventional Commit headers and PR titles are checked with a 72-character limit.
-Publication waits for all checks.
-Pull requests cannot deploy and receive no production secrets.
-See [CI/CD details](docs/CI.md) for the exact checks and how to extend them when application code is added.
+```mermaid
+flowchart LR
+  tab["Browser tab<br/>microphone"] -->|PCM over WebSocket| api["API<br/>/api/v1 and /mcp"]
+  api --> r2[("Cloudflare R2<br/>recordings")]
+  api --> db[("MySQL<br/>jobs, transcripts, memory")]
+  db --> worker["Worker<br/>notes, context, actions"]
+  worker --> db
+  api --> clients["Website, SDKs, MCP agents"]
+  worker -->|stored grant| pd["Pipedream actions"]
+```
+
+One Node.js image runs the API and the worker.
+MySQL holds the durable job ledger, so a restart loses no work.
+[Architecture](docs/ARCHITECTURE.md) describes each slice and its contracts.
+
+## Repository layout
+
+- [`web-app/`](web-app/): the React website and the Listen screen.
+- [`server/`](server/): the API, the MCP server, the workers, and the MySQL migrations.
+- [`packages/contracts/`](packages/contracts/): the shared Effect Schema contracts.
+- [`sdk/`](sdk/): the generated TypeScript and Python clients, with examples.
+- [`deploy/cloudflare/`](deploy/cloudflare/): the Cloudflare Worker and container deployment.
+- [`design/`](design/): the visual references for the Listen screen.
+- [`docs/`](docs/): the design, decisions, operations, CI, and release evidence.
+- [`docs/build/`](docs/build/): the build handoff, plan, and task checklist.
+- [`benchmarks/`](benchmarks/), [`scripts/`](scripts/), and [`tests/`](tests/): measurement, tooling, and checks.
+
+## More docs
+
+- [Design contract](docs/DESIGN.md)
+- [Decisions](docs/DECISIONS.md)
+- [Implementation plan](docs/build/tasks/plan.md)
+- [CI/CD](docs/CI.md)
+- [Release evidence](docs/release-evidence.md)
+- [Security](SECURITY.md)
 
 ## Contributing
 
-Contributions to requirements, API design, accessibility, evaluation fixtures, and implementation are welcome.
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before starting a change.
-Use synthetic meeting content in public issues and tests; never upload private recordings or credentials.
-Report security issues through the process in [SECURITY.md](SECURITY.md).
+Contributions to requirements, API design, accessibility, evaluation fixtures and code are welcome.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before you start.
+Use synthetic meeting content in public issues and tests.
+Never upload private recordings or credentials.
+Report security issues through [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE).
-Third-party services and referenced projects retain their own terms and licenses.
+Sanctum is fair source under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2).
+You can use, copy, modify, and redistribute it for any purpose except a competing commercial product or service.
+Each version becomes available under Apache 2.0 two years after its release.
+Third-party services and referenced projects keep their own terms and licenses.
