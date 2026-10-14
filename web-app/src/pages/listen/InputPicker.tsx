@@ -15,6 +15,11 @@ const CHECK: Record<InputLevel['state'], string> = {
 };
 const BUILT_IN = /built-in|macbook/i;
 
+function Hint({ input }: { input: InputLevel }) {
+  const closed = input.state === 'silent' && !input.issue && BUILT_IN.test(input.label);
+  return closed ? <span className="listen-input-hint">If your laptop is closed, choose another microphone.</span> : null;
+}
+
 /** Whether the input hears anything, from one `useInputLevel` reading; the welcome draws its level from the same reading. */
 export function InputCheckText({ input }: { input: InputLevel }) {
   return (
@@ -22,7 +27,7 @@ export function InputCheckText({ input }: { input: InputLevel }) {
       <span className="listen-input-check" data-state={input.issue ? 'silent' : input.state}>
         {input.issue ? 'This input cannot be opened.' : CHECK[input.state]}
       </span>
-      {input.state === 'silent' && !input.issue && BUILT_IN.test(input.label) && <span className="listen-input-hint">If your laptop is closed, choose another microphone.</span>}
+      <Hint input={input} />
     </>
   );
 }
