@@ -1,8 +1,11 @@
 /**
- * Real-time soak driver: plays one canonical mono PCM16 WAV into a Sanctum API as a live listener, at
+ * Real-time soak driver: plays canonical mono PCM16 WAV audio into a Sanctum API as a live listener, at
  * real speed, the way the website's capture tab would. It registers a listener, heartbeats every 15 s,
  * streams 100 ms PCM frames over the listener WebSocket, uploads 30 s archive chunks, reconnects and
  * resumes from the server watermark, and shares each meeting with its workspace so other agents can query.
+ *
+ * `--manifest` plays the corpus built by build-corpus.ts: each meeting's WAV at its `start_s`, silence in the gaps,
+ * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0` field.
  *
  * Stops, in every case with a final chunk flush and share pass, on: end of audio, `--max-seconds`, a kill
  * switch (the `--kill-file` appearing, or SIGINT/SIGTERM/SIGUSR2), the cost hard stop, or a fatal rejection.
@@ -15,7 +18,7 @@
  * Needs `SANCTUM_SOAK_TOKEN`: a token of the soak workspace owner (not an enrolled device) holding `capture:ingest`,
  * `context:read` and `context:write`. One principal registers the listener, streams and shares, because only a
  * meeting's owner with `context:write` can share it.
- * Usage: node scripts/soak/drive.ts --base-url https://host --audio day.wav --state-dir <dir>
+ * Usage: node scripts/soak/drive.ts --base-url https://host (--audio day.wav | --manifest corpus/manifest.json) --state-dir <dir>
  *          [--kill-file <path>] [--max-usd 15] [--baseline-usd 0] [--max-seconds N] [--name soak-driver]
  *
  * The state file `<state-dir>/driver.json` (mode 600) holds the listener, the acknowledged sample offset,
@@ -24,12 +27,12 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { type FileHandle, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { encodePcmFrame } from '@sanctum/contracts';
-import { isSpeech, readWav, type Wav, wavFile } from './wav.ts';
+import { manifestSource, type Source, wavSource } from './source.ts';
+import { isSpeech, wavFile } from './wav.ts';
 
 const HEARTBEAT_MS = 15_000;
 const FRAME_MS = 100;
@@ -72,7 +75,7 @@ interface Counters {
   speech_chunks: number;
 }
 
-interface State { listener_id: string | null; offset: number; units: Units; counters: Counters }
+interface State { listener_id: string | null; /** Run start: when sample 0 was captured. Written to the manifest's `t0` slot. */ t0: string | null; offset: number; units: Units; counters: Counters }
 
 interface Epoch {
   readonly id: string;
@@ -100,7 +103,10 @@ interface Link {
 interface DriverOptions {
   readonly baseUrl: string;
   readonly token: string;
-  readonly audio: string;
+  /** One canonical WAV, or null when `manifest` names the corpus. */
+  readonly audio: string | null;
+  /** Corpus `manifest.json`: its meetings play at their `start_s`, and the driver fills its `t0` at run start. */
+  readonly manifest: string | null;
   readonly stateDir: string;
   readonly killFile: string;
   readonly maxUsd: number;
@@ -131,6 +137,7 @@ const log = (event: string, fields: Record<string, unknown> = {}) => console.log
 
 const freshState = (): State => ({
   listener_id: null,
+  t0: null,
   offset: 0,
   units: { speech_seconds: 0, run_seconds: 0, chunk_puts: 0 },
   counters: { reconnects: 0, epochs: 0, heartbeats: 0, heartbeat_failures: 0, chunks_ok: 0, chunks_rejected: 0, shares: 0, share_failures: 0, transcripts: 0, degraded: 0, speech_chunks: 0 },
@@ -153,19 +160,17 @@ class SoakDriver {
 
   private readonly options: DriverOptions;
   private readonly state: State;
-  private readonly file: FileHandle;
-  private readonly wav: Wav;
+  private readonly source: Source;
 
-  constructor(options: DriverOptions, state: State, file: FileHandle, wav: Wav) {
+  constructor(options: DriverOptions, state: State, source: Source) {
     this.options = options;
     this.state = state;
-    this.file = file;
-    this.wav = wav;
-    this.rate = wav.sample_rate;
+    this.source = source;
+    this.rate = source.rate;
     this.frameSamples = (this.rate * FRAME_MS) / 1000;
     this.chunkSamples = this.rate * CHUNK_SECONDS;
     this.position = state.offset;
-    this.end = options.maxSeconds === null ? wav.samples : Math.min(wav.samples, state.offset + Math.round(options.maxSeconds * this.rate));
+    this.end = options.maxSeconds === null ? source.samples : Math.min(source.samples, state.offset + Math.round(options.maxSeconds * this.rate));
     this.stateFile = join(options.stateDir, 'driver.json');
   }
 
@@ -205,12 +210,8 @@ class SoakDriver {
     return text === '' ? null : JSON.parse(text);
   }
 
-  private async readSamples(start: number, count: number) {
-    const samples = new Int16Array(count);
-    // ponytail: little-endian host assumed, like the WAV format; add a byte swap if this ever runs on big-endian.
-    const { bytesRead } = await this.file.read(new Uint8Array(samples.buffer), 0, count * 2, this.wav.data_offset + start * 2);
-    if (bytesRead !== count * 2) throw new Error(`short read at sample ${start}`);
-    return samples;
+  private readSamples(start: number, count: number) {
+    return this.source.read(start, count);
   }
 
   // --- listener lease -------------------------------------------------------------------------------------
@@ -318,9 +319,21 @@ class SoakDriver {
 
   // --- live stream ------------------------------------------------------------------------------------------
 
+  /** T0 is when sample 0 was captured, so a planted fact at `at_s` has event time `t0 + at_s`. */
+  private setT0(t0: string) {
+    this.state.t0 = t0;
+    const { manifest } = this.options;
+    if (manifest === null) return;
+    const temp = `${manifest}.tmp`;
+    writeFileSync(temp, `${JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), t0 }, null, 2)}\n`);
+    renameSync(temp, manifest);
+    log('t0_set', { t0, manifest });
+  }
+
   private newEpoch(): Epoch {
     const now = Date.now();
     this.state.counters.epochs++;
+    if (this.state.t0 === null) this.setT0(new Date(now - (this.position / this.rate) * 1000).toISOString());
     const reason = this.epochsThisRun++ > 0 ? 'stream_restart' : this.state.offset > 0 ? 'resume' : 'start';
     return {
       id: randomUUID(),
@@ -525,7 +538,7 @@ class SoakDriver {
       this.state.listener_id = listener.id;
     }
     this.save();
-    log('started', { listener_id: this.state.listener_id, audio: this.options.audio, sample_rate: this.rate, audio_seconds: Math.round(this.wav.samples / this.rate), from_s: Math.round(this.position / this.rate), until_s: Math.round(this.end / this.rate), max_usd: this.options.maxUsd });
+    log('started', { listener_id: this.state.listener_id, audio: this.options.manifest ?? this.options.audio, sample_rate: this.rate, audio_seconds: Math.round(this.source.samples / this.rate), from_s: Math.round(this.position / this.rate), until_s: Math.round(this.end / this.rate), max_usd: this.options.maxUsd });
     while (this.stopReason === null && !(await this.heartbeat())) await this.sleep(5_000);
     const background = [this.heartbeatLoop(), this.shareLoop(), this.watchdog()];
     const streamed = this.streamLoop();
@@ -535,7 +548,7 @@ class SoakDriver {
     await Promise.all([uploaded, ...background]);
     await this.shareMeetings();
     this.save();
-    await this.file.close();
+    await this.source.close();
     log('stopped', { reason: this.stopReason, cost_usd: Number(this.cost.toFixed(4)), ...this.state.counters });
     return this.exitCode;
   }
@@ -551,8 +564,8 @@ async function drive(options: DriverOptions): Promise<number> {
     log('cost_hard_stop', { cost_usd: spent, max_usd: options.maxUsd, phase: 'before start' });
     return 3;
   }
-  const file = await open(options.audio, 'r');
-  return new SoakDriver(options, state, file, await readWav(file)).run();
+  const source = options.manifest === null ? await wavSource(options.audio!) : await manifestSource(options.manifest, JSON.parse(readFileSync(options.manifest, 'utf8')));
+  return new SoakDriver(options, state, source).run();
 }
 
 if (import.meta.main) {
@@ -560,6 +573,7 @@ if (import.meta.main) {
     options: {
       'base-url': { type: 'string' },
       audio: { type: 'string' },
+      manifest: { type: 'string' },
       'state-dir': { type: 'string' },
       'kill-file': { type: 'string' },
       'max-usd': { type: 'string', default: '15' },
@@ -569,13 +583,14 @@ if (import.meta.main) {
     },
   });
   const token = process.env['SANCTUM_SOAK_TOKEN'];
-  if (!values['base-url'] || !values.audio || !values['state-dir'] || !token) {
-    throw new Error('Usage: --base-url <url> --audio <wav> --state-dir <dir> and SANCTUM_SOAK_TOKEN in the environment');
+  if (!values['base-url'] || !values['state-dir'] || !token || (values.audio === undefined) === (values.manifest === undefined)) {
+    throw new Error('Usage: --base-url <url> (--audio <wav> | --manifest <manifest.json>) --state-dir <dir> and SANCTUM_SOAK_TOKEN in the environment');
   }
   process.exitCode = await drive({
     baseUrl: values['base-url'],
     token,
-    audio: values.audio,
+    audio: values.audio ?? null,
+    manifest: values.manifest ?? null,
     stateDir: values['state-dir'],
     killFile: values['kill-file'] ?? join(values['state-dir'], 'KILL'),
     maxUsd: Number(values['max-usd']),

@@ -1,13 +1,14 @@
 # Soak driver
 
-`drive.ts` plays one canonical mono PCM16 WAV into a Sanctum API at real speed, as a live listener (issue #154).
+`drive.ts` plays canonical mono PCM16 WAV audio into a Sanctum API at real speed, as a live listener (issue #154).
 Header comment in the file has the full contract.
 
 ```bash
-SANCTUM_SOAK_TOKEN=... node scripts/soak/drive.ts --base-url https://<host> --audio day.wav --state-dir <dir> \
+SANCTUM_SOAK_TOKEN=... node scripts/soak/drive.ts --base-url https://<host> (--audio day.wav | --manifest corpus/manifest.json) --state-dir <dir> \
   [--kill-file <path>] [--max-usd 15] [--baseline-usd 0] [--max-seconds N] [--name soak-driver]
 ```
 
+- **Audio**: `--audio` plays one WAV. `--manifest` plays the corpus from `build-corpus.ts`: each meeting's WAV at its `start_s`, silence in the gaps, so a sample's position is its offset from T0. At run start the driver writes T0 (when sample 0 was captured) into the manifest's `t0` field; a restart keeps it.
 - **Token**: the soak workspace owner's token, with `capture:ingest`, `context:read` and `context:write`. One principal registers the listener, streams and shares; an enrolled device cannot share.
 - **Kill switch**: create `<state-dir>/KILL` (or `--kill-file`), or send SIGINT, SIGTERM or SIGUSR2. The driver ends the epoch, uploads the last chunk, shares meetings and exits 0. A kill file left from an earlier run stops the next start.
 - **Cost hard stop**: exit 3 when `baseline + speech minutes x (Whisper + extraction ceiling) + run seconds x container + chunk PUTs x R2` reaches `--max-usd`. Rates are in `RATES` (fetched 2026-10-14; extraction is a ceiling, since the API does not meter it). Pass the audio-build spend as `--baseline-usd`.
