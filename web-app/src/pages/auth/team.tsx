@@ -107,7 +107,7 @@ function MemberRow({ member, access, team, busy, change }: RowProps & { member: 
           <button type="button" disabled={busy} onClick={remove}>Remove</button>
         </span>
       ) : (
-        <span className="pr-2 font-mono text-sm text-ink-muted">{member.role}</span>
+        <span className="pr-2 text-sm text-ink-muted">{member.role}</span>
       )}
     </li>
   );

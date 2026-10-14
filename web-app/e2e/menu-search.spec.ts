@@ -96,6 +96,29 @@ test('reopening the Menu shows the newest meeting, not the last one a search ope
   await expect(menuSection(page, 'Meetings')).toContainText('Weekly sync');
 });
 
+test('a search result never shows another meeting: not while it fails, and choosing it again reopens it', async ({ page }) => {
+  await api(page, []);
+  let failing = true;
+  await page.route(`**/api/v1/meetings/${OLD}`, route => (failing ? route.fulfill({ status: 404, json: { _tag: 'NotFound', code: 'not_found', message: 'none', retryable: false } }) : route.fallback()));
+  await openSearch(page);
+  const choosePilot = async () => {
+    await box(page).fill('pilot');
+    await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Enter');
+  };
+  const meetings = menuSection(page, 'Meetings');
+  await choosePilot();
+  await expect(meetings.getByRole('alert')).toHaveText('That meeting could not be opened.');
+  await expect(meetings).not.toContainText('Weekly sync · closed · started');
+  failing = false;
+  await choosePilot();
+  await expect(meetings).toContainText('Pilot review · closed · started 9/29/2026');
+  await meetings.getByRole('button', { name: /^Weekly sync/ }).click();
+  await expect(meetings).toContainText('Weekly sync · closed · started');
+  await choosePilot();
+  await expect(meetings).toContainText('Pilot review · closed · started 9/29/2026');
+});
+
 test('commands open a section; Escape clears the box first, then closes the Menu', async ({ page }) => {
   await api(page, []);
   await openSearch(page);

@@ -18,7 +18,7 @@ const SUGGESTED_APPS: Readonly<Record<string, string>> = {
 const accounts = async (response: Promise<Response>): Promise<IntegrationAccounts> => (await response).json();
 
 const grantText = ({ grants }: ConnectedIntegrationAccount) =>
-  grants.length === 0 ? 'No grants yet' : grants.map(grant => `${actionLabel(grant.action_key)} · ${grant.grantee_name ?? 'members'}`).join('; ');
+  grants.length === 0 ? 'No grants yet' : grants.map(grant => `${actionLabel(grant.action_key)} · ${grant.grantee_name ?? 'a member'}`).join('; ');
 
 const STATUS = {
   checking: 'Checking',
