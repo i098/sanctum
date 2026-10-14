@@ -37,6 +37,8 @@ const KINDS: ReadonlyArray<ContextItem['kind']> = ['decision', 'commitment'];
 const DEBOUNCE_MS = 250;
 /** ponytail: matches titles among the newest 200 meetings; page the list when search must reach older ones. */
 const MEETING_LIMIT = 200;
+/** The server's maximum; it filters no kind, so a small limit lets newer preferences push out older decisions. */
+const SEARCH_LIMIT = 200;
 const SHOWN = 8;
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -67,7 +69,7 @@ function useItems(client: SanctumClient, query: string): Loaded<ReadonlyArray<Co
     if (query === '') return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      client.context.searchContext({ q: query, limit: 20 }, { signal: controller.signal }).then(
+      client.context.searchContext({ q: query, limit: SEARCH_LIMIT }, { signal: controller.signal }).then(
         found => setItems({ query, result: { status: 'ok', data: found.items.filter(item => KINDS.includes(item.kind) && item.state !== 'superseded') } }),
         (error: unknown) => controller.signal.aborted || setItems({ query, result: { status: 'error', message: errorText(error) } }),
       );

@@ -32,7 +32,7 @@ async function api(page: Page, searched: string[], search: () => readonly [numbe
     const url = new URL(route.request().url());
     if (url.pathname === '/api/v1/meetings') return route.fulfill({ json: { meetings: MEETINGS, next_cursor: null } });
     if (url.pathname === '/api/v1/context/search') {
-      searched.push(url.searchParams.get('q')!);
+      searched.push(`${url.searchParams.get('q')!}@${url.searchParams.get('limit')}`);
       const [status, json] = search();
       return route.fulfill({ status, json });
     }
@@ -57,7 +57,7 @@ test('a query finds decisions, commitments and meeting titles; Enter opens the m
     'DecisionKeep pilot access limited to the test group.Pilot review · Sep 29, 2026',
     'CommitmentDana sends the pilot plan.Pilot review · Sep 29, 2026',
   ]);
-  expect(searched).toEqual(['pilot']);
+  expect(searched).toEqual(['pilot@200']);
   await expect(dialog(page)).toContainText('not transcript text');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
