@@ -75,6 +75,8 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   const styles = await page.evaluate(() => window.styleTexts.join('\n'));
   for (const marker of ['data-radix-scroll-area-viewport', 'data-radix-select-viewport', 'data-scroll-locked']) expect(styles).toContain(marker);
   expect(await page.evaluate(() => window.cspViolations)).toEqual([]);
-  // Radix Themes' stylesheet applied: the widgets' accent is Sanctum's blue.
-  expect(await team.getByRole('button', { name: 'Invite user' }).evaluate(button => getComputedStyle(button).backgroundColor)).toBe('rgb(61, 125, 255)');
+  // Radix Themes' stylesheet applied (its buttons are inline-flex), and team.css gives the widgets Sanctum's primary button.
+  const invite = team.getByRole('button', { name: 'Invite user' });
+  expect(await invite.evaluate(button => getComputedStyle(button).display)).toBe('inline-flex');
+  expect(await invite.evaluate(button => getComputedStyle(button).backgroundColor)).toBe('rgb(47, 109, 240)');
 });
