@@ -27,7 +27,9 @@ export type CaptureIssue =
   /** The input sends exact digital zero, which no real room does (a closed MacBook's built-in microphone). */
   | 'silent_input'
   /** The chosen input is gone, so capture uses the browser's default input. */
-  | 'input_unavailable';
+  | 'input_unavailable'
+  /** No input is open: capture keeps running without audio and opens the first input that appears. */
+  | 'waiting_for_input';
 
 export interface CaptureSnapshot {
   readonly listener: ListenerState;
