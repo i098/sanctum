@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 const ACCESS = {
   workspace_id: '00000000-0000-4000-8000-000000000001',
@@ -14,8 +15,8 @@ const CALENDAR = { id: '00000000-0000-4000-8000-0000000000a2', app: 'google_cale
 
 const integrations = async (page: Page) => {
   await openListening(page, { configured: true, access: ACCESS });
-  await page.getByRole('button', { name: 'Settings' }).click();
-  return page.getByRole('dialog', { name: 'Settings' }).locator('.listen-settings > div').filter({ has: page.getByRole('term').getByText('Integrations', { exact: true }) });
+  await openMenu(page, 'Settings');
+  return menuSection(page, 'Settings').locator('.listen-settings > div').filter({ has: page.getByRole('term').getByText('Integrations', { exact: true }) });
 };
 
 test('Integrations shows not configured, nothing connected, and each connected app with its grants', async ({ page }) => {
@@ -26,13 +27,13 @@ test('Integrations shows not configured, nothing connected, and each connected a
   await page.getByRole('button', { name: 'Close' }).click();
 
   body = { configured: true, accounts: [] };
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openMenu(page, 'Settings');
   await expect(row.getByRole('definition')).toContainText('No apps connected');
   await expect(row.getByRole('button', { name: 'Connect an app' })).toBeVisible();
   await page.getByRole('button', { name: 'Close' }).click();
 
   body = { configured: true, accounts: [GMAIL, CALENDAR] };
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openMenu(page, 'Settings');
   await expect(row.getByRole('listitem')).toHaveText(['Gmailgmail-send-email for a memberDisconnect', 'Google CalendarNo grants yetDisconnect']);
 });
 

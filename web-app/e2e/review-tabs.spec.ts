@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 /**
  * Review tabs over fixture v1 responses. Recording: 30 s saved, 10 s never saved, then 15 s
@@ -99,8 +100,8 @@ async function reviewApi(page: Page, overrides: Record<string, Answer> = {}) {
 
 async function openReview(page: Page) {
   await openListening(page);
-  await page.getByRole('button', { name: 'Review' }).click();
-  return page.getByRole('dialog', { name: 'Review' });
+  await openMenu(page, 'Review');
+  return menuSection(page, 'Review');
 }
 
 const unavailable = (message: string) => [503, { _tag: 'Unavailable', code: 'unavailable', message, retryable: false }] as const;
@@ -150,7 +151,7 @@ test('a decision\'s source opens its transcript segment, whose Play seeks author
   expect(await audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeLessThan(40);
   await page.keyboard.press('Escape');
   await expect(review).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Review' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Menu' })).toBeFocused();
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });

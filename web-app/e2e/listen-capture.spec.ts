@@ -1,6 +1,7 @@
 /** Integration: the listening page drives the real capture engine (no test-side engine). */
 import { expect, test } from '@playwright/test';
 import { fakeServer } from './capture-server.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] } });
 
@@ -15,8 +16,8 @@ test('page controls start the real engine, overlays leave capture running, pause
   await expect.poll(() => server.starts.length).toBe(1);
   await expect.poll(() => server.frames, { timeout: 10_000 }).toBeGreaterThan(5);
 
-  await page.getByRole('button', { name: 'Review' }).click();
-  await expect(page.getByRole('dialog', { name: 'Review' })).toBeVisible();
+  await openMenu(page, 'Review');
+  await expect(menuSection(page, 'Review')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const framesAfterOverlay = server.frames;

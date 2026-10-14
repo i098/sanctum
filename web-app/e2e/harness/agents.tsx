@@ -1,8 +1,9 @@
-/** Test-only page: the Agents dialog against same-origin v1 routes that the spec intercepts. */
+/** Test-only page: the Agents section against same-origin v1 routes that the spec intercepts. */
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../../src/styles.css';
-import { AgentsDialog } from '../../src/pages/listen/AgentsDialog.tsx';
+import { AgentsSection } from '../../src/pages/listen/AgentsSection.tsx';
+import { Dialog } from '../../src/pages/listen/Dialog.tsx';
 import { sessionClient } from '../../src/lib/session.ts';
 
 const client = sessionClient();
@@ -14,7 +15,9 @@ function Harness() {
       <button type="button" onClick={() => setOpen(true)}>
         Agents
       </button>
-      <AgentsDialog client={client} open={open} onClose={() => setOpen(false)} />
+      <Dialog title="Agents" open={open} onClose={() => setOpen(false)}>
+        <AgentsSection client={client} />
+      </Dialog>
     </main>
   );
 }

@@ -1,23 +1,27 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
+import { menuSection, openMenu } from './menu.ts';
+
+const dialog = (page: Page) => page.getByRole('dialog', { name: 'Menu' });
 
 for (const name of ['Review', 'Agents', 'Settings']) {
-  test(`${name} traps focus, closes on Escape, returns focus, and keeps capture running`, async ({ page }) => {
+  test(`Menu on ${name} traps focus, closes on Escape, returns focus, and keeps capture running`, async ({ page }) => {
     await openListening(page);
-    const opener = page.getByRole('button', { name });
+    const opener = page.getByRole('button', { name: 'Menu' });
     await opener.focus();
     await page.keyboard.press('Enter');
-    const dialog = page.getByRole('dialog', { name });
-    await expect(dialog).toBeVisible();
-    const frame = (await dialog.boundingBox())!;
+    await expect(dialog(page)).toBeVisible();
+    await dialog(page).getByRole('navigation', { name: 'Menu sections' }).getByRole('button', { name }).click();
+    await expect(menuSection(page, name)).toBeVisible();
+    const frame = (await dialog(page).boundingBox())!;
     expect(Math.abs(frame.x + frame.width / 2 - 640)).toBeLessThanOrEqual(1);
     const readsWhileOpen = await page.evaluate(() => window.__capture.reads);
     for (let press = 0; press < 12; press++) {
       await page.keyboard.press(press % 3 ? 'Tab' : 'Shift+Tab');
-      expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true);
+      expect(await dialog(page).evaluate(element => element.contains(document.activeElement))).toBe(true);
     }
     await page.keyboard.press('Escape');
-    await expect(dialog).toBeHidden();
+    await expect(dialog(page)).toBeHidden();
     await expect(opener).toBeFocused();
     await expect.poll(() => page.evaluate(() => window.__capture.reads)).toBeGreaterThan(readsWhileOpen);
     expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
@@ -25,19 +29,47 @@ for (const name of ['Review', 'Agents', 'Settings']) {
   });
 }
 
-test('Close button closes an overlay and returns focus', async ({ page }) => {
+test('Ctrl+K opens the Menu from anywhere on the page and Escape returns focus to the Menu button', async ({ page }) => {
   await openListening(page);
-  await page.getByRole('button', { name: 'Agents' }).click();
-  await page.getByRole('dialog', { name: 'Agents' }).getByRole('button', { name: 'Close' }).click();
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Control+k');
+  await expect(dialog(page)).toBeVisible();
+  await expect(menuSection(page, 'Review')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Menu' })).toBeFocused();
+  expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
+});
+
+test('Cmd+K with Caps Lock on (an uppercase K) still opens the Menu', async ({ page }) => {
+  await openListening(page);
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Meta+K');
+  await expect(dialog(page)).toBeVisible();
+});
+
+test('Sections switch inside the open Menu without closing it', async ({ page }) => {
+  await openListening(page);
+  await openMenu(page, 'Review');
+  await dialog(page).getByRole('button', { name: 'Agents' }).click();
+  await expect(menuSection(page, 'Agents')).toBeVisible();
+  await expect(menuSection(page, 'Review')).toBeHidden();
+  await expect(dialog(page).getByRole('button', { name: 'Agents' })).toHaveAttribute('aria-current', 'page');
+});
+
+test('Close button closes the Menu and returns focus', async ({ page }) => {
+  await openListening(page);
+  await openMenu(page, 'Agents');
+  await dialog(page).getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Agents' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Menu' })).toBeFocused();
 });
 
 test('Review tabs switch by arrow keys and show truthful unavailable states', async ({ page }) => {
   await page.route('**/api/v1/meetings?*', route =>
     route.fulfill({ status: 503, json: { _tag: 'Unavailable', code: 'unavailable', message: 'Meeting data unavailable', retryable: false } }));
   await openListening(page);
-  await page.getByRole('button', { name: 'Review' }).click();
+  await openMenu(page, 'Review');
   const tabs = page.getByRole('tab');
   await expect(tabs).toHaveText(['Notes', 'Transcript', 'Recording', 'Memory', 'Context', 'Activity']);
   await tabs.first().focus();
@@ -51,8 +83,8 @@ test('Review tabs switch by arrow keys and show truthful unavailable states', as
 
 test('Settings reports real device facts and leaves open policies unselected', async ({ page }) => {
   await openListening(page);
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   const timezone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   await expect(settings.getByRole('definition')).toHaveText([
     'Not configured: no sign-in provider has been selected',
@@ -79,8 +111,8 @@ test('Settings deletes the workspace only after its exact name is typed, and und
     return route.fulfill({ json: state });
   });
   await openListening(page);
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   await settings.getByRole('button', { name: 'Delete workspace…' }).click();
   const confirm = page.getByRole('dialog', { name: 'Delete workspace?' });
   const submit = confirm.getByRole('button', { name: 'Delete workspace' });
@@ -102,7 +134,7 @@ test('Settings deletes the workspace only after its exact name is typed, and und
 test('Settings shows no workspace deletion to anyone the server does not answer as the owner', async ({ page }) => {
   await page.route('**/api/v1/workspace', route => route.fulfill({ status: 403, json: { _tag: 'Forbidden', code: 'forbidden', message: 'Only a workspace owner can manage the workspace', retryable: false } }));
   await openListening(page);
-  await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('heading', { name: 'Recordings of removed listeners' })).toBeVisible();
+  await openMenu(page, 'Settings');
+  await expect(menuSection(page, 'Settings').getByRole('heading', { name: 'Recordings of removed listeners' })).toBeVisible();
   await expect(page.getByRole('heading', { name: /workspace/i })).toHaveCount(0);
 });

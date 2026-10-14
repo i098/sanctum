@@ -1,6 +1,7 @@
 /** The real capture engine on fake inputs: a dead (exact zero) input is named with a picker beside it, and the choice moves capture and persists. */
 import { expect, test, type Page } from '@playwright/test';
 import { fakeServer } from './capture-server.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 declare global {
   interface Window {
@@ -88,8 +89,8 @@ test('choosing another input moves the same capture to it, and the choice persis
   expect(await page.evaluate(() => localStorage.getItem('sanctum.microphone'))).toBe('iphone');
   expect(server.starts).toHaveLength(1);
 
-  await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('combobox', { name: 'Microphone' })).toHaveValue('iphone');
+  await openMenu(page, 'Settings');
+  await expect(menuSection(page, 'Settings').getByRole('combobox', { name: 'Microphone' })).toHaveValue('iphone');
 
   await page.reload();
   await page.getByRole('button', { name: 'Listen' }).click();
@@ -101,8 +102,8 @@ test('before listening, Settings checks the chosen input for sound', async ({ pa
   await page.addInitScript(installInputs, INPUTS);
   await fakeServer(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   const check = settings.locator('.listen-input-check');
   await expect(check).toHaveText('This input is sending no sound.', { timeout: 6_000 });
 

@@ -5,6 +5,7 @@ import type * as Buffer from '../src/lib/capture/buffer.ts';
 import type * as Orphans from '../src/lib/capture/orphans.ts';
 import type * as Recorder from '../src/lib/capture/recorder.ts';
 import { openListening } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 type BufferModule = typeof Buffer;
 type OrphansModule = typeof Orphans;
@@ -74,8 +75,8 @@ test('exports an orphaned recording as one WAV, then discards it only after conf
   ]);
   await page.reload();
   await expect(page.getByText('2 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   const row = settings.getByRole('listitem');
   await expect(row).toContainText('0:02 · 2 chunks · listener removed');
   await expect(row).toContainText('Gap: 0:01 missing after 0:01, not filled in the export');
@@ -129,8 +130,8 @@ export function subscribeActions() { return () => {}; }`,
   }));
   await page.reload();
   await expect(page.getByText('4 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const row = page.getByRole('dialog', { name: 'Settings' }).getByRole('listitem');
+  await openMenu(page, 'Settings');
+  const row = menuSection(page, 'Settings').getByRole('listitem');
   await expect(row).toContainText('0:04 · 4 chunks · listener removed');
   await expect(row).toContainText('Gap in part 1: 0:01 missing after 0:01, not filled in the export');
   await expect(row).toContainText('Gap in part 2: 0:01 missing after 0:04, not filled in the export');
@@ -161,8 +162,8 @@ test('lists recordings of removed listeners only while no tab captures', async (
   const other = await page.context().newPage(); // another tab of this browser captures
   await other.goto('/');
   await other.evaluate(() => new Promise<void>(held => void navigator.locks.request('sanctum-capture', () => (held(), new Promise<void>(() => { })))));
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
   await expect(settings.getByText('1 chunks of removed listeners are kept on this device; they are listed here for export or discard when capture stops.')).toBeVisible();
   await expect(settings.getByRole('listitem')).toHaveCount(0);
   await expect(page.getByText('1 chunks of removed listeners kept on this device, not uploadable')).toBeVisible();

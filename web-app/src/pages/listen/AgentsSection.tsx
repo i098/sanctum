@@ -4,7 +4,6 @@
  */
 import { type AgentWithCredential, type SanctumClient, SanctumError } from '@sanctum/sdk';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import { Dialog } from './Dialog.tsx';
 
 type Scope = AgentWithCredential['credential']['scopes'][number];
 const GRANTABLE: ReadonlyArray<{ scope: Scope; label: string }> = [
@@ -14,7 +13,7 @@ const GRANTABLE: ReadonlyArray<{ scope: Scope; label: string }> = [
   { scope: 'actions:request', label: 'Request actions' },
 ];
 
-export function AgentsDialog({ client, open, onClose }: { client: SanctumClient; open: boolean; onClose: () => void }) {
+export function AgentsSection({ client }: { client: SanctumClient }) {
   const [agents, setAgents] = useState<ReadonlyArray<AgentWithCredential> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ name: string; token: string } | null>(null);
@@ -29,12 +28,11 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
     [client],
   );
   useEffect(() => {
-    // The plain token is shown once: closing the dialog forgets it.
-    if (!open) return setIssued(null);
+    // The plain token is shown once: leaving the section forgets it.
     const controller = new AbortController();
     refresh(controller.signal).catch((failure: unknown) => controller.signal.aborted || setError(failure instanceof SanctumError ? failure.message : 'Network unavailable.'));
     return () => controller.abort();
-  }, [open, refresh]);
+  }, [refresh]);
 
   const run = async (change: () => Promise<void>) => {
     setBusy(true);
@@ -76,7 +74,7 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
   };
 
   return (
-    <Dialog title="Agents" open={open} onClose={onClose}>
+    <>
       {error && (
         <p role="alert" className="mb-3 text-warning">
           {error}
@@ -129,6 +127,6 @@ export function AgentsDialog({ client, open, onClose }: { client: SanctumClient;
           </button>
         </div>
       </form>
-    </Dialog>
+    </>
   );
 }

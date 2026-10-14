@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { fakeWorkosWidgets, realServer } from './listen-fake.ts';
+import { openMenu, menuSection } from './menu.ts';
 
 /**
  * The hosted Team overlay on the built website behind the real server and its real CSP
@@ -49,8 +50,8 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   await welcome.getByRole('button', { name: 'Skip' }).click();
   await expect(welcome).toBeHidden();
   expect((await stored).status()).toBe(200);
-  await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('dialog', { name: 'Settings' }).getByRole('button', { name: 'Team' }).click();
+  await openMenu(page, 'Settings');
+  await menuSection(page, 'Settings').getByRole('button', { name: 'Team' }).click();
   const team = page.getByRole('dialog', { name: 'Team' });
   const members = team.getByRole('region', { name: 'Members' });
   await expect(members).toContainText('grace@example.test');

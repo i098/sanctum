@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { openListening } from './listen-fake.ts';
+import { openMenu } from './menu.ts';
 
 const MEETING = '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f';
 const notes = {
@@ -17,7 +18,7 @@ test('Review Notes shows the canonical summary of the latest meeting with source
   await page.route('**/api/v1/meetings?*', route => route.fulfill({ json: { meetings: [{ id: MEETING }], next_cursor: null } }));
   await page.route(`**/api/v1/meetings/${MEETING}/notes`, route => route.fulfill({ json: notes }));
   await openListening(page);
-  await page.getByRole('button', { name: 'Review' }).click();
+  await openMenu(page, 'Review');
   const panel = page.getByRole('tabpanel', { name: 'Notes' });
   await expect(panel.getByRole('heading', { name: 'Pilot review' })).toBeVisible();
   await expect(panel).toContainText('The team kept the pilot small and set the beta date.');
@@ -29,6 +30,6 @@ test('Review Notes says why notes are missing instead of inventing them', async 
   await page.route(`**/api/v1/meetings/${MEETING}/notes`, route =>
     route.fulfill({ status: 503, json: { _tag: 'Unavailable', code: 'unavailable', message: 'Notes are not ready yet', retryable: true } }));
   await openListening(page);
-  await page.getByRole('button', { name: 'Review' }).click();
+  await openMenu(page, 'Review');
   await expect(page.getByRole('tabpanel', { name: 'Notes' })).toHaveText('Notes unavailable: Notes are not ready yet');
 });
