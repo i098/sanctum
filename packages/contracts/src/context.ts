@@ -75,7 +75,7 @@ export const ContextItem = Schema.Struct({
 });
 export type ContextItem = typeof ContextItem.Type;
 
-/** `GET /api/v1/meetings/{id}/context` (see snippets/context-response.json). */
+/** `GET /api/v1/meetings/{id}/context` (see docs/build/snippets/context-response.json). */
 export const ContextSnapshot = Schema.Struct({
   meeting_id: MeetingId,
   revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
