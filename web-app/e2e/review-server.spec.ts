@@ -24,8 +24,8 @@ test('Review reads the real meeting, and a decision\'s source plays its authoriz
     await route.fulfill({ response: await route.fetch({ url: `${server.objects}${pathname}${search}` }) });
   });
   await openListening(page);
-  await openMenu(page, 'Review');
-  const review = menuSection(page, 'Review');
+  await openMenu(page, 'Meetings');
+  const review = menuSection(page, 'Meetings');
   await expect(review).toContainText('closed');
   // No worker runs here, so notes are truthfully not ready.
   await expect(review.getByRole('tabpanel', { name: 'Notes' })).toHaveText(/^Notes unavailable: /);

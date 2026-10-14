@@ -268,6 +268,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   /** A request for an input here waits for its promise before it opens. */
   const gates: Record<string, Promise<void>> = {};
   const microphone = async (constraints: MediaStreamConstraints) => {
+    if (refuse.open) throw new DOMException('denied', 'NotAllowedError');
     const audio = constraints.audio as MediaTrackConstraints;
     requests.push(audio);
     await gates[((audio.deviceId as ConstrainDOMStringParameters | undefined)?.exact as string | undefined) ?? 'default'];
@@ -284,15 +285,16 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
   /** Streams the recorder was moved to without a restart. */
   const replaced: MediaStream[] = [];
   /** `replace`: the recorder refuses a new input without a restart, as Firefox does for another sample rate. */
-  const refuse = { replace: false };
+  const refuse = { replace: false, open: false };
   const server = new FakeListenerServer(options);
+  const devices = Object.assign(new EventTarget(), { getUserMedia: options.getUserMedia ?? microphone });
   let onBlock: ((start: number, samples: Int16Array) => void) | null = null;
   const { lives, calls, client } = server;
   const deps: CaptureDeps = {
     window: win as unknown as NonNullable<CaptureDeps['window']>,
     document: doc as unknown as NonNullable<CaptureDeps['document']>,
     navigator: {
-      mediaDevices: { getUserMedia: options.getUserMedia ?? microphone } as unknown as MediaDevices,
+      mediaDevices: devices as unknown as MediaDevices,
       permissions: { query: async () => status } as unknown as Permissions,
       wakeLock: { request: async () => sentinels[sentinels.push(new FakeSentinel()) - 1] } as unknown as WakeLock,
       locks: options.locks as unknown as LockManager,
@@ -331,6 +333,7 @@ function harness(options: { secure?: boolean; getUserMedia?: () => Promise<Media
     inputs,
     gates,
     requests,
+    devices,
     replaced,
     refuse,
     lives,
@@ -478,7 +481,7 @@ describe('capture lifecycle', () => {
     await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.sample_count)).toEqual([RATE * 0.6]));
   });
 
-  it('degrades on a muted input and interrupts when the device is unplugged', async () => {
+  it('degrades on a muted input', async () => {
     const h = harness();
     await h.engine.start();
     h.feed(0.1);
@@ -487,10 +490,147 @@ describe('capture lifecycle', () => {
     expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'input_lost' });
     h.track.dispatchEvent(new Event('unmute'));
     expect(h.snapshot()).toMatchObject({ listener: 'listening', issue: null });
+  });
 
-    h.track.unplug();
-    await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'input_lost', archive: 'interrupted' }));
-    expect(h.lives[0]!.stopped).toBe('interrupted');
+  it('stays on a silent but live input without switching', async () => {
+    const h = harness();
+    await h.engine.start();
+    h.feed(0.1);
+    h.accept();
+    h.feed(1.2, 0);
+    h.devices.dispatchEvent(new Event('devicechange'));
+    await settle();
+    expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'silent_input' });
+    expect(h.requests).toHaveLength(1);
+  });
+
+  describe('persistent microphone', () => {
+    /** Capture on the default input with its epoch open, then every input is gone and the default one is unplugged. */
+    async function unplugged() {
+      const h = harness();
+      await h.engine.start();
+      h.feed(0.1);
+      h.accept();
+      const epochId = h.snapshot().epochId!;
+      const journaled = vi.spyOn(h.buffer, 'endEpoch');
+      const opened: number[] = [];
+      const open = h.devices.getUserMedia as (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+      h.devices.getUserMedia = (constraints) => (opened.push(Date.now()), open(constraints));
+      delete h.inputs['default'];
+      h.track.unplug();
+      await vi.waitFor(() => expect(h.snapshot().issue).toBe('waiting_for_input'));
+      return { h, epochId, journaled, opened };
+    }
+
+    it('waits for a microphone, keeps its lease, marks the gap, and resumes on the first new input', async () => {
+      const { h, epochId, journaled } = await unplugged();
+      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input', archive: 'interrupted', epochId: null });
+      const bands = new Float32Array(h.engine.levels.bandCount).fill(1);
+      expect(h.engine.levels.read(bands)).toBe(0);
+      expect(bands.every((band) => band === 0)).toBe(true);
+      expect(h.lives[0]!.stopped).toBe('interrupted');
+      expect(journaled).toHaveBeenCalledWith(epochId, 'interrupted');
+
+      // The dead input's silence is never recorded, and the heartbeat goes on renewing the same lease without an epoch.
+      h.feed(0.5, 0);
+      expect(h.snapshot().epochId).toBeNull();
+      expect(h.lives).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.calls.heartbeat.at(-1)).toMatchObject({ lease_generation: 1, state: 'degraded', epoch_id: null });
+
+      h.inputs['default'] = 'Default - USB Microphone';
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ issue: null, inputLabel: 'Default - USB Microphone' }));
+      expect(h.replaced).toHaveLength(1);
+      h.feed(0.1);
+      await settle();
+      expect(h.lives).toHaveLength(2);
+      expect(h.lives[1]!.options.start.epoch_id).not.toBe(epochId);
+      expect(h.snapshot().epochId).toBe(h.lives[1]!.options.start.epoch_id);
+      await vi.waitFor(() => expect(h.calls.put.map((manifest) => manifest.epoch_id)).toContain(epochId));
+    });
+
+    it('keeps looking on a backoff that doubles from 1 second to a 30 second cap', async () => {
+      const { h, opened } = await unplugged();
+      await vi.advanceTimersByTimeAsync(130_000);
+      // The unplug's own attempt, then one after 1 second (plus the poll's own clock steps), 2, 4, 8, 16 and 30 seconds, and 30 again.
+      const gaps = opened.slice(1).map((at, i) => at - opened[i]!);
+      expect(gaps[0]).toBeGreaterThanOrEqual(1_000);
+      expect(gaps[0]).toBeLessThan(1_500);
+      expect(gaps.slice(1)).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input' });
+    });
+
+    it('returns to the remembered chosen input when it reappears, on a fallback or after waiting', async () => {
+      const h = harness({ input: 'iphone' });
+      delete h.inputs['iphone'];
+      await h.engine.start();
+      h.feed(0.1);
+      h.accept();
+      const { epochId } = h.snapshot();
+      h.inputs['iphone'] = '萧 Microphone';
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ inputId: 'iphone', issue: null, inputLabel: '萧 Microphone', epochId }));
+      expect(h.storage.get('sanctum.microphone')).toBe('iphone');
+
+      // Nothing is left to return to once it is back: another change opens nothing.
+      const opened = h.requests.length;
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await settle();
+      expect(h.requests).toHaveLength(opened);
+
+      // The chosen input and the default one both go; the default returns first, the chosen one then wins it back.
+      delete h.inputs['iphone'];
+      delete h.inputs['default'];
+      h.track.unplug();
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input', inputId: null }));
+      h.inputs['default'] = 'Default - MacBook Pro Microphone';
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ issue: null, inputLabel: 'Default - MacBook Pro Microphone' }));
+      h.inputs['iphone'] = '萧 Microphone';
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ inputId: 'iphone', inputLabel: '萧 Microphone' }));
+    });
+
+    it('does not take back an input the listener replaced by choosing another', async () => {
+      const h = harness({ input: 'iphone' });
+      delete h.inputs['iphone'];
+      await h.engine.start();
+      h.feed(0.1);
+      h.accept();
+      h.inputs['loom'] = 'LoomAudioDevice';
+      await h.engine.chooseInput('loom');
+      h.inputs['iphone'] = '萧 Microphone';
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await settle();
+      expect(h.snapshot()).toMatchObject({ inputId: 'loom', inputLabel: 'LoomAudioDevice' });
+    });
+
+    it('stays stopped when the listener pauses while waiting', async () => {
+      const { h } = await unplugged();
+      await h.engine.pause();
+      expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: null });
+      h.inputs['default'] = 'Default - USB Microphone';
+      const opened = h.requests.length;
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(h.requests).toHaveLength(opened);
+      expect(h.snapshot().listener).toBe('paused');
+    });
+
+    it('still halts when the permission is denied, at the unplug or while waiting', async () => {
+      const first = harness();
+      await first.engine.start();
+      first.feed(0.1);
+      first.refuse.open = true;
+      first.track.unplug();
+      await vi.waitFor(() => expect(first.snapshot()).toMatchObject({ listener: 'paused', issue: 'permission_denied', archive: 'interrupted' }));
+
+      const { h } = await unplugged();
+      h.refuse.open = true;
+      h.devices.dispatchEvent(new Event('devicechange'));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'paused', issue: 'permission_denied' }));
+    });
   });
 
   it('warns, naming the input, after it sends exact zero for the threshold, and clears at the first real sound', async () => {
@@ -1030,9 +1170,10 @@ describe('capture lifecycle', () => {
 
     const other = harness();
     await other.engine.start();
+    delete other.inputs['default'];
     other.track.readyState = 'ended';
     other.doc.dispatchEvent(new Event('visibilitychange'));
-    await vi.waitFor(() => expect(other.snapshot()).toMatchObject({ listener: 'paused', issue: 'input_lost' }));
+    await vi.waitFor(() => expect(other.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input' }));
   });
 
   it('re-requests the wake lock when the page is visible again', async () => {

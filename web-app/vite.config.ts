@@ -8,6 +8,8 @@ const api = 'http://127.0.0.1:7102';
 // `VITE_`-prefixed variables reach the bundle; server secrets never use that prefix.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The CSP allows fonts from 'self' only (server/src/web.ts), so a small font file is never inlined as a data: URI.
+  build: { assetsInlineLimit: file => (file.endsWith('.woff2') ? false : undefined) },
   server: {
     port: 3102,
     proxy: {

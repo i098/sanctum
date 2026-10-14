@@ -16,8 +16,8 @@ test('page controls start the real engine, overlays leave capture running, pause
   await expect.poll(() => server.starts.length).toBe(1);
   await expect.poll(() => server.frames, { timeout: 10_000 }).toBeGreaterThan(5);
 
-  await openMenu(page, 'Review');
-  await expect(menuSection(page, 'Review')).toBeVisible();
+  await openMenu(page, 'Meetings');
+  await expect(menuSection(page, 'Meetings')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const framesAfterOverlay = server.frames;

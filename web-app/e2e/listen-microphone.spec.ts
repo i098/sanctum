@@ -9,6 +9,10 @@ declare global {
     __requests: MediaTrackConstraints[];
     /** Sets one input's tone level; 0 is exact digital zero. */
     __level(id: string, gain: number): void;
+    /** Removes an input and ends its open streams, as unplugging a device does. */
+    __unplug(id: string): void;
+    /** Adds an input; `announce` (default true) also fires the browser's `devicechange`. */
+    __plug(id: string, input: { label: string; gain: number }, announce?: boolean): void;
   }
 }
 
@@ -23,8 +27,13 @@ const INPUTS = {
 /** Replaces the browser's inputs with tones whose level the test sets. Runs in the page. */
 function installInputs(inputs: Record<string, { label: string; gain: number; fail?: string }>): void {
   const levels = new Map<string, GainNode[]>();
+  const tracks = new Map<string, MediaStreamTrack[]>();
   window.__requests = [];
   window.__level = (id, gain) => levels.get(id)?.forEach(node => (node.gain.value = gain));
+  window.__plug = (id, input, announce = true) => {
+    inputs[id] = input;
+    if (announce) navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  };
   navigator.mediaDevices.getUserMedia = async (constraints) => {
     const audio = constraints?.audio as MediaTrackConstraints;
     window.__requests.push(audio);
@@ -40,11 +49,17 @@ function installInputs(inputs: Record<string, { label: string; gain: number; fai
     tone.start();
     await context.resume();
     levels.set(id, [...(levels.get(id) ?? []), level]);
-    Object.defineProperty(destination.stream.getAudioTracks()[0], 'label', { value: input.label });
+    const track = destination.stream.getAudioTracks()[0]!;
+    tracks.set(id, [...(tracks.get(id) ?? []), track]);
+    Object.defineProperty(track, 'label', { value: input.label });
     return destination.stream;
   };
   navigator.mediaDevices.enumerateDevices = async () =>
     Object.entries(inputs).map(([deviceId, { label }]) => ({ deviceId, kind: 'audioinput', label, groupId: '' }) as MediaDeviceInfo);
+  window.__unplug = (id) => {
+    delete inputs[id];
+    tracks.get(id)?.forEach(track => (track.stop(), track.dispatchEvent(new Event('ended'))));
+  };
 }
 
 async function listen(page: Page, inputs: Record<string, { label: string; gain: number; fail?: string }> = INPUTS) {
@@ -66,7 +81,9 @@ test('names a microphone that sends exact zero within the threshold, and clears 
 
   await page.evaluate(() => window.__level('default', 0.1));
   await expect(helper(page)).toHaveText('Speak to Sanctum when you need it.');
-  await expect(page.getByRole('combobox', { name: 'Microphone' })).toHaveCount(0);
+  // The chip stays in the health line; only its amber warning goes.
+  await expect(page.getByRole('combobox', { name: 'Microphone' })).toBeVisible();
+  await expect(page.locator('.listen-health-line')).not.toHaveAttribute('data-input-issue');
 });
 
 test('never warns about a quiet input that is not exact zero', async ({ page }) => {
@@ -98,6 +115,21 @@ test('choosing another input moves the same capture to it, and the choice persis
   expect(await page.evaluate(() => window.__requests)).toMatchObject([{ deviceId: { exact: 'iphone' } }]);
 });
 
+test('keeps capture open when the input is unplugged and resumes on the first input that appears', async ({ page }) => {
+  const server = await listen(page, { default: { ...INPUTS.default, gain: 0.1 } });
+  await expect(page.locator('.listen-state')).toHaveText('listening', { timeout: 15_000 });
+
+  await page.evaluate(() => window.__unplug('default'));
+  await expect(page.locator('.listen-state')).toHaveText('degraded');
+  await expect(helper(page)).toHaveText('Microphone disconnected. Waiting for one to connect.');
+  await expect(page.locator('.listen-health')).toContainText('recording interrupted');
+
+  await page.evaluate(() => window.__plug('default', { label: 'Default - USB Microphone', gain: 0.1 }));
+  await expect(page.locator('.listen-state')).toHaveText('listening', { timeout: 15_000 });
+  await expect(helper(page)).toHaveText('Speak to Sanctum when you need it.');
+  expect(server.starts.map((message) => (message._tag === 'stop' ? `stop ${message.reason}` : message._tag))).toEqual(['start', 'stop interrupted', 'start']);
+});
+
 test('before listening, Settings checks the chosen input for sound', async ({ page }) => {
   await page.addInitScript(installInputs, INPUTS);
   await fakeServer(page);
@@ -124,4 +156,44 @@ test('the picker on the listening page opens no probe stream while capture is st
   await expect(picker).toHaveValue('iphone');
   await expect(page.locator('.listen-input-check')).toHaveCount(0);
   expect(await page.evaluate(() => window.__requests)).toMatchObject([{}]);
+});
+
+test('a new input appears on devicechange or Refresh, and the chosen input stays chosen', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
+  const picker = settings.getByRole('combobox', { name: 'Microphone' });
+  await picker.selectOption({ label: '萧 Microphone' });
+  await expect(picker.locator('option')).toHaveCount(4);
+
+  await page.evaluate(() => window.__plug('usb', { label: 'USB Microphone', gain: 0.1 }, true));
+  await expect(picker.locator('option', { hasText: 'USB Microphone' })).toHaveCount(1);
+  await expect(picker).toHaveValue('iphone');
+
+  await page.evaluate(() => window.__plug('desk', { label: 'Desk Microphone', gain: 0.1 }, false));
+  await expect(picker.locator('option', { hasText: 'Desk Microphone' })).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Refresh' }).click();
+  await expect(picker.locator('option', { hasText: 'Desk Microphone' })).toHaveCount(1);
+  await expect(picker).toHaveValue('iphone');
+});
+
+test('a silent input says what to do when the laptop is closed', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await openMenu(page, 'Settings');
+  await expect(menuSection(page, 'Settings').locator('.listen-input-hint')).toHaveText('If your laptop is closed, choose another microphone.', { timeout: 6_000 });
+});
+
+test('a silent input that is not the built-in microphone gets no laptop hint', async ({ page }) => {
+  await page.addInitScript(installInputs, INPUTS);
+  await fakeServer(page);
+  await page.goto('/');
+  await openMenu(page, 'Settings');
+  const settings = menuSection(page, 'Settings');
+  await settings.getByRole('combobox', { name: 'Microphone' }).selectOption({ label: 'LoomAudioDevice' });
+  await expect(settings.locator('.listen-input-check')).toHaveText('This input is sending no sound.', { timeout: 6_000 });
+  await expect(settings.locator('.listen-input-hint')).toHaveCount(0);
 });
