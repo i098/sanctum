@@ -1,6 +1,6 @@
 # Build Sanctum from this handoff
 
-Implement a new application in `undeemed/sanctum` using tasks/plan.md and tasks/todo.md.
+Implement a new application in `undeemed/sanctum` using docs/build/tasks/plan.md and docs/build/tasks/todo.md.
 This repository intentionally contains no old application code, apart from one requested exception: the listening waveform and its side live updates are ported from the earlier kiosk (docs/DESIGN.md).
 Do not fetch or copy the old source as a shortcut.
 Recreate the rest of the approved appearance independently using docs/DESIGN.md and design/listener-reference.html.

@@ -4,9 +4,9 @@ An open-source TypeScript + Effect project for silent meeting capture, source-li
 
 [![CI and documentation](https://github.com/undeemed/sanctum/actions/workflows/ci.yml/badge.svg)](https://github.com/undeemed/sanctum/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: implementation in progress](https://img.shields.io/badge/status-implementation%20in%20progress-22d3c5)](tasks/todo.md)
+[![Status: implementation in progress](https://img.shields.io/badge/status-implementation%20in%20progress-22d3c5)](docs/build/tasks/todo.md)
 
-[Read the blueprint](https://i098.github.io/sanctum/) · [Preview the interface](https://i098.github.io/sanctum/design/listener-reference.html) · [Build handoff](HANDOFF.md) · [Contribute](CONTRIBUTING.md)
+[Read the blueprint](https://i098.github.io/sanctum/) · [Preview the interface](https://i098.github.io/sanctum/design/listener-reference.html) · [Build handoff](docs/build/HANDOFF.md) · [Contribute](CONTRIBUTING.md)
 
 **Status: implementation in progress.**
 The specification, build plan, visual references, and documentation CI/CD guide the application code in `server/` and `web-app/`.
@@ -48,22 +48,22 @@ The planned integration interface exposes three fixed tools:
 
 The full Pipedream catalog stays server-side.
 Tool discovery does not grant permission to execute an action.
-See [the implementation contract](tasks/plan.md) for scopes, source provenance, concurrent writes, and failure handling.
+See [the implementation contract](docs/build/tasks/plan.md) for scopes, source provenance, concurrent writes, and failure handling.
 
 ## Start building
 
 Give your coding agent this instruction:
 
-> Read AGENTS.md and HANDOFF.md, then implement tasks/plan.md using tasks/todo.md. Build from scratch; do not import the old application. Match docs/DESIGN.md and design/listener-reference.html closely. Complete reversible implementation and local validation, and report unresolved live-deployment requirements separately.
+> Read AGENTS.md and docs/build/HANDOFF.md, then implement docs/build/tasks/plan.md using docs/build/tasks/todo.md. Build from scratch; do not import the old application. Match docs/DESIGN.md and design/listener-reference.html closely. Complete reversible implementation and local validation, and report unresolved live-deployment requirements separately.
 
 | Document | Purpose |
 | --- | --- |
-| [HANDOFF.md](HANDOFF.md) | The execution brief for one integrated implementation run. |
-| [Implementation plan](tasks/plan.md) | Architecture, storage, APIs, MCP, SDKs, auth, recovery, and deployment. |
-| [26-task checklist](tasks/todo.md) | Ordered work with acceptance criteria and verification. |
+| [HANDOFF.md](docs/build/HANDOFF.md) | The execution brief for one integrated implementation run. |
+| [Implementation plan](docs/build/tasks/plan.md) | Architecture, storage, APIs, MCP, SDKs, auth, recovery, and deployment. |
+| [26-task checklist](docs/build/tasks/todo.md) | Ordered work with acceptance criteria and verification. |
 | [Design contract](docs/DESIGN.md) | Layout, colors, waveform shape, motion, and accessibility. |
 | [Decisions](docs/DECISIONS.md) | Confirmed scope, the sign-in decision and remaining recording policies. |
-| [EXECUTE.txt](EXECUTE.txt) | Combined handoff, plan, and checklist. |
+| [EXECUTE.txt](docs/build/EXECUTE.txt) | Combined handoff, plan, and checklist. |
 
 ## Planned technology stack
 
@@ -82,7 +82,7 @@ One Node.js image runs separate API and worker processes; MySQL stores durable j
 Python is only a client SDK option, not a server dependency.
 Performance target: optimized TypeScript with workload-specific Rust comparisons; no parity result is claimed before implementation and measurement.
 Model and speaker-attribution choices remain evaluation-gated; provider claims are not application benchmarks.
-The full selection is in [plan section 04](tasks/plan.md#04-chosen-technology-stack-and-runtime).
+The full selection is in [plan section 04](docs/build/tasks/plan.md#04-chosen-technology-stack-and-runtime).
 
 ## Run the documentation locally
 

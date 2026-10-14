@@ -24,7 +24,7 @@ The scanners check code structure and static findings; they do not prove runtime
 
 - Fallow 3.30.0 is locked through npm and runs audit in new-only mode against the PR base or push-before commit; manual dispatch compares HEAD^.
 - Fallow rejects new dead-code, duplication and complexity findings and source parse failures; existing findings remain visible through full scans.
-- Fallow excludes only generated site output, generated snippets and generated index.html; application and tooling source stay in scope.
+- Fallow excludes only generated site output, generated snippets and generated blueprint.html; application and tooling source stay in scope.
 - Sentrux 0.5.7 and its Linux grammars are version-pinned and SHA-256-verified before execution.
 - The committed Sentrux floor is 6491, with zero cycles and zero god files; its original JSON is preserved.
 - CI also measures base and candidate in temporary tracked-file snapshots using the same scanner and grammars.

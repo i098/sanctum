@@ -1,7 +1,7 @@
 # Architecture and slice contracts
 
-Pointer map for the parallel build of [tasks/todo.md](../tasks/todo.md).
-Behavior is defined by [tasks/plan.md](../tasks/plan.md); this file fixes who owns which file and which names siblings import.
+Pointer map for the parallel build of [docs/build/tasks/todo.md](build/tasks/todo.md).
+Behavior is defined by [docs/build/tasks/plan.md](build/tasks/plan.md); this file fixes who owns which file and which names siblings import.
 
 ## Rules
 
