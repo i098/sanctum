@@ -52,6 +52,8 @@ interface SettingsProps {
   client: SanctumClient;
   /** Reopens the first-run welcome; null (signed out, or no answer from the server) offers no Welcome row. */
   onWelcome: (() => void) | null;
+  /** The page's fullscreen state and its switch; entering it also closes the panel, so the waveform shows. */
+  fullscreen: { active: boolean; toggle: () => void };
 }
 
 /** Self-serve: signs in again, and the server creates the workspace with this user as owner when it still finds no membership. */
@@ -242,7 +244,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Settings section in four groups: Account, Device, Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
-export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
+export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
   return (
     <>
       {notice && <Notice notice={notice} selfServe={signIn.status === 'signed_out' && signIn.selfServe} />}
@@ -253,6 +255,7 @@ export function SettingsSection({ permission, engine, client, signIn, notice, on
         <Rows rows={[
           ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
           ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
+          ...(document.fullscreenEnabled ? [['Display', <WithAction text="Press F on the listening screen, or" label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={fullscreen.toggle} />] as const] : []),
         ]} />
       </Group>
       <Group title="Data">

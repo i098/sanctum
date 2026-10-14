@@ -94,6 +94,7 @@ test('Settings groups its rows, reports real device facts and leaves open polici
     'Unavailable until sign-in is configured',
     'Allowed',
     timezone,
+    'Press F on the listening screen, orEnter fullscreen',
     'Not selected: nothing is deleted automatically',
   ]);
 });

@@ -17,8 +17,9 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - The stage remains mostly empty around narrow spikes.
 - Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text. While browser captions run, a second helper line, at most 300 px wide, says that live captions use the browser's speech service (in Chrome, Google's). After a recognition error that stops captions for the capture session, the same line says, while capture runs, that word-by-word captions are not available in this browser (`network`, `service-not-allowed`, `not-allowed`) or for this language (`language-not-supported`), and that lines appear after each phrase.
 - Footer sits approximately 24–32 px from the bottom and sides.
-- Lower left: a tiny state dot and brief capture/context health text.
-- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu (also Ctrl/⌘+K).
+- Lower left: a tiny state dot and brief capture/context health text, then the microphone chip (the input in use; it opens the input picker).
+- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Menu (also Ctrl/⌘+K). Fullscreen is not a footer control: it is a row in Menu > Settings > Display, and the F key toggles it (ignored while typing in a field or with Ctrl/⌘/Alt held).
+- In fullscreen the footer fades after 3 seconds without pointer, touch or key input, and any such input brings it back.
 - Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 

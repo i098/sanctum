@@ -95,7 +95,7 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap, live 
   expect(transcript.x + transcript.width).toBeLessThan(helper.x);
   const controls = await page.getByRole('navigation', { name: 'Listening controls' }).getByRole('button').all();
   const rows = new Set(await Promise.all(controls.map(async control => (await control.boundingBox())!.y)));
-  // With the meeting open, End meeting joins Pause, Fullscreen and Menu on the one row.
-  expect(controls).toHaveLength(4);
+  // With the meeting open, End meeting joins Pause and Menu on the one row.
+  expect(controls).toHaveLength(3);
   expect(rows.size).toBe(1);
 });
