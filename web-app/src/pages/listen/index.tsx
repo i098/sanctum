@@ -347,7 +347,8 @@ export function ListenPage() {
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+      // Lowercase: Caps Lock (or Shift) reports an uppercase K.
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
       // Focus first: a native dialog returns focus to whatever had it when it opened.
       menuRef.current?.focus();
