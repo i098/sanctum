@@ -19,7 +19,7 @@
   color: #e7ecf3;
 }
 
-.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft):hover {
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft):hover:where(:not(:disabled, [data-disabled])) {
   background: var(--btn-secondary-hover);
 }
 
@@ -28,8 +28,31 @@
   color: #fff;
 }
 
-.listen-team .rt-Button.rt-variant-solid:hover {
+.listen-team .rt-Button.rt-variant-solid:hover:where(:not(:disabled, [data-disabled])) {
   background: var(--btn-primary-hover);
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft)[data-accent-color='red'] {
+  background: none;
+  color: var(--btn-danger);
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft)[data-accent-color='red']:hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-danger-hover);
+}
+
+.listen-team .rt-Button.rt-variant-solid[data-accent-color='red'] {
+  background: var(--btn-confirm);
+  color: #fff;
+}
+
+.listen-team .rt-Button.rt-variant-solid[data-accent-color='red']:hover:where(:not(:disabled, [data-disabled])) {
+  background: var(--btn-confirm-hover);
+}
+
+.listen-team .rt-Button:is(:disabled, [data-disabled]) {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .listen-team h3 {

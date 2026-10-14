@@ -1,6 +1,6 @@
 import { type ActionReceipt, type Meeting, pages, type SanctumClient } from '@sanctum/sdk';
 import { useEffect, useState } from 'react';
-import { actionName } from './action-name.ts';
+import { actionName } from '../../lib/action-label.ts';
 import { subscribeActions } from './engine.ts';
 import { collect, type Loadable, settle } from './review-data.ts';
 import { show, time } from './ReviewPanels.tsx';

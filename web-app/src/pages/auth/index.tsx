@@ -20,8 +20,8 @@ const next = () => {
 
 const input = 'w-full rounded border border-divider bg-surface px-3 py-2 text-ink outline-none focus-visible:border-accent';
 const button = 'inline-flex min-h-9 items-center justify-center rounded-lg px-4 font-medium disabled:opacity-60';
-const primary = `${button} bg-(--btn-primary) text-white hover:bg-(--btn-primary-hover)`;
-const secondary = `${button} bg-(--btn-secondary) text-ink hover:bg-(--btn-secondary-hover)`;
+const primary = `${button} bg-(--btn-primary) text-white enabled:hover:bg-(--btn-primary-hover)`;
+const secondary = `${button} bg-(--btn-secondary) text-ink enabled:hover:bg-(--btn-secondary-hover)`;
 
 type Failure = { readonly message?: string | undefined } | null;
 
