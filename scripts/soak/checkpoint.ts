@@ -64,18 +64,22 @@ export function fixtureBackend(fixture: Fixture): Backend {
 /** One timed search. A failure is an answer with an error, so one bad call does not hide the other metrics. */
 async function ask(backend: Backend, q: string, range: { from?: string; to?: string } = {}, resolveFor?: Fact): Promise<Answer> {
   const started = performance.now();
+  const failures: string[] = [];
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
   try {
     const found = await backend.search(q, range);
     const ms = performance.now() - started;
     const items: Item[] = await Promise.all(found.slice(0, LIMIT).map(async item => {
       const resolve = resolveFor && matches(item.text, resolveFor.answers);
       const segments = resolve ? item.sources.flatMap(s => (s.segment_id ? [s.segment_id] : [])) : [];
-      const times = await Promise.all(segments.map(async id => Date.parse((await backend.source(id)).event_at ?? '')));
+      const times = await Promise.all(segments.map(async id => {
+        try { return Date.parse((await backend.source(id)).event_at ?? ''); } catch (error) { failures.push(`${q}: source ${id}: ${reason(error)}`); return Number.NaN; }
+      }));
       return { text: item.text, event_at: item.event_at, source_ms: times.filter(t => !Number.isNaN(t)) };
     }));
-    return { items, ms };
+    return failures.length ? { items, ms, error: failures.join('; ') } : { items, ms };
   } catch (error) {
-    return { items: [], ms: performance.now() - started, error: `${q}: ${error instanceof Error ? error.message : String(error)}` };
+    return { items: [], ms: performance.now() - started, error: `${q}: ${reason(error)}` };
   }
 }
 

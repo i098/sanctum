@@ -82,3 +82,11 @@ test('the runner asks every due question, resolves cited segments for matching i
   assert.equal(broken.errors.length, 1);
   assert.equal(broken.metrics.recall_at_5, 0);
 });
+
+test('a failed source lookup keeps the returned items: the fact is wrong with a recorded error, not missing', async () => {
+  const hit = { text: 'Launch date is Nov 3', event_at: new Date(at(1210)).toISOString(), sources: [{ segment_id: 'gone' }] };
+  const backend = fixtureBackend({ search: { 'launch date||': { items: [hit] }, 'When is the launch date?||': { items: [hit] } }, sources: {} });
+  const score = await runCheckpoint(backend, { facts: [manifest.facts[0]!] }, 1, T0);
+  assert.deepEqual(score.facts, [{ id: 'L1', keyword: 'wrong', natural: 'wrong' }]);
+  assert.equal(score.errors.length, 2);
+});
