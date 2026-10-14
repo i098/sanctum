@@ -3,13 +3,14 @@ import { test } from 'node:test';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildSite, FILES, DIRECTORIES, inlineScripts, assertCurrentStack } from '../scripts/handoff.ts';
+import { buildSite, FILES, DIRECTORIES, source, inlineScripts, assertCurrentStack } from '../scripts/handoff.ts';
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), 'sanctum-handoff-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  FILES.forEach(name => writeFileSync(join(root, name), 'public document'));
-  DIRECTORIES.forEach(name => { mkdirSync(join(root, name)); writeFileSync(join(root, name, 'reference.txt'), 'public reference'); });
+  mkdirSync(join(root, 'docs/build'), { recursive: true });
+  FILES.forEach(name => writeFileSync(join(root, source(name)), 'public document'));
+  DIRECTORIES.forEach(name => { mkdirSync(join(root, source(name)), { recursive: true }); writeFileSync(join(root, source(name), 'reference.txt'), 'public reference'); });
   return root;
 }
 
