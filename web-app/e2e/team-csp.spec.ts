@@ -52,7 +52,7 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   expect((await stored).status()).toBe(200);
   await openMenu(page, 'Settings');
   await menuSection(page, 'Settings').getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
+  const team = menuSection(page, 'Settings').locator('.listen-team');
   const members = team.getByRole('region', { name: 'Members' });
   await expect(members).toContainText('grace@example.test');
   await expect(team.getByRole('region', { name: 'Your profile' })).toContainText('Ada Lovelace');

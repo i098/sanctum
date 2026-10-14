@@ -21,8 +21,9 @@
 }
 
 /*
- * Team covers Settings at every width: while Team is open, the Settings box behind it is hidden
- * and only its backdrop stays, so the page dims as before. Team itself (a DOM child) stays visible.
+ * The welcome's Team dialog covers the welcome at every width: while it is open, the welcome's box behind
+ * it is hidden and only its backdrop stays, so the page dims as before. Team itself (a DOM child) stays visible.
+ * In Settings, Team renders inline and none of these dialog rules match.
  */
 .listen-dialog:has(.listen-dialog[open] > .listen-team) {
   visibility: hidden;
@@ -34,7 +35,7 @@
 }
 
 @media (max-width: 640px) {
-  /* Team takes the whole phone screen, so the members table and profile get its full width. */
+  /* The welcome's Team takes the whole phone screen, so the members table and profile get its full width. */
   .listen-dialog:has(> .listen-team) {
     box-sizing: border-box;
     width: 100vw;

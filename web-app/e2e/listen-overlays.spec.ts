@@ -82,16 +82,18 @@ test('Review tabs switch by arrow keys and show truthful unavailable states', as
   await expect(page.getByRole('tabpanel', { name: 'Notes' })).toBeVisible();
 });
 
-test('Settings reports real device facts and leaves open policies unselected', async ({ page }) => {
+test('Settings groups its rows, reports real device facts and leaves open policies unselected', async ({ page }) => {
   await openListening(page);
   await openMenu(page, 'Settings');
   const settings = menuSection(page, 'Settings');
   const timezone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  // Signed out, no Welcome group: the server has not answered that the welcome can reopen.
+  await expect(settings.locator('.listen-settings-group > h3')).toHaveText(['Account', 'Device', 'Data']);
   await expect(settings.getByRole('definition')).toHaveText([
     'Not configured: no sign-in provider has been selected',
     'Unavailable until sign-in is configured',
-    timezone,
     'Allowed',
+    timezone,
     'Not selected: nothing is deleted automatically',
   ]);
 });

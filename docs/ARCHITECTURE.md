@@ -232,7 +232,7 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-app/src/pages/listen/{WorkosTeam.tsx,team.css}`, `web-app/e2e/team-csp.spec.ts` and the widget-token suite in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
 
 - `widget-token.ts`: `WidgetTokenLive` mounts `GET`/`POST /api/v1/workspace/team` (link status; owner-only "Set up team") and `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
-- `/auth/config` reports `workos_organizations`; SettingsSection lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server.
+- `/auth/config` reports `workos_organizations`; SettingsSection lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server, and shows it inline on the Workspace row.
 - The `style-src` hashes in `web.ts` cover the widgets' fixed `<style>` elements; `team-csp.spec.ts` fails when a dependency bump changes one.
 
 ### onboarding (first-run welcome)
@@ -240,7 +240,7 @@ Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-a
 Owns `server/src/onboarding.ts`, migration `020_onboarding`, `OnboardingApi` in contracts `onboarding.ts`, `server/tests/onboarding.test.ts`, `web-app/src/pages/listen/Welcome.tsx` and `web-app/e2e/listen-welcome.spec.ts`.
 
 - `OnboardingApi` is website only (`OpenApi.Exclude`, so not in the SDKs or MCP): `GET`/`POST /api/v1/onboarding` read and set `principals.onboarded_at` with the workspace name, and `POST /api/v1/workspace/name` renames the workspace for `workspace:admin`.
-- `TeamButton` in SettingsSection.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) for both Settings and the welcome; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
+- `TeamButton` in SettingsSection.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) in a dialog over the welcome; Settings shows the same `TeamBody` inline; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
 
 ## Hot files
 

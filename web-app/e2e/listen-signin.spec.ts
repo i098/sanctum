@@ -147,18 +147,20 @@ test('Connect sign-in navigates to the issuer URL the server returns', async ({ 
   await expect(page).toHaveURL(/\/fixture-issuer\/authorize\?state=s$/);
 });
 
-test('self-hosted issuer: Team opens over Settings, closes back to it, and capture keeps running', async ({ page }) => {
+test('self-hosted issuer: Team opens inline in Settings, hides again, and capture keeps running', async ({ page }) => {
   await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
   await openListening(page, { configured: 'embedded', access: ACCESS });
   const settings = await openSettings(page);
   await expect(row(settings, 'Profile')).toHaveText('Display name and passwordEdit');
-  await settings.getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
-  // An ended issuer session asks for sign-in instead of showing an empty team.
-  await expect(team.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/?signin=ok');
-  await page.keyboard.press('Escape');
-  await expect(team).toBeHidden();
-  await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();
+  const toggle = settings.getByRole('button', { name: 'Team' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  // An ended issuer session asks for sign-in instead of showing an empty team, and no dialog opens over Settings.
+  await expect(row(settings, 'Workspace').getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/auth/login?return_to=/?signin=ok');
+  await expect(page.getByRole('dialog', { name: 'Team' })).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(settings.getByRole('link', { name: 'Sign in again' })).toHaveCount(0);
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });
@@ -172,19 +174,21 @@ test('self-hosted issuer: a signed-in user outside the workspace team is told to
   await openListening(page, { configured: 'embedded', access: ACCESS });
   const settings = await openSettings(page);
   await settings.getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
+  const team = row(settings, 'Workspace');
   await expect(team).toContainText('This workspace has a team. Ask an owner to invite you.');
   await expect(team.getByRole('button', { name: 'Set up team' })).toHaveCount(0);
 });
 
-test('self-hosted issuer: on a phone Team covers the whole viewport', async ({ page }) => {
+test('self-hosted issuer: on a phone Team fills the Settings width, with no dialog over it', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 });
   await page.route('**/idp/get-session', route => route.fulfill({ json: null }));
   await openListening(page, { configured: 'embedded', access: ACCESS });
   const settings = await openSettings(page);
   await settings.getByRole('button', { name: 'Team' }).click();
-  const box = await page.getByRole('dialog', { name: 'Team' }).boundingBox();
-  expect(box).toEqual({ x: 0, y: 0, width: 390, height: 780 });
+  await expect(page.getByRole('dialog', { name: 'Team' })).toHaveCount(0);
+  const [team, section] = [await row(settings, 'Workspace').getByRole('link', { name: 'Sign in again' }).boundingBox(), (await settings.boundingBox())!];
+  expect(team!.x).toBeGreaterThanOrEqual(section.x);
+  expect(team!.x + team!.width).toBeLessThanOrEqual(section.x + section.width);
 });
 
 test('an operator-seeded session without an issuer or email offers no sign out', async ({ page }) => {
@@ -195,14 +199,15 @@ test('an operator-seeded session without an issuer or email offers no sign out',
   await expect(settings.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
 });
 
-test('WorkOS: an owner manages the team in the widgets over Settings, and closing Team keeps capture running', async ({ page }) => {
+test('WorkOS: an owner manages the team in the widgets inside Settings, and closing Team keeps capture running', async ({ page }) => {
   await fakeWorkosWidgets(page);
   await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
   const settings = await openSettings(page);
-  // The closed Team dialog sits in the row, so compare the rendered text (buttons render uppercase).
+  // The closed Team row holds the button, so compare the rendered text.
   await expect(row(settings, 'Workspace')).toHaveText('Name not shown yet\nTeam', { useInnerText: true });
   await settings.getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
+  // The widgets' own dialog hides the rest of the page from assistive tech, so the row's term no longer matches while it is open.
+  const team = settings.locator('.listen-team');
   await expect(team.getByRole('region', { name: 'Members' })).toContainText('grace@example.test');
   await expect(team.getByRole('region', { name: 'Your profile' })).toContainText('Ada Lovelace');
 
@@ -212,11 +217,10 @@ test('WorkOS: an owner manages the team in the widgets over Settings, and closin
   await invite.getByLabel('Email').fill('alan@example.test');
   await page.keyboard.press('Escape');
   await expect(invite).toBeHidden();
-  await expect(team).toBeVisible();
+  await expect(team.getByRole('region', { name: 'Members' })).toBeVisible();
 
-  await page.keyboard.press('Escape');
-  await expect(team).toBeHidden();
-  await expect(settings.getByRole('button', { name: 'Team' })).toBeFocused();
+  await settings.getByRole('button', { name: 'Team' }).click();
+  await expect(team.getByRole('region', { name: 'Members' })).toHaveCount(0);
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
   await expect(page.getByText('listening', { exact: true })).toBeVisible();
 });
@@ -227,7 +231,7 @@ test('WorkOS on a phone: Team hides only the Last active column, and the members
   await openListening(page, { configured: true, workos: true, access: { ...ACCESS, scopes: [...ACCESS.scopes, 'workspace:admin'] } });
   const settings = await openSettings(page);
   await settings.getByRole('button', { name: 'Team' }).click();
-  const members = page.getByRole('dialog', { name: 'Team' }).getByRole('region', { name: 'Members' });
+  const members = row(settings, 'Workspace').getByRole('region', { name: 'Members' });
   await expect(members).toContainText('grace@example.test');
   await expect(members.getByRole('columnheader', { name: 'Last active' })).toBeHidden();
   for (const name of ['User', 'Role']) await expect(members.getByRole('columnheader', { name })).toBeVisible();
@@ -272,7 +276,7 @@ test('WorkOS: the owner of an unlinked workspace sets up the team, and an admin 
   await page.reload();
   settings = await openSettings(page);
   await settings.getByRole('button', { name: 'Team' }).click();
-  const team = page.getByRole('dialog', { name: 'Team' });
+  const team = row(settings, 'Workspace');
   await expect(team).toContainText('Current members keep their access.');
   await team.getByRole('button', { name: 'Set up team' }).click();
   await expect(team.getByRole('region', { name: 'Members' })).toContainText('grace@example.test');
