@@ -1212,7 +1212,7 @@ Depends on: T16, T18.
 - [x] Wire delegated OAuth to a maintained authorization server with durable grants, resource metadata, audience checks and scope mapping; issuer configuration remains an explicit live gate.
 - [x] Add agent permission/revoke UI and test real MCP clients with different principals.
 
-Files: `server/src/mcp.ts`, `server/src/auth.ts`, `web-app/src/pages/listen/AgentsSection.tsx`, `server/tests/mcp.test.ts`, `sdk/examples/`.
+Files: `server/src/mcp.ts`, `server/src/auth.ts`, `web-app/src/pages/listen/AgentsSection.tsx`, `web-app/src/pages/listen/AgentWork.tsx`, `web-app/src/pages/listen/AccessTokens.tsx`, `server/tests/mcp.test.ts`, `sdk/examples/`.
 Verify: auth/discovery/schema/read/write/conflict/revoke; client-version compatibility; no admin/capture routes auto-exposed.
 Depends on: T05, T21, T22.
 

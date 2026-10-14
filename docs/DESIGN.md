@@ -91,6 +91,7 @@ The Menu is the one central overlay for everything beyond listening; it opens on
 Meetings is the first section: a paged list of meetings with the live meeting on top, and any meeting opens the same Review beside it.
 A search box at the top of the Menu replaces the rail while it holds text; it finds decisions, commitments, meetings and commands (Open a section, Fullscreen, Sign out), not transcript text. A meeting result opens that meeting in Meetings.
 Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
+Agents opens on Work, the live agent actions and the receipts of the five most recent meetings, with an Access tokens tab to create, list and revoke tokens.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).

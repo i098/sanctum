@@ -180,7 +180,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 
 ### interfaces (T22, T23)
 
-Owns `server/src/mcp.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/python/`, `sdk/examples/`, `web-app/src/pages/listen/AgentsSection.tsx`, `server/tests/api-contract.test.ts`, `server/tests/mcp.test.ts`.
+Owns `server/src/mcp.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/python/`, `sdk/examples/`, `web-app/src/pages/listen/AgentsSection.tsx`, `web-app/src/pages/listen/AgentWork.tsx`, `web-app/src/pages/listen/AccessTokens.tsx`, `server/tests/api-contract.test.ts`, `server/tests/mcp.test.ts`.
 
 - Generates OpenAPI from `SanctumApi`; mounts `/mcp` from main.ts.
 - MCP tools: `list_meetings`, `get_context`, `search_context`, `get_source`, `get_context_changes`, `add_context`, `revise_context`, `request_action`, `get_action`, `search_integration_actions`, `get_integration_action`.
