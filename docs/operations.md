@@ -174,24 +174,16 @@ The soak streams 24 hours of synthetic meeting audio into the hosted app at real
 | Checkpoint runner and scoring; writes the results JSON | `scripts/soak/checkpoint.ts`, `scripts/soak/score.ts` |
 | Results page | `scripts/soak/serve.ts` |
 
-**Results page.** Serve the runner's results file and expose it on the tailnet only (never `--funnel`; the page has no sign-in). Pick a port that `sudo -n tailscale serve status` does not list.
+**Results page.** Serve the directory the checkpoint runner writes to (`checkpoint.ts --out <dir>/cp-<H>h.json`, one file per checkpoint hour 1, 5, 12 and 24) and expose it on the tailnet only (never `--funnel`; the page has no sign-in). Pick a port that `sudo -n tailscale serve status` does not list.
 
 ```bash
-node scripts/soak/serve.ts --results <results.json> --port 8460
+node scripts/soak/serve.ts --dir <dir> --port 8460
 sudo -n tailscale serve --bg --https=8460 http://127.0.0.1:8460
 ```
 
-`/` shows each checkpoint against its pass bars and refreshes every 30 seconds. `/report.json` returns the same data with a `pass`, `fail` or `pending` verdict per metric and checkpoint, so any agent on the tailnet can read it. A missing file shows every checkpoint as pending; a metric with no value stays pending, never failed.
+`/` shows each checkpoint against its pass bars and refreshes every 30 seconds: `t0`, when each checkpoint was asked, every metric, and each planted fact's keyword and natural-question status. `/report.json` returns the same data with a `pass`, `fail` or `pending` verdict per metric and checkpoint, so any agent on the tailnet can read it. A missing `cp-<H>h.json` leaves that checkpoint pending, and so does a metric with no value (a `null`), never failed. An unreadable or malformed file fails that checkpoint, with the reason in its `error` field; it never stops the server.
 
-**Results file.** Metric keys and bars are defined in `BARS` in `scripts/soak/serve.ts` (proposals from the plan board; calibrate them after the 1-hour dry run).
-
-```json
-{ "run_id": "…", "started_at": "ISO time", "status": "running|done|stopped", "stop_reason": "…",
-  "checkpoints": [{ "id": "CP1", "hour": 1, "at": "ISO time",
-    "metrics": { "recall_at_5": 0.95, "latency_p95_s": 0.8 },
-    "facts": { "L1": "found|wrong|missing" } }],
-  "errors": ["…"] }
-```
+Metric names are the runner's ([score.ts](../scripts/soak/score.ts)); query latency is in milliseconds. Bars are the `BARS` table in `scripts/soak/serve.ts` (proposals from the plan board; calibrate them after the 1-hour dry run): `recall_at_5`, `recall_at_20`, `answer_accuracy`, `latest_accuracy` (not judged at 1 hour), `time_aware_accuracy`, `control_pass_rate`, latency `p50` and `p95`, and the `errors` count must be 0. `natural_recall_at_20` is shown without a bar. Driver measurements (ASR lag, database growth, cost) are not on this page.
 
 **Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`, as in [sdk/README.md](../sdk/README.md). Search needs every 3-letter-or-longer term in one item, so send keywords, not sentences. Newest matches come first; the agent decides which fact is latest.
 

@@ -1,25 +1,55 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { report } from '../scripts/soak/serve.ts';
 
-const good = { recall_at_5: 0.95, recall_at_20: 1, answer_accuracy: 0.9, range_accuracy: 1, never_said_not_found: 1, latency_p50_s: 0.2, latency_p95_s: 0.8, asr_lag_p95_s: 10, asr_lag_max_s: 30, failed_processing: 0, db_growth_mb_per_day: 20, cost_per_hour_usd: 0.2, cost_total_usd: 0.3, query_5xx: 0, speech_output_events: 0, ghost_finals: 0 };
-
-test('a checkpoint with every bar met passes and later checkpoints stay pending', () => {
-  const r = report({ checkpoints: [{ id: 'CP1', hour: 1, metrics: good }] });
-  assert.deepEqual(r.checkpoints.map(c => c.verdict), ['pass', 'pending', 'pending', 'pending']);
+const metrics = { recall_at_5: 0.95, recall_at_20: 1, natural_recall_at_20: 0.5, answer_accuracy: 0.9, latest_accuracy: 0.9, time_aware_accuracy: 1, control_pass_rate: 1, latency_ms: { p50: 200, p95: 800, samples: 40 } };
+const checkpoint = (hours: number, over: Record<string, unknown> = {}) => ({
+  asked_at: '2026-10-15T01:00:00.000Z', t0: '2026-10-15T00:00:00.000Z', checkpoint_hours: hours,
+  metrics, facts: [{ id: 'L1', keyword: 'found', natural: 'wrong' }], ranges: [], controls: [], errors: [], ...over,
 });
 
-test('one missed bar fails the checkpoint and a missing metric only leaves it pending', () => {
-  const r = report({ checkpoints: [
-    { id: 'CP1', hour: 1, metrics: { ...good, recall_at_5: 0.89 } },
-    { id: 'CP2', hour: 5, metrics: { ...good, point_in_time_accuracy: 0.8, speech_output_events: 1 } },
-    { id: 'CP3', hour: 12, metrics: { ...good, point_in_time_accuracy: 0.8, latency_p95_s: undefined as never } },
-  ] });
-  assert.deepEqual(r.checkpoints.map(c => c.verdict), ['fail', 'fail', 'pending', 'pending']);
+function dir(files: Record<string, unknown>) {
+  const d = mkdtempSync(join(tmpdir(), 'soak-serve-'));
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(d, name), typeof body === 'string' ? body : JSON.stringify(body));
+  return d;
+}
+const verdicts = (d: string) => report(d).checkpoints.map(c => c.verdict);
+
+test('a checkpoint with every bar met passes and checkpoints without a file stay pending', () => {
+  const r = report(dir({ 'cp-1h.json': checkpoint(1) }));
+  assert.deepEqual(r.checkpoints.map(c => c.verdict), ['pass', 'pending', 'pending', 'pending']);
+  assert.equal(r.t0, '2026-10-15T00:00:00.000Z');
+  assert.deepEqual(r.checkpoints[0]!.facts, [{ id: 'L1', keyword: 'found', natural: 'wrong' }]);
+});
+
+test('a missed bar or a runner error fails the checkpoint; a null metric only leaves it pending', () => {
+  const d = dir({
+    'cp-1h.json': checkpoint(1, { metrics: { ...metrics, recall_at_5: 0.89 } }),
+    'cp-5h.json': checkpoint(5, { errors: ['search 500'] }),
+    'cp-12h.json': checkpoint(12, { metrics: { ...metrics, latency_ms: { p50: null, p95: null, samples: 0 } } }),
+  });
+  assert.deepEqual(verdicts(d), ['fail', 'fail', 'pending', 'pending']);
 });
 
 test('bars differ by checkpoint hour', () => {
-  const metrics = { ...good, recall_at_5: 0.82, point_in_time_accuracy: 0.9 };
-  const r = report({ checkpoints: [{ id: 'CP1', hour: 1, metrics }, { id: 'CP3', hour: 12, metrics }] });
-  assert.deepEqual([r.checkpoints[0]!.verdict, r.checkpoints[2]!.verdict], ['fail', 'pass']);
+  const weak = { ...metrics, recall_at_5: 0.82, latency_ms: { p50: 200, p95: 1200, samples: 40 } };
+  const d = dir({ 'cp-1h.json': checkpoint(1, { metrics: weak }), 'cp-12h.json': checkpoint(12, { metrics: weak }) });
+  assert.deepEqual([verdicts(d)[0], verdicts(d)[2]], ['fail', 'pass']);
+});
+
+test('a malformed or unreadable checkpoint file fails that checkpoint without throwing', () => {
+  const d = dir({
+    'cp-1h.json': 'null',
+    'cp-5h.json': '{"checkpoint_hours": 5',
+    'cp-12h.json': checkpoint(5),
+    'cp-24h.json': checkpoint(24, { metrics: { ...metrics, recall_at_5: 'high' } }),
+  });
+  const r = report(d);
+  assert.deepEqual(r.checkpoints.map(c => c.verdict), ['fail', 'fail', 'fail', 'fail']);
+  assert.ok(r.checkpoints.every(c => c.error?.includes('malformed')));
+  assert.equal(r.t0, null);
+  assert.equal(report(join(d, 'missing-subdir')).checkpoints.every(c => c.verdict === 'pending'), true);
 });

@@ -1,100 +1,141 @@
 /**
- * Results page for the 24-hour soak. Reads the results JSON the checkpoint runner writes and shows
- * each checkpoint against its pass bars. Serves `/` (page) and `/report.json` (results plus
- * verdicts, for agents). Read-only, no product code, no auth: bind it to
- * loopback and expose it with `tailscale serve` (tailnet only, never Funnel).
+ * Results page for the 24-hour soak. Reads the `cp-<H>h.json` files the checkpoint runner
+ * (`checkpoint.ts`) writes into one directory and shows each checkpoint against its pass bars.
+ * Serves `/` (page) and `/report.json` (checkpoints plus verdicts, for agents). Read-only, no
+ * product code, no auth: bind it to loopback and expose it with `tailscale serve` (tailnet only,
+ * never Funnel).
  *
- * Usage: node scripts/soak/serve.ts --results <results.json> [--port 8460]
+ * Usage: node scripts/soak/serve.ts --dir <dir> [--port 8460]
  */
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 type Verdict = 'pass' | 'fail' | 'pending';
-export interface Checkpoint {
-  readonly id: string;
-  readonly hour: number;
-  readonly at?: string;
-  readonly metrics?: Readonly<Record<string, number | null>>;
-  readonly facts?: Readonly<Record<string, 'found' | 'wrong' | 'missing'>>;
-}
-export interface Results {
-  readonly run_id?: string;
-  readonly started_at?: string;
-  readonly status?: 'running' | 'done' | 'stopped';
-  readonly stop_reason?: string;
-  readonly checkpoints?: ReadonlyArray<Checkpoint>;
-  readonly errors?: ReadonlyArray<string>;
+type FactStatus = 'found' | 'wrong' | 'missing';
+type Metric = number | null;
+/** The file `checkpoint.ts` writes: `{ asked_at, t0, ...CheckpointScore }` (scripts/soak/score.ts). */
+interface Checkpoint {
+  readonly checkpoint_hours: number;
+  readonly asked_at: string;
+  readonly t0: string;
+  readonly metrics: {
+    readonly recall_at_5: Metric;
+    readonly recall_at_20: Metric;
+    readonly natural_recall_at_20: Metric;
+    readonly answer_accuracy: Metric;
+    readonly latest_accuracy: Metric;
+    readonly time_aware_accuracy: Metric;
+    readonly control_pass_rate: Metric;
+    readonly latency_ms: { readonly p50: Metric; readonly p95: Metric; readonly samples: number };
+  };
+  readonly facts: ReadonlyArray<{ readonly id: string; readonly keyword: FactStatus; readonly natural: FactStatus }>;
+  readonly ranges: ReadonlyArray<unknown>;
+  readonly controls: ReadonlyArray<unknown>;
+  readonly errors: ReadonlyArray<string>;
 }
 
 const HOURS = [1, 5, 12, 24] as const;
-/** One bar per checkpoint hour, or one bar for all; `null` means the metric is not judged there. */
-interface Bar { readonly key: string; readonly label: string; readonly min?: ReadonlyArray<number | null> | number; readonly max?: ReadonlyArray<number | null> | number }
+type Limit = ReadonlyArray<number | null> | number;
+/** One limit per checkpoint hour, or one for all; `null` means the metric is not judged there. */
+interface Bar { readonly label: string; readonly value: (c: Checkpoint) => Metric; readonly min?: Limit; readonly max?: Limit }
 
 // Pass bars from the plan board, section 5. Proposals until the 1 h dry run calibrates them.
 // ponytail: p95 latency uses the static 1.5 s cap; the plan's "2x the 1 h p95" is not enforced.
 const BARS: ReadonlyArray<Bar> = [
-  { key: 'recall_at_5', label: 'Recall@5', min: [0.9, 0.85, 0.8, 0.8] },
-  { key: 'recall_at_20', label: 'Recall@20', min: [0.95, 0.9, 0.9, 0.9] },
-  { key: 'answer_accuracy', label: 'Answer accuracy', min: [0.85, 0.8, 0.8, 0.8] },
-  { key: 'range_accuracy', label: 'Time range accuracy', min: 1 },
-  { key: 'point_in_time_accuracy', label: 'Point-in-time accuracy', min: [null, 0.8, 0.8, 0.8] },
-  { key: 'never_said_not_found', label: 'Never-said control', min: 1 },
-  { key: 'latency_p50_s', label: 'Query latency p50 (s)', max: 0.3 },
-  { key: 'latency_p95_s', label: 'Query latency p95 (s)', max: [1, 1.5, 1.5, 1.5] },
-  { key: 'asr_lag_p95_s', label: 'ASR lag p95 (s)', max: 20 },
-  { key: 'asr_lag_max_s', label: 'ASR lag max (s)', max: 60 },
-  { key: 'failed_processing', label: 'Failed processing jobs', max: 0 },
-  { key: 'db_growth_mb_per_day', label: 'DB growth (MB/day)', max: 100 },
-  { key: 'cost_per_hour_usd', label: 'Model cost per hour ($)', max: 0.45 },
-  { key: 'cost_total_usd', label: 'Cost so far ($, hard stop 15)', max: 15 },
-  { key: 'query_5xx', label: 'Query 5xx', max: 0 },
-  { key: 'speech_output_events', label: 'Speech output events', max: 0 },
-  { key: 'ghost_finals', label: 'Finals during silent gaps', max: 0 },
+  { label: 'Recall@5', value: c => c.metrics.recall_at_5, min: [0.9, 0.85, 0.8, 0.8] },
+  { label: 'Recall@20', value: c => c.metrics.recall_at_20, min: [0.95, 0.9, 0.9, 0.9] },
+  { label: 'Natural recall@20', value: c => c.metrics.natural_recall_at_20 },
+  { label: 'Answer accuracy', value: c => c.metrics.answer_accuracy, min: [0.85, 0.8, 0.8, 0.8] },
+  { label: 'Latest accuracy', value: c => c.metrics.latest_accuracy, min: [null, 0.8, 0.8, 0.8] },
+  { label: 'Time-aware accuracy', value: c => c.metrics.time_aware_accuracy, min: 1 },
+  { label: 'Control pass rate', value: c => c.metrics.control_pass_rate, min: 1 },
+  { label: 'Query latency p50 (ms)', value: c => c.metrics.latency_ms.p50, max: 300 },
+  { label: 'Query latency p95 (ms)', value: c => c.metrics.latency_ms.p95, max: [1000, 1500, 1500, 1500] },
+  { label: 'Errors', value: c => c.errors.length, max: 0 },
 ];
 
-const at = (bar: ReadonlyArray<number | null> | number | undefined, i: number) => (Array.isArray(bar) ? bar[i] : bar) ?? null;
+const at = (limit: Limit | undefined, i: number) => (Array.isArray(limit) ? limit[i] : limit) ?? null;
 
 /** A metric with no value is pending, not failed; a metric with no bar at that hour is judged pass. */
-function judge(bar: Bar, value: number | null | undefined, hourIndex: number): Verdict {
+function judge(bar: Bar, value: Metric, hourIndex: number): Verdict {
   const lo = at(bar.min, hourIndex);
   const hi = at(bar.max, hourIndex);
   if (lo === null && hi === null) return 'pass';
-  if (value === null || value === undefined) return 'pending';
+  if (value === null) return 'pending';
   return (lo !== null && value < lo) || (hi !== null && value > hi) ? 'fail' : 'pass';
 }
 
-function rowsFor(found: Checkpoint | undefined, i: number) {
-  return BARS.map(bar => {
-    const value = found?.metrics?.[bar.key] ?? null;
-    return { key: bar.key, label: bar.label, value, min: at(bar.min, i), max: at(bar.max, i), verdict: found ? judge(bar, value, i) : 'pending' as Verdict };
-  });
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isMetric = (v: unknown) => v === null || (typeof v === 'number' && Number.isFinite(v));
+const isStatus = (v: unknown) => v === 'found' || v === 'wrong' || v === 'missing';
+const isFact = (f: unknown) => isObject(f) && typeof f.id === 'string' && isStatus(f.keyword) && isStatus(f.natural);
+const SCORE_KEYS = ['recall_at_5', 'recall_at_20', 'natural_recall_at_20', 'answer_accuracy', 'latest_accuracy', 'time_aware_accuracy', 'control_pass_rate'];
+
+/** Each rule returns the reason `raw` is not a runner checkpoint for `hours`, or null. */
+const RULES: ReadonlyArray<(raw: Record<string, unknown>, hours: number) => string | null> = [
+  (raw, hours) => (raw.checkpoint_hours === hours ? null : `checkpoint_hours is ${String(raw.checkpoint_hours)}, expected ${hours}`),
+  raw => (typeof raw.asked_at === 'string' && typeof raw.t0 === 'string' ? null : 'asked_at and t0 must be strings'),
+  raw => (isObject(raw.metrics) && isObject(raw.metrics.latency_ms) ? null : 'metrics.latency_ms is missing'),
+  raw => {
+    const metrics = raw.metrics as Record<string, unknown>;
+    const latency = metrics.latency_ms as Record<string, unknown>;
+    return [...SCORE_KEYS.map(k => metrics[k]), latency.p50, latency.p95].every(isMetric) ? null : 'metrics must be numbers or null';
+  },
+  raw => (Array.isArray(raw.facts) && raw.facts.every(isFact) ? null : 'facts must be {id, keyword, natural} rows'),
+  raw => (Array.isArray(raw.ranges) && Array.isArray(raw.controls) ? null : 'ranges and controls must be arrays'),
+  raw => (Array.isArray(raw.errors) && raw.errors.every(e => typeof e === 'string') ? null : 'errors must be strings'),
+];
+
+function parse(raw: unknown, hours: number): Checkpoint {
+  if (!isObject(raw)) throw new Error('not a JSON object');
+  for (const rule of RULES) {
+    const reason = rule(raw, hours);
+    if (reason) throw new Error(reason);
+  }
+  return raw as unknown as Checkpoint;
 }
 
-function summarize(found: Checkpoint | undefined, rows: ReadonlyArray<{ readonly verdict: Verdict }>): Verdict {
-  if (!found) return 'pending';
-  if (rows.some(r => r.verdict === 'fail')) return 'fail';
+type Loaded = { readonly found: Checkpoint } | { readonly error: string } | null;
+
+/** null: no file yet (pending). error: unreadable or malformed file (fail). */
+function load(dir: string, hours: number): Loaded {
+  let text: string;
+  try { text = readFileSync(join(dir, `cp-${hours}h.json`), 'utf8'); } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : { error: `cannot read cp-${hours}h.json: ${(e as Error).message}` };
+  }
+  try { return { found: parse(JSON.parse(text), hours) }; } catch (e) { return { error: `cp-${hours}h.json is malformed: ${(e as Error).message}` }; }
+}
+
+function verdictOf(loaded: Loaded, rows: ReadonlyArray<{ readonly verdict: Verdict }>): Verdict {
+  if (loaded === null) return 'pending';
+  if ('error' in loaded || rows.some(r => r.verdict === 'fail')) return 'fail';
   return rows.some(r => r.verdict === 'pending') ? 'pending' : 'pass';
 }
 
-export function report(results: Results) {
-  const checkpoints = HOURS.map((hour, i) => {
-    const found = results.checkpoints?.find(c => c.hour === hour);
-    const rows = rowsFor(found, i);
-    return { id: found?.id ?? `CP${i + 1}`, hour, at: found?.at ?? null, verdict: summarize(found, rows), rows, facts: found?.facts ?? {} };
+function checkpointReport(hour: number, i: number, loaded: Loaded) {
+  const found = loaded && 'found' in loaded ? loaded.found : undefined;
+  const rows = BARS.map(bar => {
+    const value = found ? bar.value(found) : null;
+    return { label: bar.label, value, min: at(bar.min, i), max: at(bar.max, i), verdict: found ? judge(bar, value, i) : 'pending' as Verdict };
   });
   return {
-    run_id: results.run_id ?? null,
-    started_at: results.started_at ?? null,
-    status: results.status ?? 'pending',
-    stop_reason: results.stop_reason ?? null,
-    errors: results.errors ?? [],
-    checkpoints,
+    hour, rows,
+    verdict: verdictOf(loaded, rows),
+    asked_at: found?.asked_at ?? null,
+    error: loaded && 'error' in loaded ? loaded.error : null,
+    facts: found?.facts ?? [], ranges: found?.ranges ?? [], controls: found?.controls ?? [], errors: found?.errors ?? [],
   };
 }
 
-function load(path: string): Results {
-  try { return JSON.parse(readFileSync(path, 'utf8')) as Results; } catch { return {}; }
+export function report(dir: string) {
+  const loaded = HOURS.map(hour => load(dir, hour));
+  const first = loaded.find(l => l !== null && 'found' in l);
+  return {
+    t0: first && 'found' in first ? first.found.t0 : null,
+    checkpoints: HOURS.map((hour, i) => checkpointReport(hour, i, loaded[i]!)),
+  };
 }
 
 const PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -124,27 +165,35 @@ const el = id => document.getElementById(id);
 const make = (tag, text, cls) => { const e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; return e; };
 function row(cells) { const tr = document.createElement('tr'); cells.forEach(c => tr.append(c)); return tr; }
 function render(r) {
-  el('head').textContent = 'Run ' + (r.run_id ?? '—') + ' · ' + r.status + (r.started_at ? ' · started ' + r.started_at : '') + (r.stop_reason ? ' · stopped: ' + r.stop_reason : '');
-  el('tiles').replaceChildren(...r.checkpoints.map(c => { const d = make('div', '', 'tile'); d.append(make('b', c.id + ' · ' + c.hour + ' h'), make('span', c.verdict, c.verdict), make('small', c.at ? ' ' + c.at : '')); return d; }));
-  el('metrics').replaceChildren(row([make('th', 'Metric'), ...r.checkpoints.map(c => make('th', c.id))]),
+  el('head').textContent = 'Run start (t0) ' + (r.t0 ?? '—');
+  el('tiles').replaceChildren(...r.checkpoints.map(c => { const d = make('div', '', 'tile'); d.append(make('b', c.hour + ' h'), make('span', c.verdict, c.verdict), make('small', c.asked_at ? ' asked ' + c.asked_at : ''), make('small', c.error ? ' ' + c.error : '')); return d; }));
+  el('metrics').replaceChildren(row([make('th', 'Metric'), ...r.checkpoints.map(c => make('th', c.hour + ' h'))]),
     ...r.checkpoints[0].rows.map((m, i) => row([make('td', m.label), ...r.checkpoints.map(c => { const x = c.rows[i]; const limit = [x.min !== null ? '≥ ' + x.min : '', x.max !== null ? '≤ ' + x.max : ''].filter(Boolean).join(' ') || '—'; return make('td', (x.value ?? '—') + ' (' + limit + ')', x.verdict); })])));
-  const ids = [...new Set(r.checkpoints.flatMap(c => Object.keys(c.facts)))];
-  el('facts').replaceChildren(row([make('th', 'Fact'), ...r.checkpoints.map(c => make('th', c.id))]),
-    ...ids.map(id => row([make('td', id), ...r.checkpoints.map(c => make('td', c.facts[id] ?? '—', c.facts[id]))])));
-  el('errors').replaceChildren(...(r.errors.length ? r.errors.map(e => make('li', e)) : [make('li', 'none')]));
+  const ids = [...new Set(r.checkpoints.flatMap(c => c.facts.map(f => f.id)))];
+  const cell = (c, id) => { const f = c.facts.find(x => x.id === id); return f ? make('td', f.keyword + ' / ' + f.natural, f.keyword) : make('td', '—'); };
+  el('facts').replaceChildren(row([make('th', 'Fact (keyword / natural)'), ...r.checkpoints.map(c => make('th', c.hour + ' h'))]),
+    ...ids.map(id => row([make('td', id), ...r.checkpoints.map(c => cell(c, id))])));
+  const errors = r.checkpoints.flatMap(c => [...(c.error ? [c.error] : []), ...c.errors].map(e => c.hour + ' h: ' + e));
+  el('errors').replaceChildren(...(errors.length ? errors.map(e => make('li', e)) : [make('li', 'none')]));
 }
 async function refresh() { try { render(await (await fetch('report.json', { cache: 'no-store' })).json()); } catch (e) { el('head').textContent = 'Cannot read report: ' + e; } }
 refresh(); setInterval(refresh, 30000);
 </script>`;
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { results: { type: 'string', default: 'results.json' }, port: { type: 'string', default: '8460' } } });
-  const path = values.results;
+  const { values } = parseArgs({ options: { dir: { type: 'string', default: '.' }, port: { type: 'string', default: '8460' } } });
+  const dir = values.dir;
   createServer((req, res) => {
-    const url = (req.url ?? '/').split('?')[0];
-    if (req.method !== 'GET') { res.writeHead(405).end(); return; }
-    if (url === '/') res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(PAGE);
-    else if (url === '/report.json') res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(report(load(path))));
-    else res.writeHead(404).end();
-  }).listen(Number(values.port), '127.0.0.1', () => console.log(`soak results on http://127.0.0.1:${values.port}/ from ${path}`));
+    try {
+      const url = (req.url ?? '/').split('?')[0];
+      if (req.method !== 'GET') res.writeHead(405).end();
+      else if (url === '/') res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(PAGE);
+      else if (url === '/report.json') res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(report(dir)));
+      else res.writeHead(404).end();
+    } catch (error) {
+      console.error(error);
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    }
+  }).listen(Number(values.port), '127.0.0.1', () => console.log(`soak results on http://127.0.0.1:${values.port}/ from ${dir}`));
 }
