@@ -87,6 +87,7 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 Review, Agents, and Settings are sections of one central Menu panel, opened only on request by the Menu button or Ctrl/⌘+K, with a section rail beside the active section.
 Use a restrained dark overlay and the same tokens; closing it returns to the listening screen without stopping capture.
+Agents opens on Work, the live agent actions and the receipts of the five most recent meetings, with an Access tokens tab to create, list and revoke tokens.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
