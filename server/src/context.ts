@@ -17,7 +17,9 @@ import {
  type ContextItem,
  ContextItemId,
  ContextKind,
+ type ContextSearchPage,
  type ContextSnapshot,
+ type SearchContextParams,
  ContextState,
  Derivation,
  Forbidden,
@@ -341,26 +343,57 @@ export const getContextSnapshot = (access: AccessScope, meeting_id: MeetingId) =
   );
  });
 
+const SearchCursor = Schema.parseJson(Schema.Tuple(UtcTimestamp, ContextItemId));
+
+const utc = Schema.encodeSync(DbUtc);
+
+/** Filters on kind, event-time range and the resume position of a cursor. */
+const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, after: typeof SearchCursor.Type | null) => {
+ const at = sql`COALESCE(ci.event_at, ci.created_at)`;
+ return [
+  ...(input.kind === undefined ? [] : [sql`ci.kind = ${input.kind}`]),
+  ...(input.from === undefined ? [] : [sql`${at} >= ${utc(input.from)}`]),
+  ...(input.to === undefined ? [] : [sql`${at} < ${utc(input.to)}`]),
+  ...(after === null ? [] : [sql`(${at} < ${utc(after[0])} OR (${at} = ${utc(after[0])} AND ci.id > ${after[1]}))`]),
+ ];
+};
+
+const decodeSearchCursor = (cursor: string) =>
+ Schema.decode(SearchCursor)(Buffer.from(cursor, 'base64url').toString()).pipe(Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })));
+
+/** FULLTEXT for terms of three or more characters, `LOCATE` for shorter ones; every term is required. */
+const termFilters = (sql: SqlClient.SqlClient, terms: ReadonlyArray<string>) => {
+ const long = terms.filter(term => term.length >= 3).map(term => `+${term}*`);
+ return [
+  ...(long.length > 0 ? [sql`MATCH(ci.text) AGAINST (${long.join(' ')} IN BOOLEAN MODE)`] : []),
+  ...terms.filter(term => term.length < 3).map(term => sql`LOCATE(${term}, ci.text) > 0`),
+ ];
+};
+
+/** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
+const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
+ const items = rows.slice(0, limit);
+ const last = rows.length > limit ? items.at(-1) : undefined;
+ const next_cursor = last === undefined ? null : Buffer.from(Schema.encodeSync(SearchCursor)([last.event_at ?? last.created_at, last.id])).toString('base64url');
+ return { items, next_cursor } satisfies ContextSearchPage;
+};
+
 /**
- * Authorized lexical retrieval over current items: MySQL FULLTEXT for terms of three or more
- * characters (the InnoDB token minimum), substring matching for shorter ones.
+ * Authorized lexical retrieval over current items, newest event first. Without `q` it lists by the other filters.
+ * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
  */
-export const searchContext = (access: AccessScope, input: { readonly q: string; readonly meeting_id?: MeetingId | undefined; readonly limit?: number | undefined }) =>
+export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
   yield* requireScope(access, 'context:read');
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
-  const terms = input.q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-  if (terms.length === 0) return { items: [] };
+  const terms = input.q === undefined ? [] : (input.q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  if (input.q !== undefined && terms.length === 0) return searchPage([], 1);
+  const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const sql = yield* SqlClient.SqlClient;
-  const long = terms.filter(term => term.length >= 3).map(term => `+${term}*`);
-  const where = sql.and([
-   sql`ci.state <> 'superseded'`,
-   visibleWhere(sql, scope, 'ci.meeting_id'),
-   ...(long.length > 0 ? [sql`MATCH(ci.text) AGAINST (${long.join(' ')} IN BOOLEAN MODE)`] : []),
-   ...terms.filter(term => term.length < 3).map(term => sql`LOCATE(${term}, ci.text) > 0`),
-  ]);
-  return { items: yield* latestItems(access.workspace_id, where, Math.min(input.limit ?? 20, ITEM_LIMIT)) };
+  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after), ...termFilters(sql, terms)]);
+  const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
+  return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
  });
 
 /** HTTP handlers for `ContextApi`; SDK and MCP adapters call the same domain functions. */

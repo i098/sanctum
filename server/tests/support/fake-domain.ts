@@ -237,11 +237,11 @@ const contextGroup = ({ space, need, meetingOf, revisionOf, once, record, interr
         Effect.gen(function* () {
           const access = yield* CurrentAccess;
           yield* need(access, 'context:read');
-          const q = urlParams.q.toLowerCase();
+          const q = urlParams.q?.toLowerCase() ?? '';
           const hits = [...space(access).items.values()].filter(
             item => item.text.toLowerCase().includes(q) && (urlParams.meeting_id === undefined || item.meeting_id === urlParams.meeting_id),
           );
-          return { items: hits.slice(0, urlParams.limit ?? 50) };
+          return { items: hits.slice(0, urlParams.limit ?? 50), next_cursor: null };
         }),
       )
       .handle('addContextItem', ({ payload }) =>

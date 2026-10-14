@@ -328,14 +328,20 @@ class ContextItemSupersedes(TypedDict):
     revision: int
 
 
-class SearchContextInput(TypedDict):
-    q: str
-    meeting_id: NotRequired[str]
-    limit: NotRequired[int]
+SearchContextInput = TypedDict("SearchContextInput", {
+    "q": "NotRequired[str]",
+    "meeting_id": "NotRequired[str]",
+    "kind": "NotRequired[Literal[\"decision\", \"commitment\", \"constraint\", \"project_fact\", \"preference\", \"open_question\", \"research_observation\"]]",
+    "from": "NotRequired[str]",
+    "to": "NotRequired[str]",
+    "cursor": "NotRequired[str]",
+    "limit": "NotRequired[int]",
+})
 
 
-class SearchContextOutput(TypedDict):
+class ContextSearchPage(TypedDict):
     items: list[ContextItem]
+    next_cursor: str | None
 
 
 class AddContextItem(TypedDict):
@@ -673,8 +679,8 @@ OPERATIONS: dict[str, Operation] = {
     "meetings.mapSpeaker": Operation("POST", "/api/v1/meetings/{meeting_id}/speakers/map", ("meeting_id", ), (), True),
     # GetContextInput -> ContextSnapshot
     "context.getContext": Operation("GET", "/api/v1/meetings/{meeting_id}/context", ("meeting_id", ), (), False),
-    # SearchContextInput -> SearchContextOutput
-    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "meeting_id", "limit", ), False),
+    # SearchContextInput -> ContextSearchPage
+    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "meeting_id", "kind", "from", "to", "cursor", "limit", ), False),
     # AddContextItem -> ContextItem
     "context.addContextItem": Operation("POST", "/api/v1/context/items", (), (), True),
     # ReviseContextItemInput -> ContextItem
