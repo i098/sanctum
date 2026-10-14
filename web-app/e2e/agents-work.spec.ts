@@ -25,11 +25,13 @@ test('Agents opens on Work: recent meetings\' receipts, refreshed by a live upda
   await expect(agents.getByRole('region', { name: 'Untitled meeting' })).toContainText('No actions were requested in this meeting.');
   const pilot = agents.getByRole('region', { name: 'Pilot review' });
   await expect(pilot).toContainText('closed · 9/29/2026');
-  await expect(pilot.getByRole('listitem')).toHaveText(['gmail-send-email running 1 attempt · 09:20 AM']);
+  await expect(pilot.getByRole('listitem')).toHaveText(['Gmail · Send email running 1 attempt · 09:20 AM']);
 
+  await expect(pilot.locator('.listen-work-state')).toHaveAttribute('data-tone', 'muted');
   actions = [{ ...actions[0]!, state: 'succeeded' }];
   await page.evaluate(meeting_id => window.__capture.actions({ meeting_id, actions: [] }), OLD);
-  await expect(pilot.getByRole('listitem')).toHaveText(['gmail-send-email succeeded 1 attempt · 09:20 AM']);
+  await expect(pilot.getByRole('listitem')).toHaveText(['Gmail · Send email succeeded 1 attempt · 09:20 AM']);
+  await expect(pilot.locator('.listen-work-state')).toHaveAttribute('data-tone', 'done');
 
   await agents.getByRole('tab', { name: 'Access tokens' }).click();
   await expect(agents.getByText('No agents yet.')).toBeVisible();

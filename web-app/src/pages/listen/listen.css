@@ -758,6 +758,42 @@
   box-shadow: -8px 0 0 -6px #3d7dff;
 }
 
+.listen-work {
+  list-style: none;
+  padding-left: 12px;
+}
+
+.listen-work li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+}
+
+.listen-work-name {
+  color: #e7ecf3;
+}
+
+.listen-work-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8b919c;
+}
+
+.listen-work-state[data-tone='done'] {
+  color: #c6f24e;
+}
+
+.listen-work-state[data-tone='warn'] {
+  color: #f2a23b;
+}
+
+.listen-work-state[data-tone='failed'] {
+  color: #ff5d5d;
+}
+
 .listen-source button {
   padding: 0 4px;
   text-decoration: underline;

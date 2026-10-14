@@ -20,7 +20,7 @@ export interface Navigation {
 }
 
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
-const time = (iso: string, timeZone?: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone });
+export const time = (iso: string, timeZone?: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone });
 const words = (value: string) => value.replaceAll('_', ' ');
 
 /** A source in flight says so; a missing one gives the API's own reason, and a denied read says so instead of looking empty. */
@@ -158,7 +158,7 @@ function ContextPanel({ snapshot, onSource }: { snapshot: ContextSnapshot; onSou
   );
 }
 
-export function Receipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
+function Receipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
   if (actions.length === 0) return <p>No actions were requested in this meeting.</p>;
   return (
     <ul className="listen-items">
