@@ -32,7 +32,7 @@ for (const name of ['Review', 'Agents', 'Settings']) {
 test('Ctrl+K opens the Menu from anywhere on the page and Escape returns focus to the Menu button', async ({ page }) => {
   await openListening(page);
   await page.locator('body').click({ position: { x: 5, y: 5 } });
-  await page.keyboard.press('Control+K');
+  await page.keyboard.press('Control+k');
   await expect(dialog(page)).toBeVisible();
   await expect(menuSection(page, 'Review')).toBeVisible();
   await page.keyboard.press('Escape');
