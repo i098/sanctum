@@ -178,13 +178,31 @@ const itemId = HttpApiSchema.param('item_id', ContextItemId);
 const sourceId = HttpApiSchema.param('source_id', Schema.UUID);
 const Limit = Schema.NumberFromString.pipe(Schema.compose(PageLimit));
 
+/**
+ * `GET /api/v1/context/search`: newest first by event time. `q` omitted lists every authorized item that matches the other
+ * filters; `from` is inclusive, `to` exclusive, both against `event_at` (else `created_at`).
+ */
+export const SearchContextParams = Schema.Struct({
+  q: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(500))),
+  meeting_id: Schema.optional(MeetingId),
+  kind: Schema.optional(ContextKind),
+  from: Schema.optional(UtcTimestamp),
+  to: Schema.optional(UtcTimestamp),
+  cursor: Schema.optional(Cursor),
+  limit: Schema.optional(Limit),
+});
+export type SearchContextParams = typeof SearchContextParams.Type;
+
+export const ContextSearchPage = Schema.Struct({ items: Schema.Array(ContextItem), next_cursor: Schema.NullOr(Cursor) });
+export type ContextSearchPage = typeof ContextSearchPage.Type;
+
 /** Plan section 12 context routes; api.ts registers the group behind `Authenticated`. */
 export class ContextApi extends HttpApiGroup.make('context')
   .add(HttpApiEndpoint.get('getContext')`/meetings/${meetingId}/context`.addSuccess(ContextSnapshot))
   .add(
     HttpApiEndpoint.get('searchContext', '/context/search')
-      .setUrlParams(Schema.Struct({ q: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(500)), meeting_id: Schema.optional(MeetingId), limit: Schema.optional(Limit) }))
-      .addSuccess(Schema.Struct({ items: Schema.Array(ContextItem) })),
+      .setUrlParams(SearchContextParams)
+      .addSuccess(ContextSearchPage),
   )
   .add(HttpApiEndpoint.post('addContextItem', '/context/items').setPayload(AddContextItem).addSuccess(ContextItem, { status: 201 }))
   .add(HttpApiEndpoint.patch('reviseContextItem')`/context/items/${itemId}`.setPayload(ReviseContextItem).addSuccess(ContextItem))
