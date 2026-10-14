@@ -2,13 +2,14 @@ import type { Meeting } from '@sanctum/sdk';
 import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { storedListenerId } from '../../lib/capture/stored-listener.ts';
 import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, ListenerState } from '../../lib/capture/view.ts';
-import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
+import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, signOut, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsSection } from './AgentsSection.tsx';
 import { Dialog } from './Dialog.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
 import { MenuPanel } from './MenuPanel.tsx';
+import type { MenuCommand } from './MenuSearch.tsx';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
 import { ReviewSection } from './ReviewSection.tsx';
 import { SettingsSection } from './SettingsSection.tsx';
@@ -332,6 +333,8 @@ export function ListenPage() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
   const [section, setSection] = useState(notice ? 'settings' : 'review');
+  /** A search result's meeting, shown by Review instead of the newest; any other way into Review clears it. */
+  const [reviewMeeting, setReviewMeeting] = useState<string | undefined>();
   const menuRef = useRef<HTMLButtonElement>(null);
   const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
   const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
@@ -357,9 +360,15 @@ export function ListenPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
   const sections = [
-    { id: 'review', label: 'Review', body: <ReviewSection client={client} /> },
+    { id: 'review', label: 'Review', body: <ReviewSection client={client} meetingId={reviewMeeting} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
+  ];
+
+  const commands: ReadonlyArray<MenuCommand> = [
+    ...(document.fullscreenEnabled ? [{ label: 'Fullscreen', run: () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()) }] : []),
+    // Same rule as Settings: without a configured issuer the session is operator-seeded, and revoking it leaves no way back in.
+    ...(signIn.status === 'signed_in' && signIn.issuer ? [{ label: 'Sign out', run: () => signOut().then(refreshSignIn) }] : []),
   ];
 
   return (
@@ -383,7 +392,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} menuRef={menuRef} onMenu={() => setOverlay('menu')} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
-      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} />
+      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={id => (setReviewMeeting(undefined), setSection(id))} client={client} commands={commands} onMeeting={id => (setReviewMeeting(id), setSection('review'))} />
       {/* After the menu, so the menu has closed before the welcome it opens (from Settings) takes the modal layer. */}
       <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>
