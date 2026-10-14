@@ -1,5 +1,5 @@
 /**
- * Benchmark workload manifest and per-run result record (tasks/plan.md section 04), as Effect
+ * Benchmark workload manifest and per-run result record (docs/build/tasks/plan.md section 04), as Effect
  * Schemas. Validators return error lists; an empty list means valid.
  */
 import { readFileSync } from 'node:fs';
