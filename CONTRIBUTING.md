@@ -49,3 +49,13 @@ Use synthetic fixtures and redact sensitive data before posting issues, logs, or
 Never commit credentials, recordings of real people, customer data, or production exports.
 Be respectful, specific, and constructive in reviews.
 By contributing, you agree that your contributions are provided under the repository's FSL-1.1-ALv2 license.
+
+## Changelog and releases
+
+[CHANGELOG.md](CHANGELOG.md) follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+Do not edit CHANGELOG.md in a feature PR.
+
+- Add one fragment per PR: `changelog.d/<issue>.<type>.md`, where `<issue>` is the issue the PR closes and `<type>` is `added`, `changed`, `fixed`, `removed`, `deprecated`, or `security`.
+  The file holds one plain sentence without the issue link; the release step adds the link. Example, `changelog.d/58.fixed.md`: `Sign-in no longer loops after a workspace is deleted.`
+- A PR with nothing to note, such as a test-only change, gets the `no changelog` label instead. CI fails a PR with neither.
+- To release, run `uvx towncrier==26.9.0 build --version X.Y.Z` on a branch (`--draft` previews it), update the link references at the bottom of CHANGELOG.md, and open a PR. After it merges, tag the merge commit `vX.Y.Z` and create the GitHub release with that section as notes.
