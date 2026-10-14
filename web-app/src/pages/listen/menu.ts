@@ -19,7 +19,8 @@ export function menuCommands(signIn: SignInState, refreshSignIn: () => void): Re
 export function useMenuShortcut<O>(button: RefObject<HTMLElement | null>, setOverlay: Dispatch<SetStateAction<O | null>>, menu: NoInfer<O>): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+      // Lowercase: Caps Lock (or Shift) reports an uppercase K.
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
       // Focus first: a native dialog returns focus to whatever had it when it opened.
       button.current?.focus();
