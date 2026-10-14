@@ -38,6 +38,15 @@ const outdated = (page: Page): Promise<string[]> =>
       });
   });
 
+/** Visible text that is a tiny all-caps label: uppercase under 14px. */
+const tinyCaps = (page: Page): Promise<string[]> =>
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('body *')]
+      .filter(element => element.getClientRects().length > 0 && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()))
+      .filter(element => getComputedStyle(element).textTransform === 'uppercase' && parseFloat(getComputedStyle(element).fontSize) < 14)
+      .map(element => `${element.tagName.toLowerCase()}.${element.className}: ${element.textContent?.trim().slice(0, 30)}`),
+  );
+
 /** The server's answers for every screen below; the engine and sign-in come from `serveListening`. */
 async function stubApi(page: Page, context: BrowserContext): Promise<void> {
   await context.addCookies([{ name: 'sanctum_csrf', value: 'csrf-fixture', url: 'http://localhost' }]);
@@ -54,7 +63,7 @@ async function stubApi(page: Page, context: BrowserContext): Promise<void> {
 test('the signed-out status, every step of the welcome and the issuer\'s own pages', async ({ page, context }) => {
   await stubApi(page, context);
   const found: string[] = [];
-  const look = async (screen: string) => found.push(...(await outdated(page)).map(button => `${screen} > ${button}`));
+  const look = async (screen: string) => found.push(...[...(await outdated(page)), ...(await tinyCaps(page))].map(button => `${screen} > ${button}`));
 
   await serveListening(page, { configured: true, access: null });
   await page.goto('/');
@@ -83,7 +92,7 @@ test('the signed-out status, every step of the welcome and the issuer\'s own pag
 test('the listening screen, its End meeting confirm and every Menu section', async ({ page, context }) => {
   await stubApi(page, context);
   const found: string[] = [];
-  const look = async (screen: string) => found.push(...(await outdated(page)).map(button => `${screen} > ${button}`));
+  const look = async (screen: string) => found.push(...[...(await outdated(page)), ...(await tinyCaps(page))].map(button => `${screen} > ${button}`));
 
   await openListening(page, { configured: true, workos: true, access: OWNER });
   await openMeeting(page, MEETING, 'Product sync');

@@ -754,10 +754,7 @@
 }
 
 .listen-result-tag {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 12px;
   color: #8a93a3;
 }
 
@@ -834,10 +831,8 @@
   margin: 8px 0 4px;
   padding: 0 8px;
   color: #8b919c;
-  font-size: 10px;
-  font-weight: 400;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .listen-meeting-row {
@@ -878,11 +873,8 @@
 .listen-settings-group > h3 {
   margin: 0 0 2px;
   color: #8b919c;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 /* Direct rows only: an inline Team or Profile renders inside its row, on its own line under the value. */
@@ -1092,10 +1084,8 @@
 }
 
 .listen-work-state {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
   color: #8b919c;
 }
 
