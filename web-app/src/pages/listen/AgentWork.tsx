@@ -2,9 +2,48 @@ import { type ActionReceipt, type Meeting, pages, type SanctumClient } from '@sa
 import { useEffect, useState } from 'react';
 import { subscribeActions } from './engine.ts';
 import { collect, type Loadable, settle } from './review-data.ts';
-import { Receipts, show } from './ReviewPanels.tsx';
+import { show, time } from './ReviewPanels.tsx';
 
 const RECENT = 5;
+
+const titleCase = (slug: string): string => slug.split(/[_-]+/).filter(Boolean).map(word => word[0]!.toUpperCase() + word.slice(1)).join(' ');
+
+/** A Pipedream action key is `<app>-<action>`: `gmail-send-email` reads "Gmail · Send email". */
+function actionName(key: string): string {
+  const [app = '', ...action] = key.split('-');
+  const name = titleCase(action.join('-')).toLowerCase();
+  return action.length === 0 ? titleCase(app) : `${titleCase(app)} · ${name[0]!.toUpperCase()}${name.slice(1)}`;
+}
+
+/** The state word's tone: muted while it waits or runs, green done, amber when a person must look, red failed. */
+const TONE: Record<ActionReceipt['state'], string> = {
+  proposed: 'muted',
+  queued: 'muted',
+  running: 'muted',
+  cancelled: 'muted',
+  awaiting_authorization: 'warn',
+  unknown: 'warn',
+  succeeded: 'done',
+  failed: 'failed',
+};
+
+function WorkReceipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
+  if (actions.length === 0) return <p>No actions were requested in this meeting.</p>;
+  return (
+    <ul className="listen-items listen-work">
+      {actions.map(action => (
+        <li key={action.action_id}>
+          <span className="listen-work-name">{actionName(action.action_key)}</span>{' '}
+          <span className="listen-work-state" data-tone={TONE[action.state]}>{action.state.replaceAll('_', ' ')}</span>{' '}
+          <span className="listen-source">
+            {action.attempts} {action.attempts === 1 ? 'attempt' : 'attempts'}
+            {action.reconciliation === 'pending' && ' · awaiting reconciliation'} · {time(action.updated_at)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /**
  * Agent work: the receipts of the most recent meetings, read through the per-meeting actions endpoint.
@@ -63,7 +102,7 @@ export function AgentWork({ client }: { client: SanctumClient }) {
                   {meeting.state} · {new Date(meeting.started_at).toLocaleString([], { timeZone: meeting.timezone })}
                 </span>
               </h3>
-              {show('Activity', receipts[meeting.id] ?? { status: 'loading' }, actions => <Receipts actions={actions} />)}
+              {show('Activity', receipts[meeting.id] ?? { status: 'loading' }, actions => <WorkReceipts actions={actions} />)}
             </section>
           ))
         ),
