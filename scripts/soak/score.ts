@@ -13,6 +13,9 @@ const PLANT_TOLERANCE_MS = 2 * 60_000;
 const SETTLE_S = 15 * 60;
 
 /** `manifest.json` subset this scorer reads. Offsets are seconds from T0. */
+export interface T0Slot { readonly epoch_s: number | null; readonly tz: string | null }
+/** The answer is a date that depends on the real T0: the first `weekday` after the instant `after_s` seconds past T0. */
+export interface DateExpectation { readonly kind: 'weekday_after'; readonly weekday: string; readonly after_s: number }
 export interface Fact {
   readonly id: string;
   readonly at_s: number;
@@ -20,11 +23,14 @@ export interface Fact {
   readonly query: string;
   /** The same question as a person would ask it; reported separately. */
   readonly question: string;
-  /** Accepted spellings of the expected answer ("Nov 3", "November 3"). */
-  readonly answers: ReadonlyArray<string>;
+  /** Whole-token spellings of the expected answer ("Nov 3", "November 3"); empty when `expect` is set. */
+  readonly aliases: ReadonlyArray<string>;
+  readonly expect?: DateExpectation;
   /** The newest match must be this fact's answer (a later plant changes it). */
   readonly latest?: boolean;
 }
+/** A fact with the spellings it is matched against: its aliases, or the dates its `expect` resolves to. */
+export interface DueFact extends Fact { readonly answers: ReadonlyArray<string> }
 /** Time-aware question: results inside [from_s, to_s] only, and every `expect` answer must appear. */
 export interface RangeQuestion {
   readonly id: string;
@@ -36,6 +42,7 @@ export interface RangeQuestion {
 /** Question whose answer was never said: it must return no item. */
 export interface Control { readonly id: string; readonly query: string }
 export interface Manifest {
+  readonly t0: T0Slot;
   readonly facts: ReadonlyArray<Fact>;
   readonly ranges?: ReadonlyArray<RangeQuestion>;
   readonly controls?: ReadonlyArray<Control>;
@@ -59,14 +66,38 @@ export const matches = (text: string, answers: ReadonlyArray<string>) => {
   return answers.some(a => haystack.includes(` ${normalize(a)} `));
 };
 
-/** Facts old enough to have been processed by this checkpoint. */
-export const askable = (manifest: Manifest, hours: number) => ({
-  facts: manifest.facts.filter(f => f.at_s <= hours * 3600 - SETTLE_S),
-  ranges: (manifest.ranges ?? []).filter(r => r.to_s <= hours * 3600 - SETTLE_S),
-});
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+export function t0Ms(manifest: Manifest) {
+  if (manifest.t0.epoch_s === null) throw new Error('manifest.t0.epoch_s is not set: the driver writes it when the run starts');
+  return manifest.t0.epoch_s * 1000;
+}
+
+/** Date spellings of the first `weekday` strictly after the instant, on the calendar of the run's time zone. */
+function weekdayAfterAnswers(expect: DateExpectation, t0_ms: number, tz: string | null): string[] {
+  const target = WEEKDAYS.indexOf(expect.weekday.toLowerCase());
+  if (target < 0 || !tz) throw new Error(`cannot resolve weekday_after "${expect.weekday}" with time zone ${tz}`);
+  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(t0_ms + expect.after_s * 1000).split('-').map(Number);
+  const day = new Date(Date.UTC(y!, m! - 1, d! + 1));
+  while (day.getUTCDay() !== target) day.setUTCDate(day.getUTCDate() + 1);
+  const [month, n] = [MONTHS[day.getUTCMonth()]!, day.getUTCDate()];
+  const short = month.slice(0, 3);
+  const ordinal = `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
+  return [day.toISOString().slice(0, 10), `${month} ${n}`, `${month} ${ordinal}`, `${short} ${n}`, `${short} ${ordinal}`, `${n} ${month}`, `${n} ${short}`, `${day.getUTCMonth() + 1}/${n}`];
+}
+
+/** Facts and ranges old enough to have been processed by this checkpoint, with date expectations resolved against T0. */
+export function askable(manifest: Manifest, hours: number) {
+  const t0_ms = t0Ms(manifest);
+  return {
+    facts: manifest.facts.filter(f => f.at_s <= hours * 3600 - SETTLE_S).map((f): DueFact => ({ ...f, answers: f.expect ? weekdayAfterAnswers(f.expect, t0_ms, manifest.t0.tz) : f.aliases })),
+    ranges: (manifest.ranges ?? []).filter(r => r.to_s <= hours * 3600 - SETTLE_S),
+  };
+}
 
 /** found: top-k item matches the answer at the planted time; wrong: items returned but none do; missing: nothing returned. */
-function factStatus(fact: Fact, answer: Answer, t0_ms: number, k: number): FactStatus {
+function factStatus(fact: DueFact, answer: Answer, t0_ms: number, k: number): FactStatus {
   const top = answer.items.slice(0, k);
   const planted = t0_ms + fact.at_s * 1000;
   const hit = top.some(i => matches(i.text, fact.answers) && i.source_ms.some(t => Math.abs(t - planted) <= PLANT_TOLERANCE_MS));
@@ -108,11 +139,11 @@ export interface CheckpointScore {
   readonly errors: ReadonlyArray<string>;
 }
 
-export function scoreCheckpoint(input: { readonly hours: number; readonly manifest: Manifest; readonly t0_ms: number; readonly answers: Answers }): CheckpointScore {
-  const { hours, manifest, t0_ms, answers } = input;
+export function scoreCheckpoint(input: { readonly hours: number; readonly manifest: Manifest; readonly answers: Answers }): CheckpointScore {
+  const { hours, manifest, answers } = input;
+  const t0_ms = t0Ms(manifest);
   const { facts, ranges } = askable(manifest, hours);
   const controls = manifest.controls ?? [];
-  
   const factRows = facts.map(fact => {
     const { keyword, natural } = answers.facts[fact.id]!;
     return { fact, keyword, natural };
