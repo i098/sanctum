@@ -19,7 +19,8 @@
     "check:app": "node scripts/check-app.ts",
     "sdk:generate": "node scripts/generate-sdks.ts",
     "benchmark": "node scripts/benchmark.ts",
-    "replay:capture": "node scripts/replay-capture.ts"
+    "replay:capture": "node scripts/replay-capture.ts",
+    "soak:checkpoint": "node scripts/soak/checkpoint.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
