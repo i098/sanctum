@@ -7,6 +7,13 @@ test('planted facts and checkpoint questions are consistent', () => {
   assert.equal(new Set(FACTS.map(fact => fact.id)).size, FACTS.length);
 });
 
+test('relative-date fact C is scored by expect, never by aliases', () => {
+  const c = FACTS.find(fact => fact.id === 'C')!;
+  assert.deepEqual(c.expect, { kind: 'weekday_after', weekday: 'Friday' });
+  assert.deepEqual(c.aliases, []);
+  assert.ok(FACTS.filter(fact => fact.id !== 'C').every(fact => fact.expect === undefined && fact.aliases.length > 0));
+});
+
 test('splice replaces only the padded clip window and scales the clip', () => {
   const base = new Int16Array(SAMPLE_RATE * 2).fill(1000);
   const clip = Int16Array.from([100, -200, 300]);

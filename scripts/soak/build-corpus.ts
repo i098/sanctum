@@ -44,8 +44,12 @@ interface FactPlan {
   readonly offset: number;
   readonly voice: string;
   readonly spoken: string;
+  /** Human text; scoring uses `aliases`, or `expect` when the answer depends on the real T0 date. */
   readonly answer: string;
+  /** Whole-token matches (manifest `alias_match`); empty when `expect` is set. */
   readonly aliases: ReadonlyArray<string>;
+  /** The scorer resolves this against `t0` and `after_s` (the fact's at_s) to an absolute date. */
+  readonly expect?: { readonly kind: 'weekday_after'; readonly weekday: string };
   /** Keyword query an agent would send; search needs every 3+ letter term in one item, so keep it short. */
   readonly keywords: string;
   readonly supersedes?: string;
@@ -55,14 +59,14 @@ interface FactPlan {
 // ponytail: voices are the three Aura-2 speakers checked against the live API; add more when variety matters.
 export const FACTS: ReadonlyArray<FactPlan> = [
   { id: 'L1', kind: 'fact', meeting: 0, offset: 600, voice: 'luna', spoken: 'We decided the launch date is November 3.', answer: 'November 3', aliases: ['Nov 3', 'November 3', 'November 3rd', '3 November', '11/3'], keywords: 'launch', tests: 'basic recall' },
-  { id: 'V0', kind: 'distractor', meeting: 0, offset: 1080, voice: 'orion', spoken: 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.', answer: 'Northwood', aliases: ['Northwood Freight', 'Northwood'], keywords: 'Northwood', tests: 'look-alike vendor that was rejected' },
-  { id: 'V1', kind: 'fact', meeting: 0, offset: 1560, voice: 'apollo', spoken: 'We chose Northwind Freight for shipping.', answer: 'Northwind', aliases: ['Northwind Freight', 'Northwind'], keywords: 'Northwind', tests: 'look-alike distractor of V0' },
+  { id: 'V0', kind: 'distractor', meeting: 0, offset: 1080, voice: 'orion', spoken: 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.', answer: 'Northwood', aliases: ['Northwood Freight', 'Northwood'], keywords: 'shipping', tests: 'look-alike vendor that was rejected' },
+  { id: 'V1', kind: 'fact', meeting: 0, offset: 1560, voice: 'apollo', spoken: 'We chose Northwind Freight for shipping.', answer: 'Northwind', aliases: ['Northwind Freight', 'Northwind'], keywords: 'shipping', tests: 'look-alike distractor of V0' },
   { id: 'B1', kind: 'fact', meeting: 2, offset: 1800, voice: 'luna', spoken: 'The budget cap is forty-eight thousand dollars.', answer: '$48,000', aliases: ['$48,000', '48,000', '$48k', '48k', 'forty-eight thousand', 'forty eight thousand', '48 thousand'], keywords: 'budget', tests: 'supersession with B2' },
   { id: 'D', kind: 'stable', meeting: 3, offset: 1200, voice: 'orion', spoken: 'There will be no deploys on Fridays.', answer: 'no deploys on Fridays', aliases: ['no deploys on Friday', 'no Friday deploys', 'no deploys on Fridays', 'no deployments on Fridays'], keywords: 'deploy', tests: 'retention over 24 hours; never changes' },
   { id: 'L2', kind: 'fact', meeting: 4, offset: 300, voice: 'apollo', spoken: 'The launch has moved to November 17.', answer: 'November 17', aliases: ['Nov 17', 'November 17', 'November 17th', '17 November', '11/17'], keywords: 'launch', supersedes: 'L1', tests: 'supersedes L1' },
   { id: 'O1', kind: 'fact', meeting: 6, offset: 900, voice: 'luna', spoken: 'Priya owns onboarding.', answer: 'Priya', aliases: ['Priya'], keywords: 'onboarding', tests: 'supersession with O2' },
   { id: 'B2', kind: 'fact', meeting: 9, offset: 600, voice: 'orion', spoken: 'The budget has been raised to sixty-two thousand dollars.', answer: '$62,000', aliases: ['$62,000', '62,000', '$62k', '62k', 'sixty-two thousand', 'sixty two thousand', '62 thousand'], keywords: 'budget', supersedes: 'B1', tests: 'supersedes B1' },
-  { id: 'C', kind: 'fact', meeting: 10, offset: 1800, voice: 'apollo', spoken: 'Dana sends the signed contract by Friday.', answer: 'the Friday after the utterance', aliases: ['Friday'], keywords: 'contract', tests: 'relative date resolves to the actual Friday after at_s' },
+  { id: 'C', kind: 'fact', meeting: 10, offset: 1800, voice: 'apollo', spoken: 'Dana sends the signed contract by Friday.', answer: 'the Friday after the utterance', aliases: [], expect: { kind: 'weekday_after', weekday: 'Friday' }, keywords: 'contract', tests: 'relative date resolves to the first Friday after the calendar date of at_s' },
   { id: 'L3', kind: 'fact', meeting: 13, offset: 600, voice: 'luna', spoken: 'The launch is now December 1.', answer: 'December 1', aliases: ['Dec 1', 'December 1', 'December 1st', '1 December', '12/1'], keywords: 'launch', supersedes: 'L2', tests: 'second supersession' },
   { id: 'O2', kind: 'fact', meeting: 15, offset: 1800, voice: 'orion', spoken: 'Marcus takes over onboarding.', answer: 'Marcus', aliases: ['Marcus'], keywords: 'onboarding', supersedes: 'O1', tests: 'owner change' },
   { id: 'R', kind: 'fact', meeting: 22, offset: 1800, voice: 'apollo', spoken: 'The rollout region is eu-west.', answer: 'eu-west', aliases: ['eu-west', 'eu west', 'EU West', 'Europe West'], keywords: 'rollout', tests: 'newest fact at the last checkpoint' },
@@ -88,7 +92,7 @@ const HOUR = 3600;
 const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
   { id: 'cp1', at_s: HOUR, questions: [
     { id: 'cp1-launch', question: 'What launch date was decided?', keywords: 'launch', mode: 'current', expect: ['L1'] },
-    { id: 'cp1-vendor', question: 'Which shipping vendor was chosen (not Northwood)?', keywords: 'Northwind', mode: 'current', expect: ['V1'] },
+    { id: 'cp1-vendor', question: 'Which shipping vendor was chosen (not Northwood)?', keywords: 'shipping', mode: 'current', expect: ['V1'] },
   ] },
   { id: 'cp2', at_s: 5 * HOUR, questions: [
     { id: 'cp2-launch', question: 'What is the current launch date?', keywords: 'launch', mode: 'current', expect: ['L2'] },
@@ -106,7 +110,7 @@ const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
     { id: 'cp4-launch-history', question: 'What is the current launch date, and what is its history in order?', keywords: 'launch', mode: 'history', expect: ['L1', 'L2', 'L3'] },
     { id: 'cp4-owner', question: 'Who owns onboarding now?', keywords: 'onboarding', mode: 'current', expect: ['O2'] },
     { id: 'cp4-budget-as-of', question: 'What did we decide about the budget before T0+12:00?', keywords: 'budget', mode: 'as_of', as_of_s: 12 * HOUR, expect: ['B2'] },
-    { id: 'cp4-vendor', question: 'Which vendor was chosen at the start?', keywords: 'Northwind', mode: 'current', expect: ['V1'] },
+    { id: 'cp4-vendor', question: 'Which vendor was chosen at the start?', keywords: 'shipping', mode: 'current', expect: ['V1'] },
     { id: 'cp4-region', question: 'What is the rollout region?', keywords: 'rollout', mode: 'current', expect: ['R'] },
     { id: 'cp4-never-said', question: 'Who approved the Q3 audit?', keywords: 'audit approved', mode: 'never_said', expect: [] },
   ] },
@@ -153,6 +157,7 @@ function factErrors(fact: FactPlan): string[] {
     [fact.offset < EDGE_MARGIN_SECONDS || fact.offset + MAX_CLIP_SECONDS > SPEECH_SECONDS - EDGE_MARGIN_SECONDS, `offset ${fact.offset} is within ${EDGE_MARGIN_SECONDS} s of a meeting edge`],
     [/sanctum/i.test(fact.spoken), 'must not address the product'],
     [fact.supersedes !== undefined && (!target || startOf(target) >= startOf(fact)), `supersedes ${fact.supersedes}, which is missing or not earlier`],
+    [(fact.expect !== undefined) !== (fact.aliases.length === 0), 'needs exactly one of aliases or expect'],
     [crowded, 'is within 20 s of another fact in its meeting'],
   ]).map(message => `${fact.id}: ${message}`);
 }
@@ -321,6 +326,8 @@ async function build(out: string, count: number) {
   const manifest = {
     version: 1,
     generated_at: new Date().toISOString(),
+    t0: { epoch_s: null, tz: null },
+    alias_match: 'whole_token',
     sample_rate: SAMPLE_RATE,
     meetings_total: MEETINGS,
     meetings_built: count,
@@ -328,7 +335,11 @@ async function build(out: string, count: number) {
     gap_s: GAP_SECONDS,
     licences,
     schedule,
-    facts: FACTS.map(({ offset, ...fact }) => ({ ...fact, at_s: fact.meeting * SLOT_SECONDS + offset, meeting_offset_s: offset, duration_s: durations.get(fact.id) ?? null, audio_built: fact.meeting < count })),
+    facts: FACTS.map(plan => {
+      const { offset, expect, ...fact } = plan;
+      const at_s = startOf(plan);
+      return { ...fact, ...(expect && { expect: { ...expect, after_s: at_s } }), at_s, meeting_offset_s: offset, duration_s: durations.get(fact.id) ?? null, audio_built: fact.meeting < count };
+    }),
     checkpoints: CHECKPOINTS,
   };
   writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
