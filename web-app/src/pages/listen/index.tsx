@@ -19,16 +19,6 @@ import './listen.css';
 
 type Overlay = 'menu' | 'welcome';
 
-/** What the phone sheet over the page says is happening behind it. */
-const BEHIND_MENU: Record<ListenerState, string> = {
-  stopped: 'Not listening',
-  starting: 'Starting',
-  listening: 'Still listening',
-  reconnecting: 'Still listening',
-  paused: 'Paused',
-  degraded: 'Still listening',
-};
-
 const client = sessionClient();
 
 /** Read once per page load: `/auth/callback` lands here with `?signin=<code>`; `ok` is SIGN_IN_URL's own return. */
@@ -384,7 +374,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} menuRef={menuRef} onMenu={() => setOverlay('menu')} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
-      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} status={{ text: BEHIND_MENU[snapshot.listener], tone: snapshot.listener }} />
+      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} />
       {/* After the menu, so the menu has closed before the welcome it opens (from Settings) takes the modal layer. */}
       <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>
