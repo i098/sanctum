@@ -41,6 +41,13 @@ test('Ctrl+K opens the Menu from anywhere on the page and Escape returns focus t
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
 });
 
+test('Cmd+K with Caps Lock on (an uppercase K) still opens the Menu', async ({ page }) => {
+  await openListening(page);
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Meta+K');
+  await expect(dialog(page)).toBeVisible();
+});
+
 test('Sections switch inside the open Menu without closing it', async ({ page }) => {
   await openListening(page);
   await openMenu(page, 'Meetings');
