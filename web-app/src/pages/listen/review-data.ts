@@ -45,7 +45,7 @@ export type ReviewState = { readonly status: 'loading' } | { readonly status: 'e
 const LOADING = { status: 'loading' } as const;
 
 /** Every item of every page, in order. */
-async function collect<A, B>(iterable: AsyncIterable<A>, items: (page: A) => ReadonlyArray<B>): Promise<ReadonlyArray<B>> {
+export async function collect<A, B>(iterable: AsyncIterable<A>, items: (page: A) => ReadonlyArray<B>): Promise<ReadonlyArray<B>> {
   const all: Array<B> = [];
   for await (const page of iterable) all.push(...items(page));
   return all;

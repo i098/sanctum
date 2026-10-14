@@ -158,7 +158,7 @@ function ContextPanel({ snapshot, onSource }: { snapshot: ContextSnapshot; onSou
   );
 }
 
-function Receipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
+export function Receipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
   if (actions.length === 0) return <p>No actions were requested in this meeting.</p>;
   return (
     <ul className="listen-items">
