@@ -6,7 +6,7 @@ import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeS
 import { AgentsSection } from './AgentsSection.tsx';
 import { AppsSection } from './AppsSection.tsx';
 import { Dialog } from './Dialog.tsx';
-import { useFullscreen, useIdle } from './Fullscreen.tsx';
+import { useFullscreen, useFullscreenKey, useIdle } from './Fullscreen.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
@@ -93,9 +93,12 @@ const INPUT_ISSUES: ReadonlyArray<CaptureIssue> = ['silent_input', 'input_unavai
 
 /** A silent input gets one line of help (the picker is the chip in the footer's health line); other input issues need none; otherwise `children` show. */
 function InputHelp({ issue, children }: { issue: CaptureIssue | null; children: ReactNode }) {
-  if (issue === null || !INPUT_ISSUES.includes(issue)) return children;
+  if (!isInputIssue(issue)) return children;
   return issue === 'silent_input' ? <p className="listen-helper listen-input-help">A Mac with its lid closed turns off its built-in microphone. Choose another microphone below.</p> : null;
 }
+
+const isInputIssue = (issue: CaptureIssue | null): boolean => issue !== null && INPUT_ISSUES.includes(issue);
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const CAPTURING: ReadonlyArray<ListenerState> = ['listening', 'degraded', 'reconnecting'];
 
@@ -237,12 +240,12 @@ function Footer({ engine, snapshot, menuRef, onMenu, onFailure, children }: Foot
   const control = toggle(engine, snapshot.listener);
   const run = (): void => {
     onFailure(null);
-    control.run().catch((error: unknown) => onFailure(error instanceof Error ? error.message : String(error)));
+    control.run().catch((error: unknown) => onFailure(errorMessage(error)));
   };
   const warning = snapshot.issue !== null || snapshot.listener === 'degraded';
   return (
     <footer className="listen-footer">
-      <div className="listen-health-line" data-input-issue={snapshot.issue !== null && INPUT_ISSUES.includes(snapshot.issue) ? '' : undefined}>
+      <div className="listen-health-line" data-input-issue={isInputIssue(snapshot.issue) ? '' : undefined}>
         <p className="listen-health" data-tone={warning ? 'warning' : snapshot.listener}>{health(snapshot)}</p>
         <InputPicker engine={engine} />
       </div>
@@ -313,6 +316,31 @@ function SignInLine({ signIn, message }: { signIn: SignInState; message: { text:
 }
 
 /** Fullscreen listening view: waveform stage, sparse header, side live updates, quiet footer controls, secondary overlays. */
+/** The session, read again on every new capture issue because an issue may mean the session ended. */
+function useSignIn(issue: CaptureIssue | null): [SignInState, () => void] {
+  const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
+  const refresh = useCallback(() => void readSignIn(client).then(setSignIn), []);
+  useEffect(refresh, [refresh, issue]);
+  return [signIn, refresh];
+}
+
+/** With no microphone open there is nothing to hear: the line draws its idle look, as when stopped. */
+function useWaveform(canvas: RefObject<HTMLCanvasElement | null>, engine: CaptureView): void {
+  useEffect(() => startWaveform(canvas.current!, engine.levels, () => { const { listener, issue } = engine.getSnapshot(); return issue === 'waiting_for_input' ? 'paused' : listener; }), [canvas, engine]);
+}
+
+/** Fullscreen with its F key and the fading footer; entering it from Settings also closes the Menu, so the listening view is what goes fullscreen. */
+function useListenFullscreen(closeMenu: () => void) {
+  const [fullscreen, toggle] = useFullscreen();
+  useFullscreenKey(toggle);
+  const quiet = useIdle(fullscreen, 3000);
+  const fromSettings = (): void => {
+    toggle();
+    if (!fullscreen) closeMenu();
+  };
+  return { quiet, settingsFullscreen: { active: fullscreen, toggle: fromSettings } };
+}
+
 export function ListenPage() {
   const engine = getCaptureEngine();
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
@@ -320,35 +348,22 @@ export function ListenPage() {
   const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
   const { section, chosenMeeting, select, openMeeting } = useMenuSection(overlay === 'menu', notice ? 'settings' : 'meetings');
   const menuRef = useRef<HTMLButtonElement>(null);
-  const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
-  const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
-  // A capture issue may mean the session ended, so each new issue reads the session again.
-  useEffect(refreshSignIn, [refreshSignIn, snapshot.issue]);
+  const [signIn, refreshSignIn] = useSignIn(snapshot.issue);
   const [failure, setFailure] = useState<string | null>(null);
   const [captions, setCaptions] = useState<CaptionState>('off');
   const capturing = CAPTURING.includes(snapshot.listener);
-  // With no microphone open there is nothing to hear: the line draws its idle look, as when stopped.
-  useEffect(() => startWaveform(canvas.current!, engine.levels, () => { const { listener, issue } = engine.getSnapshot(); return issue === 'waiting_for_input' ? 'paused' : listener; }), [engine]);
+  useWaveform(canvas, engine);
   const { meeting, helper, end } = useEndMeeting(engine, snapshot.listener, setFailure);
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
   useMenuShortcut(menuRef, setOverlay, 'menu');
-  const [fullscreen, toggleFullscreen] = useFullscreen();
-  const quiet = useIdle(fullscreen, 3000);
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key.toLowerCase() !== 'f' || event.metaKey || event.ctrlKey || event.altKey || event.repeat || (event.target instanceof HTMLElement && event.target.closest('input, select, textarea, [contenteditable]'))) return;
-      toggleFullscreen();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleFullscreen]);
+  const { quiet, settingsFullscreen } = useListenFullscreen(close);
   const sections = [
     { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} request={chosenMeeting} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'apps', label: 'Apps', body: <AppsSection signIn={signIn} /> },
-    { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} fullscreen={{ active: fullscreen, toggle: () => { toggleFullscreen(); if (!fullscreen) close(); } }} /> },
+    { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} fullscreen={settingsFullscreen} /> },
   ];
 
   const commands = menuCommands(signIn, refreshSignIn);

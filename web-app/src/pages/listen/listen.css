@@ -427,14 +427,12 @@
 }
 
 /* Tertiary: text only, a faint fill on hover. */
-.listen-dialog-header button:where(:not(.radix-themes *)),
 .listen button[data-quiet]:where(:not(.radix-themes *)) {
   min-height: 32px;
   padding: 0 12px;
   color: #a7adb8;
 }
 
-.listen-dialog-header button:where(:not(.radix-themes *)):hover,
 .listen button[data-quiet]:where(:not(.radix-themes *)):hover {
   background: rgb(255 255 255 / 0.07);
   color: #fff;

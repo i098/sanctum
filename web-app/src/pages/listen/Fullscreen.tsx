@@ -16,6 +16,24 @@ export function useFullscreen(): [boolean, () => void] {
   return [fullscreen, toggle];
 }
 
+const TYPING = 'input, select, textarea, [contenteditable]';
+
+/** An unmodified F that is not typed into a field. */
+const MODIFIERS = ['metaKey', 'ctrlKey', 'altKey', 'repeat'] as const;
+const typingInto = ({ target }: Event): boolean => target instanceof HTMLElement && target.closest(TYPING) !== null;
+const isFullscreenKey = (event: KeyboardEvent): boolean => event.key.toLowerCase() === 'f' && !MODIFIERS.some(modifier => event[modifier]) && !typingInto(event);
+
+/** F switches fullscreen, as the Display row does. */
+export function useFullscreenKey(toggle: () => void): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (isFullscreenKey(event)) toggle();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [toggle]);
+}
+
 /** True once `active` has seen no pointer, touch or key for `ms`; any of them wakes it. */
 export function useIdle(active: boolean, ms: number): boolean {
   const [idle, setIdle] = useState(false);

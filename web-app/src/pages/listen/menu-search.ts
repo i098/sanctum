@@ -1,5 +1,6 @@
 /** What the Menu's search box lists and how the keys move through it; MenuSearch.tsx only renders it. */
 import type { ContextItem, Meeting } from '@sanctum/sdk';
+import type { Loadable } from './review-data.ts';
 
 export interface MenuCommand {
   label: string;
@@ -17,9 +18,6 @@ export interface Entry {
   failure?: string;
 }
 
-export type Loaded<A> = { status: 'loading' } | { status: 'ok'; data: A } | { status: 'error'; message: string };
-export const LOADING = { status: 'loading' } as const;
-
 export const KINDS: ReadonlyArray<ContextItem['kind']> = ['decision', 'commitment'];
 export const SHOWN = 8;
 
@@ -27,17 +25,17 @@ export const errorText = (error: unknown): string => (error instanceof Error ? e
 
 const day = (iso: string): string => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 
-const dataOf = <A>(loaded: Loaded<ReadonlyArray<A>>): ReadonlyArray<A> => (loaded.status === 'ok' ? loaded.data : []);
+const dataOf = <A>(loaded: Loadable<ReadonlyArray<A>>): ReadonlyArray<A> => (loaded.status === 'ok' ? loaded.data : []);
 
 /** Meeting id to title, for labelling the meeting an item came from. */
-const titlesOf = (meetings: Loaded<ReadonlyArray<Meeting>>): ReadonlyMap<string, string> =>
+const titlesOf = (meetings: Loadable<ReadonlyArray<Meeting>>): ReadonlyMap<string, string> =>
   new Map(dataOf(meetings).map(meeting => [meeting.id, meeting.title ?? 'Untitled meeting']));
 
 export interface Sources {
   sections: ReadonlyArray<{ id: string; label: string }>;
   commands: ReadonlyArray<MenuCommand>;
-  meetings: Loaded<ReadonlyArray<Meeting>>;
-  items: Loaded<ReadonlyArray<ContextItem>>;
+  meetings: Loadable<ReadonlyArray<Meeting>>;
+  items: Loadable<ReadonlyArray<ContextItem>>;
 }
 
 /** What choosing a row does; the caller clears the box first. */

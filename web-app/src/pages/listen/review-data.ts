@@ -42,7 +42,7 @@ export interface Review {
 
 export type ReviewState = Frame<Review>;
 
-const LOADING = { status: 'loading' } as const;
+export const LOADING = { status: 'loading' } as const;
 
 /** Every item of every page, in order. */
 export async function collect<A, B>(iterable: AsyncIterable<A>, items: (page: A) => ReadonlyArray<B>): Promise<ReadonlyArray<B>> {

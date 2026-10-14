@@ -1,6 +1,7 @@
 import type { ContextItem, Meeting } from '@sanctum/sdk';
 import { describe, expect, it, vi } from 'vitest';
-import { buildEntries, emptyMessage, isSearching, keyAction, type Loaded, LOADING, SHOWN, sourceNotes, type Sources } from '../src/pages/listen/menu-search.ts';
+import { buildEntries, emptyMessage, isSearching, keyAction, SHOWN, sourceNotes, type Sources } from '../src/pages/listen/menu-search.ts';
+import { type Loadable, LOADING } from '../src/pages/listen/review-data.ts';
 
 const meeting = (id: string, title: string | null): Meeting => ({
   id,
@@ -18,7 +19,7 @@ const meeting = (id: string, title: string | null): Meeting => ({
 const item = (id: string, over: Partial<ContextItem> = {}): ContextItem =>
   ({ id, kind: 'decision', text: `Text ${id}`, meeting_id: null, event_at: null, created_at: '2026-09-28T09:00:00Z', ...over }) as ContextItem;
 
-const ok = <A>(data: A): Loaded<A> => ({ status: 'ok', data });
+const ok = <A>(data: A): Loadable<A> => ({ status: 'ok', data });
 
 const sources = (over: Partial<Sources> = {}): Sources => ({
   sections: [{ id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' }],
@@ -86,14 +87,14 @@ describe('buildEntries', () => {
   });
 
   it('shows the fixed rows while a source is loading or has failed', () => {
-    const failed: Loaded<never> = { status: 'error', message: 'offline' };
+    const failed: Loadable<never> = { status: 'error', code: 'network', message: 'offline' };
     expect(buildEntries('open', sources({ meetings: LOADING, items: failed }), opens()).map(entry => entry.tag)).toEqual(['Section', 'Section']);
   });
 });
 
 describe('sourceNotes and isSearching', () => {
   it('names each failed source', () => {
-    const failed = (message: string) => ({ status: 'error', message }) as const;
+    const failed = (message: string) => ({ status: 'error', code: 'network', message }) as const;
     expect(sourceNotes({ items: failed('a'), meetings: failed('b') })).toEqual(['Decisions and commitments unavailable: a', 'Meeting titles unavailable: b']);
     expect(sourceNotes({ items: ok([]), meetings: ok([]) })).toEqual([]);
   });
@@ -101,7 +102,7 @@ describe('sourceNotes and isSearching', () => {
   it('searches only while a non-empty query waits on a source', () => {
     expect(isSearching('', { items: LOADING, meetings: LOADING })).toBe(false);
     expect(isSearching('x', { items: ok([]), meetings: LOADING })).toBe(true);
-    expect(isSearching('x', { items: ok([]), meetings: { status: 'error', message: 'no' } })).toBe(false);
+    expect(isSearching('x', { items: ok([]), meetings: { status: 'error', code: 'network', message: 'no' } })).toBe(false);
   });
 });
 

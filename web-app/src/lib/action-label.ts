@@ -16,8 +16,4 @@ const operation = (key: string): string => {
 export const actionLabel = (key: string): string => operation(key) || appName(key.split('-')[0] ?? '');
 
 /** A Pipedream action key with its app: `google_calendar-create-event` is `Google Calendar · Create event`. */
-export function actionName(key: string): string {
-  const app = appName(key.split('-')[0] ?? '');
-  const action = operation(key);
-  return action === '' ? app : `${app} · ${action}`;
-}
+export const actionName = (key: string): string => [appName(key.split('-')[0] ?? ''), operation(key)].filter(Boolean).join(' · ');

@@ -5,7 +5,8 @@
  */
 import type { ContextItem, Meeting, SanctumClient } from '@sanctum/sdk';
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useState } from 'react';
-import { buildEntries, type Entry, emptyMessage, errorText, isSearching, KINDS, keyAction, type Loaded, LOADING, type MenuCommand, sourceNotes } from './menu-search.ts';
+import { type Loadable, LOADING, settle } from './review-data.ts';
+import { buildEntries, type Entry, emptyMessage, errorText, isSearching, KINDS, keyAction, type MenuCommand, sourceNotes } from './menu-search.ts';
 
 interface MenuSearchProps {
   client: SanctumClient;
@@ -25,14 +26,13 @@ const MEETING_LIMIT = 200;
 const SEARCH_LIMIT = 200;
 
 /** Meetings are read on the first query, so opening the Menu costs nothing until someone searches. */
-function useMeetings(client: SanctumClient, wanted: boolean): Loaded<ReadonlyArray<Meeting>> {
-  const [meetings, setMeetings] = useState<Loaded<ReadonlyArray<Meeting>>>(LOADING);
+function useMeetings(client: SanctumClient, wanted: boolean): Loadable<ReadonlyArray<Meeting>> {
+  const [meetings, setMeetings] = useState<Loadable<ReadonlyArray<Meeting>>>(LOADING);
   useEffect(() => {
     if (!wanted) return;
     const controller = new AbortController();
-    client.meetings.listMeetings({ limit: MEETING_LIMIT }, { signal: controller.signal }).then(
-      page => setMeetings({ status: 'ok', data: page.meetings }),
-      (error: unknown) => controller.signal.aborted || setMeetings({ status: 'error', message: errorText(error) }),
+    void settle(client.meetings.listMeetings({ limit: MEETING_LIMIT }, { signal: controller.signal }).then(page => page.meetings)).then(
+      frame => controller.signal.aborted || setMeetings(frame),
     );
     return () => controller.abort();
   }, [client, wanted]);
@@ -40,16 +40,14 @@ function useMeetings(client: SanctumClient, wanted: boolean): Loaded<ReadonlyArr
 }
 
 /** Decisions and commitments matching `query`, after a short pause in typing; `query` empty reads nothing. */
-function useItems(client: SanctumClient, query: string): Loaded<ReadonlyArray<ContextItem>> {
-  const [items, setItems] = useState<{ query: string; result: Loaded<ReadonlyArray<ContextItem>> }>({ query: '', result: LOADING });
+function useItems(client: SanctumClient, query: string): Loadable<ReadonlyArray<ContextItem>> {
+  const [items, setItems] = useState<{ query: string; result: Loadable<ReadonlyArray<ContextItem>> }>({ query: '', result: LOADING });
   useEffect(() => {
     if (query === '') return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      client.context.searchContext({ q: query, limit: SEARCH_LIMIT }, { signal: controller.signal }).then(
-        found => setItems({ query, result: { status: 'ok', data: found.items.filter(item => KINDS.includes(item.kind) && item.state !== 'superseded') } }),
-        (error: unknown) => controller.signal.aborted || setItems({ query, result: { status: 'error', message: errorText(error) } }),
-      );
+      const found = client.context.searchContext({ q: query, limit: SEARCH_LIMIT }, { signal: controller.signal }).then(({ items }) => items.filter(item => KINDS.includes(item.kind) && item.state !== 'superseded'));
+      void settle(found).then(result => controller.signal.aborted || setItems({ query, result }));
     }, DEBOUNCE_MS);
     return () => (clearTimeout(timer), controller.abort());
   }, [client, query]);

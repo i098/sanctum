@@ -211,13 +211,15 @@ export function TeamButton({ signIn, onSignInChange, label }: { signIn: SignedIn
 
 /** The self-hosted issuer adds a Profile row. Team shows on the Workspace row. */
 function accountRows(signIn: SignInState, onSignInChange: () => void): ReadonlyArray<Row> {
-  const rows: Row[] = [['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />]];
-  if (signIn.status !== 'signed_in') return [...rows, ['Workspace', <span>{WORKSPACE[signIn.status]}</span>]];
-  if (signIn.team) rows.push(['Profile', <Inline text="Display name and password" label="Edit"><Suspense><ProfilePanel /></Suspense></Inline>]);
-  rows.push(['Workspace', signIn.team || signIn.workosTeam
-    ? <Inline text={WORKSPACE.signed_in} label="Team"><TeamBody signIn={signIn} onSignInChange={onSignInChange} /></Inline>
-    : <span>{WORKSPACE.signed_in}</span>]);
-  return rows;
+  const signInRow: Row = ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />];
+  if (signIn.status !== 'signed_in') return [signInRow, ['Workspace', <span>{WORKSPACE[signIn.status]}</span>]];
+  const profile: Row = ['Profile', <Inline text="Display name and password" label="Edit"><Suspense><ProfilePanel /></Suspense></Inline>];
+  return [signInRow, ...(signIn.team ? [profile] : []), workspaceRow(signIn, onSignInChange)];
+}
+
+function workspaceRow(signIn: SignedInState, onSignInChange: () => void): Row {
+  const team = signIn.team || signIn.workosTeam;
+  return ['Workspace', team ? <Inline text={WORKSPACE.signed_in} label="Team"><TeamBody signIn={signIn} onSignInChange={onSignInChange} /></Inline> : <span>{WORKSPACE.signed_in}</span>];
 }
 
 function Rows({ rows }: { rows: ReadonlyArray<Row> }) {
@@ -243,6 +245,15 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function deviceRows(permission: PermissionState, engine: CaptureView, fullscreen: SettingsProps['fullscreen']): ReadonlyArray<Row> {
+  const display: Row = ['Display', <WithAction text="Press F on the listening screen, or" label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={fullscreen.toggle} />];
+  return [
+    ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
+    ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
+    ...(document.fullscreenEnabled ? [display] : []),
+  ];
+}
+
 /** Settings section in four groups: Account, Device, Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
   return (
@@ -252,11 +263,7 @@ export function SettingsSection({ permission, engine, client, signIn, notice, on
         <Rows rows={accountRows(signIn, onSignInChange)} />
       </Group>
       <Group title="Device">
-        <Rows rows={[
-          ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
-          ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
-          ...(document.fullscreenEnabled ? [['Display', <WithAction text="Press F on the listening screen, or" label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={fullscreen.toggle} />] as const] : []),
-        ]} />
+        <Rows rows={deviceRows(permission, engine, fullscreen)} />
       </Group>
       <Group title="Data">
         <Rows rows={[['Retention', 'Not selected: nothing is deleted automatically']]} />
