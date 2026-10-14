@@ -7,7 +7,6 @@
 import type { AccessScope } from '@sanctum/sdk';
 import { type FormEvent, type SelectHTMLAttributes, useCallback, useEffect, useState } from 'react';
 import { SIGN_IN_URL } from '../../lib/session.ts';
-import { Dialog } from '../listen/Dialog.tsx';
 import { auth } from './index.tsx';
 
 type Role = 'member' | 'admin' | 'owner';
@@ -114,7 +113,7 @@ function MemberRow({ member, access, team, busy, change }: RowProps & { member: 
   );
 }
 
-/** Email and role in; the new invitation's link out, shown until the dialog closes. */
+/** Email and role in; the new invitation's link out, shown until the panel closes. */
 function InviteForm({ access, busy, change }: Omit<RowProps, 'team'>) {
   const [invited, setInvited] = useState<{ id: string; email: string } | null>(null);
   const invite = (event: FormEvent<HTMLFormElement>) => {
@@ -209,16 +208,13 @@ function NoTeam({ access, busy, change }: Omit<RowProps, 'team'>) {
   );
 }
 
-export function TeamDialog({ access, open, onClose }: { access: AccessScope; open: boolean; onClose: () => void }) {
+/** Team for the self-hosted issuer, inline in Settings or in the welcome's Team dialog; it reads the team when it mounts. */
+export function TeamPanel({ access }: { access: AccessScope }) {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => readTeam(access.workspace_id).then(setView, (failure: Error) => setError(failure.message)), [access.workspace_id]);
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    void load();
-  }, [open, load]);
+  useEffect(() => void load(), [load]);
 
   const change: Change = action => {
     setBusy(true);
@@ -237,10 +233,10 @@ export function TeamDialog({ access, open, onClose }: { access: AccessScope; ope
     team: () => view.kind === 'team' && <TeamList access={access} team={view.team} busy={busy} change={change} />,
   };
   return (
-    <Dialog title="Team" open={open} onClose={onClose}>
+    <>
       {error && <p role="alert" className="mb-3 text-warning">{error}</p>}
       {body[view.kind]()}
-    </Dialog>
+    </>
   );
 }
 
@@ -288,17 +284,15 @@ function ProfileForms({ name, onNotice }: { name: string; onNotice: (notice: Not
   );
 }
 
-export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Reads the signed-in name when it mounts. */
+export function ProfilePanel() {
   const [name, setName] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  useEffect(() => {
-    setNotice(null);
-    if (open) void auth.getSession().then(({ data }) => setName(data?.user.name ?? null));
-  }, [open]);
+  useEffect(() => void auth.getSession().then(({ data }) => setName(data?.user.name ?? null)), []);
   return (
-    <Dialog title="Profile" open={open} onClose={onClose}>
+    <>
       {notice && <NoticeLine notice={notice} />}
       {name === null ? <SignedOutNote task="edit your profile" /> : <ProfileForms name={name} onNotice={setNotice} />}
-    </Dialog>
+    </>
   );
 }
