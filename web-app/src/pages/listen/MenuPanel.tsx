@@ -15,10 +15,12 @@ interface MenuPanelProps {
   sections: ReadonlyArray<MenuSection>;
   active: string;
   onSelect: (id: string) => void;
+  /** What listening is doing behind the panel; the phone sheet covers the whole page, so it says so at the foot. */
+  status: { text: string; tone: string };
 }
 
 /** The one central overlay for everything beyond listening: a section rail beside the active section's body. */
-export function MenuPanel({ open, onClose, sections, active, onSelect }: MenuPanelProps) {
+export function MenuPanel({ open, onClose, sections, active, onSelect, status }: MenuPanelProps) {
   const current = sections.find(section => section.id === active) ?? sections[0]!;
   return (
     <Dialog title="Menu" open={open} onClose={onClose} className="listen-menu">
@@ -32,6 +34,7 @@ export function MenuPanel({ open, onClose, sections, active, onSelect }: MenuPan
       <section aria-label={current.label} className="listen-menu-body">
         {current.body}
       </section>
+      <p className="listen-menu-status" data-tone={status.tone}>{status.text} · tap close to return</p>
     </Dialog>
   );
 }

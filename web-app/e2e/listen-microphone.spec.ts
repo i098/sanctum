@@ -66,7 +66,9 @@ test('names a microphone that sends exact zero within the threshold, and clears 
 
   await page.evaluate(() => window.__level('default', 0.1));
   await expect(helper(page)).toHaveText('Speak to Sanctum when you need it.');
-  await expect(page.getByRole('combobox', { name: 'Microphone' })).toHaveCount(0);
+  // The chip stays in the health line; only its amber warning goes.
+  await expect(page.getByRole('combobox', { name: 'Microphone' })).toBeVisible();
+  await expect(page.locator('.listen-health-line')).not.toHaveAttribute('data-input-issue');
 });
 
 test('never warns about a quiet input that is not exact zero', async ({ page }) => {

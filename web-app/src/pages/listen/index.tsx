@@ -5,6 +5,7 @@ import type { ArchiveState, CaptureIssue, CaptureSnapshot, CaptureView, Listener
 import { accountLabel, endMeeting, readSignIn, sessionClient, SIGN_IN_URL, takeSignInNotice, type SignInState } from '../../lib/session.ts';
 import { AgentsSection } from './AgentsSection.tsx';
 import { Dialog } from './Dialog.tsx';
+import { DisplaySection, useFullscreen, useIdle } from './Fullscreen.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
@@ -17,6 +18,16 @@ import { useOnboarding, Welcome } from './Welcome.tsx';
 import './listen.css';
 
 type Overlay = 'menu' | 'welcome';
+
+/** What the phone sheet over the page says is happening behind it. */
+const BEHIND_MENU: Record<ListenerState, string> = {
+  stopped: 'Not listening',
+  starting: 'Starting',
+  listening: 'Still listening',
+  reconnecting: 'Still listening',
+  paused: 'Paused',
+  degraded: 'Still listening',
+};
 
 const client = sessionClient();
 
@@ -87,15 +98,10 @@ function statusMessage(snapshot: CaptureSnapshot, failure: string | null, helper
 /** The picker belongs to every issue an input choice can cure: a silent, missing or unopenable input. */
 const INPUT_ISSUES: ReadonlyArray<CaptureIssue> = ['silent_input', 'input_unavailable', 'no_input', 'hardware_error', 'unsupported_constraints'];
 
-/** An input issue gets the picker right under the warning (and, when silent, one line of help); otherwise `children` show. */
-function InputHelp({ engine, issue, children }: { engine: CaptureView; issue: CaptureIssue | null; children: ReactNode }) {
+/** A silent input gets one line of help (the picker is the chip in the footer's health line); other input issues need none; otherwise `children` show. */
+function InputHelp({ issue, children }: { issue: CaptureIssue | null; children: ReactNode }) {
   if (issue === null || !INPUT_ISSUES.includes(issue)) return children;
-  return (
-    <>
-      {issue === 'silent_input' && <p className="listen-helper listen-input-help">A Mac with its lid closed turns off its built-in microphone. Choose another input:</p>}
-      <InputPicker engine={engine} />
-    </>
-  );
+  return issue === 'silent_input' ? <p className="listen-helper listen-input-help">A Mac with its lid closed turns off its built-in microphone. Choose another microphone below.</p> : null;
 }
 
 const CAPTURING: ReadonlyArray<ListenerState> = ['listening', 'degraded', 'reconnecting'];
@@ -117,20 +123,6 @@ function Clock() {
       <span>{now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
       <span>{now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span>
     </time>
-  );
-}
-
-function FullscreenButton() {
-  const [fullscreen, setFullscreen] = useState(false);
-  useEffect(() => {
-    const sync = (): void => setFullscreen(document.fullscreenElement !== null);
-    document.addEventListener('fullscreenchange', sync);
-    return () => document.removeEventListener('fullscreenchange', sync);
-  }, []);
-  return (
-    <button type="button" aria-pressed={fullscreen} onClick={() => void (fullscreen ? document.exitFullscreen() : document.documentElement.requestFullscreen())}>
-      Fullscreen
-    </button>
   );
 }
 
@@ -257,11 +249,13 @@ function Footer({ engine, snapshot, menuRef, onMenu, onFailure, children }: Foot
   const warning = snapshot.issue !== null || snapshot.listener === 'degraded';
   return (
     <footer className="listen-footer">
-      <p className="listen-health" data-tone={warning ? 'warning' : snapshot.listener}>{health(snapshot)}</p>
+      <div className="listen-health-line" data-input-issue={snapshot.issue !== null && INPUT_ISSUES.includes(snapshot.issue) ? '' : undefined}>
+        <p className="listen-health" data-tone={warning ? 'warning' : snapshot.listener}>{health(snapshot)}</p>
+        <InputPicker engine={engine} />
+      </div>
       <nav aria-label="Listening controls" className="listen-controls">
         <button type="button" onClick={run} disabled={snapshot.listener === 'starting'}>{control.label}</button>
         {children}
-        {document.fullscreenEnabled && <FullscreenButton />}
         <button ref={menuRef} type="button" aria-keyshortcuts="Control+K Meta+K" onClick={onMenu}>Menu</button>
       </nav>
     </footer>
@@ -345,26 +339,33 @@ export function ListenPage() {
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
+  const [fullscreen, toggleFullscreen] = useFullscreen();
+  const quiet = useIdle(fullscreen, 3000);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      const modifier = event.metaKey || event.ctrlKey;
       // Lowercase: Caps Lock (or Shift) reports an uppercase K.
-      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
-      event.preventDefault();
-      // Focus first: a native dialog returns focus to whatever had it when it opened.
-      menuRef.current?.focus();
-      setOverlay(open => open ?? 'menu');
+      if (event.key.toLowerCase() === 'k' && modifier) {
+        event.preventDefault();
+        // Focus first: a native dialog returns focus to whatever had it when it opened.
+        menuRef.current?.focus();
+        setOverlay(open => open ?? 'menu');
+      } else if (event.key.toLowerCase() === 'f' && !modifier && !event.altKey && !event.repeat && !(event.target instanceof HTMLElement && event.target.closest('input, select, textarea, [contenteditable]'))) {
+        toggleFullscreen();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [toggleFullscreen]);
   const sections = [
     { id: 'review', label: 'Review', body: <ReviewSection client={client} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
+    { id: 'display', label: 'Display', body: <DisplaySection fullscreen={fullscreen} onToggle={toggleFullscreen} onDone={close} /> },
   ];
 
   return (
-    <main aria-label="Sanctum" className="listen">
+    <main aria-label="Sanctum" className="listen" data-quiet={quiet ? '' : undefined}>
       <canvas ref={canvas} className="listen-wave" aria-hidden="true" />
       <header className="listen-header">
         <div className="listen-brand">
@@ -376,7 +377,7 @@ export function ListenPage() {
       <section className="listen-status" aria-live="polite">
         <p className="listen-state">{snapshot.listener}</p>
         <SignInLine signIn={signIn} message={message} />
-        <InputHelp engine={engine} issue={snapshot.issue}>
+        <InputHelp issue={snapshot.issue}>
           <CaptionNote state={captions} capturing={capturing} />
         </InputHelp>
       </section>
@@ -384,7 +385,7 @@ export function ListenPage() {
       <Footer engine={engine} snapshot={snapshot} menuRef={menuRef} onMenu={() => setOverlay('menu')} onFailure={setFailure}>
         <EndMeeting key={String(meeting)} meeting={meeting} onEnd={end} />
       </Footer>
-      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} />
+      <MenuPanel open={overlay === 'menu'} onClose={close} sections={sections} active={section} onSelect={setSection} status={{ text: BEHIND_MENU[snapshot.listener], tone: snapshot.listener }} />
       {/* After the menu, so the menu has closed before the welcome it opens (from Settings) takes the modal layer. */}
       <Welcome open={overlay === 'welcome'} onClose={close} engine={engine} signIn={signIn} onSignInChange={refreshSignIn} onboarding={onboarding} onChange={setOnboarding} onFailure={setFailure} />
     </main>

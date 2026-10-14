@@ -238,6 +238,48 @@
   background: #f2a23b;
 }
 
+/* The microphone chip sits beside the health text; a silent or unusable input turns it amber. */
+.listen-health-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.listen-health-line .listen-health {
+  flex: none;
+  max-width: 100%;
+}
+
+/* Beside the text while a few words of the input's name fit, else on the line below. */
+.listen-health-line .listen-input-picker {
+  flex: 1 1 9rem;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.listen-health-line .listen-input {
+  max-width: 100%;
+  padding: 3px 6px;
+  background: none;
+  color: #a7adb8;
+  text-overflow: ellipsis;
+}
+
+.listen-health-line[data-input-issue] .listen-input {
+  border-color: #f2a23b;
+}
+
+/* In fullscreen the footer steps back after a quiet spell; a warning keeps it; any key, touch or pointer movement brings it back. */
+.listen-footer {
+  transition: opacity 0.6s;
+}
+
+.listen[data-quiet]:not(:has(.listen-health[data-tone='warning'])) .listen-footer {
+  opacity: 0.25;
+}
+
 .listen-controls {
   display: flex;
   gap: 8px;
@@ -558,6 +600,35 @@
   min-height: 0;
   padding: 20px 28px;
   overflow: auto;
+}
+
+/* The phone sheet's foot; a wider panel has no use for it. */
+.listen-menu-status {
+  display: none;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid #222936;
+  color: #8b919c;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.listen-menu-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #8b919c;
+}
+
+.listen-menu-status[data-tone='listening']::before,
+.listen-menu-status[data-tone='degraded']::before,
+.listen-menu-status[data-tone='reconnecting']::before {
+  background: #22d3c5;
 }
 
 /* Direct rows only: Team's dialog and widgets render inside the Workspace row. */
@@ -963,14 +1034,9 @@
     gap: 16px;
   }
 
-  /* The captions note adds its two lines and gap to the status above the rails. */
-  .listen:has(.listen-note) .listen-rails {
+  /* The captions note and a silent input's help each add about 80 px (two lines and a gap) to the status above the rails. */
+  .listen:has(.listen-note, .listen-input-help) .listen-rails {
     top: calc(var(--stage-floor) + 134px);
-  }
-
-  /* A silent input's help and picker take about 140 px, so the rails start below them. */
-  .listen:has(.listen-status .listen-input) .listen-rails {
-    top: calc(var(--stage-floor) + 154px);
   }
 
   .listen-tlog,
@@ -1050,7 +1116,7 @@
 
   .listen-menu[open] {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto 1fr auto;
   }
 
   .listen-menu .listen-dialog-header {
@@ -1066,5 +1132,20 @@
 
   .listen-menu-body {
     padding: 16px;
+  }
+
+  /* Many sections never wrap or squeeze: the row scrolls sideways. */
+  .listen-menu-rail {
+    overflow-x: auto;
+  }
+
+  .listen-menu-rail button {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  /* The sheet covers the page, so its foot says what listening is doing behind it. */
+  .listen-menu-status {
+    display: flex;
   }
 }
