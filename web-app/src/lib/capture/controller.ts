@@ -111,7 +111,7 @@ class CaptureController implements CaptureView {
   readonly subscribe = this.store.view.subscribe;
   readonly levels: LevelSource = {
     bandCount: WAVEFORM_BANDS,
-    read: (bands) => (this.session === null ? (bands.fill(0), 0) : this.session.recorder.levels.read(bands)),
+    read: (bands) => (this.session === null || this.session.waiting ? (bands.fill(0), 0) : this.session.recorder.levels.read(bands)),
   };
 
   private readonly win: NonNullable<CaptureDeps['window']>;
@@ -415,7 +415,7 @@ class CaptureController implements CaptureView {
       this.remember(deviceId);
       this.note(null);
     }
-    if (this.issue === 'input_lost') this.issue = null;
+    if (this.issue === 'input_lost' || this.issue === 'waiting_for_input') this.issue = null;
     this.publish();
   }
 
@@ -635,8 +635,8 @@ class CaptureController implements CaptureView {
     if (issue === 'permission_denied') return this.halt(issue, true);
     session.waiting = true;
     this.endEpoch(session, 'interrupted');
-    // Waiting reads as a muted input: degraded, `input_lost`, and nothing recorded until an input opens.
-    Object.assign(this, { interrupted: true, issue: 'input_lost', muted: true, silent: false, silentSamples: 0, reachMs: REACH_MIN_MS });
+    // Waiting reads as a muted input: degraded, its own issue, a flat waveform, and nothing recorded until an input opens.
+    Object.assign(this, { interrupted: true, issue: 'waiting_for_input', muted: true, silent: false, silentSamples: 0, reachMs: REACH_MIN_MS });
     this.scheduleReach();
     this.publish();
   }

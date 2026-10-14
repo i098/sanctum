@@ -50,6 +50,7 @@ const ISSUE: Record<CaptureIssue, string> = {
   transcription_behind: 'Live transcription is behind. Audio is still being saved and is transcribed later.',
   silent_input: 'The microphone is sending no sound.',
   input_unavailable: 'The chosen microphone is not connected, so Sanctum uses the default microphone.',
+  waiting_for_input: 'Microphone disconnected. Waiting for one to connect.',
 };
 
 const ARCHIVE: Record<ArchiveState, string> = {
@@ -337,7 +338,8 @@ export function ListenPage() {
   const [failure, setFailure] = useState<string | null>(null);
   const [captions, setCaptions] = useState<CaptionState>('off');
   const capturing = CAPTURING.includes(snapshot.listener);
-  useEffect(() => startWaveform(canvas.current!, engine.levels, () => engine.getSnapshot().listener), [engine]);
+  // With no microphone open there is nothing to hear: the line draws its idle look, as when stopped.
+  useEffect(() => startWaveform(canvas.current!, engine.levels, () => { const { listener, issue } = engine.getSnapshot(); return issue === 'waiting_for_input' ? 'paused' : listener; }), [engine]);
   const { meeting, helper, end } = useEndMeeting(engine, snapshot.listener, setFailure);
   const message = statusMessage(snapshot, failure, helper);
   const close = (): void => setOverlay(null);

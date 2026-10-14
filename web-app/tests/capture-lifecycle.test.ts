@@ -518,13 +518,16 @@ describe('capture lifecycle', () => {
       h.devices.getUserMedia = (constraints) => (opened.push(Date.now()), open(constraints));
       delete h.inputs['default'];
       h.track.unplug();
-      await vi.waitFor(() => expect(h.snapshot().issue).toBe('input_lost'));
+      await vi.waitFor(() => expect(h.snapshot().issue).toBe('waiting_for_input'));
       return { h, epochId, journaled, opened };
     }
 
     it('waits for a microphone, keeps its lease, marks the gap, and resumes on the first new input', async () => {
       const { h, epochId, journaled } = await unplugged();
-      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'input_lost', archive: 'interrupted', epochId: null });
+      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input', archive: 'interrupted', epochId: null });
+      const bands = new Float32Array(h.engine.levels.bandCount).fill(1);
+      expect(h.engine.levels.read(bands)).toBe(0);
+      expect(bands.every((band) => band === 0)).toBe(true);
       expect(h.lives[0]!.stopped).toBe('interrupted');
       expect(journaled).toHaveBeenCalledWith(epochId, 'interrupted');
 
@@ -555,7 +558,7 @@ describe('capture lifecycle', () => {
       expect(gaps[0]).toBeGreaterThanOrEqual(1_000);
       expect(gaps[0]).toBeLessThan(1_500);
       expect(gaps.slice(1)).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
-      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'input_lost' });
+      expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input' });
     });
 
     it('returns to the remembered chosen input when it reappears, on a fallback or after waiting', async () => {
@@ -580,7 +583,7 @@ describe('capture lifecycle', () => {
       delete h.inputs['iphone'];
       delete h.inputs['default'];
       h.track.unplug();
-      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'input_lost', inputId: null }));
+      await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input', inputId: null }));
       h.inputs['default'] = 'Default - MacBook Pro Microphone';
       h.devices.dispatchEvent(new Event('devicechange'));
       await vi.waitFor(() => expect(h.snapshot()).toMatchObject({ issue: null, inputLabel: 'Default - MacBook Pro Microphone' }));
@@ -1170,7 +1173,7 @@ describe('capture lifecycle', () => {
     delete other.inputs['default'];
     other.track.readyState = 'ended';
     other.doc.dispatchEvent(new Event('visibilitychange'));
-    await vi.waitFor(() => expect(other.snapshot()).toMatchObject({ listener: 'degraded', issue: 'input_lost' }));
+    await vi.waitFor(() => expect(other.snapshot()).toMatchObject({ listener: 'degraded', issue: 'waiting_for_input' }));
   });
 
   it('re-requests the wake lock when the page is visible again', async () => {

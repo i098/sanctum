@@ -118,7 +118,7 @@ test('keeps capture open when the input is unplugged and resumes on the first in
 
   await page.evaluate(() => window.__unplug('default'));
   await expect(page.locator('.listen-state')).toHaveText('degraded');
-  await expect(helper(page)).toHaveText('The microphone was disconnected.');
+  await expect(helper(page)).toHaveText('Microphone disconnected. Waiting for one to connect.');
   await expect(page.locator('.listen-health')).toContainText('recording interrupted');
 
   await page.evaluate(() => window.__plug('default', { label: 'Default - USB Microphone', gain: 0.1 }));
