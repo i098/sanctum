@@ -1144,6 +1144,7 @@
   }
 
   .listen-menu-results {
+    grid-row: 3 / -1;
     padding: 8px 10px 16px;
   }
 
