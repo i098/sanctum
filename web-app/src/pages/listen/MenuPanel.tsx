@@ -1,7 +1,8 @@
 import type { SanctumClient } from '@sanctum/sdk';
 import type { ReactNode } from 'react';
 import { Dialog } from './Dialog.tsx';
-import { type MenuCommand, MenuSearch } from './MenuSearch.tsx';
+import { MenuSearch } from './MenuSearch.tsx';
+import type { MenuCommand } from './menu-search.ts';
 
 interface MenuSection {
   id: string;
