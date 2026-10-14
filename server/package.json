@@ -1,6 +1,7 @@
 {
   "name": "@sanctum/server",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "imports": { "#better-auth-api": "better-auth/api" },
   "description": "Sanctum API and worker entrypoints",

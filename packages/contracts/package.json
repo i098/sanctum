@@ -1,6 +1,7 @@
 {
   "name": "@sanctum/contracts",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "Effect Schema wire contracts shared by the Sanctum server, website, SDKs and MCP",
   "exports": {
