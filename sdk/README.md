@@ -33,6 +33,18 @@ SANCTUM_URL=https://sanctum.example SANCTUM_TOKEN=... PYTHONPATH=sdk/python/src 
 
 Each reads a meeting, cites a transcript segment, appends research, recovers from a conflict, consumes changes, requests an action and reads its receipt, then creates and revokes a read-only agent.
 
+## Querying the soak workspace
+
+Any agent with a bearer token can read the soak meetings; the run and its pass bars are in [operations](../docs/operations.md#24-hour-soak).
+
+| Need | Call | Notes |
+| --- | --- | --- |
+| Search by keyword | `GET /api/v1/context/search?q=launch+date` (TypeScript `client.context.searchContext({ q })`, Python `context.searchContext`) | Needs `context:read`. Every term of 3+ letters must appear in one item, so send keywords. Newest first, no relevance ranking. |
+| Time range or timeline | same route with `from`, `to`, `kind`; omit `q` to list the range | Page with `next_cursor` as `cursor`. Every item carries `event_at`; the latest fact wins by `event_at`, not by server supersession. |
+| Meetings in a range | `GET /api/v1/meetings?from=&to=` | A detected meeting is private to its capturing principal until it is shared with the workspace (`POST /api/v1/meetings/{id}/share`). |
+| Transcript and cited source | `GET /api/v1/meetings/{id}/transcript`, `GET /api/v1/sources/{id}` | Needs `recordings:read`. |
+| Soak results | `GET /report.json` on the results page | Verdict per metric and checkpoint; no token. |
+
 ## MCP
 
 Remote MCP clients connect to `/mcp` (Streamable HTTP, protocol baseline `2025-11-25`) with a delegated OAuth access token whose audience is the `/mcp` resource URL.
