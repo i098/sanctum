@@ -54,6 +54,8 @@ interface SettingsProps {
   client: SanctumClient;
   /** Reopens the first-run welcome; null (signed out, or no answer from the server) offers no Welcome row. */
   onWelcome: (() => void) | null;
+  /** The page's fullscreen state and its switch; entering it also closes the panel, so the waveform shows. */
+  fullscreen: { active: boolean; toggle: () => void };
 }
 
 /** Self-serve: signs in again, and the server creates the workspace with this user as owner when it still finds no membership. */
@@ -228,12 +230,13 @@ function IntegrationsRow({ signIn }: { signIn: SignInState }) {
 }
 
 /** Settings section: real device and session facts, and the unselected policies stated as unselected. */
-export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome }: SettingsProps) {
+export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
   const rows: ReadonlyArray<Row> = [
     ['Sign-in', <SignInRow signIn={signIn} onSignInChange={onSignInChange} />],
     ...accountRows(signIn, onSignInChange),
     ['Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone],
     ['Microphone', <><span>{MICROPHONE[permission]}</span><InputPicker engine={engine} check /></>],
+    ...(document.fullscreenEnabled ? [['Display', <WithAction text="Press F on the listening screen, or" label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={fullscreen.toggle} />] as const] : []),
     ['Integrations', <IntegrationsRow signIn={signIn} />],
     ['Retention', 'Not selected: nothing is deleted automatically'],
     ...(onWelcome ? [['Welcome', <WithAction text="What Sanctum records and how to set it up" label="Show welcome again" onClick={onWelcome} />] as const] : []),

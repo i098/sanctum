@@ -91,6 +91,7 @@ test('Settings reports real device facts and leaves open policies unselected', a
     'Unavailable until sign-in is configured',
     timezone,
     'Allowed',
+    'Press F on the listening screen, orEnter fullscreen',
     'Unavailable until sign-in is configured',
     'Not selected: nothing is deleted automatically',
   ]);

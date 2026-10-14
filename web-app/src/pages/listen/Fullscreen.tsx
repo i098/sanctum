@@ -37,26 +37,3 @@ export function useIdle(active: boolean, ms: number): boolean {
   }, [active, ms]);
   return active && idle;
 }
-
-/** Display section: Fullscreen, where the F key does the same. Entering it closes the panel, so the waveform shows. */
-export function DisplaySection({ fullscreen, onToggle, onDone }: { fullscreen: boolean; onToggle: () => void; onDone: () => void }) {
-  return (
-    <dl className="listen-panel listen-settings">
-      <div>
-        <dt>Fullscreen</dt>
-        <dd>
-          {document.fullscreenEnabled
-            ? (
-              <>
-                <span>Press F on the listening screen, or:</span>
-                <button type="button" aria-pressed={fullscreen} onClick={() => { onToggle(); if (!fullscreen) onDone(); }}>
-                  {fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                </button>
-              </>
-            )
-            : 'This browser does not allow fullscreen.'}
-        </dd>
-      </div>
-    </dl>
-  );
-}
