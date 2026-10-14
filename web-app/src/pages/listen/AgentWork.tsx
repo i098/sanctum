@@ -57,9 +57,11 @@ export function AgentWork({ client }: { client: SanctumClient }) {
         frame => controller.signal.aborted || reads.get(meeting_id) !== mine || setReceipts(all => ({ ...all, [meeting_id]: frame })),
       );
     };
+    let loads = 0;
     const load = (): void => {
+      const mine = ++loads;
       void settle(client.meetings.listMeetings({ limit: RECENT }, options).then(page => page.meetings)).then(frame => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || mine !== loads) return;
         setMeetings(frame);
         if (frame.status !== 'ok') return;
         known.clear();
