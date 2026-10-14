@@ -75,8 +75,15 @@ test('Team on the built site: the widgets render under the real CSP without a vi
   const styles = await page.evaluate(() => window.styleTexts.join('\n'));
   for (const marker of ['data-radix-scroll-area-viewport', 'data-radix-select-viewport', 'data-scroll-locked']) expect(styles).toContain(marker);
   expect(await page.evaluate(() => window.cspViolations)).toEqual([]);
-  // Radix Themes' stylesheet applied (its buttons are inline-flex), and team.css gives the widgets Sanctum's primary button.
-  const invite = team.getByRole('button', { name: 'Invite user' });
-  expect(await invite.evaluate(button => getComputedStyle(button).display)).toBe('inline-flex');
-  expect(await invite.evaluate(button => getComputedStyle(button).backgroundColor)).toBe('rgb(47, 109, 240)');
+  // Radix Themes' stylesheet applied (its buttons are inline-flex), and the widgets wear the app's own primary button color.
+  const inviteButton = team.getByRole('button', { name: 'Invite user' });
+  expect(await inviteButton.evaluate(button => getComputedStyle(button).display)).toBe('inline-flex');
+  const [actual, primary] = await inviteButton.evaluate(button => {
+    const probe = Object.assign(document.createElement('i'), { style: 'background: var(--btn-primary)' });
+    document.body.append(probe);
+    const colors = [getComputedStyle(button).backgroundColor, getComputedStyle(probe).backgroundColor];
+    probe.remove();
+    return colors;
+  });
+  expect(actual).toBe(primary);
 });
