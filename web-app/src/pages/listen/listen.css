@@ -160,7 +160,7 @@
 }
 
 /* A grid column's automatic minimum is its widest content; the long input names must not push the row past the dialog. */
-.listen-settings dd:has(.listen-input-picker, .listen-integrations) {
+.listen-settings dd:has(.listen-input-picker) {
   min-width: 0;
 }
 
@@ -178,46 +178,56 @@
   font-size: inherit;
 }
 
-/* Integrations: connected apps, one per line with its action, then the connect form; all of the value column. */
-.listen-integrations {
-  display: grid;
-  flex-basis: 100%;
-  gap: 12px;
-  min-width: 0;
+/* Apps: connected and available apps as a grid of tiles; the typed-slug tile is dashed. */
+.listen-apps p {
+  margin: 0 0 10px;
+  line-height: 1.5;
 }
 
-.listen-integrations ul {
+.listen-apps h3:first-child {
+  margin-top: 0;
+}
+
+.listen-app-tiles {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
   gap: 12px;
-  margin: 0;
+  margin: 0 0 16px;
   padding: 0;
   list-style: none;
 }
 
-.listen-integrations li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+.listen-app-tile,
+.listen-app-tile form {
+  display: grid;
+  align-content: start;
+  gap: 6px;
 }
 
-.listen-integrations p {
-  margin: 0;
-  line-height: 1.5;
+.listen-app-tile {
+  padding: 14px;
+  border: 1px solid #222936;
+  border-radius: 6px;
 }
 
-/* The field and its button share one height; a narrow dialog puts the button on its own line. */
-.listen-integration-connect {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: 8px 12px;
+.listen-app-tile[data-other] {
+  border-style: dashed;
 }
 
-.listen-integration-connect .listen-input {
-  flex: 1 1 12rem;
+.listen-app-tile button {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+.listen-app-tile .listen-input {
+  min-width: 0;
   padding: 5px 10px;
+  font-size: inherit;
   cursor: text;
+}
+
+.listen-apps-note {
+  font-size: 12px;
 }
 
 .listen-footer {
