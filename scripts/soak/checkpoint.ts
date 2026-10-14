@@ -111,4 +111,6 @@ if (import.meta.main) {
   writeFileSync(values.out, `${JSON.stringify({ asked_at: new Date().toISOString(), t0: manifest.t0, ...score }, null, 2)}\n`);
   const m = score.metrics;
   console.log(`checkpoint ${values.hours}h: recall@5 ${m.recall_at_5} recall@20 ${m.recall_at_20} accuracy ${m.answer_accuracy} time-aware ${m.time_aware_accuracy} p50 ${m.latency_ms.p50?.toFixed(0)}ms p95 ${m.latency_ms.p95?.toFixed(0)}ms errors ${score.errors.length} -> ${values.out}`);
+  // Errors are transport/auth failures, not retrieval misses: fail loudly so an unattended wrapper notices.
+  if (score.errors.length) process.exitCode = 1;
 }
