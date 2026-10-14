@@ -44,3 +44,32 @@ test('Work says so when receipts cannot be read, and when there are no meetings'
   const agents = await openMenu(page, 'Agents');
   await expect(agents).toContainText('Activity unavailable: Meeting data unavailable');
 });
+
+test('a slow, older meetings read never replaces the newer one a live update started', async ({ page }) => {
+  let live = false;
+  let reads = 0;
+  const pilot = meeting(OLD, 'Pilot review', 'closed', '2026-09-29T09:00:00Z');
+  await page.route('**/api/v1/meetings?*', async route => {
+    if (!route.request().url().includes('limit=5')) return route.fulfill({ json: { meetings: [], next_cursor: null } });
+    if (!live) return route.fulfill({ json: { meetings: [pilot], next_cursor: null } });
+    // The first read after the update is slow and stale; the second is fast and sees the new meeting.
+    if (++reads === 1) {
+      await new Promise(done => setTimeout(done, 1000));
+      return route.fulfill({ json: { meetings: [pilot], next_cursor: null } });
+    }
+    return route.fulfill({ json: { meetings: [meeting(NEW, 'Fresh meeting', 'active', '2026-09-30T10:00:00Z'), pilot], next_cursor: null } });
+  });
+  await page.route('**/api/v1/meetings/*/actions*', route => route.fulfill({ json: { actions: [], next_cursor: null } }));
+  await page.route('**/api/v1/agents**', route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  await openListening(page);
+  const agents = await openMenu(page, 'Agents');
+  await expect(agents.getByRole('region', { name: 'Pilot review' })).toBeVisible();
+
+  live = true;
+  // Neither update names a meeting the panel knows, so each starts its own read.
+  for (const _ of [1, 2]) await page.evaluate(meeting_id => window.__capture.actions({ meeting_id, actions: [] }), NEW);
+  await expect(agents.getByRole('region', { name: 'Fresh meeting' })).toBeVisible();
+  await expect.poll(() => reads).toBe(2);
+  await page.waitForTimeout(1300);
+  await expect(agents.getByRole('region', { name: 'Fresh meeting' })).toBeVisible();
+});
