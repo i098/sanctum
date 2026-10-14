@@ -9,6 +9,29 @@
   --default-font-family: var(--font-sans);
 }
 
+/* The widgets' buttons wear the app's two looks: solid primary, quiet secondary. */
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft, .rt-variant-solid) {
+  border-radius: var(--btn-r);
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  background: var(--btn-secondary);
+  color: #e7ecf3;
+}
+
+.listen-team .rt-Button:is(.rt-variant-surface, .rt-variant-outline, .rt-variant-soft):hover {
+  background: var(--btn-secondary-hover);
+}
+
+.listen-team .rt-Button.rt-variant-solid {
+  background: var(--btn-primary);
+  color: #fff;
+}
+
+.listen-team .rt-Button.rt-variant-solid:hover {
+  background: var(--btn-primary-hover);
+}
+
 .listen-team h3 {
   margin: 24px 0 8px;
   color: #e7ecf3;

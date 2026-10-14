@@ -100,7 +100,7 @@ export function AccessTokens({ client }: { client: SanctumClient }) {
               </span>
             </span>
             {!credential.revoked_at && (
-              <button type="button" disabled={busy} onClick={() => revoke({ agent, credential })} className="rounded px-3 py-1 text-warning hover:bg-surface">
+              <button type="button" data-danger disabled={busy} onClick={() => revoke({ agent, credential })}>
                 Revoke
               </button>
             )}
@@ -122,7 +122,7 @@ export function AccessTokens({ client }: { client: SanctumClient }) {
           ))}
         </fieldset>
         <div className="flex justify-end gap-2">
-          <button type="submit" disabled={busy} className="rounded bg-accent px-4 py-2">
+          <button type="submit" data-primary disabled={busy}>
             Create agent
           </button>
         </div>

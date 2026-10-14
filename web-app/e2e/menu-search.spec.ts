@@ -47,7 +47,7 @@ async function openSearch(page: Page) {
   await expect(box(page)).toBeFocused();
 }
 
-test('a query finds decisions, commitments and meeting titles; Enter opens the meeting in Review', async ({ page }) => {
+test('a query finds decisions, commitments and meeting titles; Enter opens the meeting in Meetings', async ({ page }) => {
   const searched: string[] = [];
   await api(page, searched);
   await openSearch(page);
@@ -67,7 +67,7 @@ test('a query finds decisions, commitments and meeting titles; Enter opens the m
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(box(page)).toHaveValue('');
-  await expect(menuSection(page, 'Review')).toContainText('Pilot review · closed · started 9/29/2026, 9:00:00 AM');
+  await expect(menuSection(page, 'Meetings')).toContainText('Pilot review · closed · started 9/29/2026, 9:00:00 AM');
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
 });
 
@@ -89,11 +89,11 @@ test('reopening the Menu shows the newest meeting, not the last one a search ope
   await box(page).fill('pilot');
   await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('Enter');
-  await expect(menuSection(page, 'Review')).toContainText('Pilot review');
+  await expect(menuSection(page, 'Meetings')).toContainText('Pilot review');
   await page.keyboard.press('Escape');
   await expect(dialog(page)).toBeHidden();
   await page.getByRole('button', { name: 'Menu' }).click();
-  await expect(menuSection(page, 'Review')).toContainText('Weekly sync');
+  await expect(menuSection(page, 'Meetings')).toContainText('Weekly sync');
 });
 
 test('commands open a section; Escape clears the box first, then closes the Menu', async ({ page }) => {

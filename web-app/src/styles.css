@@ -34,6 +34,18 @@
     --type-title: 18px;
     --weight-medium: 500;
     --weight-semibold: 600;
+    /* Buttons: solid primary, quiet secondary, quiet red danger that only a final confirm fills. */
+    --btn-h: 36px;
+    --btn-r: 8px;
+    --btn-px: 16px;
+    --btn-primary: #2f6df0;
+    --btn-primary-hover: #4a82f5;
+    --btn-secondary: #222a39;
+    --btn-secondary-hover: #2c3547;
+    --btn-danger: #ff8a8a;
+    --btn-danger-hover: rgb(255 93 93 / 0.14);
+    --btn-confirm: #c93a3a;
+    --btn-confirm-hover: #d94a4a;
   }
 
   html,

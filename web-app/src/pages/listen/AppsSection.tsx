@@ -39,7 +39,7 @@ function ConnectedApps({ list, onDisconnect }: { list: ReadonlyArray<ConnectedIn
         <li key={account.id} className="listen-app-tile">
           <span className="listen-account-name">{appName(account.app)}</span>
           <span className="listen-account-email">{grantText(account)}</span>
-          <button type="button" onClick={() => onDisconnect(account.id)} aria-label={`Disconnect ${appName(account.app)}`}>Disconnect</button>
+          <button type="button" data-danger onClick={() => onDisconnect(account.id)} aria-label={`Disconnect ${appName(account.app)}`}>Disconnect</button>
         </li>
       ))}
     </ul>
