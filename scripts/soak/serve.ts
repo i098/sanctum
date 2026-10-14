@@ -114,19 +114,20 @@ function verdictOf(loaded: Loaded, rows: ReadonlyArray<{ readonly verdict: Verdi
   return rows.some(r => r.verdict === 'pending') ? 'pending' : 'pass';
 }
 
+const NO_FILE = { asked_at: null, facts: [], ranges: [], controls: [], errors: [] };
+
+/** One pass-bar row; without a checkpoint file every row is pending. */
+export function barRow(bar: Bar, found: Checkpoint | undefined, hourIndex: number) {
+  const value = found ? bar.value(found) : null;
+  const verdict: Verdict = found ? judge(bar, value, hourIndex) : 'pending';
+  return { label: bar.label, value, min: at(bar.min, hourIndex), max: at(bar.max, hourIndex), verdict };
+}
+
 function checkpointReport(hour: number, i: number, loaded: Loaded) {
   const found = loaded && 'found' in loaded ? loaded.found : undefined;
-  const rows = BARS.map(bar => {
-    const value = found ? bar.value(found) : null;
-    return { label: bar.label, value, min: at(bar.min, i), max: at(bar.max, i), verdict: found ? judge(bar, value, i) : 'pending' as Verdict };
-  });
-  return {
-    hour, rows,
-    verdict: verdictOf(loaded, rows),
-    asked_at: found?.asked_at ?? null,
-    error: loaded && 'error' in loaded ? loaded.error : null,
-    facts: found?.facts ?? [], ranges: found?.ranges ?? [], controls: found?.controls ?? [], errors: found?.errors ?? [],
-  };
+  const rows = BARS.map(bar => barRow(bar, found, i));
+  const { asked_at, facts, ranges, controls, errors } = found ?? NO_FILE;
+  return { hour, rows, verdict: verdictOf(loaded, rows), asked_at, error: loaded && 'error' in loaded ? loaded.error : null, facts, ranges, controls, errors };
 }
 
 export function report(dir: string) {

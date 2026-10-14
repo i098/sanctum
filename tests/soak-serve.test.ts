@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { report } from '../scripts/soak/serve.ts';
+import { barRow, report } from '../scripts/soak/serve.ts';
 
 const metrics = { recall_at_5: 0.95, recall_at_20: 1, natural_recall_at_20: 0.5, answer_accuracy: 0.9, latest_accuracy: 0.9, time_aware_accuracy: 1, control_pass_rate: 1, latency_ms: { p50: 200, p95: 800, samples: 40 } };
 const checkpoint = (hours: number, over: Record<string, unknown> = {}) => ({
@@ -52,4 +52,12 @@ test('a malformed or unreadable checkpoint file fails that checkpoint without th
   assert.ok(r.checkpoints.every(c => c.error?.includes('malformed')));
   assert.equal(r.t0, null);
   assert.equal(report(join(d, 'missing-subdir')).checkpoints.every(c => c.verdict === 'pending'), true);
+});
+
+test('a pass-bar row is pending without a checkpoint file and judged per hour with one', () => {
+  const bar = { label: 'Recall@5', value: (c: { metrics: typeof metrics }) => c.metrics.recall_at_5, min: [0.9, 0.8] };
+  const found = checkpoint(1, { metrics: { ...metrics, recall_at_5: 0.85 } }) as never;
+  assert.deepEqual(barRow(bar as never, undefined, 0), { label: 'Recall@5', value: null, min: 0.9, max: null, verdict: 'pending' });
+  assert.equal(barRow(bar as never, found, 0).verdict, 'fail');
+  assert.equal(barRow(bar as never, found, 1).verdict, 'pass');
 });
