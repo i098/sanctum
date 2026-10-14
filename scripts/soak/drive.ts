@@ -5,7 +5,10 @@
  * resumes from the server watermark, and shares each meeting with its workspace so other agents can query.
  *
  * `--manifest` plays the corpus built by build-corpus.ts: each meeting's WAV at its `start_s`, silence in the gaps,
- * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0` field.
+ * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0.epoch_s`.
+ * Every new epoch is stamped with the real time, so an outage delays all later audio. The state file therefore records
+ * `actual_at`, the real event time of each manifest fact as streamed (not `t0 + at_s`), and `outages`, the
+ * cumulative delay behind T0 at each epoch after the first.
  *
  * Stops, in every case with a final chunk flush and share pass, on: end of audio, `--max-seconds`, a kill
  * switch (the `--kill-file` appearing, or SIGINT/SIGTERM/SIGUSR2), the cost hard stop, or a fatal rejection.
@@ -22,7 +25,7 @@
  *          [--kill-file <path>] [--max-usd 15] [--baseline-usd 0] [--max-seconds N] [--name soak-driver]
  *
  * The state file `<state-dir>/driver.json` (mode 600) holds the listener, the acknowledged sample offset,
- * the cumulative units and counters; a restart resumes from it in a new epoch. Audio acknowledged but not
+ * the cumulative units, counters, `actual_at` and `outages`; a restart resumes from it in a new epoch. Audio acknowledged but not
  * yet archived when the process dies (under one chunk) is not archived.
  */
 import { createHash, randomUUID } from 'node:crypto';
@@ -75,11 +78,32 @@ interface Counters {
   speech_chunks: number;
 }
 
-interface State { listener_id: string | null; /** Run start: when sample 0 was captured. Written to the manifest's `t0` slot. */ t0: string | null; offset: number; units: Units; counters: Counters }
+interface Outage {
+  /** Position in the audio, in seconds from T0, where the epoch began. */
+  readonly at_s: number;
+  readonly resumed_at: string;
+  /** Seconds the audio at `at_s` plays behind its nominal time `t0 + at_s`; cumulative over all outages. */
+  readonly lag_s: number;
+  readonly reason: Epoch['reason'];
+}
+
+interface State {
+  listener_id: string | null;
+  /** Run start: when sample 0 was captured. Written to the manifest's `t0.epoch_s`. */
+  t0: string | null;
+  offset: number;
+  units: Units;
+  counters: Counters;
+  /** Manifest fact id -> the real time its first sample was captured, as last streamed. */
+  actual_at: Record<string, string>;
+  outages: Outage[];
+}
+
+interface Clock { sample_rate: number; channels: 1; encoding: 'pcm_s16le'; sample_start: number; captured_at: string; timezone: 'UTC' }
 
 interface Epoch {
   readonly id: string;
-  readonly clock: { sample_rate: number; channels: 1; encoding: 'pcm_s16le'; sample_start: number; captured_at: string; timezone: 'UTC' };
+  readonly clock: Clock;
   readonly reason: 'start' | 'resume' | 'stream_restart';
   readonly wall_base: number;
   sequence: number;
@@ -87,6 +111,29 @@ interface Epoch {
 }
 
 interface ChunkJob { readonly epoch: Epoch; readonly chunk_id: string; readonly sequence: number; readonly sample_start: number; readonly sample_count: number }
+
+interface PlantedFact { readonly id: string; readonly at_s: number }
+
+/** When `sample` was captured, on the epoch's clock. */
+export const captureTime = (clock: Pick<Clock, 'sample_rate' | 'sample_start' | 'captured_at'>, sample: number) =>
+  new Date(Date.parse(clock.captured_at) + ((sample - clock.sample_start) / clock.sample_rate) * 1000).toISOString();
+
+/** Real capture time of each fact whose first sample lies in `[start, start + count)`. */
+export function factTimes(clock: Pick<Clock, 'sample_rate' | 'sample_start' | 'captured_at'>, facts: ReadonlyArray<PlantedFact>, start: number, count: number) {
+  const times: Record<string, string> = {};
+  for (const { id, at_s } of facts) {
+    const sample = Math.round(at_s * clock.sample_rate);
+    if (sample >= start && sample < start + count) times[id] = captureTime(clock, sample);
+  }
+  return times;
+}
+
+/** A safety limit or duration from the command line: a finite number of at least zero. */
+export function parseLimit(name: string, text: string) {
+  const value = text.trim() === '' ? Number.NaN : Number(text);
+  if (!Number.isFinite(value) || value < 0) throw new Error(`--${name} must be a number of at least 0, got '${text}'`);
+  return value;
+}
 
 interface Rejection { readonly reason: string; readonly message: string }
 type Handshake = { readonly _tag: 'accepted'; readonly resume_from_sample: number } | ({ readonly _tag: 'rejected' } & Rejection);
@@ -141,6 +188,8 @@ const freshState = (): State => ({
   offset: 0,
   units: { speech_seconds: 0, run_seconds: 0, chunk_puts: 0 },
   counters: { reconnects: 0, epochs: 0, heartbeats: 0, heartbeat_failures: 0, chunks_ok: 0, chunks_rejected: 0, shares: 0, share_failures: 0, transcripts: 0, degraded: 0, speech_chunks: 0 },
+  actual_at: {},
+  outages: [],
 });
 
 class SoakDriver {
@@ -161,11 +210,13 @@ class SoakDriver {
   private readonly options: DriverOptions;
   private readonly state: State;
   private readonly source: Source;
+  private readonly facts: ReadonlyArray<PlantedFact>;
 
-  constructor(options: DriverOptions, state: State, source: Source) {
+  constructor(options: DriverOptions, state: State, source: Source, facts: ReadonlyArray<PlantedFact>) {
     this.options = options;
     this.state = state;
     this.source = source;
+    this.facts = facts;
     this.rate = source.rate;
     this.frameSamples = (this.rate * FRAME_MS) / 1000;
     this.chunkSamples = this.rate * CHUNK_SECONDS;
@@ -271,7 +322,7 @@ class SoakDriver {
       sample_start: job.sample_start,
       sample_count: job.sample_count,
       sample_rate: this.rate,
-      captured_at: new Date(Date.parse(epoch.clock.captured_at) + ((job.sample_start - epoch.clock.sample_start) / this.rate) * 1000).toISOString(),
+      captured_at: captureTime(epoch.clock, job.sample_start),
       byte_length: body.byteLength,
       sha256: createHash('sha256').update(body).digest('hex'),
     };
@@ -319,13 +370,14 @@ class SoakDriver {
 
   // --- live stream ------------------------------------------------------------------------------------------
 
-  /** T0 is when sample 0 was captured, so a planted fact at `at_s` has event time `t0 + at_s`. */
+  /** T0 is when sample 0 was captured. Each epoch is stamped with the real time, so after an outage a fact's event time is `state.actual_at`, not `t0 + at_s`. */
   private setT0(t0: string) {
     this.state.t0 = t0;
     const { manifest } = this.options;
     if (manifest === null) return;
     const temp = `${manifest}.tmp`;
-    writeFileSync(temp, `${JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), t0 }, null, 2)}\n`);
+    const current = JSON.parse(readFileSync(manifest, 'utf8'));
+    writeFileSync(temp, `${JSON.stringify({ ...current, t0: { ...current.t0, epoch_s: Date.parse(t0) / 1000 } }, null, 2)}\n`);
     renameSync(temp, manifest);
     log('t0_set', { t0, manifest });
   }
@@ -335,6 +387,10 @@ class SoakDriver {
     this.state.counters.epochs++;
     if (this.state.t0 === null) this.setT0(new Date(now - (this.position / this.rate) * 1000).toISOString());
     const reason = this.epochsThisRun++ > 0 ? 'stream_restart' : this.state.offset > 0 ? 'resume' : 'start';
+    if (reason !== 'start') {
+      const nominal = Date.parse(this.state.t0!) + (this.position / this.rate) * 1000;
+      this.state.outages.push({ at_s: this.position / this.rate, resumed_at: new Date(now).toISOString(), lag_s: (now - nominal) / 1000, reason });
+    }
     return {
       id: randomUUID(),
       clock: { sample_rate: this.rate, channels: 1, encoding: 'pcm_s16le', sample_start: this.position, captured_at: new Date(now).toISOString(), timezone: 'UTC' },
@@ -402,6 +458,7 @@ class SoakDriver {
       if (this.stopReason !== null || socket.readyState !== WebSocket.OPEN) continue;
       const count = Math.min(this.frameSamples, this.end - this.position);
       const samples = await this.readSamples(this.position, count);
+      Object.assign(this.state.actual_at, factTimes(epoch.clock, this.facts, this.position, count));
       socket.send(encodePcmFrame({ track: 0, sequence: epoch.sequence++, sample_start: this.position, sample_count: count }, samples));
       this.position += count;
       if (isSpeech(samples)) units.speech_seconds += count / this.rate;
@@ -448,11 +505,12 @@ class SoakDriver {
     );
   }
 
-  /** Rotates the epoch after a rejection, otherwise waits before reconnecting; returns the next backoff. */
+  /** Rotates the epoch after a rejection, then waits before reconnecting; returns the next backoff. */
   private async recover(outcome: { ended: Ended | 'failed'; rejected?: Rejection; current: Epoch }, backoff: number) {
     if (outcome.rejected !== undefined) {
       await this.rotate(outcome.current, outcome.rejected);
-      return 1_000;
+      await this.sleep(backoff);
+      return Math.min(backoff * 2, 30_000);
     }
     this.state.counters.reconnects++;
     await this.sleep(backoff);
@@ -564,8 +622,9 @@ async function drive(options: DriverOptions): Promise<number> {
     log('cost_hard_stop', { cost_usd: spent, max_usd: options.maxUsd, phase: 'before start' });
     return 3;
   }
-  const source = options.manifest === null ? await wavSource(options.audio!) : await manifestSource(options.manifest, JSON.parse(readFileSync(options.manifest, 'utf8')));
-  return new SoakDriver(options, state, source).run();
+  const manifest = options.manifest === null ? null : JSON.parse(readFileSync(options.manifest, 'utf8'));
+  const source = manifest === null ? await wavSource(options.audio!) : await manifestSource(options.manifest!, manifest);
+  return new SoakDriver(options, state, source, manifest?.facts ?? []).run();
 }
 
 if (import.meta.main) {
@@ -593,9 +652,9 @@ if (import.meta.main) {
     manifest: values.manifest ?? null,
     stateDir: values['state-dir'],
     killFile: values['kill-file'] ?? join(values['state-dir'], 'KILL'),
-    maxUsd: Number(values['max-usd']),
-    baselineUsd: Number(values['baseline-usd']),
-    maxSeconds: values['max-seconds'] === undefined ? null : Number(values['max-seconds']),
+    maxUsd: parseLimit('max-usd', values['max-usd']),
+    baselineUsd: parseLimit('baseline-usd', values['baseline-usd']),
+    maxSeconds: values['max-seconds'] === undefined ? null : parseLimit('max-seconds', values['max-seconds']),
     name: values.name,
   }).catch(error => {
     console.error(String(error));

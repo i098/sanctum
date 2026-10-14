@@ -4,7 +4,7 @@ import { open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { costUsd } from '../scripts/soak/drive.ts';
+import { costUsd, factTimes, parseLimit } from '../scripts/soak/drive.ts';
 import { manifestSource } from '../scripts/soak/source.ts';
 import { isSpeech, readWav, wavFile } from '../scripts/soak/wav.ts';
 
@@ -56,4 +56,22 @@ test('manifest meetings play at their slot start, with silence in the gap and in
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a restart shifts the actual event time of later facts by the outage length', () => {
+  const rate = 8_000;
+  const facts = [{ id: 'A', at_s: 10 }, { id: 'B', at_s: 100 }];
+  const t0 = Date.parse('2026-10-14T00:00:00Z');
+  const first = { sample_rate: rate, sample_start: 0, captured_at: new Date(t0).toISOString() };
+  assert.deepEqual(factTimes(first, facts, 0, 20 * rate), { A: new Date(t0 + 10_000).toISOString() });
+  const outage_ms = 90_000;
+  const resumed = { sample_rate: rate, sample_start: 20 * rate, captured_at: new Date(t0 + 20_000 + outage_ms).toISOString() };
+  assert.deepEqual(factTimes(resumed, facts, 20 * rate, 100 * rate), { B: new Date(t0 + 100_000 + outage_ms).toISOString() });
+  assert.deepEqual(factTimes(resumed, facts, 20 * rate, 10 * rate), {}, 'a fact outside the frame range is not stamped');
+});
+
+test('a safety limit that is empty, not a number, infinite or negative is refused', () => {
+  assert.equal(parseLimit('max-usd', '15'), 15);
+  assert.equal(parseLimit('max-usd', '0.5'), 0.5);
+  for (const bad of ['', ' ', 'abc', 'NaN', 'Infinity', '-1']) assert.throws(() => parseLimit('max-usd', bad), /--max-usd must be/);
 });
