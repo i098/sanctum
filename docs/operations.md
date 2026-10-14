@@ -163,6 +163,32 @@ Sync revokes only a membership that WorkOS granted (`workspace_members.org_issue
 
 Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs poll for settled state.
 
+## 24-hour soak
+
+The soak streams 24 hours of synthetic meeting audio into the hosted app at real speed and asks planted questions at 1, 5, 12 and 24 hours. It is the named gate in [release-evidence.md](release-evidence.md); the accelerated replay above is not a soak. Run it in a dedicated soak workspace, never the real one. Live recording and paid model calls on the hosted instance each need the owner's go. The driver stops at $15 cumulative measured cost.
+
+| Part | File |
+| --- | --- |
+| Corpus and manifest of planted facts | `scripts/soak/build-corpus.ts` |
+| Real-time driver (WebSocket ingest, kill switch) | `scripts/soak/drive.ts` |
+| Checkpoint runner and scoring; writes the results JSON | `scripts/soak/checkpoint.ts`, `scripts/soak/score.ts` |
+| Results page | `scripts/soak/serve.ts` |
+
+**Results page.** Serve the directory the checkpoint runner writes to (`checkpoint.ts --out <dir>/cp-<H>h.json`, one file per checkpoint hour 1, 5, 12 and 24) and expose it on the tailnet only (never `--funnel`; the page has no sign-in). Pick a port that `sudo -n tailscale serve status` does not list.
+
+```bash
+node scripts/soak/serve.ts --dir <dir> --port 8460
+sudo -n tailscale serve --bg --https=8460 http://127.0.0.1:8460
+```
+
+`/` shows each checkpoint against its pass bars and refreshes every 30 seconds: `t0`, when each checkpoint was asked, every metric, and each planted fact's keyword and natural-question status. `/report.json` returns the same data with a `pass`, `fail` or `pending` verdict per metric and checkpoint, so any agent on the tailnet can read it. A missing `cp-<H>h.json` leaves that checkpoint pending, and so does a metric with no value (a `null`), never failed. An unreadable or malformed file fails that checkpoint, with the reason in its `error` field; it never stops the server.
+
+Metric names are the runner's (`scripts/soak/score.ts`); query latency is in milliseconds. Bars are the `BARS` table in `scripts/soak/serve.ts` (proposals from the plan board; calibrate them after the 1-hour dry run): `recall_at_5`, `recall_at_20`, `answer_accuracy`, `latest_accuracy` (not judged at 1 hour), `time_aware_accuracy`, `control_pass_rate`, latency `p50` and `p95`, and the `errors` count must be 0. `natural_recall_at_20` is shown without a bar. Driver measurements (ASR lag, database growth, cost) are not on this page.
+
+**Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`, as in [sdk/README.md](../sdk/README.md). Search needs every 3-letter-or-longer term in one item, so send keywords, not sentences. Newest matches come first; the agent decides which fact is latest.
+
+**Cleanup.** Delete the soak workspace in Settings; rows and R2 objects purge after the grace period.
+
 ## Recovery
 
 - **Worker crash or restart**: leases expire and the sweeper returns running jobs to pending; handlers are idempotent per work key, and an action whose outcome is unknown stays `unknown` until a person resolves it.
