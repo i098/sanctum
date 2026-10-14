@@ -349,6 +349,9 @@ export function ListenPage() {
   const close = (): void => setOverlay(null);
   const { onboarding, setOnboarding, reopen } = useOnboarding(signIn, setOverlay, 'welcome');
   useEffect(() => {
+    if (overlay !== 'menu') setReviewMeeting(undefined);
+  }, [overlay]);
+  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key !== 'k' || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();

@@ -37,7 +37,7 @@ const KINDS: ReadonlyArray<ContextItem['kind']> = ['decision', 'commitment'];
 const DEBOUNCE_MS = 250;
 /** ponytail: matches titles among the newest 200 meetings; page the list when search must reach older ones. */
 const MEETING_LIMIT = 200;
-/** The server's maximum; it filters no kind, so a small limit lets newer preferences push out older decisions. */
+/** Most items one search returns (the server's maximum). */
 const SEARCH_LIMIT = 200;
 const SHOWN = 8;
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));

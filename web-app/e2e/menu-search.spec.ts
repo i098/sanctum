@@ -27,13 +27,13 @@ const box = (page: Page) => dialog(page).getByRole('combobox', { name: 'Search' 
 const rows = (page: Page) => dialog(page).getByRole('option');
 
 /** Fixture v1 routes: the meeting list, `GET /context/search` (recorded by query), and each meeting by id. */
-async function api(page: Page, searched: string[], search: () => readonly [number, unknown] = () => [200, { items: FOUND }]) {
+async function api(page: Page, searched: string[], search: (limit: number) => readonly [number, unknown] = () => [200, { items: FOUND }]) {
   await page.route('**/api/v1/**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/v1/meetings') return route.fulfill({ json: { meetings: MEETINGS, next_cursor: null } });
     if (url.pathname === '/api/v1/context/search') {
-      searched.push(`${url.searchParams.get('q')!}@${url.searchParams.get('limit')}`);
-      const [status, json] = search();
+      searched.push(url.searchParams.get('q')!);
+      const [status, json] = search(Number(url.searchParams.get('limit')));
       return route.fulfill({ status, json });
     }
     const chosen = MEETINGS.find(({ id }) => url.pathname === `/api/v1/meetings/${id}`);
@@ -57,7 +57,7 @@ test('a query finds decisions, commitments and meeting titles; Enter opens the m
     'DecisionKeep pilot access limited to the test group.Pilot review · Sep 29, 2026',
     'CommitmentDana sends the pilot plan.Pilot review · Sep 29, 2026',
   ]);
-  expect(searched).toEqual(['pilot@200']);
+  expect(searched).toEqual(['pilot']);
   await expect(dialog(page)).toContainText('not transcript text');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -69,6 +69,31 @@ test('a query finds decisions, commitments and meeting titles; Enter opens the m
   await expect(box(page)).toHaveValue('');
   await expect(menuSection(page, 'Review')).toContainText('Pilot review · closed · started 9/29/2026, 9:00:00 AM');
   expect(await page.evaluate(() => window.__capture.calls)).toEqual(['start']);
+});
+
+test('a decision older than many newer preferences still shows', async ({ page }) => {
+  const preferences = Array.from({ length: 25 }, (_, i) => item(`b0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, OLD, 'preference', `Pilot preference ${i}.`));
+  const decision = item('c0000000-0000-4000-8000-000000000001', OLD, 'decision', 'Pilot goes ahead in November.');
+  await api(page, [], limit => [200, { items: [...preferences, decision].slice(0, limit) }]);
+  await openSearch(page);
+  await box(page).fill('pilot');
+  await expect(rows(page)).toHaveText([
+    'MeetingPilot reviewSep 29, 2026',
+    'DecisionPilot goes ahead in November.Pilot review · Sep 29, 2026',
+  ]);
+});
+
+test('reopening the Menu shows the newest meeting, not the last one a search opened', async ({ page }) => {
+  await api(page, []);
+  await openSearch(page);
+  await box(page).fill('pilot');
+  await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Enter');
+  await expect(menuSection(page, 'Review')).toContainText('Pilot review');
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toBeHidden();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await expect(menuSection(page, 'Review')).toContainText('Weekly sync');
 });
 
 test('commands open a section; Escape clears the box first, then closes the Menu', async ({ page }) => {
