@@ -1,6 +1,7 @@
 {
   "name": "@sanctum/cloudflare",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "Cloudflare Worker and Containers deployment of the Sanctum image",
   "scripts": {

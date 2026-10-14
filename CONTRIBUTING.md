@@ -48,4 +48,4 @@ Do not claim a model, provider, or deployment was verified if it was only mocked
 Use synthetic fixtures and redact sensitive data before posting issues, logs, or examples.
 Never commit credentials, recordings of real people, customer data, or production exports.
 Be respectful, specific, and constructive in reviews.
-By contributing, you agree that your contributions are provided under the repository's MIT license.
+By contributing, you agree that your contributions are provided under the repository's FSL-1.1-ALv2 license.

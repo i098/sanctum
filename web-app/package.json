@@ -1,6 +1,7 @@
 {
   "name": "@sanctum/web-app",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "Fullscreen Sanctum listening website",
   "scripts": {

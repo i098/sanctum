@@ -17,6 +17,7 @@
 - Keep Pipedream's catalog server-side, with search/inspect/request gateways.
 - Expose one shared context model through website, SDKs, and MCP.
 - Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
+- Relicense from MIT to FSL-1.1-ALv2 (Functional Source License, Apache 2.0 future license; same as i098/Crewship) by the owner on 2026-10-14; earlier commits stay under MIT.
 
 ## Spoken work decision - 2026-10-10
 

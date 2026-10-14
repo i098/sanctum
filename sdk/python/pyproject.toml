@@ -2,6 +2,7 @@
 name = "sanctum-sdk"
 version = "0.1.0"
 description = "Thin HTTPX client for the Sanctum v1 API"
+license = "FSL-1.1-ALv2"
 requires-python = ">=3.11"
 dependencies = ["httpx>=0.28,<1"]
 
