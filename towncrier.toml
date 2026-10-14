@@ -1,0 +1,19 @@
+# Changelog fragments: changelog.d/<issue>.<type>.md, assembled at release time
+# by `uvx towncrier==26.9.0 build --version X.Y.Z` (CONTRIBUTING.md).
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+template = "changelog.d/template.md"
+start_string = "## [Unreleased]\n"
+title_format = "## [{version}] - {project_date}"
+issue_format = "[#{issue}](https://github.com/i098/sanctum/issues/{issue})"
+
+# Keep a Changelog sections, in its order.
+type = [
+  { directory = "added", name = "Added" },
+  { directory = "changed", name = "Changed" },
+  { directory = "deprecated", name = "Deprecated" },
+  { directory = "removed", name = "Removed" },
+  { directory = "fixed", name = "Fixed" },
+  { directory = "security", name = "Security" },
+]
