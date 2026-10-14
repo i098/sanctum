@@ -18,7 +18,7 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text. While browser captions run, a second helper line, at most 300 px wide, says that live captions use the browser's speech service (in Chrome, Google's). After a recognition error that stops captions for the capture session, the same line says, while capture runs, that word-by-word captions are not available in this browser (`network`, `service-not-allowed`, `not-allowed`) or for this language (`language-not-supported`), and that lines appear after each phrase.
 - Footer sits approximately 24–32 px from the bottom and sides.
 - Lower left: a tiny state dot and brief capture/context health text.
-- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu (also Ctrl/⌘+K).
+- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu.
 - Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 
@@ -85,18 +85,18 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 ## Secondary views
 
-Review, Agents, and Settings are sections of one central Menu panel, opened only on request by the Menu button or Ctrl/⌘+K, with a section rail beside the active section.
-Use a restrained dark overlay and the same tokens; closing it returns to the listening screen without stopping capture.
+Review, Agents, and Settings live in one central Menu panel that opens only on request: the footer's Menu button or Ctrl/⌘+K, with a section rail (Review, Agents, Settings) beside the active section.
+Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
-On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it opens Team over Settings with the WorkOS profile and members widgets on the same tokens, and full screen on phones.
-Signed in, the Integrations row lists the person's connected apps, each with the grants they made on it and Disconnect, then an app field with Connect an app; without Pipedream settings on the server it reads not configured, and signed out it waits for sign-in.
+On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it shows Team inline under the Workspace row, with the WorkOS profile and members widgets on the same tokens.
+The Integrations list lives in the Apps section of the Menu (the sanctum-nav-4-apps PR in this stack), not in Settings. It lists the person's connected apps, each with the grants they made on it and Disconnect, then an app field with Connect an app; without Pipedream settings on the server it reads not configured, and signed out it waits for sign-in.
 Connect an app opens Pipedream's hosted Connect Link in a new tab, so the listening tab keeps capturing; coming back to the listening tab stores what was connected. Connecting grants nothing.
 Signed out, an outlined Sign in to listen button replaces the helper line under the status; the landing page header also has a Sign in link.
 Both sign-in links, and the self-serve Create workspace sign-in, return to `/?signin=ok`, where a signed-in session shows "Signed in as <name>" (the email when the issuer gave no name) under the helper line until the next load, even when the issuer redirects back at once; Settings keeps showing the identity.
 A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
-With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open a dialog over Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
+With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open inline under their row in Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
 A person's first signed-in visit opens Welcome to Sanctum over the listening view, on the Settings tokens and rows: one step at a time with Back and Next, focus on each step's heading, and Skip in the header (and Escape) at every step.
 The steps are what Sanctum records and who sees it; a microphone check (permission, the input picker and a level meter of a preview stream that is never recorded, saying so after 3 s without any sound); the workspace name, which owners and admins rename there, with the server's Team (Invite teammates, or Set up team for the owner of an unlinked hosted workspace); and Start listening, which closes it and starts capture.
 Skipping or finishing is stored for the person on the server, so the welcome does not open again on any device; Settings → Welcome → Show welcome again opens it.
