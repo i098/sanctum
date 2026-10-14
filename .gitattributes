@@ -1,4 +1,4 @@
-index.html linguist-generated=true
-EXECUTE.txt linguist-generated=true
-snippets/* linguist-documentation=true
+docs/build/blueprint.html linguist-generated=true
+docs/build/EXECUTE.txt linguist-generated=true
+docs/build/snippets/* linguist-documentation=true
 design/* linguist-documentation=true

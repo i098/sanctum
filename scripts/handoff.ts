@@ -9,7 +9,10 @@ import { XMLValidator } from 'fast-xml-parser';
 const ROOT = resolve(import.meta.dirname, '..');
 export const FILES = ['index.html', 'EXECUTE.txt', 'HANDOFF.md', 'README.md', 'AGENTS.md', 'LICENSE', 'CONTRIBUTING.md', 'SECURITY.md'];
 export const DIRECTORIES = ['design', 'docs', 'tasks', 'snippets'];
-const SOURCES = ['HANDOFF.md', 'tasks/plan.md', 'tasks/todo.md'];
+/** Published URL name -> repository path, for the build handoff under docs/build. */
+const MOVED: Record<string, string> = { 'index.html': 'docs/build/blueprint.html', 'EXECUTE.txt': 'docs/build/EXECUTE.txt', 'HANDOFF.md': 'docs/build/HANDOFF.md', tasks: 'docs/build/tasks', snippets: 'docs/build/snippets' };
+export const source = (name: string) => MOVED[name] ?? name;
+const SOURCES = ['docs/build/HANDOFF.md', 'docs/build/tasks/plan.md', 'docs/build/tasks/todo.md'];
 const IGNORED = new Set(['.git', '_site', 'node_modules', '.venv', 'dist', '.work']);
 const read = (root: string, name: string) => readFileSync(join(root, name), 'utf8');
 const escape = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
@@ -51,11 +54,11 @@ export function generatedFiles(root: string): Map<string, string> {
         assert(i < lines.length, 'Unclosed code block');
         const names: Record<string, string> = { json: 'context-response.json', typescript: 'sdk-example.ts', bash: 'check-commands.sh' };
         const name = names[language] ?? `example-${blocks.length}.txt`;
-        assert(!outputs.has(`snippets/${name}`), `Duplicate snippet: ${name}`);
+        assert(!outputs.has(`docs/build/snippets/${name}`), `Duplicate snippet: ${name}`);
         const id = `code-${blocks.length}`;
         const contents = body.join('\n') + '\n';
         blocks.push({ id, name, contents });
-        outputs.set(`snippets/${name}`, contents);
+        outputs.set(`docs/build/snippets/${name}`, contents);
         out.push(`<div class="code-intro"><span>Proposed contract · ${escape(name)}</span><a href="snippets/${name}" download>Download</a></div><div id="${id}" class="code-view"><p class="small">Loading syntax view…</p></div>`);
         i++; continue;
       }
@@ -110,7 +113,7 @@ export function generatedFiles(root: string): Map<string, string> {
     return `<details class="task" id="${slug}"><summary>${escape(title)}</summary><div class="detail-body">${markdown(part.slice(index + 1))}</div></details>`;
   }).join('');
   const fullPrompt = [handoff, plan, todo].join('\n\n---\n\n');
-  outputs.set('EXECUTE.txt', fullPrompt);
+  outputs.set('docs/build/EXECUTE.txt', fullPrompt);
   const values: Record<string, string> = {
     TASKCOUNT: String(taskCount),
     NAVIGATION: sections.map(s => `<button type="button" data-target="${s.id}"><span>${s.number}</span>${escape(s.title)}</button>`).join(''),
@@ -118,7 +121,7 @@ export function generatedFiles(root: string): Map<string, string> {
     TASKS: tasks, HANDOFF: escape(handoff),
     BUNDLEDATA: JSON.stringify({ full_prompt: fullPrompt, code_blocks: blocks }).replaceAll('<', '\\u003c')
   };
-  outputs.set('index.html', read(root, 'scripts/handoff-template.html').replace(/TASKCOUNT|NAVIGATION|SECTIONS|TASKS|HANDOFF|BUNDLEDATA/g, token => values[token]));
+  outputs.set('docs/build/blueprint.html', read(root, 'scripts/handoff-template.html').replace(/TASKCOUNT|NAVIGATION|SECTIONS|TASKS|HANDOFF|BUNDLEDATA/g, token => values[token]));
   return outputs;
 }
 
@@ -144,9 +147,9 @@ export function assertCurrentStack(text: string, name: string) {
 }
 
 export function check(root: string) {
-  const required = [...FILES, 'tasks/plan.md', 'tasks/todo.md', 'docs/DESIGN.md', 'docs/DECISIONS.md', 'design/listener-reference.svg', 'design/listener-reference.html', '.github/workflows/ci.yml'];
+  const required = [...FILES.map(source), ...SOURCES, 'docs/DESIGN.md', 'docs/DECISIONS.md', 'design/listener-reference.svg', 'design/listener-reference.html', '.github/workflows/ci.yml'];
   required.forEach(name => assert(lstatSync(join(root, name)).isFile(), `Missing handoff: ${name}`));
-  const todo = read(root, 'tasks/todo.md');
+  const todo = read(root, 'docs/build/tasks/todo.md');
   assert.deepEqual([...todo.matchAll(/^## T(\d{2})\./gm)].map(match => match[1]), Array.from({ length: 26 }, (_, i) => String(i + 1).padStart(2, '0')));
   for (const part of todo.split(/(?=^## T\d{2}\.)/m).slice(1)) {
     const task = Number(part.match(/^## T(\d{2})/)![1]);
@@ -166,13 +169,13 @@ export function check(root: string) {
   for (const name of [...SOURCES, 'README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'docs/CI.md', 'docs/DECISIONS.md', 'scripts/handoff-template.html', '.github/workflows/ci.yml']) assertCurrentStack(read(root, name), name);
   assert(!files(root).some(name => /^(scripts|tests)\/.*\.py$/.test(name)), 'Stale Python documentation tooling');
   assert.equal(XMLValidator.validate(read(root, 'design/listener-reference.svg')), true, 'Invalid SVG XML');
-  JSON.parse(read(root, 'snippets/context-response.json'));
+  JSON.parse(read(root, 'docs/build/snippets/context-response.json'));
   const generated = generatedFiles(root);
   for (const [name, expected] of generated) assert.equal(read(root, name), expected, `Stale generated file: ${name}; run npm run docs:render`);
-  const expectedSnippets = [...generated.keys()].filter(name => name.startsWith('snippets/')).sort();
-  assert.deepEqual(files(join(root, 'snippets')).map(name => `snippets/${name}`).sort(), expectedSnippets, 'Stale snippet output');
+  const expectedSnippets = [...generated.keys()].filter(name => name.startsWith('docs/build/snippets/')).sort();
+  assert.deepEqual(files(join(root, 'docs/build/snippets')).map(name => `docs/build/snippets/${name}`).sort(), expectedSnippets, 'Stale snippet output');
   let count = 0;
-  for (const name of ['index.html', ...files(join(root, 'design')).filter(name => name.endsWith('.html')).map(name => `design/${name}`)]) {
+  for (const name of ['docs/build/blueprint.html', ...files(join(root, 'design')).filter(name => name.endsWith('.html')).map(name => `design/${name}`)]) {
     for (const script of inlineScripts(read(root, name))) {
       const result = spawnSync(process.execPath, ['--check', '--input-type=' + (script.module ? 'module' : 'commonjs')], { input: script.source, encoding: 'utf8' });
       assert.equal(result.status, 0, `${name}: ${result.stderr || result.error}`);
@@ -188,11 +191,11 @@ export function buildSite(root: string) {
   assert(!lstatSync(site, { throwIfNoEntry: false })?.isSymbolicLink(), '_site must not be a symlink');
   // Validate inputs before replacing generated output; never publish the checkout.
   for (const name of [...FILES, ...DIRECTORIES]) {
-    const info = lstatSync(join(root, name));
+    const info = lstatSync(join(root, source(name)));
     assert(!info.isSymbolicLink(), `Invalid site input: ${name}`);
     assert(DIRECTORIES.includes(name) ? info.isDirectory() : info.isFile(), `Invalid site type: ${name}`);
     if (info.isDirectory()) {
-      for (const entry of files(root, name)) {
+      for (const entry of files(root, source(name))) {
         assert(!lstatSync(join(root, entry)).isSymbolicLink(), `Symlink in site inputs: ${entry}`);
         assert(!entry.split('/').some(part => part.startsWith('.')), `Hidden site input: ${entry}`);
         assert(['.md', '.html', '.svg', '.json', '.ts', '.sh', '.txt'].includes(extname(entry)), `Unexpected site input: ${entry}`);
@@ -201,7 +204,7 @@ export function buildSite(root: string) {
   }
   rmSync(site, { recursive: true, force: true });
   mkdirSync(site);
-  for (const name of [...FILES, ...DIRECTORIES]) cpSync(join(root, name), join(site, name), { recursive: true, filter: source => !IGNORED.has(source.split('/').at(-1)!) });
+  for (const name of [...FILES, ...DIRECTORIES]) cpSync(join(root, source(name)), join(site, name), { recursive: true, filter: from => !IGNORED.has(from.split('/').at(-1)!) && from !== join(root, 'docs/build') });
   writeFileSync(join(site, '.nojekyll'), '');
   writeFileSync(join(site, 'robots.txt'), 'User-agent: *\nAllow: /\nSitemap: https://i098.github.io/sanctum/sitemap.xml\n');
   writeFileSync(join(site, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://i098.github.io/sanctum/</loc></url><url><loc>https://i098.github.io/sanctum/design/listener-reference.html</loc></url></urlset>\n');

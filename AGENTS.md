@@ -2,7 +2,7 @@
 
 ## First action
 
-Read HANDOFF.md, tasks/plan.md, tasks/todo.md, docs/DESIGN.md, and docs/DECISIONS.md before implementation.
+Read docs/build/HANDOFF.md, docs/build/tasks/plan.md, docs/build/tasks/todo.md, docs/DESIGN.md, and docs/DECISIONS.md before implementation.
 This is a handoff-only repository; build fresh application code here.
 Do not clone, copy, vendor, or import source code from the old Sanctum repository.
 Reference links are historical evidence and product context, not implementation dependencies.

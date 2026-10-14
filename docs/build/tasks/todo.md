@@ -1,7 +1,7 @@
 # Clean-build execution checklist
 
 Run these slices in order unless an independent check can run alongside the current slice.
-The full behavioral contract is `tasks/plan.md`; the approved visual reference is `docs/DESIGN.md` and `design/listener-reference.html`.
+The full behavioral contract is `docs/build/tasks/plan.md`; the approved visual reference is `docs/DESIGN.md` and `design/listener-reference.html`.
 Paths below are repository-relative proposed edit targets.
 Every task must end with its verification result, not only code changes.
 These checks are a proposed suite to implement, not tests already present in the baseline.

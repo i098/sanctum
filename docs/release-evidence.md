@@ -1,6 +1,6 @@
 # Release evidence
 
-Evidence for the clean build of [tasks/plan.md](../tasks/plan.md) at the delivery branch head.
+Evidence for the clean build of [docs/build/tasks/plan.md](build/tasks/plan.md) at the delivery branch head.
 Each state and acceptance row below says what was run, where the proof lives, and what remains unrun and why.
 Nothing here claims delivered external side effects or uptime; the one deployment is described under Deployed.
 The only model-quality evidence is the small Workers AI smoke comparison under Workers AI text models; it is not a quality benchmark.
