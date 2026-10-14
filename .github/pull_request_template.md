@@ -10,7 +10,7 @@ Closes #
 
 ## Related task
 
-<!-- The task in tasks/todo.md or the plan section this change belongs to, if any. -->
+<!-- The task in docs/build/tasks/todo.md or the plan section this change belongs to, if any. -->
 
 ## Test evidence
 
