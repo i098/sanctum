@@ -11,7 +11,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/i098/sanctum?style=for-the-badge&logo=git&logoColor=white&label=updated&color=6b7280)](https://github.com/i098/sanctum/commits/main)
 [![Sponsor](https://img.shields.io/badge/Sponsor-db61a2?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/i098)
 
-[Try it](https://sanctum.42nights.dev) · [Self-host](#self-host) · [Docs](https://i098.github.io/sanctum/) · [Contribute](CONTRIBUTING.md)
+[Try it](https://sanctum.42nights.dev) · [Self-host](#self-host) · [Docs](https://i098.github.io/sanctum/) · [Changelog](CHANGELOG.md) · [Contribute](CONTRIBUTING.md)
 
 <img src=".github/assets/listen.png" alt="The Sanctum Listen screen while recording: a lively teal waveform on a dark background, with Pause, Review, Agents, Fullscreen and Settings at the bottom">
 
