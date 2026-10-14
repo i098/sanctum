@@ -1,19 +1,11 @@
 import { type ActionReceipt, type Meeting, pages, type SanctumClient } from '@sanctum/sdk';
 import { useEffect, useState } from 'react';
+import { actionName } from './action-name.ts';
 import { subscribeActions } from './engine.ts';
 import { collect, type Loadable, settle } from './review-data.ts';
 import { show, time } from './ReviewPanels.tsx';
 
 const RECENT = 5;
-
-const titleCase = (slug: string): string => slug.split(/[_-]+/).filter(Boolean).map(word => word[0]!.toUpperCase() + word.slice(1)).join(' ');
-
-/** A Pipedream action key is `<app>-<action>`: `gmail-send-email` reads "Gmail · Send email". */
-function actionName(key: string): string {
-  const [app = '', ...action] = key.split('-');
-  const name = titleCase(action.join('-')).toLowerCase();
-  return action.length === 0 ? titleCase(app) : `${titleCase(app)} · ${name[0]!.toUpperCase()}${name.slice(1)}`;
-}
 
 /** The state word's tone: muted while it waits or runs, green done, amber when a person must look, red failed. */
 const TONE: Record<ActionReceipt['state'], string> = {
