@@ -2,8 +2,8 @@
   "$schema": "https://fallow.tools/schema.json",
   "ignorePatterns": [
     "_site/**",
-    "snippets/**",
-    "index.html"
+    "docs/build/snippets/**",
+    "docs/build/blueprint.html"
   ],
   "entry": ["web-app/landing/index.html"],
   "audit": {

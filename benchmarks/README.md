@@ -1,6 +1,6 @@
 # Benchmarks
 
-`workload.json` is the machine-readable workload manifest required by `tasks/plan.md` section 04.
+`workload.json` is the machine-readable workload manifest required by `docs/build/tasks/plan.md` section 04.
 It names the five matched workloads: `pcm_ingest`, `transcript_ingest`, `context_read_write`, `archive_streaming` and `cosine_ranking`.
 Each workload declares its deterministic fixture generator and seed, parameters, metrics, durability semantics and parity gate.
 
