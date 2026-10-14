@@ -662,6 +662,76 @@
   overflow: auto;
 }
 
+/* Meetings: the list beside the chosen meeting's Review; each column scrolls on its own. */
+.listen-menu-body:has(.listen-meetings) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.listen-meetings {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+}
+
+.listen-meetings-list,
+.listen-meetings-detail {
+  min-height: 0;
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.listen-meetings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid #222936;
+}
+
+.listen-meetings-list h3 {
+  margin: 8px 0 4px;
+  padding: 0 8px;
+  color: #8b919c;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.listen-meeting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.listen-meeting-row[aria-current='true'] {
+  background: #171c26;
+  color: #e7ecf3;
+}
+
+.listen-meeting-row span {
+  color: #e7ecf3;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.listen-meeting-row small {
+  letter-spacing: 0;
+  text-transform: none;
+  color: #8b919c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.listen-meetings-back {
+  display: none;
+}
+
 /* Direct rows only: Team's dialog and widgets render inside the Workspace row. */
 .listen-settings > div {
   display: grid;
@@ -1137,5 +1207,25 @@
 
   .listen-menu-body {
     padding: 16px;
+  }
+
+  /* One column: the list, then the chosen meeting over it with a way back. */
+  .listen-meetings {
+    grid-template-columns: 1fr;
+  }
+
+  .listen-meetings-list,
+  .listen-meetings-detail {
+    padding: 12px 16px;
+    border-right: 0;
+  }
+
+  .listen-meetings[data-open] .listen-meetings-list {
+    display: none;
+  }
+
+  .listen-meetings-back {
+    display: block;
+    margin-bottom: 8px;
   }
 }

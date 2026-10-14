@@ -8,9 +8,9 @@ import { Dialog } from './Dialog.tsx';
 import { browserRecognition, type CaptionState, startCaptions } from './captions.ts';
 import { getCaptureEngine, subscribeActions, subscribeTranscript } from './engine.ts';
 import { deviceName, InputPicker } from './InputPicker.tsx';
+import { MeetingsSection } from './MeetingsSection.tsx';
 import { MenuPanel } from './MenuPanel.tsx';
 import { clearCaptions, showCaption, startActionFeed, startTranscriptRail } from './rails.ts';
-import { ReviewSection } from './ReviewSection.tsx';
 import { SettingsSection } from './SettingsSection.tsx';
 import { startWaveform } from './waveform.ts';
 import { useOnboarding, Welcome } from './Welcome.tsx';
@@ -331,7 +331,7 @@ export function ListenPage() {
   const snapshot = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(firstOverlay);
-  const [section, setSection] = useState(notice ? 'settings' : 'review');
+  const [section, setSection] = useState(notice ? 'settings' : 'meetings');
   const menuRef = useRef<HTMLButtonElement>(null);
   const [signIn, setSignIn] = useState<SignInState>({ status: 'checking' });
   const refreshSignIn = useCallback(() => void readSignIn(client).then(setSignIn), []);
@@ -358,7 +358,7 @@ export function ListenPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
   const sections = [
-    { id: 'review', label: 'Review', body: <ReviewSection client={client} /> },
+    { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} /> },
   ];

@@ -723,8 +723,8 @@ Suspend visual animation when hidden and respect reduced-motion preference witho
 The preview waveform is illustrative; production must never simulate input or show fake healthy recording status.
 
 Keep capture lifecycle outside overlay mount/unmount.
-Review, Agents, and Settings are secondary dialogs, with accessible focus handling and Escape-to-close.
-The main screen contains pause/resume, review, agents, settings, and fullscreen controls only.
+The Menu is one central overlay for Meetings (with Review), Agents, and Settings, with accessible focus handling and Escape-to-close.
+The main screen contains pause/resume, fullscreen, and Menu controls only.
 No automatic sound effects, greetings, completion notices, or sign-offs.
 Every TTS response requires a direct-request speech gate; explicit recording playback remains available.
 
