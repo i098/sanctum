@@ -11,7 +11,7 @@ It does not deploy the application or claim coverage for slices that do not exis
 The CI workflow runs on pull requests, pushes to main, and manual dispatch.
 It checks TypeScript types, documentation-tool behavior, handoff structure, local links, SVG/JSON validity, embedded JavaScript syntax, generated-file consistency, stale stack references, and static-site assembly.
 Both verification and Pages assembly use Node.js 24 LTS and `npm ci` against the committed lockfile.
-No Python interpreter is used by current documentation CI.
+No Python interpreter is used by the documentation CI job; the separate changelog workflow uses uv (see Changelog fragments).
 `npm run check` fails on generated-file drift; `npm run docs:render` updates the derived files locally.
 GitHub Actions dependencies are pinned to immutable commit SHAs.
 The check job has read-only repository permissions and a ten-minute timeout.
@@ -90,6 +90,13 @@ The `python-sdk` job installs `sdk/python` (its only dependency is `httpx`) into
 It replays the golden exchanges in `sdk/fixtures/wire-cases.json` that the TypeScript SDK also replays, then runs the Python example end to end against the database-free fixture API (`server/tests/support/fixture-server.ts`).
 The job has no secrets, no database, and a ten-minute timeout.
 Run it locally: `pip install ./sdk/python`, then `cd sdk/python && python3 -m unittest discover -s tests -p 'test_*.py'`.
+
+## Changelog fragments
+
+The separate `changelog` workflow runs on pull requests to main and executes `uvx towncrier==26.9.0 check --compare-with HEAD^1` (Python only through uv, in that workflow).
+It fails a pull request without a `changelog.d/` fragment unless the PR has the `no changelog` label; only that label's changes re-run it.
+The job has read-only repository permissions and a five-minute timeout.
+Fragment format and release steps: [CONTRIBUTING.md](../CONTRIBUTING.md#changelog-and-releases).
 
 ## When implementation is added
 
