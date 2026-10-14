@@ -4,13 +4,8 @@
  * ↑ ↓ move, Enter opens, Escape clears the box before it closes the Menu.
  */
 import type { ContextItem, Meeting, SanctumClient } from '@sanctum/sdk';
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
-
-export interface MenuCommand {
-  label: string;
-  /** A rejection is shown under the box and keeps the Menu open; success closes it. */
-  run: () => void | Promise<void>;
-}
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useState } from 'react';
+import { buildEntries, type Entry, emptyMessage, errorText, isSearching, KINDS, keyAction, type Loaded, LOADING, type MenuCommand, sourceNotes } from './menu-search.ts';
 
 interface MenuSearchProps {
   client: SanctumClient;
@@ -23,29 +18,11 @@ interface MenuSearchProps {
   children: ReactNode;
 }
 
-interface Entry {
-  key: string;
-  tag: string;
-  title: string;
-  detail?: string;
-  /** An item with no meeting has nowhere to open. */
-  open?: () => void | Promise<void>;
-  failure?: string;
-}
-
-const KINDS: ReadonlyArray<ContextItem['kind']> = ['decision', 'commitment'];
 const DEBOUNCE_MS = 250;
 /** ponytail: matches titles among the newest 200 meetings; page the list when search must reach older ones. */
 const MEETING_LIMIT = 200;
 /** Most items one search returns (the server's maximum). */
 const SEARCH_LIMIT = 200;
-const SHOWN = 8;
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-type Loaded<A> = { status: 'loading' } | { status: 'ok'; data: A } | { status: 'error'; message: string };
-const LOADING = { status: 'loading' } as const;
-
-const day = (iso: string): string => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 
 /** Meetings are read on the first query, so opening the Menu costs nothing until someone searches. */
 function useMeetings(client: SanctumClient, wanted: boolean): Loaded<ReadonlyArray<Meeting>> {
@@ -85,36 +62,58 @@ const focusFirst = (input: HTMLInputElement | null): void => {
   if (input !== null && matchMedia('(pointer: fine)').matches) input.setAttribute('autofocus', '');
 };
 
+interface ResultsProps {
+  listId: string;
+  entries: ReadonlyArray<Entry>;
+  active: number;
+  query: string;
+  searching: boolean;
+  notes: ReadonlyArray<string>;
+  failure: string | null;
+  onChoose: (entry: Entry) => void;
+  onHover: (index: number) => void;
+}
+
+function ResultRow({ id, entry, selected, onChoose, onHover }: { id: string; entry: Entry; selected: boolean; onChoose: () => void; onHover: () => void }) {
+  return (
+    <li id={id} role="option" aria-selected={selected} aria-disabled={entry.open === undefined} onClick={onChoose} onPointerMove={onHover}>
+      <span className="listen-result-tag">{entry.tag}</span>
+      <span className="listen-result-title">{entry.title}</span>
+      {entry.detail && <span className="listen-result-detail">{entry.detail}</span>}
+    </li>
+  );
+}
+
+function Results({ listId, entries, active, query, searching, notes, failure, onChoose, onHover }: ResultsProps) {
+  return (
+    <div className="listen-menu-results">
+      <ul id={listId} role="listbox" aria-label="Search results">
+        {entries.map((entry, index) => (
+          <ResultRow key={entry.key} id={`${listId}-${entry.key}`} entry={entry} selected={index === active} onChoose={() => onChoose(entry)} onHover={() => onHover(index)} />
+        ))}
+      </ul>
+      <div role="status" className="listen-result-note">
+        {emptyMessage(entries.length, query, searching, notes.length)}
+        {failure && <p role="alert">{failure}</p>}
+        {notes.map(note => <p key={note}>{note}</p>)}
+        <p>Searches decisions, commitments, meeting titles and commands, not transcript text.</p>
+      </div>
+    </div>
+  );
+}
+
 export function MenuSearch({ client, sections, commands, onSection, onMeeting, onClose, children }: MenuSearchProps) {
   const listId = useId();
   const [text, setText] = useState('');
   const [active, setActive] = useState(0);
   const [failure, setFailure] = useState<string | null>(null);
   const query = text.trim();
-  const lower = query.toLowerCase();
   const meetings = useMeetings(client, query !== '');
   const items = useItems(client, query);
-  const titles = useMemo(() => new Map(meetings.status === 'ok' ? meetings.data.map(meeting => [meeting.id, meeting.title ?? 'Untitled meeting']) : []), [meetings]);
-
-  const entries: ReadonlyArray<Entry> = useMemo(() => {
-    const clear = (): void => setText('');
-    const fixed: ReadonlyArray<Entry> = [
-      ...sections.map(({ id, label }) => ({ key: `section-${id}`, tag: 'Section', title: `Open ${label}`, open: () => (clear(), onSection(id)) })),
-      ...commands.map(({ label, run }) => ({ key: `command-${label}`, tag: 'Command', title: label, open: run, failure: `${label} did not finish: ` })),
-    ].filter(entry => entry.title.toLowerCase().includes(lower));
-    const found: ReadonlyArray<Entry> = (meetings.status === 'ok' ? meetings.data : [])
-      .filter(meeting => meeting.title?.toLowerCase().includes(lower))
-      .slice(0, SHOWN)
-      .map(meeting => ({ key: `meeting-${meeting.id}`, tag: 'Meeting', title: meeting.title!, detail: day(meeting.started_at), open: () => (clear(), onMeeting(meeting.id)) }));
-    const said: ReadonlyArray<Entry> = (items.status === 'ok' ? items.data : []).slice(0, SHOWN).map(item => ({
-      key: `item-${item.id}`,
-      tag: item.kind === 'decision' ? 'Decision' : 'Commitment',
-      title: item.text,
-      detail: [item.meeting_id === null ? null : (titles.get(item.meeting_id) ?? 'Meeting'), day(item.event_at ?? item.created_at)].filter(Boolean).join(' · '),
-      ...(item.meeting_id === null ? {} : { open: () => (clear(), onMeeting(item.meeting_id!)) }),
-    }));
-    return query === '' ? [] : [...fixed, ...found, ...said];
-  }, [query, lower, sections, commands, meetings, items, titles, onSection, onMeeting]);
+  const entries = buildEntries(query, { sections, commands, meetings, items }, {
+    section: id => (setText(''), onSection(id)),
+    meeting: id => (setText(''), onMeeting(id)),
+  });
 
   // A new result list starts at its first row.
   useEffect(() => setActive(0), [entries.length, query]);
@@ -130,26 +129,13 @@ export function MenuSearch({ client, sections, commands, onSection, onMeeting, o
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    const move = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    if (move !== undefined && entries.length > 0) {
-      event.preventDefault();
-      setActive((active + move + entries.length) % entries.length);
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      choose(entries[active]);
-    } else if (event.key === 'Escape' && text !== '') {
-      // The first Escape clears the box; the dialog stays open.
-      event.preventDefault();
-      setText('');
-    }
+    const action = keyAction(event.key, { active, count: entries.length, text });
+    if (action === undefined) return;
+    event.preventDefault();
+    if (action.kind === 'move') setActive(action.active);
+    else if (action.kind === 'choose') choose(entries[active]);
+    else setText('');
   };
-
-  const settled = (loaded: Loaded<unknown>): boolean => loaded.status !== 'loading';
-  const notes = [
-    items.status === 'error' && `Decisions and commitments unavailable: ${items.message}`,
-    meetings.status === 'error' && `Meeting titles unavailable: ${meetings.message}`,
-  ].filter(Boolean);
-  const searching = query !== '' && !(settled(items) && settled(meetings));
 
   return (
     <>
@@ -172,24 +158,7 @@ export function MenuSearch({ client, sections, commands, onSection, onMeeting, o
         />
       </div>
       {query === '' ? children : (
-        <div className="listen-menu-results">
-          <ul id={listId} role="listbox" aria-label="Search results">
-            {entries.map((entry, index) => (
-              <li key={entry.key} id={`${listId}-${entry.key}`} role="option" aria-selected={index === active} aria-disabled={entry.open === undefined} onClick={() => choose(entry)} onPointerMove={() => setActive(index)}>
-                <span className="listen-result-tag">{entry.tag}</span>
-                <span className="listen-result-title">{entry.title}</span>
-                {entry.detail && <span className="listen-result-detail">{entry.detail}</span>}
-              </li>
-            ))}
-          </ul>
-          <div role="status" className="listen-result-note">
-            {searching && entries.length === 0 && 'Searching…'}
-            {!searching && entries.length === 0 && notes.length === 0 && `No match for “${query}”.`}
-            {failure && <p role="alert">{failure}</p>}
-            {notes.map(note => <p key={String(note)}>{note}</p>)}
-            <p>Searches decisions, commitments, meeting titles and commands, not transcript text.</p>
-          </div>
-        </div>
+        <Results listId={listId} entries={entries} active={active} query={query} searching={isSearching(query, { items, meetings })} notes={sourceNotes({ items, meetings })} failure={failure} onChoose={choose} onHover={setActive} />
       )}
     </>
   );
