@@ -77,7 +77,8 @@ type Mode = 'current' | 'as_of' | 'range' | 'history' | 'never_said';
 interface QuestionPlan {
   readonly id: string;
   readonly question: string;
-  readonly keywords: string;
+  /** Keyword query for search. `null` only for `range`: the scorer lists the time range without a query and checks every expected fact appears. */
+  readonly keywords: string | null;
   readonly mode: Mode;
   /** Fact ids that answer it: all of them for `range`, in order for `history`, the newest for `current`/`as_of`. */
   readonly expect: ReadonlyArray<string>;
@@ -101,7 +102,7 @@ const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
     { id: 'cp2-deploy', question: 'Are there any deploy restrictions?', keywords: 'deploy', mode: 'current', expect: ['D'] },
   ] },
   { id: 'cp3', at_s: 12 * HOUR, questions: [
-    { id: 'cp3-range', question: 'What was decided between T0+04:00 and T0+10:00?', keywords: 'launch onboarding budget', mode: 'range', range_s: [4 * HOUR, 10 * HOUR], expect: ['L2', 'O1', 'B2'] },
+    { id: 'cp3-range', question: 'What was decided between T0+04:00 and T0+10:00?', keywords: null, mode: 'range', range_s: [4 * HOUR, 10 * HOUR], expect: ['L2', 'O1', 'B2'] },
     { id: 'cp3-budget-as-of', question: 'What was the budget cap before T0+08:00?', keywords: 'budget', mode: 'as_of', as_of_s: 8 * HOUR, expect: ['B1'] },
     { id: 'cp3-owner', question: 'Who owns onboarding?', keywords: 'onboarding', mode: 'current', expect: ['O1'] },
     { id: 'cp3-contract', question: 'When does Dana send the contract?', keywords: 'contract', mode: 'current', expect: ['C'] },
@@ -162,11 +163,17 @@ function factErrors(fact: FactPlan): string[] {
   ]).map(message => `${fact.id}: ${message}`);
 }
 
-function questionErrors(checkpoint: CheckpointPlan, q: QuestionPlan): string[] {
+export function questionErrors(checkpoint: CheckpointPlan, q: QuestionPlan): string[] {
   // `as_of` asks about its own time; every other mode asks about the state at the checkpoint.
   const stateAt = q.as_of_s ?? checkpoint.at_s;
   const horizon = q.range_s?.[1] ?? stateAt;
-  return q.expect.flatMap(id => {
+  // Search needs every 3+ letter term in a single item, so several expected facts cannot share a multi-term query.
+  const terms = q.keywords?.split(/\s+/).filter(term => term.length >= 3).length ?? 0;
+  const queryErrors = violations([
+    [q.keywords === null && q.mode !== 'range', 'null keywords are only allowed for mode range'],
+    [q.expect.length > 1 && terms > 1, 'a query with several terms cannot match several expected facts'],
+  ]).map(message => `${q.id}: ${message}`);
+  return [...queryErrors, ...q.expect.flatMap(id => {
     const fact = FACT_BY_ID.get(id);
     if (!fact) return [`${q.id}: unknown fact ${id}`];
     return violations([
@@ -175,7 +182,7 @@ function questionErrors(checkpoint: CheckpointPlan, q: QuestionPlan): string[] {
       [startOf(fact) > horizon, `is after ${horizon} s`],
       [(q.mode === 'as_of' || q.mode === 'current') && FACTS.some(f => f.supersedes === id && startOf(f) <= stateAt), `is already superseded at ${stateAt} s`],
     ]).map(message => `${q.id}: ${id} ${message}`);
-  });
+  })];
 }
 
 /** Problems with the plan itself; empty when every fact, cue and checkpoint question is consistent. */

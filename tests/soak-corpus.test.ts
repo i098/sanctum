@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FACTS, SAMPLE_RATE, splice, validatePlan } from '../scripts/soak/build-corpus.ts';
+import { FACTS, SAMPLE_RATE, questionErrors, splice, validatePlan } from '../scripts/soak/build-corpus.ts';
 
 test('planted facts and checkpoint questions are consistent', () => {
   assert.deepEqual(validatePlan(), []);
@@ -12,6 +12,16 @@ test('relative-date fact C is scored by expect, never by aliases', () => {
   assert.deepEqual(c.expect, { kind: 'weekday_after', weekday: 'Friday' });
   assert.deepEqual(c.aliases, []);
   assert.ok(FACTS.filter(fact => fact.id !== 'C').every(fact => fact.expect === undefined && fact.aliases.length > 0));
+});
+
+test('multi-term queries and null keywords are only allowed where search can honour them', () => {
+  const checkpoint = { id: 'cp', at_s: 24 * 3600, questions: [] };
+  const ask = (keywords: string | null, mode: 'current' | 'range', expect: string[]) => questionErrors(checkpoint, { id: 'q', question: '?', keywords, mode, expect });
+  assert.deepEqual(ask(null, 'range', ['L1', 'B1']), []);
+  assert.deepEqual(ask('launch', 'current', ['L3']), []);
+  assert.deepEqual(ask('audit approved', 'current', []), []);
+  assert.match(ask('launch budget', 'range', ['L1', 'B1']).join(), /several terms/);
+  assert.match(ask(null, 'current', ['L3']).join(), /only allowed for mode range/);
 });
 
 test('splice replaces only the padded clip window and scales the clip', () => {
