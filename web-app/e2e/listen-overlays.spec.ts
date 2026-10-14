@@ -4,7 +4,7 @@ import { menuSection, openMenu } from './menu.ts';
 
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Menu' });
 
-for (const name of ['Review', 'Agents', 'Settings']) {
+for (const name of ['Meetings', 'Agents', 'Settings']) {
   test(`Menu on ${name} traps focus, closes on Escape, returns focus, and keeps capture running`, async ({ page }) => {
     await openListening(page);
     const opener = page.getByRole('button', { name: 'Menu' });
@@ -34,7 +34,7 @@ test('Ctrl+K opens the Menu from anywhere on the page and Escape returns focus t
   await page.locator('body').click({ position: { x: 5, y: 5 } });
   await page.keyboard.press('Control+k');
   await expect(dialog(page)).toBeVisible();
-  await expect(menuSection(page, 'Review')).toBeVisible();
+  await expect(menuSection(page, 'Meetings')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog(page)).toBeHidden();
   await expect(page.getByRole('button', { name: 'Menu' })).toBeFocused();
@@ -43,10 +43,10 @@ test('Ctrl+K opens the Menu from anywhere on the page and Escape returns focus t
 
 test('Sections switch inside the open Menu without closing it', async ({ page }) => {
   await openListening(page);
-  await openMenu(page, 'Review');
+  await openMenu(page, 'Meetings');
   await dialog(page).getByRole('button', { name: 'Agents' }).click();
   await expect(menuSection(page, 'Agents')).toBeVisible();
-  await expect(menuSection(page, 'Review')).toBeHidden();
+  await expect(menuSection(page, 'Meetings')).toBeHidden();
   await expect(dialog(page).getByRole('button', { name: 'Agents' })).toHaveAttribute('aria-current', 'page');
 });
 
@@ -59,17 +59,18 @@ test('Close button closes the Menu and returns focus', async ({ page }) => {
 });
 
 test('Review tabs switch by arrow keys and show truthful unavailable states', async ({ page }) => {
-  await page.route('**/api/v1/meetings?*', route =>
+  await page.route('**/api/v1/meetings?*', route => route.fulfill({ json: { meetings: [{ id: '5f0c6f7e-8d1b-4c2a-9e3f-1a2b3c4d5e6f', title: 'Pilot review', state: 'closed', started_at: '2026-09-29T09:00:00Z', timezone: 'UTC' }], next_cursor: null } }));
+  await page.route(/\/api\/v1\/(meetings\/|context\/)/, route =>
     route.fulfill({ status: 503, json: { _tag: 'Unavailable', code: 'unavailable', message: 'Meeting data unavailable', retryable: false } }));
   await openListening(page);
-  await openMenu(page, 'Review');
+  await openMenu(page, 'Meetings');
   const tabs = page.getByRole('tab');
   await expect(tabs).toHaveText(['Notes', 'Transcript', 'Recording', 'Memory', 'Context', 'Activity']);
   await tabs.first().focus();
   await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('tab', { name: 'Activity' })).toBeFocused();
   await expect(page.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('tabpanel', { name: 'Activity' })).toHaveText('Activity unavailable: Meeting data unavailable');
+  await expect(page.getByRole('tabpanel', { name: 'Activity' })).toContainText('Activity unavailable: Meeting data unavailable');
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('tabpanel', { name: 'Notes' })).toBeVisible();
 });

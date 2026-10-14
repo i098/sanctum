@@ -110,7 +110,7 @@ test('signed in: name, email, role label, keyboard focus, sign out', async ({ pa
     expect(await page.getByRole('dialog', { name: 'Menu' }).evaluate(element => element.contains(document.activeElement))).toBe(true);
     reached.add(await page.evaluate(() => document.activeElement?.textContent ?? ''));
   }
-  expect([...reached]).toEqual(expect.arrayContaining(['Close', 'Review', 'Connect sign-in', 'Sign out']));
+  expect([...reached]).toEqual(expect.arrayContaining(['Close', 'Meetings', 'Connect sign-in', 'Sign out']));
 
   await settings.getByRole('button', { name: 'Sign out' }).press('Enter');
   await expect(row(settings, 'Sign-in')).toHaveText('Signed outSign in');

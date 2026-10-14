@@ -1,4 +1,4 @@
-import { createClient } from '@sanctum/sdk';
+import { createClient, type Meeting } from '@sanctum/sdk';
 import { describe, expect, it } from 'vitest';
 import { loadReview, playbackOffset, type ReviewState, settle } from '../src/pages/listen/review-data.ts';
 
@@ -33,9 +33,9 @@ const segment = (id: string, from: number, to: number) => ({
 });
 
 /** Every state `loadReview` reports, in order. */
-async function states(client: ReturnType<typeof createClient>) {
+async function states(client: ReturnType<typeof createClient>, meeting: Meeting) {
   const seen: ReviewState[] = [];
-  await loadReview(client, new AbortController().signal, state => seen.push(state));
+  await loadReview(client, meeting, new AbortController().signal, state => seen.push(state));
   return seen;
 }
 
@@ -56,12 +56,7 @@ function fakeApi(routes: Record<string, (url: URL) => [number, unknown]>) {
 }
 
 describe('loadReview', () => {
-  it('reports no meetings instead of inventing one', async () => {
-    const { client } = fakeApi({ '/api/v1/meetings': () => [200, { meetings: [], next_cursor: null }] });
-    expect(await states(client)).toEqual([{ status: 'empty' }]);
-  });
-
-  it('reads every source of the latest meeting, pages to the end, and keeps a denied source as its own error', async () => {
+  it('reads every source of the chosen meeting, pages to the end, and keeps a denied source as its own error', async () => {
     const meeting = { id: MEETING, title: 'Pilot review', state: 'closed', started_at: '2026-09-29T09:00:00Z' };
     const receipt = { action_id: 'a1', action_key: 'gmail-send-email', meeting_id: MEETING, state: 'succeeded', attempts: 1 };
     const event = { seq: 7, meeting_id: MEETING, item: null, change: 'meeting_boundary_changed', actor: 'p1', permission_revision: 1, created_at: '2026-09-29T09:10:00Z' };
@@ -77,7 +72,7 @@ describe('loadReview', () => {
       [`/api/v1/meetings/${MEETING}/actions`]: () => [200, { actions: [receipt], next_cursor: null }],
       '/api/v1/context/changes': url => [200, { events: url.searchParams.get('cursor') === null ? [event] : [], next_cursor: 'c7' }],
     });
-    const seen = await states(client);
+    const seen = await states(client, meeting as Meeting);
     const loading = { status: 'loading' };
     expect(seen[0]).toEqual({ status: 'ok', data: { meeting, notes: loading, transcript: loading, recording: loading, context: loading, actions: loading, changes: loading } });
     // One report per source as it settles; the last holds all six.

@@ -40,7 +40,7 @@ export interface Review {
   readonly changes: Loadable<ReadonlyArray<ContextEvent>>;
 }
 
-export type ReviewState = { readonly status: 'loading' } | { readonly status: 'empty' } | Frame<Review>;
+export type ReviewState = Frame<Review>;
 
 const LOADING = { status: 'loading' } as const;
 
@@ -52,15 +52,12 @@ async function collect<A, B>(iterable: AsyncIterable<A>, items: (page: A) => Rea
 }
 
 /**
- * The most recent meeting this caller may read, then each Review source in parallel: `update`
- * receives the new state as every source settles, so one slow source never hides the others.
+ * Each Review source of one meeting in parallel: `update` receives the new state as every source
+ * settles, so one slow source never hides the others.
  * ponytail: reads whole transcripts and feeds page by page; page lazily when meetings outgrow a few thousand segments.
  */
-export async function loadReview(client: SanctumClient, signal: AbortSignal, update: (state: ReviewState) => void): Promise<void> {
+export async function loadReview(client: SanctumClient, meeting: Meeting, signal: AbortSignal, update: (state: ReviewState) => void): Promise<void> {
   const options = { signal };
-  const page = await settle(client.meetings.listMeetings({ limit: 1 }, options));
-  const meeting = page.status === 'ok' ? page.data.meetings[0] : undefined;
-  if (meeting === undefined) return update(page.status === 'error' ? page : { status: 'empty' });
   const meeting_id = meeting.id;
   let review: Review = { meeting, notes: LOADING, transcript: LOADING, recording: LOADING, context: LOADING, actions: LOADING, changes: LOADING };
   update({ status: 'ok', data: review });
