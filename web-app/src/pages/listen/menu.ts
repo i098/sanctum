@@ -1,6 +1,7 @@
 /** What the listening page wires around the Menu: its commands, its shortcut, and which section it shows. */
 import { type Dispatch, type RefObject, type SetStateAction, useCallback, useEffect, useState } from 'react';
 import { signOut, type SignInState } from '../../lib/session.ts';
+import type { MeetingRequest } from './MeetingsSection.tsx';
 import type { MenuCommand } from './menu-search.ts';
 
 /** The fixed commands the search box runs, besides opening each section. */
@@ -37,11 +38,11 @@ export function useMenuShortcut<O>(button: RefObject<HTMLElement | null>, setOve
  */
 export function useMenuSection(menuOpen: boolean, first: string) {
   const [section, setSection] = useState(first);
-  const [chosenMeeting, setChosenMeeting] = useState<string | undefined>();
+  const [chosenMeeting, setChosenMeeting] = useState<MeetingRequest | undefined>();
   useEffect(() => {
     if (!menuOpen) setChosenMeeting(undefined);
   }, [menuOpen]);
   const select = useCallback((id: string) => (setChosenMeeting(undefined), setSection(id)), []);
-  const openMeeting = useCallback((id: string) => (setChosenMeeting(id), setSection('meetings')), []);
+  const openMeeting = useCallback((id: string) => (setChosenMeeting({ id }), setSection('meetings')), []);
   return { section, chosenMeeting, select, openMeeting };
 }

@@ -1,6 +1,6 @@
 import { type ActionReceipt, type Meeting, pages, type SanctumClient } from '@sanctum/sdk';
 import { useEffect, useState } from 'react';
-import { actionName } from '../../lib/action-label.ts';
+import { actionName, upper } from '../../lib/action-label.ts';
 import { subscribeActions } from './engine.ts';
 import { collect, type Loadable, settle } from './review-data.ts';
 import { show, time } from './ReviewPanels.tsx';
@@ -26,7 +26,7 @@ function WorkReceipts({ actions }: { actions: ReadonlyArray<ActionReceipt> }) {
       {actions.map(action => (
         <li key={action.action_id}>
           <span className="listen-work-name">{actionName(action.action_key)}</span>{' '}
-          <span className="listen-work-state" data-tone={TONE[action.state]}>{action.state.replaceAll('_', ' ')}</span>{' '}
+          <span className="listen-work-state" data-tone={TONE[action.state]}>{upper(action.state.replaceAll('_', ' '))}</span>{' '}
           <span className="listen-source">
             {action.attempts} {action.attempts === 1 ? 'attempt' : 'attempts'}
             {action.reconciliation === 'pending' && ' · awaiting reconciliation'} · {time(action.updated_at)}

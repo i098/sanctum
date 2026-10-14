@@ -2,7 +2,7 @@
 const BRAND: Readonly<Record<string, string>> = { github: 'GitHub' };
 
 const words = (slug: string): string[] => slug.split(/[_-]+/).filter(Boolean);
-const upper = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
+export const upper = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
 
 /** A Pipedream app slug as its name: `google_calendar` is `Google Calendar`. */
 export const appName = (slug: string): string => BRAND[slug] ?? words(slug).map(upper).join(' ');

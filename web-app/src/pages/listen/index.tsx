@@ -345,7 +345,7 @@ export function ListenPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [toggleFullscreen]);
   const sections = [
-    { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} meetingId={chosenMeeting} /> },
+    { id: 'meetings', label: 'Meetings', body: <MeetingsSection client={client} request={chosenMeeting} /> },
     { id: 'agents', label: 'Agents', body: <AgentsSection client={client} /> },
     { id: 'apps', label: 'Apps', body: <AppsSection signIn={signIn} /> },
     { id: 'settings', label: 'Settings', body: <SettingsSection permission={snapshot.permission} engine={engine} client={client} signIn={signIn} notice={notice} onSignInChange={refreshSignIn} onWelcome={reopen} fullscreen={{ active: fullscreen, toggle: () => { toggleFullscreen(); if (!fullscreen) close(); } }} /> },

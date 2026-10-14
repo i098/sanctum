@@ -10,6 +10,9 @@ const isLive = ({ state }: Meeting): boolean => state === 'provisional' || state
 
 type Cursor = Parameters<SanctumClient['meetings']['listMeetings']>[0]['cursor'];
 
+/** A search result's meeting; each choice is a new object, so choosing the same meeting again opens it again. */
+export type MeetingRequest = { readonly id: string };
+
 const startedAt = ({ started_at, timezone }: Meeting): string =>
   new Date(started_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: timezone });
 
@@ -111,19 +114,25 @@ function MeetingList({ state, selected, onSelect }: { state: MeetingsState; sele
 const newest = (meetings: ReadonlyArray<Meeting> | null): Meeting | null => meetings?.find(isLive) ?? meetings?.[0] ?? null;
 
 /**
- * The open meeting: a search result (`meetingId`) once read, else the one chosen, else side by side the live
- * (else newest) one, as Review always did, and on a phone none, so the list shows first.
+ * The open meeting: a search result (`request`) once read, else the one chosen, else side by side the live
+ * (else newest) one, as Review always did, and on a phone none, so the list shows first. While a search
+ * result is read, or when it cannot be, no other meeting stands in for it.
  */
-function useSelection(client: SanctumClient, meetings: ReadonlyArray<Meeting> | null, meetingId: string | undefined): [Meeting | null, (meeting: Meeting | null) => void] {
-  const [chosen, choose] = useState<Meeting | null | undefined>(undefined);
+function useSelection(client: SanctumClient, meetings: ReadonlyArray<Meeting> | null, request: MeetingRequest | undefined) {
+  const [chosen, setChosen] = useState<Meeting | null | undefined | 'loading' | 'failed'>(undefined);
+  const reading = useRef<AbortController | null>(null);
   useEffect(() => {
-    if (meetingId === undefined) return;
+    if (request === undefined) return setChosen(was => (typeof was === 'string' ? undefined : was));
     const controller = new AbortController();
-    void settle(client.meetings.getMeeting({ meeting_id: meetingId }, { signal: controller.signal })).then(found => controller.signal.aborted || found.status !== 'ok' || choose(found.data));
+    reading.current = controller;
+    setChosen('loading');
+    void settle(client.meetings.getMeeting({ meeting_id: request.id }, { signal: controller.signal })).then(found => controller.signal.aborted || setChosen(found.status === 'ok' ? found.data : 'failed'));
     return () => controller.abort();
-  }, [client, meetingId]);
+  }, [client, request]);
+  const choose = useCallback((meeting: Meeting | null) => (reading.current?.abort(), setChosen(meeting)), []);
   const fallback = window.matchMedia(WIDE).matches ? newest(meetings) : null;
-  return [chosen === undefined ? fallback : chosen, choose];
+  if (chosen === 'loading' || chosen === 'failed') return { selected: null, choose, status: chosen };
+  return { selected: chosen === undefined ? fallback : chosen, choose, status: null };
 }
 
 /**
@@ -131,12 +140,14 @@ function useSelection(client: SanctumClient, meetings: ReadonlyArray<Meeting> | 
  * opens its six Review tabs beside the list (over it on a phone). Opening or closing it never
  * touches capture.
  */
-export function MeetingsSection({ client, meetingId }: { client: SanctumClient; meetingId?: string | undefined }) {
+export function MeetingsSection({ client, request }: { client: SanctumClient; request?: MeetingRequest | undefined }) {
   const state = useMeetings(client);
-  const [selected, choose] = useSelection(client, state.meetings, meetingId);
+  const { selected, choose, status } = useSelection(client, state.meetings, request);
   return (
     <div className="listen-meetings" data-open={selected ? 'true' : undefined}>
       <MeetingList state={state} selected={selected} onSelect={choose} />
+      {status === 'loading' && <p>Opening the meeting…</p>}
+      {status === 'failed' && <p role="alert">That meeting could not be opened.</p>}
       {selected && (
         <div className="listen-meetings-detail">
           <button type="button" className="listen-meetings-back" onClick={() => choose(null)}>
