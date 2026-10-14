@@ -136,8 +136,7 @@ test('a new input appears on devicechange or Refresh, and the chosen input stays
   await page.addInitScript(installInputs, INPUTS);
   await fakeServer(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const settings = await openMenu(page, 'Settings');
   const picker = settings.getByRole('combobox', { name: 'Microphone' });
   await picker.selectOption({ label: '萧 Microphone' });
   await expect(picker.locator('option')).toHaveCount(4);
@@ -157,16 +156,15 @@ test('a silent input says what to do when the laptop is closed', async ({ page }
   await page.addInitScript(installInputs, INPUTS);
   await fakeServer(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings' }).locator('.listen-input-hint')).toHaveText('If your laptop is closed, choose another microphone.', { timeout: 6_000 });
+  const settings = await openMenu(page, 'Settings');
+  await expect(settings.locator('.listen-input-hint')).toHaveText('If your laptop is closed, choose another microphone.', { timeout: 6_000 });
 });
 
 test('a silent input that is not the built-in microphone gets no laptop hint', async ({ page }) => {
   await page.addInitScript(installInputs, INPUTS);
   await fakeServer(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const settings = await openMenu(page, 'Settings');
   await settings.getByRole('combobox', { name: 'Microphone' }).selectOption({ label: 'LoomAudioDevice' });
   await expect(settings.locator('.listen-input-check')).toHaveText('This input is sending no sound.', { timeout: 6_000 });
   await expect(settings.locator('.listen-input-hint')).toHaveCount(0);
