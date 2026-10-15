@@ -49,12 +49,12 @@ export const seedMeeting = (device: AccessScope, options: { readonly started_at:
  });
 
 /** A transcript segment `[from, to)` seconds into the meeting's epoch. */
-export const seedSegment = (meeting: FixtureMeeting, from: number, to: number, text: string, status: 'final' | 'partial' = 'final') =>
+export const seedSegment = (meeting: FixtureMeeting, from: number, to: number, text: string, status: 'final' | 'partial' = 'final', track = 0) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const id = TranscriptSegmentId.make(randomUUID());
   yield* sql`INSERT INTO transcript_segments (id, workspace_id, epoch_id, track, sample_start, sample_end, text, status, revision, origin, provider, model, created_at)
-      VALUES (${id}, ${meeting.workspace_id}, ${meeting.epoch_id}, 0, ${from * SAMPLE_RATE}, ${to * SAMPLE_RATE}, ${text}, ${status}, 1, 'live', 'fixture', 'fixture-asr', UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${meeting.workspace_id}, ${meeting.epoch_id}, ${track}, ${from * SAMPLE_RATE}, ${to * SAMPLE_RATE}, ${text}, ${status}, 1, 'live', 'fixture', 'fixture-asr', UTC_TIMESTAMP(6))`;
   return id;
  });
 
