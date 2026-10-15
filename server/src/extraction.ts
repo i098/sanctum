@@ -22,10 +22,11 @@ import { type Llm, LlmClient } from './llm.ts';
 
 /**
  * The extraction role first; any failure (no key, timeout, invalid output) sends the same request once to the
- * planner's Workers AI Qwen, as the spoken classifier does. Both calls get the longer extraction timeout.
+ * planner's Workers AI Qwen, as the spoken classifier does. Both calls get the longer extraction timeout
+ * and patient retries, since these are background jobs.
  */
 const generateWithFallback = <A, I>(llm: Llm, request: { readonly name: string; readonly output: Schema.Schema<A, I>; readonly system: string; readonly prompt: string }) => {
-  const timed = { ...request, timeoutMs: engineeringDefaults.modelRequest.extractionTimeoutMs };
+  const timed = { ...request, timeoutMs: engineeringDefaults.modelRequest.extractionTimeoutMs, patient: true };
   return llm.generate('extraction', timed).pipe(
     Effect.catchAll(error =>
       Effect.zipRight(Effect.logWarning(`Extraction model unavailable for ${request.name}; falling back to planner: ${error.message}`), llm.generate('planner', timed)),
