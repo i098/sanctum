@@ -211,6 +211,10 @@ Chunk measurement on 2026-10-08, with a 22 s synthetic speech clip at normal lev
 
 Fixed cuts split words, and the 2 s cut lost the word "Sanctum" from the direct request; overlap repeats words.
 Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2.5 s (`engineeringDefaults.liveAsr`).
+Continuous speech has no quiet 20 ms, and the second soak dry run cut "Northwind" into "North" and "wind".
+A cut with sound on it, one at or above `speechFloorRms`, may fall inside a word, so the next chunk also starts `overlapMs` (0.75 s) before it and the word is whole there; a quiet cut adds no overlap.
+The answer that closes a chunk before an overlap waits for the next chunk's first answer when it ends inside that overlap; the two are joined word by word, a fragment at either edge matches its whole word, and the whole form is kept.
+Answers that share no words stay separate. A held answer is released when the stream ends or a chunk is skipped, because the next answer then repeats the skipped audio and not the held answer's.
 Results keep audio order, so one slow answer holds back every later chunk.
 Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
 With three chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
@@ -228,7 +232,8 @@ A skipped live chunk emits no text but still records coverage (see below), and a
 Past the allocation, requests cost about $0.0005 per audio minute (about $0.62 a day for the 1,240 minutes beyond it, for a listener that never goes quiet); the gate keeps a mostly quiet room far below that.
 A 429 stops requests for its `Retry-After`, else `rateLimitBackoffMs` (30 s); the live stream stays open, skipped chunks are reported as `transcription_behind` (`asr_backlog`), and archive reconciliation transcribes them later.
 After any `degraded` frame, the first live answer for audio at or after its `from_sample` (also an empty answer for silence) sends `recovered`, and the page clears the warning; an old lane's late answers do not count.
-A live chunk Whisper answered or the gate skipped records coverage for its whole span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
+A live chunk Whisper answered or the gate skipped records coverage for its span in the same write as its text, so `transcript.reconcile` does not re-send the gaps between its segments, and a failed write leaves the whole chunk uncovered for reconciliation; a chunk skipped by a 429 stays uncovered too.
+Coverage of an answered chunk stops where a held answer starts and resumes in the batch that releases it, so audio whose text is not yet stored is never covered.
 A final window inside a meeting that closed before its transcript was complete (a live answer after the close, or reconciliation) finalizes that meeting again, so its transcript status, notes and memory include that text.
 
 ## Workspace deletion decision — 2026-10-09
