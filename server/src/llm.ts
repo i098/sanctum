@@ -5,7 +5,7 @@
  * This service reports a missing key or provider failure as `Unavailable`; it never substitutes output.
  * The callers own fallbacks between roles: spoken work (classifier to planner) and extraction (docs/DECISIONS.md).
  */
-import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
+import { Context, Duration, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
 import { Unavailable } from '@sanctum/contracts';
 import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfig } from './config.ts';
 import { anthropic } from './providers/anthropic.ts';
@@ -46,6 +46,9 @@ export interface Llm {
 export class LlmClient extends Context.Tag('sanctum/LlmClient')<LlmClient, Llm>() {}
 
 
+/** Longest wait on a provider's retry delay inside one request. */
+const RETRY_AFTER_CAP_MS = 10_000;
+
 const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
   if (error instanceof Unavailable) return error;
   const retryable = error instanceof ProviderError && error.retryable;
@@ -72,7 +75,13 @@ export function makeLlm(
     return Effect.succeed({ provider, base });
   };
 
-  const retries = Schedule.exponential('250 millis').pipe(Schedule.jittered, Schedule.intersect(Schedule.recurs(budget.maxAttempts - 1)));
+  // A provider's retry delay (Retry-After, Cerebras queue backoff) raises the short jittered step, up to `RETRY_AFTER_CAP_MS` so a long hold falls to the caller's fallback.
+  const retries = Schedule.exponential('250 millis').pipe(
+    Schedule.jittered,
+    Schedule.intersect(Schedule.recurs(budget.maxAttempts - 1)),
+    Schedule.intersect(Schedule.identity<Unavailable>()),
+    Schedule.modifyDelay(([, error], delay) => Duration.max(delay, Duration.millis(Math.min(error.retry_after_ms ?? 0, RETRY_AFTER_CAP_MS)))),
+  );
 
   const call = <T>(role: ModelRoleName, timeoutMs: number, run: (provider: ModelProvider, base: ProviderRequest, signal: AbortSignal) => Promise<T>) =>
     Effect.flatMap(select(role), ({ provider, base }) =>

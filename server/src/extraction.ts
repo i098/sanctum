@@ -160,8 +160,11 @@ local is "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM", or null when it cannot be resolved;
 Never guess names, dates or facts that the transcript does not support.`;
 
 const NOTES_SYSTEM = `You write the canonical notes for a meeting from its transcript.
-Give a short title, a summary paragraph, and sections of discussion points.
+Give a short title, a summary paragraph of at most 80 words, and sections of at most 8 discussion points in total, each under 40 words.
 Every point lists in segments the transcript refs (for example ["S1", "S3"]) that support it; segments holds only refs, never text. Leave out anything the transcript does not support.`;
+
+const NOTES_TITLE_SYSTEM = `You write the title and summary of a meeting from the summaries of its consecutive parts.
+Give a short title and a summary paragraph of at most 120 words. Leave out anything the part summaries do not say.`;
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
@@ -228,20 +231,45 @@ export const extractCandidates = (input: ExtractionInput): Effect.Effect<Readonl
     return results.filter((result): result is ExtractionCandidate => typeof result !== 'string');
   });
 
-/** One canonical summary per meeting, every point cited; points citing unknown segments are dropped. */
+/** Transcript lines per notes request, so one request's output stays far below the output cap however long the meeting is. */
+const NOTES_WINDOW = 120;
+/** Notes requests in flight at once; Cerebras queues and Workers AI is slow, so this stays low. */
+const NOTES_CONCURRENCY = 3;
+
+const TitleOutput = Schema.Struct({ title: Schema.String, summary: Schema.String });
+
+/**
+ * One canonical summary per meeting, every point cited; points citing unknown segments are dropped.
+ * The transcript is summarized in windows of `NOTES_WINDOW` lines, each bounded in output; with more than
+ * one window a final request writes the title and summary from the window summaries.
+ */
 export const summarizeMeeting = (input: Omit<ExtractionInput, 'snapshot'>): Effect.Effect<MeetingNotes, Unavailable, LlmClient> =>
   Effect.gen(function* () {
     const lines = yield* timeline({ ...input, snapshot: [] });
     if (lines.length === 0) return yield* new Unavailable({ message: 'meeting has no final transcript to summarize', retryable: false });
     const llm = yield* LlmClient;
-    const { value, model } = yield* generateWithFallback(llm, {
-      name: 'meeting_notes',
-      output: NotesOutput,
-      system: NOTES_SYSTEM,
-      prompt: `Meeting timezone: ${input.meeting.timezone}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}`,
-    });
+    const windows = Array.from({ length: Math.ceil(lines.length / NOTES_WINDOW) }, (_, i) => lines.slice(i * NOTES_WINDOW, (i + 1) * NOTES_WINDOW));
+    const parts = yield* Effect.forEach(
+      windows,
+      part => generateWithFallback(llm, {
+        name: 'meeting_notes',
+        output: NotesOutput,
+        system: NOTES_SYSTEM,
+        prompt: `Meeting timezone: ${input.meeting.timezone}\n\nTranscript:\n${transcriptBlock(part, input.meeting)}`,
+      }),
+      { concurrency: NOTES_CONCURRENCY },
+    );
+    const head = parts.length === 1
+      ? parts[0]!
+      : yield* generateWithFallback(llm, {
+        name: 'meeting_notes_title',
+        output: TitleOutput,
+        system: NOTES_TITLE_SYSTEM,
+        prompt: parts.map(({ value }, i) => `Part ${i + 1}: ${value.summary}`).join('\n\n'),
+      });
     const byRef = new Map(lines.map(line => [line.ref, line]));
-    const sections = value.sections
+    const written = parts.flatMap(({ value }) => value.sections);
+    const sections = written
       .map(section => ({
         heading: section.heading.trim(),
         points: section.points
@@ -249,8 +277,8 @@ export const summarizeMeeting = (input: Omit<ExtractionInput, 'snapshot'>): Effe
           .map(point => ({ text: point.text.trim(), sources: [...new Set(point.segments)].map(ref => byRef.get(ref)!.source) })),
       }))
       .filter(section => section.points.length > 0);
-    const dropped = value.sections.reduce((count, section) => count + section.points.length, 0) - sections.reduce((count, section) => count + section.points.length, 0);
+    const dropped = written.reduce((count, section) => count + section.points.length, 0) - sections.reduce((count, section) => count + section.points.length, 0);
     if (dropped > 0) yield* Effect.logWarning(`notes dropped ${dropped} ungrounded points`);
-    if (value.summary.trim() === '') return yield* new Unavailable({ message: 'notes model returned an empty summary', retryable: false });
-    return { meeting_id: input.meeting.id, model, title: value.title.trim(), summary: value.summary.trim(), sections };
+    if (head.value.summary.trim() === '') return yield* new Unavailable({ message: 'notes model returned an empty summary', retryable: false });
+    return { meeting_id: input.meeting.id, model: head.model, title: head.value.title.trim(), summary: head.value.summary.trim(), sections };
   });

@@ -355,6 +355,16 @@ describe('Cerebras classifier client', () => {
       expect(server.seen[1]).toMatchObject({ path: '/ai/v1/chat/completions', body: { model: '@cf/qwen/qwen3.8-27b' } });
     }));
 
+  it.scopedLive('waits and retries a 429 queue_exceeded on Cerebras instead of failing at once', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([json(429, { message: 'Too many requests', type: 'too_many_requests_error', code: 'queue_exceeded' }), completion('{"work":true}')]);
+      const llm = makeLlm(roles, { cerebras: cerebras({ apiKey: 'k', baseUrl: server.url }) }, budget);
+      const started = Date.now();
+      expect((yield* llm.generate('classifier', { ...ask, output: Schema.Struct({ work: Schema.Boolean }) })).value).toEqual({ work: true });
+      expect(server.seen).toHaveLength(2);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+    }));
+
   for (const [reply, reason] of [
     [completion('{"work":true}', 'length'), 'truncated'],
     [json(200, { choices: [{ message: { content: null } }] }), 'no message content'],

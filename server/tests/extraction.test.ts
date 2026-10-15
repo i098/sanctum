@@ -255,6 +255,21 @@ describe('summarizeMeeting', () => {
       });
     }));
 
+  it.effect('summarizes a long meeting in bounded windows and writes the title from the window summaries', () =>
+    Effect.gen(function* () {
+      const long = Array.from({ length: 250 }, (_, i) => segment(i * 2, i * 2 + 1, `Line ${i + 1}.`, 'speaker_0'));
+      const window = (title: string, ref: string) => JSON.stringify({ title, summary: `${title} summary.`, sections: [{ heading: title, points: [{ text: `${title} point.`, segments: [ref] }] }] });
+      const requests: ProviderRequest[] = [];
+      const answers = [window('First', 'S1'), window('Second', 'S121'), window('Third', 'S250'), JSON.stringify({ title: 'Whole meeting', summary: 'All three parts.' })];
+      const notes = yield* Effect.provide(summarizeMeeting({ meeting, segments: long, epochs: anchors }), fixtureLlm(answers, requests));
+      expect(requests.map(request => request.json!.name)).toEqual(['meeting_notes', 'meeting_notes', 'meeting_notes', 'meeting_notes_title']);
+      expect(requests.map(request => request.prompt.split('\n').filter(line => /^S\d+ /.test(line)).length)).toEqual([120, 120, 10, 0]);
+      expect(requests.every(request => request.maxOutputTokens <= engineeringDefaults.modelRequest.maxOutputTokens)).toBe(true);
+      expect(requests[3]!.prompt).toContain('Part 3: Third summary.');
+      expect([notes.title, notes.summary, notes.sections.map(section => section.heading)]).toEqual(['Whole meeting', 'All three parts.', ['First', 'Second', 'Third']]);
+      expect(notes.sections[2]!.points[0]!.sources).toEqual([source(long[249]!, 498_000, 499_000)]);
+    }));
+
   it.effect('refuses to summarize a meeting without final transcript', () =>
     Effect.gen(function* () {
       const failure = yield* Effect.flip(Effect.provide(summarizeMeeting({ meeting, segments: [], epochs: anchors }), fixtureLlm(['{}'])));
