@@ -48,13 +48,13 @@ const SHARE_MS = 60_000;
 const STATUS_MS = 30_000;
 
 /**
- * Prices fetched 2026-10-14 (see README.md); extraction is an estimate, not a measurement.
- * Extraction runs on Cerebras ($0.99 per M input, $1.49 per M output tokens). The second 1 h dry run made 148 `context.refresh`
- * calls for 40 speech minutes, averaging about 5.8 k input tokens (the meeting's growing context plus up to 40 segments) and 0.5 k output.
+ * Prices fetched 2026-10-14 (see README.md); extraction is priced from measured call counts, because the API does not meter cost.
+ * Extraction runs on Cerebras. Dry run 3 measured about 6.2 `context.refresh` calls per speech minute at about $0.0016 each;
+ * with Whisper and notes the total is about $0.011 per speech minute (soak-dryrun3 report, "Go / no-go").
  */
 const RATES = {
   whisper_per_audio_min: 0.0005,
-  extraction_per_audio_min: 4 * ((6_000 * 0.99 + 500 * 1.49) / 1e6), // 4 refresh calls per speech minute
+  extraction_per_audio_min: 6.2 * 0.0016, // dry run 3 measured: 6.2 refresh calls per speech minute at about $0.0016 per call
   container_per_s: 0.7 / 86_400,
   r2_put: 4.5e-6,
 };

@@ -57,7 +57,9 @@ interface FactPlan {
 }
 
 // ponytail: voices are the three Aura-2 speakers checked against the live API; add more when variety matters.
-const KEY_FACTS: ReadonlyArray<FactPlan> = [
+/** Spoken lead-in before each fact: speech-to-text clips the first words of a short clip, so the fact starts after a fixed phrase. */
+const lead = (spoken: string) => `For the record, ${spoken}`;
+const KEY_FACTS_PLAIN: ReadonlyArray<FactPlan> = [
   { id: 'L1', kind: 'fact', meeting: 0, offset: 600, voice: 'luna', spoken: 'We decided the launch date is November 3.', answer: 'November 3', aliases: ['Nov 3', 'Nov 3rd', 'November 3', 'November 3rd', '3 November', '11/3'], keywords: 'launch', tests: 'basic recall' },
   { id: 'V0', kind: 'distractor', meeting: 0, offset: 1080, voice: 'orion', spoken: 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.', answer: 'Northwood', aliases: ['Northwood Freight', 'Northwood'], keywords: 'shipping', tests: 'look-alike vendor that was rejected' },
   { id: 'V1', kind: 'fact', meeting: 0, offset: 1560, voice: 'apollo', spoken: 'We chose Northwind Freight for shipping.', answer: 'Northwind', aliases: ['Northwind Freight', 'Northwind'], keywords: 'shipping', tests: 'look-alike distractor of V0' },
@@ -71,6 +73,7 @@ const KEY_FACTS: ReadonlyArray<FactPlan> = [
   { id: 'O2', kind: 'fact', meeting: 15, offset: 1800, voice: 'orion', spoken: 'Marcus takes over onboarding.', answer: 'Marcus', aliases: ['Marcus'], keywords: 'onboarding', supersedes: 'O1', tests: 'owner change' },
   { id: 'R', kind: 'fact', meeting: 22, offset: 1800, voice: 'apollo', spoken: 'The rollout region is eu-west.', answer: 'eu-west', aliases: ['eu-west', 'eu west', 'EU West', 'Europe West'], keywords: 'rollout', tests: 'newest fact at the last checkpoint' },
 ];
+const KEY_FACTS: ReadonlyArray<FactPlan> = KEY_FACTS_PLAIN.map(fact => ({ ...fact, spoken: lead(fact.spoken) }));
 
 /** Bulk facts per meeting: one per `BULK_TOPICS` entry, 240 s apart from 270 s, so a checkpoint's recall has a grain of 1 / (questions asked), not 1 / 2. */
 // Each meeting gets its own project word, so "<project> <topic word>" names exactly one fact; the values are the filler of the fact, not the key.
@@ -91,7 +94,7 @@ const BULK_TOPICS: ReadonlyArray<{ word: string; say: (p: string, v: string) => 
 const BULK = PROJECTS.flatMap((project, meeting) => BULK_TOPICS.map((topic, t) => {
   const value = topic.values[(meeting + t * 5) % topic.values.length]!;
   const aliases = value.split('|');
-  const fact: FactPlan = { id: `F${String(meeting).padStart(2, '0')}-${t}`, kind: 'fact', meeting, offset: 270 + t * 240, voice: ['luna', 'orion', 'apollo'][(meeting + t) % 3]!, spoken: topic.say(project, value), answer: aliases[0]!, aliases, keywords: `${project} ${topic.word}`, tests: 'bulk recall' };
+  const fact: FactPlan = { id: `F${String(meeting).padStart(2, '0')}-${t}`, kind: 'fact', meeting, offset: 270 + t * 240, voice: ['luna', 'orion', 'apollo'][(meeting + t) % 3]!, spoken: lead(topic.say(project, value)), answer: aliases[0]!, aliases, keywords: `${project} ${topic.word}`, tests: 'bulk recall' };
   return { fact, question: topic.ask(project) };
 }));
 
