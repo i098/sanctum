@@ -22,20 +22,24 @@ export const properNouns = (text: string): Array<string> => {
   return terms;
 };
 
-/** `items`: the texts of the workspace's visible committed items, newest first; each name keeps its first appearance. */
+/** `items`: the texts of the visible committed items, newest first, or none; each name keeps its first appearance. */
 export const asrVocabulary = (items: Iterable<string>) => {
   const known = new Map<string, string>();
   for (const text of items) for (const term of properNouns(text)) if (!known.has(term.toLowerCase())) known.set(term.toLowerCase(), term);
   /** Oldest first; a repeated term moves to the newest place. */
-  const heard = new Map<string, string>();
+  let heard = new Map<string, string>();
   return {
-    /** Adds the proper nouns of one final transcript text, keeping the newest `HEARD_TERMS`. */
-    heard: (text: string) =>
-      properNouns(text).forEach(term => {
-        heard.delete(term.toLowerCase());
-        heard.set(term.toLowerCase(), term);
-        if (heard.size > HEARD_TERMS) heard.delete(heard.keys().next().value!);
-      }),
+    /** Replaces the heard names with the newest `HEARD_TERMS` of the current meeting's finals, given oldest first. */
+    hear: (finals: Iterable<string>) => {
+      const terms = new Map<string, string>();
+      for (const text of finals) {
+        for (const term of properNouns(text)) {
+          terms.delete(term.toLowerCase());
+          terms.set(term.toLowerCase(), term);
+        }
+      }
+      heard = new Map([...terms].slice(-HEARD_TERMS));
+    },
     prompt: () => [...[...heard.values()].reverse(), ...[...known].filter(([key]) => !heard.has(key)).map(([, term]) => term)].slice(0, PROMPT_TERMS).join(', '),
   };
 };

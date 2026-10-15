@@ -237,9 +237,10 @@ A live caption arrives about 3 s later on average (estimate: half a chunk plus t
 
 In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
 In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
-Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read (the `searchContext` visibility), newest item first, each name once; the whole prompt stops after 20 names.
-The item names are read once at session start; names from a restricted meeting without `meeting_access` never enter the prompt.
-A reconnect reads the capture's last finals again, so the names stay.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of the finals of the listener's open meeting, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read, newest item first, each name once; the whole prompt stops after 20 names.
+Item names need `context:read` and the `searchContext` visibility, so names from a restricted meeting without `meeting_access` never enter the prompt, and a capture-only device gets heard names only; they are read once at session start.
+Heard names are read again from the open meeting's finals after each answer, and a reconnect reads them the same way; with no open meeting (after an End) there are none.
+So names from an earlier meeting of an all-day capture do not reach the next meeting, except in chunks sent before the answer that starts the next meeting is placed, because the boundary is known only from that answer.
 Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
 Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
 

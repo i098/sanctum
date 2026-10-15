@@ -11,16 +11,23 @@ describe('ASR hint', () => {
   it('puts heard names first, newest first, then item names, newest item first, each once', () => {
     const vocabulary = asrVocabulary(['We keep the Falcon tickets in Asana.', 'Ask Peter about Falcon and asana.', 'Then Northwind shipped.']);
     expect(vocabulary.prompt()).toBe('Falcon, Asana, Peter, Northwind');
-    vocabulary.heard('then the Falcon met PETER and Dublin');
-    expect(vocabulary.prompt()).toBe('Dublin, PETER, Falcon, Asana, Northwind');
-    vocabulary.heard('back to Falcon');
+    vocabulary.hear(['then the Falcon met PETER and Dublin', 'back to Falcon']);
     expect(vocabulary.prompt()).toBe('Falcon, Dublin, PETER, Asana, Northwind');
+  });
+
+  it('replaces the heard names with those of the current meeting', () => {
+    const vocabulary = asrVocabulary([]);
+    vocabulary.hear(['the codename is Bluebird']);
+    vocabulary.hear(['the Walnut room is booked']);
+    expect(vocabulary.prompt()).toBe('Walnut');
+    vocabulary.hear([]);
+    expect(vocabulary.prompt()).toBe('');
   });
 
   it('keeps the newest heard names and bounds the whole prompt', () => {
     const vocabulary = asrVocabulary([`see ${Array.from({ length: PROMPT_TERMS }, (_, i) => `Known${i}`).join(' ')}`]);
     expect(vocabulary.prompt().split(', ')).toHaveLength(PROMPT_TERMS);
-    vocabulary.heard(`we said ${Array.from({ length: HEARD_TERMS + 1 }, (_, i) => `Name${i}`).join(' ')}`);
+    vocabulary.hear([`we said ${Array.from({ length: HEARD_TERMS + 1 }, (_, i) => `Name${i}`).join(' ')}`]);
     expect(vocabulary.prompt().split(', ')).toEqual([
       ...Array.from({ length: HEARD_TERMS }, (_, i) => `Name${HEARD_TERMS - i}`),
       ...Array.from({ length: PROMPT_TERMS - HEARD_TERMS }, (_, i) => `Known${i}`),
