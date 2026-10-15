@@ -386,6 +386,29 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
+  it.scopedLive('sends the prompt current when each chunk goes out as initial_prompt, and none while it is empty', () =>
+    Effect.gen(function* () {
+      let arrived = () => {};
+      const firstRequest = new Promise<void>(resolve => (arrived = resolve));
+      const server = yield* localServer((_request, _body, response) => {
+        arrived();
+        response.end(JSON.stringify({ result: { text: 'words', segments: [{ start: 0, end: 1, text: 'words' }] } }));
+      });
+      let prompt = '';
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void, () => prompt);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      // 6.5 s of sound and a 300 ms pause end the first chunk; 1 s more is the second.
+      const audio = new Int16Array(124_800).fill(8_000).fill(0, 104_000, 108_800);
+      for (let at = 0; at < 108_800; at += 1_600) stream.send(audio.subarray(at, at + 1_600), false);
+      yield* Effect.promise(() => firstRequest);
+      prompt = 'Falcon, Asana';
+      for (let at = 108_800; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600), false);
+      yield* stream.finish;
+      yield* collected.await;
+      expect(server.requests.map(request => JSON.parse(request.body.toString()).initial_prompt)).toEqual([undefined, 'Falcon, Asana']);
+    }),
+  );
+
   it.effect('reports missing settings as unavailable instead of pretending to transcribe', () =>
     Effect.gen(function* () {
       const stt = yield* Effect.provide(SpeechToText, SpeechToTextLive.pipe(Layer.provide(withConfig({ WORKERS_AI_ACCOUNT_ID: 'acct' }))));

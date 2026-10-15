@@ -7,8 +7,9 @@
  * that stream or request; callers map them to epoch samples through the anchor they persisted
  * (provider_connections). Whisper invents text such as "Thank you." on silence and room noise, so
  * audio without sustained sound is never sent, `vad_filter` drops silence inside a request, and a
- * segment Whisper scores as likely no speech is dropped. API and segment fields per
- * developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo (checked 2026-10-09).
+ * segment Whisper scores as likely no speech is dropped. Each live chunk carries the stream's current
+ * `initial_prompt`, so names said earlier are spelled the same way again. API and segment fields per
+ * developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo (checked 2026-10-15).
  */
 import { Context, Effect, Option, Queue, Redacted, Schema, type Scope, Stream } from 'effect';
 import { MAX_FRAME_SAMPLES, Unavailable } from '@sanctum/contracts';
@@ -50,7 +51,12 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
   {
     readonly provider: string;
     readonly model: string;
-    readonly openStream: (sample_rate: number, behind: (offset: number) => Effect.Effect<void>) => Effect.Effect<AsrStream, Unavailable, Scope.Scope>;
+    /** `prompt` is read once per chunk and sent as Whisper's `initial_prompt` when not empty. */
+    readonly openStream: (
+      sample_rate: number,
+      behind: (offset: number) => Effect.Effect<void>,
+      prompt?: () => string,
+    ) => Effect.Effect<AsrStream, Unavailable, Scope.Scope>;
     readonly transcribe: (sample_rate: number, samples: Int16Array) => Effect.Effect<ReadonlyArray<AsrResult>, Unavailable>;
   }
 >() {}
@@ -158,13 +164,13 @@ const toResults = (result: typeof WhisperResponse.Type.result) => {
   );
 };
 
-const requestSegments = (url: string, token: string, wav: Uint8Array, limits: WhisperConfig['liveAsr']) =>
+const requestSegments = (url: string, token: string, wav: Uint8Array, limits: WhisperConfig['liveAsr'], prompt: string) =>
   Effect.gen(function* () {
     const response = yield* Effect.tryPromise(signal =>
       fetch(url, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength).toString('base64'), vad_filter: true }),
+        body: JSON.stringify({ audio: Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength).toString('base64'), vad_filter: true, ...(prompt === '' ? {} : { initial_prompt: prompt }) }),
         signal: AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)]),
       }),
     ).pipe(Effect.mapError(error => unavailable(`request failed: ${String(error.cause)}`)));
@@ -186,14 +192,14 @@ export function whisperSpeechToText(config: WhisperConfig) {
     onSome: Effect.succeed,
   });
 
-  const transcribe = (sample_rate: number, samples: Int16Array) =>
+  const transcribe = (sample_rate: number, samples: Int16Array, prompt = '') =>
     Effect.gen(function* () {
       const { url, token } = yield* configured;
       if (!hasSustainedSound(samples, Math.round((20 * sample_rate) / 1000), limits.speechFloorRms)) return [];
-      return yield* requestSegments(url, token, wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]), limits);
+      return yield* requestSegments(url, token, wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]), limits, prompt);
     });
 
-  const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>) =>
+  const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>, prompt: () => string = () => '') =>
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
@@ -232,7 +238,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const shift = (offset - lead) / sample_rate;
         const skipped = Effect.as(behind(offset), [null] as ReadonlyArray<Answered | null>);
         if (Date.now() < pausedUntil) return skipped;
-        const request = transcribe(sample_rate, samples);
+        const request = transcribe(sample_rate, samples, prompt());
         // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
         // The duplicate is never sent during a 429 pause and never wins by failing: the original settles the chunk then.
         const hedge = Effect.suspend(() => (Date.now() < pausedUntil ? Effect.never : request)).pipe(Effect.delay(limits.hedgeMs), Effect.catchAll(() => Effect.never));

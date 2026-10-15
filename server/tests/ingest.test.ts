@@ -8,6 +8,7 @@ import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
+import { createProfile } from '../src/store.ts';
 import { coverageIn, finalSegments, uncovered } from '../src/transcripts.ts';
 import { deleteWorkspace } from '../src/workspaces.ts';
 import {
@@ -148,6 +149,25 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const anchors = yield* sql<{ anchor_sample: string; closed: number }>`
         SELECT anchor_sample, closed_at IS NOT NULL AS closed FROM provider_connections WHERE epoch_id = ${epoch_id} ORDER BY opened_at`;
       expect(anchors.map(row => [row.anchor_sample, Number(row.closed)])).toEqual([['0', 1], ['3200', 0]]);
+    }),
+  );
+
+  it.scoped('prompts Whisper with names this capture heard and the workspace profiles, also after a reconnect', () =>
+    Effect.gen(function* () {
+      const { access, speech, socket, connect } = yield* setup;
+      socket.send(pcmFrame(0, 0));
+      const first = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
+      expect(first!.prompt()).toBe('');
+      first!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the Falcon tickets live in Asana.', confidence: 0.9, speaker: '0' });
+      yield* eventually(Effect.sync(() => first!.prompt()), prompt => prompt === 'Falcon, Asana');
+      yield* createProfile(access.workspace_id, { kind: 'organization', principal_id: null, display_name: 'Northwind Freight', details: {} });
+      socket.close();
+      yield* eventually(Effect.sync(() => first!.finished), finished => finished === true);
+
+      const { socket: resumed } = yield* connect;
+      resumed.send(pcmFrame(1, 1_600));
+      const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
+      expect(second!.prompt()).toBe('Falcon, Asana, Northwind Freight');
     }),
   );
 

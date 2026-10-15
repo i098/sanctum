@@ -232,9 +232,28 @@ Replay of the dry-run audio through the live adapter on 2026-10-15 (the 11 plant
 | Quietest 20 ms between 1.5 s and 2.5 s | 301 | 2.1 s | 1.6 s / 5.7 s | 7 of 11 | 2 of 11 |
 | First pause after 6 s, else quietest 20 ms by 10 s | 105 | 6.4 s | 2.6 s / 6.9 s | 11 of 11 | 9 of 11 |
 
-The longer chunks heard "Asana", "Falcon" and "Northwind" right, so no `initial_prompt` vocabulary hint is sent.
 Requests send about 10 % more audio (680 s against 616 s); the cost per audio minute does not change.
 A live caption arrives about 3 s later on average (estimate: half a chunk plus the answer, 5.8 s against 2.7 s); a word waits at most 10 s for its chunk to close.
+
+In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
+In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, then the 15 most recently updated workspace profile names, nearest the audio.
+A reconnect reads the capture's last finals again, so the names stay.
+Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
+Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
+
+| Prompt | "Falcon tickets live in Asana" (1470 s) | "Falcon standup is in the Walnut room" (1711 s) | Requests | Answer p50 / p95 |
+| --- | --- | --- | --- | --- |
+| None | "a sauna" | "fountain stand-up ... walnut realm" | 256 | 3.0 s / 9.2 s |
+| Names heard in the meeting | "a sauna" | "Falcon stand-up ... walnut realm" | 246 | 2.6 s / 6.9 s |
+| Names heard plus an "Asana" profile | "Asana" | "Falcon stand-up ... walnut realm" | 251 | 2.8 s / 8.5 s |
+
+A name never said before and not in a profile stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
+"Walnut realm" is in the audio itself (Nova-3 and `@cf/openai/whisper` hear it too); the transcript sentence now carries "Falcon" and "walnut".
+A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart.
+The prompt adds no audio, so the cost per audio minute does not change; the answer time stayed within run-to-run noise.
+whisper-large-v3 (non-turbo) is not in the Workers AI catalog.
+The older `@cf/openai/whisper` wrote "Asana" in 1 of 3 chunk windows and "Assana" in 2, changed "For the record" to "Though the record", and one answer took 68 s, so turbo stays.
 
 The answer that closes a chunk before an overlap waits for the next chunk's first answer when it ends inside that overlap; the two are joined word by word, a fragment at either edge matches its whole word, and the whole form is kept.
 Answers that share no words stay separate. A held answer is released when the stream ends or a chunk is skipped, because the next answer then repeats the skipped audio and not the held answer's.

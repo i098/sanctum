@@ -53,6 +53,8 @@ interface FakeStream {
   readonly sample_rate: number;
   received: number;
   backlog: number;
+  /** The Whisper prompt the session gave this connection, read as the provider would per chunk. */
+  readonly prompt: () => string;
   finished: boolean;
   /** The connection's scope closed (socket and keep-alive released). */
   released: boolean;
@@ -81,7 +83,7 @@ export function fakeSpeech() {
   const service = SpeechToText.of({
     provider: 'fake',
     model: 'fake-1',
-    openStream: sample_rate =>
+    openStream: (sample_rate, _behind, prompt = () => '') =>
       Effect.gen(function* () {
         if (controls.openFailures > 0) {
           controls.openFailures--;
@@ -91,6 +93,7 @@ export function fakeSpeech() {
         const stream: FakeStream = {
           sample_rate,
           received: 0,
+          prompt,
           backlog: 0,
           finished: false,
           released: false,

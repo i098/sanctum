@@ -29,6 +29,7 @@ import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
+import { asrVocabulary, HEARD_TERMS, KNOWN_TERMS } from './asr-hint.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
@@ -163,6 +164,20 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
+/** Whisper's prompt: names this capture already heard, so a reconnect keeps them, then the workspace's people and organizations. */
+const captureVocabulary = (workspace_id: AccessScope['workspace_id'], { epoch_id, track }: typeof StartMessage.Type) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [profiles, heard] = yield* Effect.all([
+      sql<{ display_name: string }>`SELECT display_name FROM profiles WHERE workspace_id = ${workspace_id} ORDER BY updated_at DESC LIMIT ${KNOWN_TERMS}`,
+      sql<{ text: string }>`SELECT text FROM transcript_segments WHERE workspace_id = ${workspace_id} AND epoch_id = ${epoch_id} AND track = ${track}
+        AND status = 'final' ORDER BY sample_start DESC LIMIT ${HEARD_TERMS * 4}`,
+    ]).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR vocabulary not read', error), [[], []] as const)));
+    const vocabulary = asrVocabulary(profiles.map(row => row.display_name).reverse());
+    for (const row of heard.toReversed()) vocabulary.heard(row.text);
+    return vocabulary;
+  });
+
 /**
  * The live-ASR lane of one session: at most one provider connection, anchored at the sample it
  * started from. Gaps, overload and failures detach it and report the range as degraded.
@@ -181,6 +196,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let retryAt = 0;
     let providerDown = false;
     const { degrade, answered } = asrHealth(send);
+    const vocabulary = yield* captureVocabulary(workspace_id, start);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -214,7 +230,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const opened = yield* stt
-          .openStream(rate, offset => degrade('asr_backlog', anchor + offset))
+          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), vocabulary.prompt)
           .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);
@@ -232,6 +248,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(batch =>
             Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)).pipe(
+              Effect.tap(() => batch.results.forEach(result => vocabulary.heard(result.text))),
               Effect.flatMap(end => (end === null ? Effect.void : speech.onCovered(end))),
             ),
           ),
