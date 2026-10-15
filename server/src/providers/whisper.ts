@@ -1,8 +1,8 @@
 /**
  * Speech-to-text on Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`, plan
  * section 09) over REST, sending mono PCM16 WAV. Whisper is batch-only: a live stream buffers PCM
- * and posts short chunks cut at the quietest moment (`engineeringDefaults.liveAsr`). A cut with sound on it
- * may fall inside a word, so the next chunk starts `overlapMs` before it and `joinOverlap` repeats no word;
+ * and posts chunks of at least `minMs` cut in a pause (`engineeringDefaults.liveAsr`). Without a pause by `maxMs`
+ * the cut falls at the quietest 20 ms, maybe inside a word, so the next chunk starts `overlapMs` before it and `joinOverlap` repeats no word;
  * every result is final. Times are seconds from the first sample sent on
  * that stream or request; callers map them to epoch samples through the anchor they persisted
  * (provider_connections). Whisper invents text such as "Thank you." on silence and room noise, so
@@ -62,6 +62,8 @@ const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const NO_SPEECH_PROB = 0.6;
 /** Sound must stay at the speech floor this long; a click, tap or breath in a quiet chunk is shorter than one word. */
 const SUSTAINED_SOUND_MS = 100;
+/** Quiet this long is a pause between words; the joint inside a spoken "Northwind" measured one quiet 20 ms window. */
+const PAUSE_MS = 200;
 
 const WhisperResponse = Schema.Struct({
   result: Schema.Struct({
@@ -81,7 +83,7 @@ const meanSquare = (samples: Int16Array, from: number, to: number) => {
   return energy / (to - from);
 };
 
-/** Middle of the quietest 20 ms window in `[min, max)`, so a chunk boundary falls between words. */
+/** Middle of the quietest 20 ms window in `[min, max)`: the cut when no pause came, likely between words but not surely. */
 function quietestCut(samples: Int16Array, min: number, max: number, frame: number): number {
   let cut = max;
   let lowest = Infinity;
@@ -191,17 +193,21 @@ export function whisperSpeechToText(config: WhisperConfig) {
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
-      const [min, max, frame, overlap] = [samplesIn(limits.minMs), samplesIn(limits.maxMs), samplesIn(20), samplesIn(limits.overlapMs)];
+      const [min, max, frame, overlap, pause] = [samplesIn(limits.minMs), samplesIn(limits.maxMs), samplesIn(20), samplesIn(limits.overlapMs), samplesIn(PAUSE_MS)];
+      const quiet = limits.speechFloorRms ** 2;
       const chunks = yield* Queue.unbounded<Chunk | null>();
-      // The `lead` samples repeated from the last send plus under `max` samples stay after each send, and one frame holds at most MAX_FRAME_SAMPLES.
-      const buffer = new Int16Array(overlap + max + MAX_FRAME_SAMPLES);
+      // The `lead` samples repeated from the last send plus under `max` samples and one window stay after each send, and one frame holds at most MAX_FRAME_SAMPLES.
+      const buffer = new Int16Array(overlap + max + frame + MAX_FRAME_SAMPLES);
       let filled = 0;
       let lead = 0;
       let offset = 0;
       let queued = 0;
       let pausedUntil = 0;
       let open = true;
-      /** `repeated` samples at the end of this chunk start the next one: a cut with sound on it may fall inside a word, a quiet cut falls between words. */
+      // The pause search starts half a pause before `min`, so a pause cut, which falls in its middle, never leaves a chunk shorter than `min`.
+      let scan = min - (pause >> 1);
+      let quietRun = 0;
+      /** `repeated` samples at the end of this chunk start the next one: a cut outside a pause may fall inside a word. */
       const enqueue = (length: number, repeated: number) => {
         const samples = buffer.slice(0, length);
         chunks.unsafeOffer({ offset, lead, repeated, samples });
@@ -210,10 +216,8 @@ export function whisperSpeechToText(config: WhisperConfig) {
         lead = repeated;
         buffer.copyWithin(0, length - lead, filled);
         filled -= length - lead;
-      };
-      const enqueueCut = (cut: number) => {
-        const sound = meanSquare(buffer, cut - (frame >> 1), cut + (frame >> 1)) >= limits.speechFloorRms ** 2;
-        enqueue(cut, sound ? Math.min(overlap, cut) : 0);
+        scan = lead + min - (pause >> 1);
+        quietRun = 0;
       };
       const transcribeChunk = ({ offset, lead, repeated, samples }: Chunk): Effect.Effect<ReadonlyArray<Answered | null>, Unavailable> => {
         queued -= samples.byteLength;
@@ -263,7 +267,12 @@ export function whisperSpeechToText(config: WhisperConfig) {
           if (!open) return false;
           buffer.set(samples, filled);
           filled += samples.length;
-          while (filled >= lead + max) enqueueCut(quietestCut(buffer, lead + min, lead + max, frame));
+          while (scan + frame <= filled) {
+            quietRun = meanSquare(buffer, scan, scan + frame) < quiet ? quietRun + frame : 0;
+            scan += frame;
+            if (quietRun >= pause) enqueue(scan - (pause >> 1), 0);
+            else if (scan >= lead + max) enqueue(quietestCut(buffer, lead + min, lead + max, frame), overlap);
+          }
           return true;
         },
         backlogBytes: () => queued,

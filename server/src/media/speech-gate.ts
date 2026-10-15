@@ -184,13 +184,13 @@ export const speechController = (options: {
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
     let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
     const seenFinals = new Set<TranscriptSegment['id']>();
-    let turnTimer: Fiber.RuntimeFiber<void> | null = null;
-    let speaking: Fiber.RuntimeFiber<void> | null = null;
+    let turnTimer: Fiber.Fiber<void> = Fiber.void;
+    let speaking: Fiber.Fiber<void> = Fiber.void;
 
     const cancel = (reason: SpeechCancelReason) =>
       Effect.gen(function* () {
         const message = gate.cancel(listener_id, reason);
-        if (speaking) yield* Fiber.interrupt(speaking);
+        yield* Fiber.interrupt(speaking);
         if (message) yield* send(message);
       });
 
@@ -221,7 +221,7 @@ export const speechController = (options: {
         } else {
           turn = { epoch_id, segments: [segment], sample_start, sample_end };
         }
-        if (turnTimer) yield* Fiber.interrupt(turnTimer);
+        yield* Fiber.interrupt(turnTimer);
         turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
       });
 
@@ -237,10 +237,15 @@ export const speechController = (options: {
           if (role === 'interrupt') yield* cancel('barge_in');
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
+      /**
+       * Live speech-to-text answered the audio up to `sample_end`: a turn that ended `endOfTurnMs` before it is complete now, without the
+       * `turnWaitMs` wait. Its timer then finds no turn, and a newer turn's first segment replaces that timer.
+       */
+      onCovered: (sample_end: number) => (turn && sample_end - turn.sample_end >= endOfTurnSamples ? completeTurn : Effect.void),
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */
       onEnd: (reason: 'pause' | 'disconnect') =>
         Effect.gen(function* () {
-          if (turnTimer) yield* Fiber.interrupt(turnTimer);
+          yield* Fiber.interrupt(turnTimer);
           turn = null;
           yield* cancel(reason);
         }),

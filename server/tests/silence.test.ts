@@ -112,6 +112,20 @@ describe('speech gate', () => {
       expect(synthesized.slice(-2)).toEqual(['The next item is hiring.', 'Then budget.']);
     }));
 
+  it.effect('speaks a direct request once live speech-to-text answered a pause past it, without the turn wait', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.make('Hiring is next.'));
+      yield* session.onSegment(heard('Sanctum, what is next?', 10_000, 11_000));
+      yield* session.onCovered(((11_000 + endOfTurnMs - 20) * RATE) / 1000);
+      yield* settle(100);
+      expect(session.requests).toEqual([]); // a pause shorter than a turn end may still continue the request
+      yield* session.onCovered(((11_000 + endOfTurnMs) * RATE) / 1000);
+      yield* settle(100);
+      expect(session.requests).toEqual(['what is next?']);
+      yield* settle(turnWaitMs);
+      expect(session.requests).toEqual(['what is next?']);
+    }));
+
   for (const order of [[0, 2, 1], [2, 1, 0]] as const) {
     it.effect(`preserves the ordered request for speech and work when finals arrive ${order.join(',')}`, () =>
       Effect.gen(function* () {
@@ -254,7 +268,7 @@ describe('speech gate', () => {
       yield* settle(endOfTurnMs);
       const cancels = session.sent.filter(message => message._tag === 'speech_cancel');
       expect(cancels).toContainEqual({ _tag: 'speech_cancel', generation: first.generation, reason: 'barge_in' });
-      yield* settle(10_000);
+      yield* settle(turnWaitMs + 1_500);
       const later = session.chunks().filter(chunk => chunk.request_id !== first.request_id);
       expect(later.length).toBeGreaterThan(0);
       expect(later.every(chunk => chunk.generation > first.generation)).toBe(true);

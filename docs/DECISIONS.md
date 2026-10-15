@@ -211,20 +211,41 @@ Chunk measurement on 2026-10-08, with a 22 s synthetic speech clip at normal lev
 | Cut at the quietest 20 ms between 1.5 s and 2.5 s | 0.028 | 0.028 |
 
 Fixed cuts split words, and the 2 s cut lost the word "Sanctum" from the direct request; overlap repeats words.
-Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2.5 s (`engineeringDefaults.liveAsr`).
-Continuous speech has no quiet 20 ms, and the second soak dry run cut "Northwind" into "North" and "wind".
-A cut with sound on it, one at or above `speechFloorRms`, may fall inside a word, so the next chunk also starts `overlapMs` (0.75 s) before it and the word is whole there; a quiet cut adds no overlap.
+Sanctum first cut each live chunk at the quietest 20 ms between 1.5 s and 2.5 s.
+The third soak dry run (2026-10-15) showed two faults in that rule.
+Chunks of 1.5–2.5 s misheard names: "Asana" as "a sauna", "Falcon" as "Mexican".
+The quietest 20 ms inside a spoken "Northwind" was under `speechFloorRms`, so the cut fell inside the word and no overlap was added.
+
+Sanctum therefore sends live chunks of at least 6 s (`minMs`, `engineeringDefaults.liveAsr`) unless the stream ends.
+The first 200 ms pause under `speechFloorRms` after 6 s ends the chunk with no overlap; a stop consonant or a joint inside a word is shorter.
+Without a pause by 10 s (`maxMs`), the cut falls at the quietest 20 ms, which may be inside a word.
+The next chunk then also starts `overlapMs` (0.75 s) before the cut, so the word is whole there.
+
+Replay of the dry-run audio through the live adapter on 2026-10-15 (the 11 planted facts, 60 s around each; Whisper large-v3-turbo):
+
+| Live chunk | Requests | Chunk p50 | Answer p50 / p95 | Facts with every word right | Fact sentence in one segment |
+| --- | --- | --- | --- | --- | --- |
+| Quietest 20 ms between 1.5 s and 2.5 s | 301 | 2.1 s | 1.6 s / 5.7 s | 7 of 11 | 2 of 11 |
+| First pause after 6 s, else quietest 20 ms by 10 s | 105 | 6.4 s | 2.6 s / 6.9 s | 11 of 11 | 9 of 11 |
+
+The longer chunks heard "Asana", "Falcon" and "Northwind" right, so no `initial_prompt` vocabulary hint is sent.
+Requests send about 10 % more audio (680 s against 616 s); the cost per audio minute does not change.
+A live caption arrives about 3 s later on average (estimate: half a chunk plus the answer, 5.8 s against 2.7 s); a word waits at most 10 s for its chunk to close.
+
 The answer that closes a chunk before an overlap waits for the next chunk's first answer when it ends inside that overlap; the two are joined word by word, a fragment at either edge matches its whole word, and the whole form is kept.
 Answers that share no words stay separate. A held answer is released when the stream ends or a chunk is skipped, because the next answer then repeats the skipped audio and not the held answer's.
 Results keep audio order, so one slow answer holds back every later chunk.
 Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
-With three chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
-Up to eight chunks are therefore in flight, and a chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins, but the duplicate never wins by failing and is not sent during a 429 pause.
+With three 2 s chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
+Four chunks of at least 6 s are therefore in flight (`concurrency`), more than the slowest answers, and a second unsent chunk reports `asr_backlog` (1 MiB holds one 10.75 s chunk at 48 kHz).
+A chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins, but the duplicate never wins by failing and is not sent during a 429 pause.
 Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
 In production, `vad_filter` still let "You" and "Thank you." through on near-silent audio.
 Sanctum therefore also drops a segment whose `no_speech_prob` is above 0.6, Whisper's `no_speech_threshold`.
 The provider ignores `avg_logprob`, so confident filler on silence is dropped too.
-A direct request can end in a later chunk, so the speech gate waits `turnWaitMs` for the next chunk's results before it ends a turn.
+A turn ends once live speech-to-text has answered 0.7 s (`endOfTurnMs`) past its last final, also with no text: in the chunk of the request when that chunk runs on into silence, else in the next chunk, at most 10 s later.
+A direct request can still end in a later chunk, so otherwise the speech gate waits `turnWaitMs` (15 s, above one 10 s chunk and its answer) for new finals before it ends a turn.
+Echo memory (`echoTailMs`) lasts as long, because an echo is heard one chunk later too.
 
 Cost control: the free allocation covers about 200 audio minutes a day, and an always-on listener sends up to 1,440, so silence must not be sent.
 Before every Whisper request, live and `transcript.reconcile`, the adapter looks for 100 ms of consecutive 20 ms windows at `speechFloorRms` (`engineeringDefaults.liveAsr`, default 50 PCM16 RMS, about -56 dBFS, under quiet speech and above room noise); without it no request is made.

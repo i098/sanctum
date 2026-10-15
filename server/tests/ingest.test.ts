@@ -318,9 +318,13 @@ const FRAME = 2_205;
 const ANSWER_S = [1.9, 3.2, 4.7, 2.1, 3.4, 5.1, 2.4, 3.5, 5.4, 2.6, 3.8, 6.2, 2.7, 4.1, 6.5, 2.8, 4.2, 7.9, 3.1, 4.4];
 const TEXT = 'we are reviewing the launch plan';
 
-/** 300 ms words and 100 ms pauses of varying depth, so chunks cut between 1.5 s and 2.5 s as they do on speech. */
-const speechAt = (i: number) =>
-  i % (0.4 * BROWSER_RATE) < 0.3 * BROWSER_RATE ? Math.round(2_000 * Math.sin((i * 2 * Math.PI * 220) / BROWSER_RATE)) : ((Math.floor(i / (0.4 * BROWSER_RATE)) * 7_919) % 97) * Math.sign(Math.sin(i));
+/** 300 ms words and 100 ms pauses of varying depth, and every fifth word silent: about half of those 500 ms pauses are under the speech floor and end a chunk, as on speech. */
+const speechAt = (i: number) => {
+  const word = Math.floor(i / (0.4 * BROWSER_RATE));
+  return word % 5 !== 4 && i % (0.4 * BROWSER_RATE) < 0.3 * BROWSER_RATE
+    ? Math.round(2_000 * Math.sin((i * 2 * Math.PI * 220) / BROWSER_RATE))
+    : ((word * 7_919) % 97) * Math.sign(Math.sin(i));
+};
 
 /** Provider retries at production's 5 s, scaled with the clock, until the test's scope closes. */
 const slowRetries = Effect.gen(function* () {
@@ -406,11 +410,11 @@ layer(MigratedDatabase, { timeout: 120_000 })('live ASR at production Workers AI
         let hung = false;
         const provider = yield* standIn((order, repeat) => {
           if (repeat) return 6.2;
-          if (order >= 20 && !straggled) {
+          if (order >= 5 && !straggled) {
             straggled = true;
             return 12.6;
           }
-          if (order >= 45 && !hung) {
+          if (order >= 10 && !hung) {
             hung = true;
             return null;
           }
@@ -436,11 +440,12 @@ layer(MigratedDatabase, { timeout: 120_000 })('live ASR at production Workers AI
         let recovered = false;
         const provider = yield* standIn(order => (recovered || order < 5 ? ANSWER_S[order % ANSWER_S.length]! : 80));
         const { host, owner, media, listener_id, epoch_id, socket } = yield* listen(provider.baseUrl);
-        const end = yield* speak(socket, 60);
+        const end = yield* speak(socket, 120);
         expect(socket.messages).toContainEqual(expect.objectContaining({ _tag: 'degraded', reason: 'asr_backlog' }));
 
         // The browser uploads the archive in 30 s chunks while it listens.
-        for (const [sequence, sample_start] of [0, 30 * BROWSER_RATE].entries()) {
+        const archive = [0, 30, 60, 90].map(second => second * BROWSER_RATE);
+        for (const [sequence, sample_start] of archive.entries()) {
           const samples = Int16Array.from({ length: Math.min(30 * BROWSER_RATE, end - sample_start) }, (_, i) => speechAt(sample_start + i));
           expect((yield* uploadChunk(host, 'owner', chunk({ listener_id, epoch_id, sequence, sample_start, samples, sample_rate: BROWSER_RATE }))).status).toBe(200);
         }
@@ -451,7 +456,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live ASR at production Workers AI
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${owner.workspace_id} AND kind = 'meeting.finalize'`;
 
         recovered = true;
-        for (const sample_start of [0, 30 * BROWSER_RATE]) {
+        for (const sample_start of archive) {
           const payload = { epoch_id, track: 0, sample_start, sample_end: Math.min(sample_start + 30 * BROWSER_RATE, end) };
           yield* Effect.provide(reconcileTranscript({ workspace_id: owner.workspace_id, payload }), media);
         }

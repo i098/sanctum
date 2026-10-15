@@ -33,8 +33,8 @@ import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
 
 export const liveLimits = {
-  /** Provider send backlog at which live ASR is skipped and the range left to batch reconciliation. */
-  asrBacklogBytes: 512 * 1024,
+  /** Provider send backlog at which live ASR is skipped and the range left to batch reconciliation: more than one unsent chunk of `liveAsr.maxMs` plus overlap at 48 kHz. */
+  asrBacklogBytes: 1024 * 1024,
   /** Wait before reopening a failed or overloaded provider connection. */
   providerRetryMs: 5_000,
   /** Watermark persistence and ownership-fencing interval. */
@@ -92,7 +92,7 @@ const partialSegment = (stt: { readonly provider: string; readonly model: string
     created_at: new Date().toISOString(),
   });
 
-/** Maps one provider answer to epoch samples: partials go to the client only; finals and the span they answered become evidence in one write, or not at all. */
+/** Maps one provider answer to epoch samples: partials go to the client only; finals and the span they answered become evidence in one write, or not at all. Returns the persisted span's end. */
 const relayBatch = (
   { access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>,
   stt: { readonly provider: string; readonly model: string },
@@ -116,7 +116,7 @@ const relayBatch = (
       }
     }
     const window = span(batch);
-    if (window.sample_end <= window.sample_start || (finals.length === 0 && batch.results.length > 0)) return;
+    if (window.sample_end <= window.sample_start || (finals.length === 0 && batch.results.length > 0)) return null;
     const segments = yield* publishFinalWindow({
       workspace_id: access.workspace_id,
       epoch_id: start.epoch_id,
@@ -131,7 +131,8 @@ const relayBatch = (
       capture_group_id: listener.capture_group_id,
     });
     for (const segment of segments) yield* send({ _tag: 'transcript', segment });
-  }).pipe(Effect.catchAll(error => Effect.logWarning('Live final not persisted; batch reconciliation covers the range', error)));
+    return window.sample_end;
+  }).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('Live final not persisted; batch reconciliation covers the range', error), null)));
 
 /**
  * Whether live ASR is behind: `degrade` reports a range, and the first answer for audio at or after
@@ -159,7 +160,7 @@ const asrHealth = (send: LiveSessionInput['send']) => {
  * The live-ASR lane of one session: at most one provider connection, anchored at the sample it
  * started from. Gaps, overload and failures detach it and report the range as degraded.
  */
-const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>) =>
+const liveAsr = ({ access, listener, start, send, covered }: Omit<LiveSessionInput, 'resume_from_sample'> & { readonly covered: (sample_end: number) => Effect.Effect<void> }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const stt = yield* SpeechToText;
@@ -220,7 +221,9 @@ const liveAsr = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resu
         lane = current;
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(batch =>
-            Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)),
+            Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)).pipe(
+              Effect.flatMap(end => (end === null ? Effect.void : covered(end))),
+            ),
           ),
           Effect.catchAll(error =>
             Effect.gen(function* () {
@@ -279,6 +282,7 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
     const gate = yield* Effect.serviceOption(SpeechGate);
     return {
       onSegment: (_segment: TranscriptSegment) => Effect.void,
+      onCovered: (_sample_end: number) => Effect.void,
       onEnd: (_reason: 'pause' | 'disconnect') => Effect.sync(() => Option.map(gate, value => value.cancel(listener.id, 'disconnect'))),
     };
   });
@@ -312,7 +316,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
     // Every transcript the client sees also reaches the speech gate (barge-in and direct requests).
     const relay = (message: ServerControlMessage) =>
       Effect.zipRight(send(message), message._tag === 'transcript' ? speech.onSegment(message.segment) : Effect.void);
-    const asr = yield* liveAsr({ access, listener, start, send: relay });
+    const asr = yield* liveAsr({ access, listener, start, send: relay, covered: speech.onCovered });
 
     const flush = Effect.gen(function* () {
       if (watermark === persisted) return;
