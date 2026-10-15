@@ -44,7 +44,10 @@ export interface EpochAnchor {
 export interface ExtractionInput {
   readonly meeting: Meeting;
   readonly segments: ReadonlyArray<TranscriptSegment>;
+  /** Existing items to show the model: the caller's relevant candidates, not necessarily the whole meeting. `relevantContext` fits them to the budget. */
   readonly snapshot: ReadonlyArray<ContextItem>;
+  /** Kind and text of every current item of the meeting, so a repeat of any of them is rejected even when it is not in `snapshot`. */
+  readonly known?: ReadonlyArray<Pick<ContextItem, 'kind' | 'text'>>;
   /** Anchor for every segment's epoch; without one a segment cannot be placed in time and extraction fails. */
   readonly epochs?: ReadonlyArray<EpochAnchor>;
 }
@@ -209,20 +212,23 @@ function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, mee
 /** Characters of existing context one extraction prompt carries (about 1k tokens), however large the meeting grows. */
 const CONTEXT_BUDGET_CHARS = 4_000;
 /** Newest items always offered first, so the model sees what was just said even without a shared term. */
-const RECENT_ITEMS = 12;
+export const RECENT_ITEMS = 12;
+/** Most term-sharing items a caller fetches as candidates; the budget keeps about 30 of them. */
+export const MATCHING_ITEMS = 60;
 
 /** Distinct content words as 5-letter prefixes, so "launch" matches "launched" and "shipping" matches "shipped". */
-const terms = (text: string) => new Set(fold(text).split(' ').filter(word => word.length > 3).map(word => word.slice(0, 5)));
+export const contentTerms = (text: string) => new Set(fold(text).split(' ').filter(word => word.length > 3).map(word => word.slice(0, 5)));
 
 /**
  * The existing-context prompt block for these new segments, oldest first, within `CONTEXT_BUDGET_CHARS`: the newest
  * `RECENT_ITEMS`, then items that share terms with the segments, rarest shared terms first, so a fact that
- * supersedes or repeats an older one still sees it. `items` run oldest to newest, as `meetingItems` returns them.
+ * supersedes or repeats an older one still sees it. `items` run oldest to newest: the meeting's newest items and
+ * its term-sharing items from any age (`relevantItems`).
  * ponytail: term overlap, no embeddings; add a vector lookup if paraphrased supersession is missed.
  */
 function relevantContext(items: ReadonlyArray<ContextItem>, segmentText: string): string {
-  const spoken = terms(segmentText);
-  const itemTerms = items.map(item => terms(item.text));
+  const spoken = contentTerms(segmentText);
+  const itemTerms = items.map(item => contentTerms(item.text));
   const frequency = new Map<string, number>();
   for (const own of itemTerms) for (const term of own) frequency.set(term, (frequency.get(term) ?? 0) + 1);
   const ranked = items.map((_, index) => ({ index, score: [...itemTerms[index]!].reduce((sum, term) => sum + (spoken.has(term) ? 1 / frequency.get(term)! : 0), 0) }));
@@ -256,7 +262,7 @@ export const extractCandidates = (input: ExtractionInput): Effect.Effect<Readonl
       prompt: `Meeting timezone: ${input.meeting.timezone}\n\nExisting context:\n${context}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}`,
     });
     const byRef = new Map(lines.map(line => [line.ref, line]));
-    const known = new Set(existing.map(item => `${item.kind}:${fold(item.text)}`));
+    const known = new Set([...existing, ...(input.known ?? [])].map(item => `${item.kind}:${fold(item.text)}`));
     const results = value.candidates.map(candidate => ground(candidate, byRef, input.meeting, known));
     const rejected = results.flatMap((result, i) => (typeof result === 'string' ? [{ text: value.candidates[i]!.text, reason: result }] : []));
     if (rejected.length > 0) yield* Effect.logWarning('extraction dropped ungrounded candidates', rejected);
