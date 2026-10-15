@@ -76,25 +76,33 @@ describe('model provider configuration', () => {
   const defaultModels = { 'workers-ai': '@cf/qwen/qwen3.8-27b', anthropic: 'claude-sonnet-5-5', openai: 'gpt-4.1-mini-2025-04-14', cerebras: 'gpt-oss-120b' } as const;
   for (const role of ['voice', 'extraction', 'planner', 'classifier', 'research'] as const) {
     for (const provider of role === 'research' ? ['openai', 'anthropic'] as const
-      : role === 'classifier' ? ['cerebras', 'workers-ai', 'anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
+      : role === 'classifier' || role === 'extraction' ? ['cerebras', 'workers-ai', 'anthropic'] as const : ['workers-ai', 'anthropic'] as const) {
       it.effect(`uses a compatible default and preserves an explicit ${role} model on ${provider}`, () =>
         Effect.gen(function* () {
           const settings = new Map<string, string>([[`${role.toUpperCase()}_MODEL_PROVIDER`, provider]]);
           const defaults = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
-          expect(defaults.modelRoles[role]).toMatchObject({ provider, model: defaultModels[provider] });
+          // Cerebras serves its own Qwen id for extraction; the classifier keeps GPT-OSS.
+          expect(defaults.modelRoles[role]).toMatchObject({ provider, model: role === 'extraction' && provider === 'cerebras' ? 'qwen-3.8-27b' : defaultModels[provider] });
           settings.set(`${role.toUpperCase()}_MODEL`, 'explicit-model');
           const explicit = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(settings)));
           expect(explicit.modelRoles[role]).toMatchObject({ provider, model: 'explicit-model' });
         }));
     }
   }
+
+  it.effect('defaults extraction to Cerebras Qwen and the other text roles to their documented providers', () =>
+    Effect.gen(function* () {
+      const { modelRoles } = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map())));
+      expect(modelRoles.extraction).toEqual({ provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'low' });
+      expect(modelRoles.planner).toMatchObject({ provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b' });
+    }));
 });
 
 describe('Workers AI client', () => {
   it.scopedLive('sends the role model, reasoning effort and a strict schema, then decodes the JSON answer', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([completion('{"kind":"decision","text":"Ship Friday","quote":"we ship Friday"}')]);
-      const result = yield* withWorkersAi(server.url).generate('extraction', ask);
+      const result = yield* withWorkersAi(server.url).generate('planner', ask);
       expect(result).toEqual({ model: '@cf/qwen/qwen3.8-27b', value: { kind: 'decision', text: 'Ship Friday', quote: 'we ship Friday' } });
       const [request] = server.seen;
       expect(request!.path).toBe('/accounts/acct/ai/v1/chat/completions');
@@ -118,11 +126,11 @@ describe('Workers AI client', () => {
   it.scopedLive('retries rate limits and server errors a bounded number of times', () =>
     Effect.gen(function* () {
       const recovered = yield* replayServer([json(429, { error: 'slow down' }, { 'retry-after': '0' }), completion('{"kind":"commitment","text":"Send notes","quote":null}')]);
-      expect((yield* withWorkersAi(recovered.url).generate('extraction', ask)).value.kind).toBe('commitment');
+      expect((yield* withWorkersAi(recovered.url).generate('planner', ask)).value.kind).toBe('commitment');
       expect(recovered.seen).toHaveLength(2);
 
       const down = yield* replayServer([json(503, {}), json(500, {}), json(502, {}, { 'retry-after': '7' }), completion('{}')]);
-      const failure = yield* Effect.flip(withWorkersAi(down.url).generate('extraction', ask));
+      const failure = yield* Effect.flip(withWorkersAi(down.url).generate('planner', ask));
       expect(failure).toMatchObject({ _tag: 'Unavailable', retryable: true, retry_after_ms: 7_000 });
       expect(down.seen).toHaveLength(budget.maxAttempts);
     }));
@@ -138,7 +146,7 @@ describe('Workers AI client', () => {
       const llm = withWorkersAi(server.url);
       const messages = [];
       for (let i = 0; i < 4; i++) {
-        const failure = yield* Effect.flip(llm.generate('extraction', ask));
+        const failure = yield* Effect.flip(llm.generate('planner', ask));
         expect(failure.retryable).toBe(false);
         messages.push(failure.message);
       }
@@ -153,14 +161,21 @@ describe('Workers AI client', () => {
     Effect.gen(function* () {
       const server = yield* replayServer([hang, hang, hang, hang]);
       const llm = makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: server.url, apiToken: 'test-key' }) }, { ...budget, maxAttempts: 1 });
-      const timedOut = yield* Effect.flip(llm.generate('extraction', ask));
-      expect(timedOut).toMatchObject({ _tag: 'Unavailable', retryable: true, message: 'extraction model timed out after 400 ms' });
-      const fiber = yield* Effect.fork(llm.generate('extraction', ask));
+      const timedOut = yield* Effect.flip(llm.generate('planner', ask));
+      expect(timedOut).toMatchObject({ _tag: 'Unavailable', retryable: true, message: 'planner model timed out after 400 ms' });
+      const fiber = yield* Effect.fork(llm.generate('planner', ask));
       yield* Effect.sleep('100 millis');
       yield* Fiber.interrupt(fiber);
       yield* Effect.sleep('100 millis');
       expect(server.seen).toHaveLength(2);
       expect(server.aborted()).toBe(2);
+    }));
+
+  it.scopedLive('uses the timeout a call asks for instead of the default', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([hang]);
+      const llm = makeLlm(roles, { 'workers-ai': workersAi({ baseUrl: server.url, apiToken: 'test-key' }) }, { ...budget, maxAttempts: 1 });
+      expect(yield* Effect.flip(llm.generate('planner', { ...ask, timeoutMs: 100 }))).toMatchObject({ message: 'planner model timed out after 100 ms' });
     }));
 
   it.scopedLive('streams SSE text deltas and aborts the request when the consumer stops early', () =>
@@ -185,8 +200,8 @@ describe('Workers AI client', () => {
   it.effect('fails visibly without a key and never falls back to another provider', () =>
     Effect.gen(function* () {
       const llm = makeLlm(roles, { anthropic: anthropic({ apiKey: 'unused', baseUrl: 'http://127.0.0.1:9' }) });
-      const failure = yield* Effect.flip(llm.generate('extraction', ask));
-      expect(failure).toMatchObject({ retryable: false, message: 'extraction model provider workers-ai is not configured (WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN)' });
+      const failure = yield* Effect.flip(llm.generate('planner', ask));
+      expect(failure).toMatchObject({ retryable: false, message: 'planner model provider workers-ai is not configured (WORKERS_AI_ACCOUNT_ID, WORKERS_AI_API_TOKEN)' });
       expect((yield* Effect.flip(Stream.runDrain(llm.stream('voice', { system: '', prompt: '' })))).message).toMatch(/WORKERS_AI_API_TOKEN/);
     }));
 });
@@ -371,9 +386,9 @@ describe('LlmLive', () => {
       const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"kind":"decision","text":"Ship","quote":null}' } }] })));
       vi.stubGlobal('fetch', fetch);
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllGlobals()));
-      const env = new Map([['WORKERS_AI_ACCOUNT_ID', 'acct'], ['WORKERS_AI_API_TOKEN', 'test-token'], ['EXTRACTION_MODEL', '@cf/test/model']]);
+      const env = new Map([['WORKERS_AI_ACCOUNT_ID', 'acct'], ['WORKERS_AI_API_TOKEN', 'test-token'], ['PLANNER_MODEL', '@cf/test/model']]);
       const llm = yield* Effect.provide(LlmClient, LlmLive.pipe(Layer.provide(Layer.setConfigProvider(ConfigProvider.fromMap(env)))));
-      expect((yield* llm.generate('extraction', ask)).value.text).toBe('Ship');
+      expect((yield* llm.generate('planner', ask)).value.text).toBe('Ship');
       const [url, init] = fetch.mock.calls[0]!;
       expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions');
       expect(init.headers).toMatchObject({ authorization: 'Bearer test-token' });

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import type { JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
+import { engineeringDefaults } from './config.ts';
 
 /** Failure message of a job whose requester lost access; restoring a workspace requeues the jobs that failed with it. */
 export const REQUESTER_REFUSED = 'Requester is no longer authorized';
@@ -35,7 +36,7 @@ export const enqueueJob = (input: EnqueueJob) =>
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO jobs (id, workspace_id, kind, work_key, requested_by, source_revision, status, payload, available_at, max_attempts, created_at, updated_at)
       VALUES (${randomUUID()}, ${input.workspace_id}, ${input.kind}, ${input.work_key}, ${input.requested_by}, ${input.source_revision ?? null}, 'pending',
-        ${JSON.stringify(input.payload)}, ${later(sql, input.delay_ms ?? 0)}, ${input.max_attempts ?? 5}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) AS new
+        ${JSON.stringify(input.payload)}, ${later(sql, input.delay_ms ?? 0)}, ${input.max_attempts ?? engineeringDefaults.jobs.maxAttemptsByKind[input.kind] ?? 5}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) AS new
       ON DUPLICATE KEY UPDATE
         rearmed = IF(jobs.status = 'running', 1, jobs.rearmed),
         attempts = IF(jobs.status = 'running', jobs.attempts, 0),

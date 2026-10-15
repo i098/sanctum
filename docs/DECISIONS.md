@@ -51,7 +51,7 @@ See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for 
 
 ## Spoken classifier provider decision - 2026-10-10
 
-Accepted: only the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
+Accepted: the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
 Planning and synthesis keep Workers AI Qwen; research and its paid-call caps stay unchanged.
 The classifier uses strict [JSON-schema chat completions](https://inference-docs.cerebras.ai/capabilities/structured-outputs) and the existing Effect Schema decoder.
 See the [configuration guide](operations.md#configuration) for server-only credentials and independent classifier overrides.
@@ -72,6 +72,32 @@ The all-call medians cover all 20 cases per model; Cerebras's 0.157 s explains t
 This small synthetic evaluation supports role selection, not production quality or latency guarantees.
 See [classifier evidence](release-evidence.md#cerebras-spoken-classifier---2026-10-10) for local implementation checks and unrun live checks.
 This change does not deploy the application or set a live secret.
+
+## Extraction provider decision - 2026-10-15
+
+Accepted: context extraction, memory commit and meeting notes use Cerebras `qwen-3.8-27b` with low reasoning through the `extraction` role.
+A missing `CEREBRAS_API_KEY`, a provider failure, a timeout or an invalid answer logs one fallback line and sends the same request once to the planner role, which is Workers AI `@cf/qwen/qwen3.8-27b`.
+If the fallback also fails, the job fails with that error and the job ledger retries it.
+Source: the 1 h soak dry run on main `46e3fcc` and the Firstmate Cerebras evaluation of 2026-10-10, both reports outside this repository.
+
+| Measure | Value |
+| --- | --- |
+| Workers AI Qwen, 100 transcript lines, reasoning low | 62.6 s and 99.1 s, about 1,500 completion tokens |
+| Workers AI Qwen, 100 transcript lines, reasoning off | 39.0 s and 35.7 s |
+| Previous per-attempt timeout | 60 s, so `context.refresh`, `memory.commit` and `notes.summarize` failed 5/5 |
+| Segments extracted after 80 minutes | 546 of 1,040 (audio to 1,356 s of 2,399 s); recall@5 0.5 against a 0.90 bar |
+| Median call, Cerebras Qwen against Workers AI Qwen | 0.211 s against 3.336 s on the 20-case evaluation (10/10 planning and 10/10 synthesis on both) |
+| One live extraction call on Cerebras (40 lines) and one notes call | 0.67 s and 0.54 s |
+
+The other changes keep the 0.90 recall bar and every other pass bar as they were:
+
+- A refresh round reads 40 final segments, not 100, so one call stays well under its timeout on the fallback too.
+- Extraction and notes calls (both the Cerebras call and the fallback) may take 120 s; every other role keeps 60 s.
+- A job handler for these kinds may run 15 minutes, above two sequential model calls with retries.
+- `context.refresh`, `memory.commit` and `notes.summarize` get 24 attempts, about 83 minutes at the capped 5-minute backoff, instead of 5 attempts in about 31 s.
+  A closed meeting's backlog is therefore processed once the provider answers, and `memory.commit`, which the close enqueues, drains it in 40-segment rounds.
+
+The change does not deploy the application, and the Worker already holds `CEREBRAS_API_KEY`.
 
 ## Web research provider decision - 2026-10-10
 
@@ -139,11 +165,11 @@ No deployment or secret change forms part of this cutover.
 ## Text model provider decision — 2026-10-08
 
 Accepted: the voice and extraction roles (spoken replies, notes, memory and context) use Cloudflare Workers AI on the 42nights account, which Sanctum already runs on, so no new vendor account or card is needed.
-Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-compatible `/v1/chat/completions` endpoint: thinking off for voice, `reasoning_effort: low` for extraction.
+Both roles defaulted to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-compatible `/v1/chat/completions` endpoint: thinking off for voice, `reasoning_effort: low` for extraction. The [extraction provider decision](#extraction-provider-decision---2026-10-15) moved extraction to Cerebras with this model as fallback.
 Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
-The general Cerebras client was removed; a decision-only client now serves the [spoken classifier](#spoken-classifier-provider-decision---2026-10-10).
+The general Cerebras client was removed; a decision-only client now serves the [spoken classifier](#spoken-classifier-provider-decision---2026-10-10) and extraction.
 Research moved to OpenAI in the [web research provider decision](#web-research-provider-decision---2026-10-10).
 
 ## Sign-in and workspace management decision — 2026-10-08

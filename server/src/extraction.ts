@@ -17,7 +17,21 @@ import {
   UtcTimestamp,
 } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
-import { LlmClient } from './llm.ts';
+import { engineeringDefaults } from './config.ts';
+import { type Llm, LlmClient } from './llm.ts';
+
+/**
+ * The extraction role first; any failure (no key, timeout, invalid output) sends the same request once to the
+ * planner's Workers AI Qwen, as the spoken classifier does. Both calls get the longer extraction timeout.
+ */
+const generateWithFallback = <A, I>(llm: Llm, request: { readonly name: string; readonly output: Schema.Schema<A, I>; readonly system: string; readonly prompt: string }) => {
+  const timed = { ...request, timeoutMs: engineeringDefaults.modelRequest.extractionTimeoutMs };
+  return llm.generate('extraction', timed).pipe(
+    Effect.catchAll(error =>
+      Effect.zipRight(Effect.logWarning(`Extraction model unavailable for ${request.name}; falling back to planner: ${error.message}`), llm.generate('planner', timed)),
+    ),
+  );
+};
 
 /** UTC instant of a capture epoch's first sample (`capture_epochs.sample_start` / `captured_at`). */
 export interface EpochAnchor {
@@ -200,7 +214,7 @@ export const extractCandidates = (input: ExtractionInput): Effect.Effect<Readonl
     const llm = yield* LlmClient;
     const existing = input.snapshot.filter(item => item.state !== 'superseded');
     const context = existing.map(item => `- ${item.kind}: ${item.text}`).join('\n') || '(none)';
-    const { value } = yield* llm.generate('extraction', {
+    const { value } = yield* generateWithFallback(llm, {
       name: 'context_candidates',
       output: CandidatesOutput,
       system: EXTRACTION_SYSTEM,
@@ -220,7 +234,7 @@ export const summarizeMeeting = (input: Omit<ExtractionInput, 'snapshot'>): Effe
     const lines = yield* timeline({ ...input, snapshot: [] });
     if (lines.length === 0) return yield* new Unavailable({ message: 'meeting has no final transcript to summarize', retryable: false });
     const llm = yield* LlmClient;
-    const { value, model } = yield* llm.generate('extraction', {
+    const { value, model } = yield* generateWithFallback(llm, {
       name: 'meeting_notes',
       output: NotesOutput,
       system: NOTES_SYSTEM,

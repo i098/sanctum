@@ -36,7 +36,16 @@ export const engineeringDefaults = {
       'research.run': 20 * 60_000,
       /** Object deletes are idempotent, so a hit keeps its progress and the next attempt continues. */
       'workspace.purge': 30 * 60_000,
+      /** Above two sequential model calls (extraction provider, then the Workers AI fallback) at `modelRequest.extractionTimeoutMs` each. */
+      'context.refresh': 15 * 60_000,
+      'memory.commit': 15 * 60_000,
+      'notes.summarize': 15 * 60_000,
     } as Partial<Record<JobKind, number>>,
+    /**
+     * Attempts for jobs that fail only when a model is slow or unavailable. The capped 5-minute backoff
+     * spreads 24 attempts over about 83 minutes, so a closed meeting's backlog outlasts a provider outage; other kinds get 5.
+     */
+    maxAttemptsByKind: { 'context.refresh': 24, 'memory.commit': 24, 'notes.summarize': 24 } as Partial<Record<JobKind, number>>,
     /** A purge retries every retryable error at the capped backoff until it succeeds: the INT UNSIGNED maximum of `jobs.max_attempts`. */
     purgeMaxAttempts: 2 ** 32 - 1,
   },
@@ -65,14 +74,15 @@ export const engineeringDefaults = {
    */
   modelRoles: {
     voice: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'none' },
-    extraction: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
+    /** Cerebras serves this Qwen in about 0.2 s against 35-100 s on Workers AI (docs/DECISIONS.md); a failure falls back to the planner's Workers AI Qwen. */
+    extraction: { provider: 'cerebras', model: 'qwen-3.8-27b', reasoning: 'low' },
     planner: { provider: 'workers-ai', model: '@cf/qwen/qwen3.8-27b', reasoning: 'low' },
     classifier: { provider: 'cerebras', model: 'gpt-oss-120b', reasoning: 'low' },
     /** OpenAI Responses hosted web search, a paid call held to `paidResearchAllowance`. */
     research: { provider: 'openai', model: 'gpt-4.1-mini-2025-04-14', reasoning: null },
   },
-  /** Per-attempt timeout, bounded transport attempts, output cap and hosted-search budget. */
-  modelRequest: { timeoutMs: 60_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 3, researchMaxContinuations: 3 },
+  /** Per-attempt timeout (`extractionTimeoutMs` for extraction and notes, where a Workers AI call took up to 99 s), bounded transport attempts, output cap and hosted-search budget. */
+  modelRequest: { timeoutMs: 60_000, extractionTimeoutMs: 120_000, maxAttempts: 3, maxOutputTokens: 4_096, researchMaxSearches: 3, researchMaxContinuations: 3 },
   /** Integration gateways (plan section 10): model-facing output budget, options page, upstream timeout. */
   pipedream: { outputBudgetBytes: 16_384, optionsPageSize: 20, requestTimeoutMs: 30_000 },
   /** WorkOS Events API polling (`workos.sync`): time between runs, pages read per run, request timeout. */
@@ -87,14 +97,14 @@ const providerModels = { 'workers-ai': engineeringDefaults.modelRoles.voice.mode
 const modelRole = (role: ModelRoleName) => {
   const fallback = engineeringDefaults.modelRoles[role];
   const providers = role === 'research' ? (['openai', 'anthropic'] as const)
-    : role === 'classifier' ? (['cerebras', 'workers-ai', 'anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
+    : role === 'classifier' || role === 'extraction' ? (['cerebras', 'workers-ai', 'anthropic'] as const) : (['workers-ai', 'anthropic'] as const);
   const prefix = role.toUpperCase();
   return Config.all({
     provider: Config.literal(...providers)(`${prefix}_MODEL_PROVIDER`).pipe(Config.withDefault(fallback.provider)),
     model: Config.option(Config.string(`${prefix}_MODEL`)),
   }).pipe(Config.map(({ provider, model }) => ({
     provider,
-    model: Option.getOrElse(model, () => providerModels[provider]),
+    model: Option.getOrElse(model, () => (provider === fallback.provider ? fallback.model : providerModels[provider])),
     reasoning: fallback.reasoning,
   })));
 };
@@ -179,7 +189,7 @@ export const serverConfig = Config.all({
     selfServeWorkspaces: Config.boolean('SANCTUM_SELF_SERVE_WORKSPACES').pipe(Config.withDefault(false)),
   }),
   modelRoles: Config.all({ voice: modelRole('voice'), extraction: modelRole('extraction'), planner: modelRole('planner'), classifier: modelRole('classifier'), research: modelRole('research') }),
-  /** Server-only provider keys. The spoken classifier alone can fall back to the planner (speech-requests.ts). */
+  /** Server-only provider keys. The spoken classifier (speech-requests.ts) and extraction (extraction.ts) fall back to the planner's Workers AI Qwen. */
   modelKeys: Config.all({ anthropic: Config.option(Config.redacted('ANTHROPIC_API_KEY')), openai: Config.option(Config.redacted('OPENAI_API_KEY')), cerebras: Config.option(Config.redacted('CEREBRAS_API_KEY')) }),
   /** Server-only Workers AI credentials shared by speech-to-text, requested speech, and text models. */
   workersAi: Config.option(
