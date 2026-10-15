@@ -212,6 +212,28 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       expect((yield* Ref.get(fake.calls)).map(call => call.segments.length)).toEqual([40, 40, 5]);
     }));
 
+  it.effect('shows the last processed segment with the next round so a sentence cut at the batch edge is extracted once, whole', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Edge', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      yield* Effect.forEach(Array.from({ length: 39 }, (_, index) => index), index => seedSegment(meeting, index, index + 1, `Turn ${index}.`), { discard: true });
+      const half = yield* seedSegment(meeting, 39, 40, 'The Falcon project owner');
+      const rest = yield* seedSegment(meeting, 40, 41, 'is Peter.');
+      const cite = (...ids: string[]) => ids.map(id => ({ segment_id: TranscriptSegmentId.make(id), start_ms: 0, end_ms: 0 }));
+      const fake = yield* fakeExtractor(input =>
+        input.segments.some(segment => segment.id === rest)
+          ? [candidate(half, { kind: 'project_fact', text: 'Peter owns the Falcon project', quote: 'Falcon project owner is Peter', time: null, sources: cite(...input.earlier!.map(segment => segment.id), rest) })]
+          : []);
+      const refresh = refreshContext(fake.extract);
+      yield* refresh(job(meeting, owner!.principal.id));
+      yield* refresh(job(meeting, owner!.principal.id));
+      yield* refresh(job(meeting, owner!.principal.id));
+      const calls = yield* Ref.get(fake.calls);
+      expect(calls.map(call => [call.earlier!.map(segment => segment.id), call.segments.length])).toEqual([[[], 40], [[half], 1]]);
+      const { items } = yield* getContextSnapshot(owner!, meeting.meeting_id);
+      expect(items.map(item => [item.text, item.sources.map(source => source.segment_id)])).toEqual([['Peter owns the Falcon project', [half, rest]]]);
+    }));
+
   it.effect('shows the model an old item the new speech supersedes in a meeting of more than 200 items, and rejects repeats of any item', () =>
     Effect.gen(function*() {
       const [owner, device] = yield* seedWorkspace('Large', ['owner', 'device']);

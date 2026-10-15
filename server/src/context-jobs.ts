@@ -26,7 +26,7 @@ import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { resolveTime } from './context-time.ts';
 import { lockMeeting, meetingItems, meetingItemTexts, type NewItem, relevantItems, writeItem } from './context.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
-import { adjacentRuns, contentTerms, type ExtractionInput, MATCHING_ITEMS, RECENT_ITEMS } from './extraction.ts';
+import { adjacentRuns, contentTerms, type ExtractionInput, MATCHING_ITEMS, RECENT_ITEMS, squash } from './extraction.ts';
 import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
@@ -59,18 +59,16 @@ interface Target {
  readonly actor: PrincipalId;
 }
 
-const words = (text: string) => ` ${text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
-
 /**
- * Keeps a candidate only if every cited segment is in this batch and any quote appears in the
+ * Keeps a candidate only if every cited segment is in this batch (or the one earlier segment shown with it) and any quote appears in the
  * cited text. A "spoken" claim without a quote is kept as an inference. Relative time is
  * re-resolved against the first cited utterance in the meeting timezone.
  */
 function grounded(candidate: ExtractionCandidate, batch: ReadonlyMap<string, SegmentRow & { readonly index: number }>, meeting: Meeting, actor: PrincipalId): ReadonlyArray<NewItem> {
  const segments = candidate.sources.flatMap(source => batch.get(source.segment_id) ?? []);
  if (segments.length !== candidate.sources.length) return [];
- const quote = candidate.quote === null ? null : words(candidate.quote);
- if (quote !== null && !adjacentRuns(segments).some(run => words(run).includes(quote))) return [];
+ const quote = candidate.quote === null ? null : squash(candidate.quote);
+ if (quote !== null && !adjacentRuns(segments).some(run => squash(run).includes(quote))) return [];
  const event_at = segments.map(segment => segment.event_at).sort()[0]!;
  return [{
   id: ContextItemId.make(randomUUID()),
@@ -110,6 +108,17 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
   );
   const batch = pending.slice(0, BATCH_SEGMENTS);
   if (batch.length === 0) return { processed: 0, added: 0, rejected: 0, backlog: false };
+  // The last segment an earlier round processed goes along as context, so a sentence cut at the batch edge reaches the model whole.
+  const first = batch[0]!;
+  const earlier = yield* segmentRows(
+   workspace_id,
+   sql`m.id = ${meeting_id} AND s.id = (SELECT p.segment_id FROM context_processed_segments p
+        JOIN transcript_segments t ON t.workspace_id = p.workspace_id AND t.id = p.segment_id
+        WHERE p.workspace_id = ${workspace_id} AND p.meeting_id = ${meeting_id}
+          AND t.epoch_id = ${first.epoch_id} AND t.track = ${first.track} AND t.sample_start < ${first.sample_start}
+        ORDER BY t.sample_start DESC, t.id DESC LIMIT 1)`,
+   1,
+  );
   const spoken = batch.map(toSegment);
   const items = yield* relevantItems(workspace_id, meeting_id, [...contentTerms(spoken.map(segment => segment.text).join(' '))], RECENT_ITEMS, MATCHING_ITEMS);
   const known = yield* meetingItemTexts(workspace_id, meeting_id);
@@ -118,10 +127,10 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
    sql`SELECT id AS epoch_id, sample_rate, sample_start, captured_at FROM capture_epochs
           WHERE workspace_id = ${workspace_id} AND ${sql.in('id', [...new Set(batch.map(segment => segment.epoch_id))])}`,
   );
-  const candidates = yield* extract({ meeting, segments: spoken, snapshot: items, known, epochs }).pipe(
+  const candidates = yield* extract({ meeting, segments: spoken, earlier: earlier.map(toSegment), snapshot: items, known, epochs }).pipe(
    Effect.mapError(error => new JobFailure({ message: error.message, retryable: error.retryable })),
   );
-  const byId = new Map(batch.map((segment, index) => [segment.id as string, { ...segment, index }]));
+  const byId = new Map([...earlier, ...batch].map((segment, index) => [segment.id as string, { ...segment, index }]));
   const accepted = candidates.flatMap(candidate => grounded(candidate, byId, meeting, target.actor));
   const ids = batch.map(segment => segment.id);
   const added = yield* sql.withTransaction(

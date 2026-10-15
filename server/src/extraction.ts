@@ -49,6 +49,11 @@ export interface ExtractionInput {
   readonly snapshot: ReadonlyArray<ContextItem>;
   /** Kind and text of every current item of the meeting, so a repeat of any of them is rejected even when it is not in `snapshot`. */
   readonly known?: ReadonlyArray<Pick<ContextItem, 'kind' | 'text'>>;
+  /**
+   * The last segment an earlier round already processed, shown as context so a sentence cut at the batch edge reaches the model whole.
+   * A candidate must cite at least one of `segments`; the model is told not to extract the earlier line alone.
+   */
+  readonly earlier?: ReadonlyArray<TranscriptSegment>;
   /** Anchor for every segment's epoch; without one a segment cannot be placed in time and extraction fails. */
   readonly epochs?: ReadonlyArray<EpochAnchor>;
 }
@@ -129,6 +134,9 @@ function resolveTime(mention: typeof TimeMention.Type, anchorMs: number, timeZon
 /** Case- and punctuation-insensitive text for verbatim checks. */
 const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
+/** `fold` without spaces: ASR splits and joins words ("North wind" for "Northwind"), so verbatim checks ignore word breaks. */
+export const squash = (text: string) => fold(text).replaceAll(' ', '');
+
 /** Final segments inside the meeting, in time order, with short citation refs and meeting-relative milliseconds. */
 function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
   const anchors = new Map(input.epochs?.map(anchor => [anchor.epoch_id, anchor]));
@@ -184,7 +192,7 @@ export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; read
 
 /** Why a candidate's text, quote or time phrase is not supported by its cited lines, or null. */
 function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, known: ReadonlySet<string>): string | null {
-  const verbatim = (text: string) => fold(text) !== '' && heard.some(run => run.includes(fold(text)));
+  const verbatim = (text: string) => squash(text) !== '' && heard.some(run => squash(run).includes(squash(text)));
   const checks: ReadonlyArray<readonly [boolean, string]> = [
     [fold(candidate.text) !== '' && !known.has(`${candidate.kind}:${fold(candidate.text)}`), 'empty or already in the context snapshot'],
     [candidate.derivation === 'inferred' || candidate.quote !== null, 'spoken candidate without a quote'],
@@ -195,11 +203,12 @@ function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, kn
 }
 
 /** The grounded candidate, or why it was rejected. */
-function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, meeting: Meeting, known: ReadonlySet<string>): ExtractionCandidate | string {
+function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, meeting: Meeting, known: ReadonlySet<string>, fresh: ReadonlySet<string>): ExtractionCandidate | string {
   const cited = [...new Set(candidate.segments)].map(ref => byRef.get(ref));
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
-  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))).map(fold), known);
+  if (!lines.some(line => fresh.has(line.segment.id))) return 'cites only segments an earlier round processed';
+  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))), known);
   if (reason !== null) return reason;
   const phrase = candidate.time && fold(candidate.time.phrase);
   const said = lines.find(line => phrase !== null && fold(line.segment.text).includes(phrase)) ?? lines[0]!;
@@ -254,20 +263,23 @@ function relevantContext(items: ReadonlyArray<ContextItem>, segmentText: string)
 /** Context candidates grounded in the meeting's final segments; the context slice validates access and commits them. */
 export const extractCandidates = (input: ExtractionInput): Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient> =>
   Effect.gen(function* () {
-    const lines = yield* timeline(input);
-    if (lines.length === 0) return [];
+    const fresh = new Set(input.segments.map(segment => segment.id));
+    const lines = yield* timeline({ ...input, segments: [...(input.earlier ?? []), ...input.segments] });
+    if (!lines.some(line => fresh.has(line.segment.id))) return [];
     const llm = yield* LlmClient;
     const existing = input.snapshot.filter(item => item.state !== 'superseded');
     const context = relevantContext(existing, lines.map(line => line.segment.text).join(' ')) || '(none)';
+    const earlier = lines.filter(line => !fresh.has(line.segment.id)).map(line => line.ref);
+    const overlap = earlier.length === 0 ? '' : `\n\n${earlier.join(', ')} was processed in an earlier round, shown only so a sentence cut at the round edge is whole: cite it only together with a later line that completes the fact, and extract nothing it says alone.`;
     const { value } = yield* generateWithFallback(llm, {
       name: 'context_candidates',
       output: CandidatesOutput,
       system: EXTRACTION_SYSTEM,
-      prompt: `Meeting timezone: ${input.meeting.timezone}\n\nExisting context:\n${context}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}`,
+      prompt: `Meeting timezone: ${input.meeting.timezone}\n\nExisting context:\n${context}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}${overlap}`,
     });
     const byRef = new Map(lines.map(line => [line.ref, line]));
     const known = new Set([...existing, ...(input.known ?? [])].map(item => `${item.kind}:${fold(item.text)}`));
-    const results = value.candidates.map(candidate => ground(candidate, byRef, input.meeting, known));
+    const results = value.candidates.map(candidate => ground(candidate, byRef, input.meeting, known, fresh));
     const rejected = results.flatMap((result, i) => (typeof result === 'string' ? [{ text: value.candidates[i]!.text, reason: result }] : []));
     if (rejected.length > 0) yield* Effect.logWarning('extraction dropped ungrounded candidates', rejected);
     return results.filter((result): result is ExtractionCandidate => typeof result !== 'string');
