@@ -5,7 +5,7 @@
  * This service reports a missing key or provider failure as `Unavailable`; it never substitutes output.
  * The callers own fallbacks between roles: spoken work (classifier to planner) and extraction (docs/DECISIONS.md).
  */
-import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
+import { Context, Duration, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
 import { Unavailable } from '@sanctum/contracts';
 import { engineeringDefaults, type ModelRoleName, type ServerConfig, serverConfig } from './config.ts';
 import { anthropic } from './providers/anthropic.ts';
@@ -26,8 +26,11 @@ interface Prompt {
 }
 
 export interface Llm {
-  /** Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements); `timeoutMs` replaces the per-attempt default. */
-  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number }) => Effect.Effect<Generated<A>, Unavailable>;
+  /**
+   * Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements); `timeoutMs` replaces the per-attempt default.
+   * `patient` (background jobs only) makes each retry wait for the provider's retry delay, or `PATIENT_BACKOFF_MS` without one, so a loaded provider can drain.
+   */
+  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number; readonly patient?: boolean }) => Effect.Effect<Generated<A>, Unavailable>;
   /** Text deltas; interruption aborts the request, and a stalled stream fails. Never retried, so no text repeats. */
   readonly stream: (role: ModelRoleName, request: Prompt) => Stream.Stream<string, Unavailable>;
   /**
@@ -45,6 +48,12 @@ export interface Llm {
 
 export class LlmClient extends Context.Tag('sanctum/LlmClient')<LlmClient, Llm>() {}
 
+
+/** Longest wait on a provider's retry delay inside one patient request. */
+const RETRY_AFTER_CAP_MS = 10_000;
+
+/** Retry wait of a patient request when the provider names none (Cerebras `queue_exceeded` drains in seconds). */
+const PATIENT_BACKOFF_MS = 2_000;
 
 const toUnavailable = (role: ModelRoleName) => (error: unknown) => {
   if (error instanceof Unavailable) return error;
@@ -72,21 +81,28 @@ export function makeLlm(
     return Effect.succeed({ provider, base });
   };
 
-  const retries = Schedule.exponential('250 millis').pipe(Schedule.jittered, Schedule.intersect(Schedule.recurs(budget.maxAttempts - 1)));
+  const quick = Schedule.exponential('250 millis').pipe(
+    Schedule.jittered,
+    Schedule.intersect(Schedule.recurs(budget.maxAttempts - 1)),
+  );
+  const patient = quick.pipe(
+    Schedule.intersect(Schedule.identity<Unavailable>()),
+    Schedule.modifyDelay(([, error], delay) => Duration.max(delay, Duration.millis(Math.min(error.retry_after_ms ?? PATIENT_BACKOFF_MS, RETRY_AFTER_CAP_MS)))),
+  );
 
-  const call = <T>(role: ModelRoleName, timeoutMs: number, run: (provider: ModelProvider, base: ProviderRequest, signal: AbortSignal) => Promise<T>) =>
+  const call = <T>(role: ModelRoleName, timeoutMs: number, patientRetries: boolean, run: (provider: ModelProvider, base: ProviderRequest, signal: AbortSignal) => Promise<T>) =>
     Effect.flatMap(select(role), ({ provider, base }) =>
       Effect.tryPromise({ try: signal => run(provider, base, signal), catch: toUnavailable(role) }).pipe(
         Effect.timeoutFail({ duration: timeoutMs, onTimeout: () => new Unavailable({ message: `${role} model timed out after ${timeoutMs} ms`, retryable: true }) }),
-        Effect.retry({ schedule: retries, while: error => error.retryable }),
+        Effect.retry({ schedule: patientRetries ? patient : quick, while: error => error.retryable }),
         Effect.map(value => ({ value, model: base.model })),
       ),
     );
 
   return {
-    generate: (role, { name, output, timeoutMs, ...prompt }) => {
+    generate: (role, { name, output, timeoutMs, patient: patientRetries, ...prompt }) => {
       const { $schema: _, ...schema }: Record<string, unknown> = { ...JSONSchema.make(output) };
-      return call(role, timeoutMs ?? budget.timeoutMs, (provider, base, signal) => {
+      return call(role, timeoutMs ?? budget.timeoutMs, patientRetries === true, (provider, base, signal) => {
         if (!provider.complete) throw new ProviderError('provider has no text generation', false);
         return provider.complete({ ...base, ...prompt, json: { name, schema } }, signal);
       }).pipe(

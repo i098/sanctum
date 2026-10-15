@@ -355,6 +355,42 @@ describe('Cerebras classifier client', () => {
       expect(server.seen[1]).toMatchObject({ path: '/ai/v1/chat/completions', body: { model: '@cf/qwen/qwen3.8-27b' } });
     }));
 
+  it.scopedLive('waits and retries a 429 queue_exceeded on an opted-in background call', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([json(429, { message: 'Too many requests', type: 'too_many_requests_error', code: 'queue_exceeded' }), completion('{"work":true}')]);
+      const llm = makeLlm(roles, { cerebras: cerebras({ apiKey: 'k', baseUrl: server.url }) }, budget);
+      const started = Date.now();
+      expect((yield* llm.generate('classifier', { ...ask, output: Schema.Struct({ work: Schema.Boolean }), patient: true })).value).toEqual({ work: true });
+      expect(server.seen).toHaveLength(2);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+    }));
+
+  it.scopedLive('keeps the 250 ms retry step for a classifier 429, ignoring Retry-After', () =>
+    Effect.gen(function* () {
+      const server = yield* replayServer([json(429, { code: 'queue_exceeded' }, { 'retry-after': '5' }), completion('{"work":true}')]);
+      const llm = makeLlm(roles, { cerebras: cerebras({ apiKey: 'k', baseUrl: server.url }) }, budget);
+      const started = Date.now();
+      expect((yield* llm.generate('classifier', { ...ask, output: Schema.Struct({ work: Schema.Boolean }) })).value).toEqual({ work: true });
+      expect(server.seen).toHaveLength(2);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    }));
+
+  it.scopedLive('falls back to the planner at once when every classifier attempt gets a 429', () =>
+    Effect.gen(function* () {
+      const busy = json(429, { code: 'queue_exceeded' });
+      const server = yield* replayServer([busy, busy, busy, completion('{"work":false}')]);
+      const llm = makeLlm(roles, {
+        cerebras: cerebras({ apiKey: 'k', baseUrl: server.url }),
+        'workers-ai': workersAi({ apiToken: 'q', baseUrl: `${server.url}/ai` }),
+      }, budget);
+      const input = { ...ask, output: Schema.Struct({ work: Schema.Boolean }) };
+      const started = Date.now();
+      const value = yield* llm.generate('classifier', input).pipe(Effect.catchAll(() => llm.generate('planner', input)));
+      expect(value).toEqual({ model: '@cf/qwen/qwen3.8-27b', value: { work: false } });
+      expect(server.seen.map(request => request.path)).toEqual([...Array(budget.maxAttempts).fill('/v1/chat/completions'), '/ai/v1/chat/completions']);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    }));
+
   for (const [reply, reason] of [
     [completion('{"work":true}', 'length'), 'truncated'],
     [json(200, { choices: [{ message: { content: null } }] }), 'no message content'],

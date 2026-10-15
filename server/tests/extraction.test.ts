@@ -8,7 +8,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { ContextItem, Meeting, TranscriptSegment, Unavailable, UtcTimestamp, CaptureEpochId } from '@sanctum/contracts';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
-import { type EpochAnchor, extractCandidates, summarizeMeeting } from '../src/extraction.ts';
+import { type EpochAnchor, extractCandidates, notesCeilingMs, summarizeMeeting } from '../src/extraction.ts';
 import { fixtureLlm, LlmClient, makeLlm } from '../src/llm.ts';
 import { type ModelProvider, ProviderError, type ProviderRequest } from '../src/providers/types.ts';
 
@@ -292,9 +292,38 @@ describe('summarizeMeeting', () => {
       });
     }));
 
+  it.effect('summarizes a long meeting in bounded windows and writes the title from the window summaries', () =>
+    Effect.gen(function* () {
+      const long = Array.from({ length: 250 }, (_, i) => segment(i * 2, i * 2 + 1, `Line ${i + 1}.`, 'speaker_0'));
+      const window = (title: string, ref: string) => JSON.stringify({ title, summary: `${title} summary.`, sections: [{ heading: title, points: [{ text: `${title} point.`, segments: [ref] }] }] });
+      const requests: ProviderRequest[] = [];
+      const answers = [window('First', 'S1'), window('Second', 'S121'), window('Third', 'S250'), JSON.stringify({ title: 'Whole meeting', summary: 'All three parts.' })];
+      const notes = yield* Effect.provide(summarizeMeeting({ meeting, segments: long, epochs: anchors }), fixtureLlm(answers, requests));
+      expect(requests.map(request => request.json!.name)).toEqual(['meeting_notes', 'meeting_notes', 'meeting_notes', 'meeting_notes_title']);
+      expect(requests.map(request => request.prompt.split('\n').filter(line => /^S\d+ /.test(line)).length)).toEqual([120, 120, 10, 0]);
+      expect(requests.every(request => request.maxOutputTokens <= engineeringDefaults.modelRequest.maxOutputTokens)).toBe(true);
+      expect(requests[3]!.prompt).toContain('Part 3: Third summary.');
+      expect([notes.title, notes.summary, notes.sections.map(section => section.heading)]).toEqual(['Whole meeting', 'All three parts.', ['First', 'Second', 'Third']]);
+      expect(notes.sections[2]!.points[0]!.sources).toEqual([source(long[249]!, 498_000, 499_000)]);
+    }));
+
   it.effect('refuses to summarize a meeting without final transcript', () =>
     Effect.gen(function* () {
       const failure = yield* Effect.flip(Effect.provide(summarizeMeeting({ meeting, segments: [], epochs: anchors }), fixtureLlm(['{}'])));
       expect(failure).toMatchObject({ _tag: 'Unavailable', retryable: false, message: 'meeting has no final transcript to summarize' });
     }));
+});
+
+describe('notesCeilingMs', () => {
+  const { extractionTimeoutMs } = engineeringDefaults.modelRequest;
+
+  it('grows with the sequential stages (parallel window batches, then the title) and stops at the job maximum', () => {
+    const margin = notesCeilingMs(1) - 2 * extractionTimeoutMs;
+    expect(margin).toBeGreaterThanOrEqual(15 * 60_000);
+    expect(notesCeilingMs(2) - margin).toBe(2 * 2 * extractionTimeoutMs);
+    expect(notesCeilingMs(3) - margin).toBe(notesCeilingMs(2) - margin);
+    expect(notesCeilingMs(15) - margin).toBe(6 * 2 * extractionTimeoutMs);
+    expect(notesCeilingMs(10_000)).toBe(engineeringDefaults.jobs.ceilingByKind['notes.summarize']);
+    expect(notesCeilingMs(10_000)).toBe(60 * 60_000);
+  });
 });
