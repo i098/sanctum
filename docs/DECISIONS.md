@@ -51,7 +51,7 @@ See [release evidence](release-evidence.md#workers-ai-planner---2026-10-10) for 
 
 ## Spoken classifier provider decision - 2026-10-10
 
-Accepted: only the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
+Accepted: the spoken yes/no work decision uses Cerebras `gpt-oss-120b`, with low reasoning, through the `classifier` role.
 Planning and synthesis keep Workers AI Qwen; research and its paid-call caps stay unchanged.
 The classifier uses strict [JSON-schema chat completions](https://inference-docs.cerebras.ai/capabilities/structured-outputs) and the existing Effect Schema decoder.
 See the [configuration guide](operations.md#configuration) for server-only credentials and independent classifier overrides.
@@ -165,11 +165,11 @@ No deployment or secret change forms part of this cutover.
 ## Text model provider decision — 2026-10-08
 
 Accepted: the voice and extraction roles (spoken replies, notes, memory and context) use Cloudflare Workers AI on the 42nights account, which Sanctum already runs on, so no new vendor account or card is needed.
-Both roles default to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-compatible `/v1/chat/completions` endpoint: thinking off for voice, `reasoning_effort: low` for extraction.
+Both roles defaulted to the open-weight `@cf/qwen/qwen3.8-27b` through the OpenAI-compatible `/v1/chat/completions` endpoint: thinking off for voice, `reasoning_effort: low` for extraction. The [extraction provider decision](#extraction-provider-decision---2026-10-15) moved extraction to Cerebras with this model as fallback.
 Its model schema lists strict `json_schema` output with `name`, `schema` and `strict`, which is the form the client sends; the plan had already picked this model on Cerebras.
 On the synthetic extraction, notes and voice fixtures it grounded the notes, resolved the relative dates and did not repeat the superseded decision in voice, but twice labeled a decision as a commitment; `@cf/openai/gpt-oss-120b` added a sentence that is not in the context to a spoken reply.
 This is a 24-call smoke comparison, not a quality benchmark; the run is recorded in [release-evidence.md](release-evidence.md#workers-ai-text-models).
-The general Cerebras client was removed; a decision-only client now serves the [spoken classifier](#spoken-classifier-provider-decision---2026-10-10).
+The general Cerebras client was removed; a decision-only client now serves the [spoken classifier](#spoken-classifier-provider-decision---2026-10-10) and extraction.
 Research moved to OpenAI in the [web research provider decision](#web-research-provider-decision---2026-10-10).
 
 ## Sign-in and workspace management decision — 2026-10-08

@@ -478,7 +478,7 @@ Failures retain the full sources and expose pending/failed status instead of act
 | Role | Initial implementation choice | Gate |
 | --- | --- | --- |
 | Requested voice response | Workers AI `@cf/qwen/qwen3.8-27b` (OpenAI-compatible chat completions), thinking disabled, short streamed response. | Compare first audible response and tool fidelity against labeled behavior fixtures. |
-| Notes and memory extraction | Same Workers AI Qwen model, strict `json_schema`, low reasoning. | Grounding, omissions, contradictions, names, and date resolution. |
+| Notes and memory extraction | See the extraction provider decision in `docs/DECISIONS.md`. | Grounding, omissions, contradictions, names, and date resolution. |
 | Planner | See the planner provider decision in `docs/DECISIONS.md`. | No unauthorized action or material regression in labeled fixtures; see `docs/release-evidence.md` for verification. |
 | Spoken classifier | See the classifier provider decision in `docs/DECISIONS.md`. | See `docs/release-evidence.md` for classifier evaluation results and limits. |
 | Research executor | OpenAI Responses `web_search` with GPT-4.1-mini, chosen 2026-10-10 (docs/DECISIONS.md); Anthropic hosted search stays selectable. | The planner decides when to research; each paid call passes the daily allowance first and records usage. |
