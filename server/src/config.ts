@@ -39,7 +39,8 @@ export const engineeringDefaults = {
       /** Above two sequential model calls (extraction provider, then the Workers AI fallback) at `modelRequest.extractionTimeoutMs` each. */
       'context.refresh': 15 * 60_000,
       'memory.commit': 15 * 60_000,
-      'notes.summarize': 15 * 60_000,
+      /** Hard maximum for notes; `notesCeilingMs` in extraction.ts sets the actual limit from the meeting's transcript size. */
+      'notes.summarize': 60 * 60_000,
     } as Partial<Record<JobKind, number>>,
     /**
      * Attempts for jobs that fail only when a model is slow or unavailable. The capped 5-minute backoff

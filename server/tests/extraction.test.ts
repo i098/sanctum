@@ -8,7 +8,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { ContextItem, Meeting, TranscriptSegment, Unavailable, UtcTimestamp, CaptureEpochId } from '@sanctum/contracts';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
-import { type EpochAnchor, extractCandidates, summarizeMeeting } from '../src/extraction.ts';
+import { type EpochAnchor, extractCandidates, notesCeilingMs, summarizeMeeting } from '../src/extraction.ts';
 import { fixtureLlm, LlmClient, makeLlm } from '../src/llm.ts';
 import { type ModelProvider, ProviderError, type ProviderRequest } from '../src/providers/types.ts';
 
@@ -275,4 +275,18 @@ describe('summarizeMeeting', () => {
       const failure = yield* Effect.flip(Effect.provide(summarizeMeeting({ meeting, segments: [], epochs: anchors }), fixtureLlm(['{}'])));
       expect(failure).toMatchObject({ _tag: 'Unavailable', retryable: false, message: 'meeting has no final transcript to summarize' });
     }));
+});
+
+describe('notesCeilingMs', () => {
+  const { extractionTimeoutMs } = engineeringDefaults.modelRequest;
+
+  it('grows with the sequential stages (parallel window batches, then the title) and stops at the job maximum', () => {
+    const margin = notesCeilingMs(1) - 2 * extractionTimeoutMs;
+    expect(margin).toBeGreaterThanOrEqual(15 * 60_000);
+    expect(notesCeilingMs(2) - margin).toBe(2 * 2 * extractionTimeoutMs);
+    expect(notesCeilingMs(3) - margin).toBe(notesCeilingMs(2) - margin);
+    expect(notesCeilingMs(15) - margin).toBe(6 * 2 * extractionTimeoutMs);
+    expect(notesCeilingMs(10_000)).toBe(engineeringDefaults.jobs.ceilingByKind['notes.summarize']);
+    expect(notesCeilingMs(10_000)).toBe(60 * 60_000);
+  });
 });

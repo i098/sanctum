@@ -237,6 +237,19 @@ const NOTES_WINDOW = 120;
 /** Notes requests in flight at once; Cerebras queues and Workers AI is slow, so this stays low. */
 const NOTES_CONCURRENCY = 3;
 
+/** Margin above the model stages: the former fixed ceiling of every model job. */
+const NOTES_MARGIN_MS = 15 * 60_000;
+
+/**
+ * Time one notes run may take: each stage (`NOTES_CONCURRENCY` window requests at once, then the title request when there is
+ * more than one window) may spend the extraction call and then the planner fallback at `extractionTimeoutMs` each, plus
+ * `NOTES_MARGIN_MS`, never above the job's hard ceiling.
+ */
+export const notesCeilingMs = (windows: number) => {
+  const stages = Math.ceil(windows / NOTES_CONCURRENCY) + (windows > 1 ? 1 : 0);
+  return Math.min(engineeringDefaults.jobs.ceilingByKind['notes.summarize'] ?? engineeringDefaults.jobs.ceilingMs, NOTES_MARGIN_MS + stages * 2 * engineeringDefaults.modelRequest.extractionTimeoutMs);
+};
+
 const TitleOutput = Schema.Struct({ title: Schema.String, summary: Schema.String });
 
 /**
@@ -250,24 +263,32 @@ export const summarizeMeeting = (input: Omit<ExtractionInput, 'snapshot'>): Effe
     if (lines.length === 0) return yield* new Unavailable({ message: 'meeting has no final transcript to summarize', retryable: false });
     const llm = yield* LlmClient;
     const windows = Array.from({ length: Math.ceil(lines.length / NOTES_WINDOW) }, (_, i) => lines.slice(i * NOTES_WINDOW, (i + 1) * NOTES_WINDOW));
-    const parts = yield* Effect.forEach(
-      windows,
-      part => generateWithFallback(llm, {
-        name: 'meeting_notes',
-        output: NotesOutput,
-        system: NOTES_SYSTEM,
-        prompt: `Meeting timezone: ${input.meeting.timezone}\n\nTranscript:\n${transcriptBlock(part, input.meeting)}`,
+    const { parts, head } = yield* Effect.gen(function* () {
+      const parts = yield* Effect.forEach(
+        windows,
+        part => generateWithFallback(llm, {
+          name: 'meeting_notes',
+          output: NotesOutput,
+          system: NOTES_SYSTEM,
+          prompt: `Meeting timezone: ${input.meeting.timezone}\n\nTranscript:\n${transcriptBlock(part, input.meeting)}`,
+        }),
+        { concurrency: NOTES_CONCURRENCY },
+      );
+      const head = parts.length === 1
+        ? parts[0]!
+        : yield* generateWithFallback(llm, {
+          name: 'meeting_notes_title',
+          output: TitleOutput,
+          system: NOTES_TITLE_SYSTEM,
+          prompt: parts.map(({ value }, i) => `Part ${i + 1}: ${value.summary}`).join('\n\n'),
+        });
+      return { parts, head };
+    }).pipe(
+      Effect.timeoutFail({
+        duration: notesCeilingMs(windows.length),
+        onTimeout: () => new Unavailable({ message: `notes model calls exceeded ${notesCeilingMs(windows.length)} ms for ${windows.length} transcript windows`, retryable: true }),
       }),
-      { concurrency: NOTES_CONCURRENCY },
     );
-    const head = parts.length === 1
-      ? parts[0]!
-      : yield* generateWithFallback(llm, {
-        name: 'meeting_notes_title',
-        output: TitleOutput,
-        system: NOTES_TITLE_SYSTEM,
-        prompt: parts.map(({ value }, i) => `Part ${i + 1}: ${value.summary}`).join('\n\n'),
-      });
     const byRef = new Map(lines.map(line => [line.ref, line]));
     const written = parts.flatMap(({ value }) => value.sections);
     const sections = written
