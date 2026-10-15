@@ -5,10 +5,12 @@ import {
   type AccessScope,
   CaptureEpochId,
   CurrentAccess,
+  Forbidden,
   type MeetingId,
   NotFound,
   ProviderConnectionId,
   RevisionConflict,
+  type ShareMeeting,
   type SpeakerTrack,
   SpeakerTrackId,
   type TranscriptPage,
@@ -22,7 +24,7 @@ import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
 import { mergeMeetings, splitMeeting } from './meeting-corrections.ts';
-import { currentRanges, dbFailures, selectMeeting } from './meeting-store.ts';
+import { currentRanges, dbFailures, readMeeting, selectMeeting } from './meeting-store.ts';
 import { closeMeeting, getMeeting, listMeetings } from './meetings.ts';
 import { exportMeeting, getMeetingNotes } from './notes.ts';
 import { ObjectStore } from './providers/object-store.ts';
@@ -105,6 +107,22 @@ export const getTranscript = (access: AccessScope, meeting_id: MeetingId, params
     return { meeting_id, boundary_revision: revision, segments, speakers: tracks.filter(track => used.has(track.id)), next_cursor } satisfies TranscriptPage;
   }).pipe(dbFailures);
 
+/** The meeting's owner or a human workspace owner/admin may change its visibility; a caller who cannot read the meeting sees the same 404 as everywhere else, one who can read it but may not share it gets 403. */
+const shareMeeting = (access: AccessScope, meeting_id: MeetingId, { visibility }: ShareMeeting) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* requireScope(access, 'context:write');
+    if (access.principal.kind === 'human' && (access.role === 'owner' || access.role === 'admin')) {
+      if (Option.isNone(yield* selectMeeting(access.workspace_id, meeting_id))) return yield* new NotFound({ message: 'Meeting not found' });
+    } else {
+      yield* authorizeMeeting(access, meeting_id, 'read');
+      const [grant] = yield* sql<{ access: string }>`SELECT access FROM meeting_access WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id} AND principal_id = ${access.principal.id}`;
+      if (grant?.access !== 'owner') return yield* new Forbidden({ message: 'Only the meeting owner or a workspace admin can change who reads it' });
+    }
+    yield* sql`UPDATE meetings SET visibility = ${visibility}, updated_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${access.workspace_id} AND id = ${meeting_id}`;
+    return yield* readMeeting(access.workspace_id, meeting_id);
+  }).pipe(dbFailures);
+
 export const MeetingsLive = HttpApiBuilder.group(SanctumApi, 'meetings', handlers =>
   handlers
     .handle('listMeetings', ({ urlParams }) => Effect.flatMap(CurrentAccess, access => Effect.zipRight(requireScope(access, 'context:read'), listMeetings(access, urlParams))))
@@ -113,6 +131,7 @@ export const MeetingsLive = HttpApiBuilder.group(SanctumApi, 'meetings', handler
     .handle('endMeeting', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => closeMeeting(access, path.meeting_id, payload)))
     .handle('splitMeeting', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => splitMeeting(access, path.meeting_id, payload)))
     .handle('mergeMeetings', ({ payload }) => Effect.flatMap(CurrentAccess, access => mergeMeetings(access, payload)))
+    .handle('shareMeeting', ({ path, payload }) => Effect.flatMap(CurrentAccess, access => shareMeeting(access, path.meeting_id, payload)))
     .handle('getTranscript', ({ path, urlParams }) => Effect.flatMap(CurrentAccess, access => getTranscript(access, path.meeting_id, urlParams)))
     .handle('recordingAccess', ({ path }) =>
       Effect.flatMap(CurrentAccess, access =>

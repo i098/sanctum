@@ -283,7 +283,8 @@ describe('authorization boundary', () => {
 
         expect(yield* outcome(granted, 'read')).toBe('ok');
         expect(yield* outcome(granted, 'write')).toBe('NotFound');
-        expect(yield* outcome(shared, 'write')).toBe('ok');
+        expect(yield* outcome(shared, 'read')).toBe('ok');
+        expect(yield* outcome(shared, 'write')).toBe('NotFound');
         expect(yield* outcome(hidden, 'read')).toBe('NotFound');
         expect(yield* outcome(elsewhere, 'read')).toBe('NotFound');
         expect(yield* listVisibleMeetingIds(access)).toEqual([granted, shared].sort());

@@ -525,7 +525,10 @@ describe('automatic meeting lifecycle', () => {
         const { owner, agent, listener, epoch } = yield* setup;
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
-        yield* sql`UPDATE meetings SET visibility = 'workspace' WHERE id = ${id}`;
+        for (const writer of [owner, agent]) {
+          yield* sql`INSERT IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+            VALUES (${writer.workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, UTC_TIMESTAMP(6))`;
+        }
         for (const caller of [owner, agent]) {
           for (const epoch_id of [epoch, CaptureEpochId.make(randomUUID())]) {
             expect(yield* Effect.flip(closeMeeting(caller, id, { epoch_id, fence_sample: 50 * RATE }))).toMatchObject({ _tag: 'Forbidden' });
@@ -619,7 +622,8 @@ describe('automatic meeting lifecycle', () => {
         const secondEpoch = yield* seedEpoch(second, '2026-09-28 16:01:00.000000');
         yield* hear(first, firstEpoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(first.workspace_id))[0]!.id);
-        yield* sql`UPDATE meetings SET visibility = 'workspace' WHERE id = ${id}`;
+        yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+          VALUES (${laptop!.workspace_id}, ${id}, ${laptop!.principal.id}, 'write', ${laptop!.principal.id}, UTC_TIMESTAMP(6))`;
         expect(yield* closeMeeting(laptop!, id, { epoch_id: secondEpoch, fence_sample: 5 * RATE })).toMatchObject({ state: 'closing' });
         expect(yield* sql`SELECT id, end_fence_sample FROM capture_epochs WHERE id = ${secondEpoch}`).toEqual([{ id: secondEpoch, end_fence_sample: String(5 * RATE) }]);
         expect(yield* sql`SELECT id FROM capture_epochs WHERE end_fence_from_sample = 0 AND id = ${firstEpoch}`).toEqual([{ id: firstEpoch }]);
