@@ -108,7 +108,7 @@ if (import.meta.main) {
   if (values.url && !token) throw new Error(`set ${values['token-env']} to an agent token with context:read`);
   const backend = values.fixture ? fixtureBackend(JSON.parse(readFileSync(values.fixture, 'utf8')) as Fixture) : httpBackend(values.url!, token!);
   const score = await runCheckpoint(backend, manifest, Number(values.hours));
-  writeFileSync(values.out, `${JSON.stringify({ asked_at: new Date().toISOString(), t0: manifest.t0, ...score }, null, 2)}\n`);
+  writeFileSync(values.out, `${JSON.stringify({ asked_at: new Date().toISOString(), t0: new Date(t0Ms(manifest)).toISOString(), ...score }, null, 2)}\n`);
   const m = score.metrics;
   console.log(`checkpoint ${values.hours}h: recall@5 ${m.recall_at_5} recall@20 ${m.recall_at_20} accuracy ${m.answer_accuracy} time-aware ${m.time_aware_accuracy} p50 ${m.latency_ms.p50?.toFixed(0)}ms p95 ${m.latency_ms.p95?.toFixed(0)}ms errors ${score.errors.length} -> ${values.out}`);
   // Errors are transport/auth failures, not retrieval misses: fail loudly so an unattended wrapper notices.

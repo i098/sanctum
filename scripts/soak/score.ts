@@ -14,11 +14,13 @@ const SETTLE_S = 15 * 60;
 
 /** `manifest.json` subset this scorer reads. Offsets are seconds from T0. */
 export interface T0Slot { readonly epoch_s: number | null; readonly tz: string | null }
-/** The answer is a date that depends on the real T0: the first `weekday` after the instant `after_s` seconds past T0. */
-export interface DateExpectation { readonly kind: 'weekday_after'; readonly weekday: string; readonly after_s: number }
+/** The answer is a date that depends on when the fact was really said: the first `weekday` after that day. */
+export interface DateExpectation { readonly kind: 'weekday_after'; readonly weekday: string }
 export interface Fact {
   readonly id: string;
   readonly at_s: number;
+  /** When the driver really played the fact (event time, ISO), including any outage shift; absent means T0 + `at_s`. */
+  readonly actual_at?: string;
   /** Keywords, as an agent would send: search ANDs every term of 3+ characters. */
   readonly query: string;
   /** The same question as a person would ask it; reported separately. */
@@ -29,8 +31,8 @@ export interface Fact {
   /** The newest match must be this fact's answer (a later plant changes it). */
   readonly latest?: boolean;
 }
-/** A fact with the spellings it is matched against: its aliases, or the dates its `expect` resolves to. */
-export interface DueFact extends Fact { readonly answers: ReadonlyArray<string> }
+/** A fact with its planted instant and the spellings it is matched against: its aliases, or the dates its `expect` resolves to. */
+export interface DueFact extends Fact { readonly planted_ms: number; readonly answers: ReadonlyArray<string> }
 /** Time-aware question: results inside [from_s, to_s] only, and every `expect` answer must appear. */
 export interface RangeQuestion {
   readonly id: string;
@@ -75,10 +77,10 @@ export function t0Ms(manifest: Manifest) {
 }
 
 /** Date spellings of the first `weekday` strictly after the instant, on the calendar of the run's time zone. */
-function weekdayAfterAnswers(expect: DateExpectation, t0_ms: number, tz: string | null): string[] {
+function weekdayAfterAnswers(expect: DateExpectation, instant_ms: number, tz: string | null): string[] {
   const target = WEEKDAYS.indexOf(expect.weekday.toLowerCase());
   if (target < 0 || !tz) throw new Error(`cannot resolve weekday_after "${expect.weekday}" with time zone ${tz}`);
-  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(t0_ms + expect.after_s * 1000).split('-').map(Number);
+  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(instant_ms).split('-').map(Number);
   const day = new Date(Date.UTC(y!, m! - 1, d! + 1));
   while (day.getUTCDay() !== target) day.setUTCDate(day.getUTCDate() + 1);
   const [month, n] = [MONTHS[day.getUTCMonth()]!, day.getUTCDate()];
@@ -87,20 +89,25 @@ function weekdayAfterAnswers(expect: DateExpectation, t0_ms: number, tz: string 
   return [day.toISOString().slice(0, 10), `${month} ${n}`, `${month} ${ordinal}`, `${short} ${n}`, `${short} ${ordinal}`, `${n} ${month}`, `${n} ${short}`, `${day.getUTCMonth() + 1}/${n}`];
 }
 
-/** Facts and ranges old enough to have been processed by this checkpoint, with date expectations resolved against T0. */
+/** Facts and ranges old enough to have been processed by this checkpoint; each fact carries its real planted instant and resolved answers. */
 export function askable(manifest: Manifest, hours: number) {
   const t0_ms = t0Ms(manifest);
+  const placed = manifest.facts.map(f => {
+    const planted_ms = f.actual_at === undefined ? t0_ms + f.at_s * 1000 : Date.parse(f.actual_at);
+    if (Number.isNaN(planted_ms)) throw new Error(`fact ${f.id}: actual_at "${f.actual_at}" is not a timestamp`);
+    return { f, planted_ms };
+  });
   return {
-    facts: manifest.facts.filter(f => f.at_s <= hours * 3600 - SETTLE_S).map((f): DueFact => ({ ...f, answers: f.expect ? weekdayAfterAnswers(f.expect, t0_ms, manifest.t0.tz) : f.aliases })),
+    facts: placed.filter(p => p.planted_ms - t0_ms <= hours * 3_600_000 - SETTLE_S * 1000)
+      .map(({ f, planted_ms }): DueFact => ({ ...f, planted_ms, answers: f.expect ? weekdayAfterAnswers(f.expect, planted_ms, manifest.t0.tz) : f.aliases })),
     ranges: (manifest.ranges ?? []).filter(r => r.to_s <= hours * 3600 - SETTLE_S),
   };
 }
 
 /** found: top-k item matches the answer at the planted time; wrong: items returned but none do; missing: nothing returned. */
-function factStatus(fact: DueFact, answer: Answer, t0_ms: number, k: number): FactStatus {
+function factStatus(fact: DueFact, answer: Answer, k: number): FactStatus {
   const top = answer.items.slice(0, k);
-  const planted = t0_ms + fact.at_s * 1000;
-  const hit = top.some(i => matches(i.text, fact.answers) && i.source_ms.some(t => Math.abs(t - planted) <= PLANT_TOLERANCE_MS));
+  const hit = top.some(i => matches(i.text, fact.answers) && i.source_ms.some(t => Math.abs(t - fact.planted_ms) <= PLANT_TOLERANCE_MS));
   return hit ? 'found' : top.length ? 'wrong' : 'missing';
 }
 
@@ -148,10 +155,10 @@ export function scoreCheckpoint(input: { readonly hours: number; readonly manife
     const { keyword, natural } = answers.facts[fact.id]!;
     return { fact, keyword, natural };
   });
-  const factResults = factRows.map(({ fact, keyword, natural }) => ({ id: fact.id, keyword: factStatus(fact, keyword, t0_ms, MAX_K), natural: factStatus(fact, natural, t0_ms, MAX_K) }));
+  const factResults = factRows.map(({ fact, keyword, natural }) => ({ id: fact.id, keyword: factStatus(fact, keyword, MAX_K), natural: factStatus(fact, natural, MAX_K) }));
   const rangeResults = ranges.map(r => ({ id: r.id, correct: rangeCorrect(r, answers.ranges[r.id]!, t0_ms) }));
   const controlResults = controls.map(c => ({ id: c.id, passed: !answers.controls[c.id]!.error && answers.controls[c.id]!.items.length === 0 }));
-  const recall = (k: number) => ratio(factRows.filter(r => factStatus(r.fact, r.keyword, t0_ms, k) === 'found').length, factRows.length);
+  const recall = (k: number) => ratio(factRows.filter(r => factStatus(r.fact, r.keyword, k) === 'found').length, factRows.length);
   const latest = factRows.filter(r => r.fact.latest);
   const all = [...factRows.flatMap(r => [r.keyword, r.natural]), ...ranges.map(r => answers.ranges[r.id]!), ...controls.map(c => answers.controls[c.id]!)];
   return {

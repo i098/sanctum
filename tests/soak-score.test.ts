@@ -95,7 +95,7 @@ test('a failed source lookup keeps the returned items: the fact is wrong with a 
 
 test('a weekday_after expectation resolves against T0 and the run time zone; a bare weekday does not match', () => {
   // Fri 2026-10-23 00:30 UTC is still Thu 22 Oct in Los Angeles, so "the Friday after" is 23 Oct there and 30 Oct in UTC.
-  const contract = { id: 'C', at_s: 261_000, query: 'contract', question: 'When?', aliases: [], expect: { kind: 'weekday_after', weekday: 'Friday', after_s: 261_000 } } as const;
+  const contract = { id: 'C', at_s: 261_000, query: 'contract', question: 'When?', aliases: [], expect: { kind: 'weekday_after', weekday: 'Friday' } } as const;
   const score = (tz: string, text: string) => scoreCheckpoint({
     hours: 73, manifest: { t0: { epoch_s: T0 / 1000, tz }, facts: [contract] },
     answers: { facts: { C: { keyword: answer([item(text, 261_005)]), natural: none } }, ranges: {}, controls: {} },
@@ -106,4 +106,19 @@ test('a weekday_after expectation resolves against T0 and the run time zone; a b
   assert.equal(score('UTC', 'Dana sends the contract on October 30'), 'found');
   assert.equal(score('UTC', 'Dana sends the contract on Friday'), 'wrong');
   assert.equal(score('UTC', 'Dana sends the contract on Oct 300'), 'wrong');
+});
+
+test('a fact the driver played late is matched at its actual_at, and falls back to T0 + at_s without one', () => {
+  const planted = { id: 'L1', at_s: 1200, query: 'launch', question: 'When?', aliases: ['Nov 3'] };
+  const delayed = { ...planted, actual_at: new Date(at(1200 + 3600)).toISOString() };
+  const score = (fact: typeof planted, cited_s: number) => scoreCheckpoint({
+    hours: 5, manifest: { t0, facts: [fact] },
+    answers: { facts: { L1: { keyword: answer([item('Launch is Nov 3', cited_s)]), natural: none } }, ranges: {}, controls: {} },
+  }).facts[0]!.keyword;
+  assert.equal(score(delayed, 4800), 'found');
+  assert.equal(score(delayed, 1200), 'wrong');
+  assert.equal(score(planted, 1200), 'found');
+  // A late fact is also not due before it has had time to be processed: 1 h run, played at 80 min.
+  assert.deepEqual(scoreCheckpoint({ hours: 1, manifest: { t0, facts: [{ ...planted, actual_at: new Date(at(4800)).toISOString() }] }, answers: { facts: {}, ranges: {}, controls: {} } }).facts, []);
+  assert.throws(() => scoreCheckpoint({ hours: 1, manifest: { t0, facts: [{ ...planted, actual_at: 'later' }] }, answers: { facts: {}, ranges: {}, controls: {} } }), /not a timestamp/);
 });
