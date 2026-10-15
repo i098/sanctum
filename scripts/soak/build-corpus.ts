@@ -57,7 +57,7 @@ interface FactPlan {
 }
 
 // ponytail: voices are the three Aura-2 speakers checked against the live API; add more when variety matters.
-export const FACTS: ReadonlyArray<FactPlan> = [
+const KEY_FACTS: ReadonlyArray<FactPlan> = [
   { id: 'L1', kind: 'fact', meeting: 0, offset: 600, voice: 'luna', spoken: 'We decided the launch date is November 3.', answer: 'November 3', aliases: ['Nov 3', 'Nov 3rd', 'November 3', 'November 3rd', '3 November', '11/3'], keywords: 'launch', tests: 'basic recall' },
   { id: 'V0', kind: 'distractor', meeting: 0, offset: 1080, voice: 'orion', spoken: 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.', answer: 'Northwood', aliases: ['Northwood Freight', 'Northwood'], keywords: 'shipping', tests: 'look-alike vendor that was rejected' },
   { id: 'V1', kind: 'fact', meeting: 0, offset: 1560, voice: 'apollo', spoken: 'We chose Northwind Freight for shipping.', answer: 'Northwind', aliases: ['Northwind Freight', 'Northwind'], keywords: 'shipping', tests: 'look-alike distractor of V0' },
@@ -71,6 +71,31 @@ export const FACTS: ReadonlyArray<FactPlan> = [
   { id: 'O2', kind: 'fact', meeting: 15, offset: 1800, voice: 'orion', spoken: 'Marcus takes over onboarding.', answer: 'Marcus', aliases: ['Marcus'], keywords: 'onboarding', supersedes: 'O1', tests: 'owner change' },
   { id: 'R', kind: 'fact', meeting: 22, offset: 1800, voice: 'apollo', spoken: 'The rollout region is eu-west.', answer: 'eu-west', aliases: ['eu-west', 'eu west', 'EU West', 'Europe West'], keywords: 'rollout', tests: 'newest fact at the last checkpoint' },
 ];
+
+/** Bulk facts per meeting: one per `BULK_TOPICS` entry, 240 s apart from 270 s, so a checkpoint's recall has a grain of 1 / (questions asked), not 1 / 2. */
+// Each meeting gets its own project word, so "<project> <topic word>" names exactly one fact; the values are the filler of the fact, not the key.
+const PROJECTS = ['Falcon', 'Harbor', 'Maple', 'Cobalt', 'Garden', 'Granite', 'Lantern', 'Meadow', 'Orchard', 'Pioneer', 'Ribbon', 'Willow',
+  'Beacon', 'Copper', 'Dolphin', 'Ember', 'Glacier', 'Hazel', 'Indigo', 'Jasmine', 'Canyon', 'Summit', 'River', 'Sunrise'];
+/** `word` appears verbatim in `say`, so the keyword query "<project> <word>" matches the item. A value `a|b` is spoken as `a` and accepted as `a` or `b`. */
+const BULK_TOPICS: ReadonlyArray<{ word: string; say: (p: string, v: string) => string; ask: (p: string) => string; values: ReadonlyArray<string> }> = [
+  { word: 'owner', say: (p, v) => `The ${p} project owner is ${v}.`, ask: p => `Who owns the ${p} project?`, values: ['Tomas', 'Wen', 'Ingrid', 'Rafael', 'Keiko', 'Omar', 'Sofia', 'Daniel', 'Nadia', 'Hugo', 'Leila', 'Viktor'] },
+  { word: 'offsite', say: (p, v) => `The ${p} offsite is in ${v}.`, ask: p => `Where is the ${p} offsite?`, values: ['Lisbon', 'Oslo', 'Denver', 'Kyoto', 'Austin', 'Dublin', 'Prague', 'Seattle', 'Nairobi', 'Lima', 'Vienna', 'Tallinn'] },
+  { word: 'review', say: (p, v) => `The ${p} review is on ${v}.`, ask: p => `When is the ${p} review?`, values: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] },
+  { word: 'banner', say: (p, v) => `The ${p} banner color is ${v}.`, ask: p => `What color is the ${p} banner?`, values: ['teal', 'crimson', 'amber', 'violet', 'ivory', 'scarlet', 'olive', 'navy', 'magenta', 'bronze', 'lavender', 'turquoise'] },
+  { word: 'engineers', say: (p, v) => `The ${p} team has ${v.split('|')[0]} engineers.`, ask: p => `How many engineers are on the ${p} team?`, values: ['three|3', 'four|4', 'five|5', 'six|6', 'seven|7', 'eight|8', 'nine|9', 'ten|10', 'eleven|11', 'twelve|12', 'thirteen|13', 'fourteen|14'] },
+  { word: 'tickets', say: (p, v) => `The ${p} tickets live in ${v}.`, ask: p => `Where do the ${p} tickets live?`, values: ['Trello', 'Asana', 'Notion', 'Linear', 'Airtable', 'Basecamp'] },
+  { word: 'standup', say: (p, v) => `The ${p} standup is in the ${v} room.`, ask: p => `Which room is the ${p} standup in?`, values: ['Cedar', 'Birch', 'Aspen', 'Redwood', 'Sequoia', 'Spruce', 'Pine', 'Elm'] },
+  { word: 'mascot', say: (p, v) => `The ${p} mascot is the ${v}.`, ask: p => `What is the ${p} mascot?`, values: ['otter', 'heron', 'badger', 'lynx', 'gecko', 'puffin', 'walrus', 'ferret', 'marmot', 'osprey'] },
+];
+
+const BULK = PROJECTS.flatMap((project, meeting) => BULK_TOPICS.map((topic, t) => {
+  const value = topic.values[(meeting + t * 5) % topic.values.length]!;
+  const aliases = value.split('|');
+  const fact: FactPlan = { id: `F${String(meeting).padStart(2, '0')}-${t}`, kind: 'fact', meeting, offset: 270 + t * 240, voice: ['luna', 'orion', 'apollo'][(meeting + t) % 3]!, spoken: topic.say(project, value), answer: aliases[0]!, aliases, keywords: `${project} ${topic.word}`, tests: 'bulk recall' };
+  return { fact, question: topic.ask(project) };
+}));
+
+export const FACTS: ReadonlyArray<FactPlan> = [...KEY_FACTS, ...BULK.map(({ fact }) => fact)];
 
 type Mode = 'current' | 'as_of' | 'range' | 'history' | 'never_said';
 
@@ -90,7 +115,7 @@ interface QuestionPlan {
 interface CheckpointPlan { readonly id: string; readonly at_s: number; readonly questions: ReadonlyArray<QuestionPlan> }
 
 const HOUR = 3600;
-const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
+const KEY_CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
   { id: 'cp1', at_s: HOUR, questions: [
     { id: 'cp1-launch', question: 'What launch date was decided?', keywords: 'launch', mode: 'current', expect: ['L1'] },
     { id: 'cp1-vendor', question: 'Which shipping vendor was chosen (not Northwood)?', keywords: 'shipping', mode: 'current', expect: ['V1'] },
@@ -116,6 +141,13 @@ const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = [
     { id: 'cp4-never-said', question: 'Who approved the Q3 audit?', keywords: 'audit approved', mode: 'never_said', expect: [] },
   ] },
 ];
+
+/** Every checkpoint also asks one question per bulk fact whose meeting is closed by then, so retention is re-asked at each hour. */
+const CHECKPOINTS: ReadonlyArray<CheckpointPlan> = KEY_CHECKPOINTS.map(checkpoint => ({
+  ...checkpoint,
+  questions: [...checkpoint.questions, ...BULK.filter(({ fact }) => fact.meeting * SLOT_SECONDS + SPEECH_SECONDS <= checkpoint.at_s)
+    .map(({ fact, question }): QuestionPlan => ({ id: `${checkpoint.id}-${fact.id}`, question, keywords: fact.keywords, mode: 'current', expect: [fact.id] }))],
+}));
 
 interface Source { readonly corpus: 'AMI' | 'ICSI'; readonly id: string }
 
