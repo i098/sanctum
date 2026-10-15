@@ -88,8 +88,8 @@ const toItem = (row: ItemRow): ContextItem => ({
  created_at: row.created_at,
 });
 
-/** Latest revision of each item matching `where` (over alias `ci`), newest event first, at most `limit`. */
-const latestItems = (workspace_id: string, where: Statement.Fragment, limit: number) =>
+/** Latest revision of each item matching `where` (over alias `ci`), newest event first unless `order` says otherwise, at most `limit`. */
+const latestItems = (workspace_id: string, where: Statement.Fragment, limit: number, order?: Statement.Fragment) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* decodeRows(
@@ -97,7 +97,7 @@ const latestItems = (workspace_id: string, where: Statement.Fragment, limit: num
    sql`SELECT ci.* FROM context_items ci
         WHERE ci.workspace_id = ${workspace_id} AND ${where}
           AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
-        ORDER BY COALESCE(ci.event_at, ci.created_at) DESC, ci.id
+        ORDER BY ${order ?? sql`COALESCE(ci.event_at, ci.created_at) DESC, ci.id`}
         LIMIT ${limit}`,
   );
   return rows.map(toItem);
@@ -109,6 +109,35 @@ export const meetingItems = (workspace_id: string, meeting_id: string) =>
   const sql = yield* SqlClient.SqlClient;
   const items = yield* latestItems(workspace_id, sql`ci.meeting_id = ${meeting_id} AND ci.state <> 'superseded'`, ITEM_LIMIT + 1);
   return { items: items.slice(0, ITEM_LIMIT).reverse(), truncated: items.length > ITEM_LIMIT };
+ });
+
+/**
+ * Candidates to show an extraction prompt, chronological: the meeting's newest `recent` current items plus the
+ * `matching` current items of any age that best match `prefixes` (word prefixes, as FULLTEXT `prefix*` terms).
+ */
+export const relevantItems = (workspace_id: string, meeting_id: string, prefixes: ReadonlyArray<string>, recent: number, matching: number) =>
+ Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient;
+  const current = sql`ci.meeting_id = ${meeting_id} AND ci.state <> 'superseded'`;
+  const newest = yield* latestItems(workspace_id, current, recent);
+  const against = sql`MATCH(ci.text) AGAINST (${prefixes.map(prefix => `${prefix}*`).join(' ')} IN BOOLEAN MODE)`;
+  const shared = prefixes.length === 0 ? [] : yield* latestItems(workspace_id, sql.and([current, against]), matching, sql`${against} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
+  const at = (item: ContextItem) => Date.parse(item.event_at ?? item.created_at);
+  return [...new Map([...shared, ...newest].map(item => [item.id, item])).values()].sort((a, b) => at(a) - at(b));
+ });
+
+const ItemText = Schema.Struct({ kind: ContextKind, text: Schema.String });
+
+/** Kind and text of every current item of one meeting: all of them, but only the two columns a repeat check needs. */
+export const meetingItemTexts = (workspace_id: string, meeting_id: string) =>
+ Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* decodeRows(
+   ItemText,
+   sql`SELECT ci.kind, ci.text FROM context_items ci
+        WHERE ci.workspace_id = ${workspace_id} AND ci.meeting_id = ${meeting_id} AND ci.state <> 'superseded'
+          AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)`,
+  );
  });
 
 /** Fields of a new revision; the database assigns `created_at`. */

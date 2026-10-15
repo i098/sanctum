@@ -22,7 +22,8 @@ import { requestContextRefresh, requestMemoryCommit } from '../src/context-sched
 import { appendContextEvent } from '../src/context-events.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem } from '../src/context.ts';
 import { jobHandlers } from '../src/job-handlers.ts';
-import { LlmClient } from '../src/llm.ts';
+import { fixtureLlm, LlmClient } from '../src/llm.ts';
+import type { ProviderRequest } from '../src/providers/types.ts';
 import { type FixtureMeeting, grantMeeting, migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -209,6 +210,41 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       expect(yield* refresh(job(meeting, owner!.principal.id))).toMatchObject({ status: 'paused', resume_after_ms: 0 });
       expect(yield* refresh(job(meeting, owner!.principal.id))).toMatchObject({ status: 'succeeded', result: { processed: 5 } });
       expect((yield* Ref.get(fake.calls)).map(call => call.segments.length)).toEqual([40, 40, 5]);
+    }));
+
+  it.effect('shows the model an old item the new speech supersedes in a meeting of more than 200 items, and rejects repeats of any item', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Large', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      const early = yield* seedSegment(meeting, 0, 1, 'Okay then.');
+      const later = yield* seedSegment(meeting, 50, 51, 'Okay then.');
+      const texts = [
+        'The remote control product launch date is November 3rd, 2026.',
+        ...Array.from({ length: 230 }, (_, i) => `Topic${i} budget review number ${i} agreed with member${i}: keep scope${i} steady.`),
+      ];
+      yield* Effect.forEach(texts, (text, i) =>
+        addContextItem(owner!, {
+          meeting_id: meeting.meeting_id,
+          expected_revision: i,
+          kind: 'decision',
+          text,
+          sources: [{ segment_id: TranscriptSegmentId.make(i === 0 ? early : later), start_ms: 0, end_ms: 0 }],
+          idempotency_key: `item-${i}`,
+        }));
+      yield* seedSegment(meeting, 100, 103, 'The launch will slip to December 1st.');
+      const fake = yield* fakeExtractor(() => []);
+      yield* refreshContext(fake.extract)(job(meeting, owner!.principal.id));
+      const [call] = yield* Ref.get(fake.calls);
+      expect(call!.snapshot.length).toBeLessThan(100);
+      expect(call!.snapshot.map(item => item.text)).toContain(texts[0]);
+      expect(call!.known).toHaveLength(231);
+
+      const requests: ProviderRequest[] = [];
+      const omitted = texts.find(text => !call!.snapshot.some(item => item.text === text))!;
+      const repeat = JSON.stringify({ candidates: [{ kind: 'decision', text: omitted, quote: 'launch will slip', derivation: 'spoken', time: null, segments: ['S3'] }] });
+      const found = yield* Effect.provide(extractCandidates(call!), fixtureLlm([repeat], requests));
+      expect(requests[0]!.prompt).toContain(texts[0]);
+      expect(found).toEqual([]);
     }));
 
   it.effect('drains a closed meeting\'s whole backlog in its memory commit and then marks memory complete', () =>
