@@ -2,12 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { SqlClient } from '@effect/sql';
 import { beforeAll, expect, layer } from '@effect/vitest';
-import { type AccessScope, type CaptureEpochId, encodePcmFrame, type MeetingId } from '@sanctum/contracts';
+import { type AccessScope, type CaptureEpochId, ContextItemId, encodePcmFrame, type MeetingId } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
+import { writeItem } from '../src/context.ts';
 import { coverageIn, finalSegments, uncovered } from '../src/transcripts.ts';
 import { deleteWorkspace } from '../src/workspaces.ts';
 import {
@@ -30,6 +31,7 @@ import {
 import { serverLayer } from '../src/main.ts';
 import { finalizeSealed, jobsOf, meetingsOf, rangesOf } from './support/capture.ts';
 import { memoryObjectStore } from './support/object-store.ts';
+import { seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const RATE = 16_000;
@@ -37,6 +39,7 @@ const RATE = 16_000;
 beforeAll(() => {
   liveLimits.providerRetryMs = 200;
   liveLimits.actionFeedMs = 100;
+  liveLimits.asrHintMs = 100;
 });
 
 /** Server with fake providers, a claimed listener and a started live session. */
@@ -148,6 +151,36 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const anchors = yield* sql<{ anchor_sample: string; closed: number }>`
         SELECT anchor_sample, closed_at IS NOT NULL AS closed FROM provider_connections WHERE epoch_id = ${epoch_id} ORDER BY opened_at`;
       expect(anchors.map(row => [row.anchor_sample, Number(row.closed)])).toEqual([['0', 1], ['3200', 0]]);
+    }),
+  );
+
+  it.scoped('prompts Whisper with readable committed item names, newest first, only for a principal with context:read', () =>
+    Effect.gen(function* () {
+      const { access, tokens, speech, socket, connect } = yield* setup;
+      const restricted = yield* seedMeeting(access.workspace_id);
+      const item = (text: string, state: 'committed' | 'provisional', meeting_id: MeetingId | null = null) =>
+        writeItem(access.workspace_id, {
+          id: ContextItemId.make(randomUUID()), revision: 1, meeting_id, kind: 'project_fact', text, state, derivation: 'spoken', event_at: null,
+          valid_from: null, valid_until: null, time: null, author: { type: 'system', id: access.principal.id }, sources: [], supersedes: null,
+        }, { change: 'item_added' });
+      yield* item('The team keeps the Falcon tickets in Asana.', 'committed');
+      yield* item('The Zebra board is not settled.', 'provisional');
+      yield* item('The codename is Northwind.', 'committed', restricted);
+      // A capture-only device reads no items, so its chunks carry no names.
+      socket.send(pcmFrame(0, 0));
+      const device = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
+      expect(yield* device!.prompt()).toBe('');
+      socket.close();
+      yield* eventually(Effect.sync(() => device!.finished), finished => finished === true);
+
+      tokens.set('device', { ...access, scopes: ['capture:ingest', 'context:read'] });
+      const { socket: reader } = yield* connect;
+      reader.send(pcmFrame(1, 1_600));
+      const stream = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
+      expect(yield* stream!.prompt()).toBe('Falcon, Asana');
+      // A name extracted later in the meeting joins the prompt at the next re-read.
+      yield* item('The Falcon standup is in the Walnut room.', 'committed');
+      expect(yield* eventually(stream!.prompt(), prompt => prompt !== 'Falcon, Asana')).toBe('Falcon, Walnut, Asana');
     }),
   );
 

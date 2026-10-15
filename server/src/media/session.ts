@@ -29,6 +29,8 @@ import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
+import { asrPrompt, PROMPT_TERMS } from './asr-hint.ts';
+import { visibleScope, visibleWhere } from '../context-changes.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
@@ -51,6 +53,11 @@ export const liveLimits = {
    * reaches the listener within about this long.
    */
   actionFeedMs: 1_000,
+  /**
+   * Re-read interval of the Whisper prompt's item names. Extraction commits an item about 30 s after speech, so a name
+   * said in this meeting reaches the prompt within about that plus this long; one indexed read per socket per interval.
+   */
+  asrHintMs: 15_000,
 };
 
 /** Ends the session with a `rejected` message to the client. */
@@ -164,6 +171,34 @@ const asrHealth = (send: LiveSessionInput['send']) => {
 };
 
 /**
+ * Whisper's prompt for this session's chunks: names of the newest current committed items the capturing principal may read,
+ * with `searchContext`'s scope and visibility rules; a principal without `context:read` (a capture-only device) gets none.
+ * The items are re-read at most every `asrHintMs`, so names extracted from this meeting join the prompt as it goes.
+ */
+const itemPrompt = (access: AccessScope) =>
+  Effect.gen(function* () {
+    if (!access.scopes.includes('context:read')) return () => Effect.succeed('');
+    const sql = yield* SqlClient.SqlClient;
+    const read = Effect.flatMap(visibleScope(access), scope =>
+      sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${access.workspace_id} AND ci.state = 'committed'
+        AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
+        ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`,
+    ).pipe(
+      Effect.map(rows => asrPrompt(rows.map(row => row.text))),
+      Effect.catchAll(error => Effect.as(Effect.logWarning('ASR item names not read', error), '')),
+      Effect.provideService(SqlClient.SqlClient, sql),
+    );
+    let prompt = '';
+    let readAt = -Infinity;
+    return () =>
+      Effect.suspend(() => {
+        if (Date.now() - readAt < liveLimits.asrHintMs) return Effect.succeed(prompt);
+        readAt = Date.now();
+        return Effect.tap(read, text => (prompt = text));
+      });
+  });
+
+/**
  * The live-ASR lane of one session: at most one provider connection, anchored at the sample it
  * started from. Gaps, overload and failures detach it and report the range as degraded.
  */
@@ -181,6 +216,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let retryAt = 0;
     let providerDown = false;
     const { degrade, answered } = asrHealth(send);
+    const prompt = yield* itemPrompt(access);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -214,7 +250,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const opened = yield* stt
-          .openStream(rate, offset => degrade('asr_backlog', anchor + offset))
+          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), prompt)
           .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);
