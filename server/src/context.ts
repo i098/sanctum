@@ -390,13 +390,20 @@ const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, afte
 const decodeSearchCursor = (cursor: string) =>
  Schema.decode(SearchCursor)(Buffer.from(cursor, 'base64url').toString()).pipe(Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })));
 
-/** FULLTEXT for terms of three or more characters, `LOCATE` for shorter ones; every term is required. */
-const termFilters = (sql: SqlClient.SqlClient, terms: ReadonlyArray<string>) => {
- const long = terms.filter(term => term.length >= 3).map(term => `+${term}*`);
- return [
-  ...(long.length > 0 ? [sql`MATCH(ci.text) AGAINST (${long.join(' ')} IN BOOLEAN MODE)`] : []),
-  ...terms.filter(term => term.length < 3).map(term => sql`LOCATE(${term}, ci.text) > 0`),
- ];
+/**
+ * Every word is required: FULLTEXT for three or more characters, `LOCATE` for shorter ones. A hyphenated word matches its
+ * spaced form as a phrase and its joined form as a word; `text_joined` (text without hyphens) lets "offsite" find "off-site".
+ * Hyphenated words whose parts are all shorter than three characters have no FULLTEXT tokens, so they use `LOCATE`.
+ */
+export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
+ const word = (w: string) => {
+  const parts = w.split('-');
+  if (parts.length > 1 && parts.every(part => part.length < 3)) return sql`LOCATE(${w}, ci.text) > 0`;
+  // The joined prefix must precede the phrase: MySQL 8.4 boolean mode drops rows matching only the wildcard when a phrase comes first.
+  if (parts.length > 1) return sql`MATCH(ci.text, ci.text_joined) AGAINST (${`${parts.join('')}* "${parts.join(' ')}"`} IN BOOLEAN MODE)`;
+  return w.length >= 3 ? sql`MATCH(ci.text, ci.text_joined) AGAINST (${`+${w}*`} IN BOOLEAN MODE)` : sql`LOCATE(${w}, ci.text) > 0`;
+ };
+ return sql.and(words.map(word));
 };
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
@@ -416,11 +423,11 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   yield* requireScope(access, 'context:read');
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
-  const terms = input.q === undefined ? [] : (input.q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const terms = input.q === undefined ? [] : (input.q.toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? []);
   if (input.q !== undefined && terms.length === 0) return searchPage([], 1);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const sql = yield* SqlClient.SqlClient;
-  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after), ...termFilters(sql, terms)]);
+  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after), termFilter(sql, terms)]);
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
   return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
  });
