@@ -45,7 +45,7 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 const TABLE = /^CREATE TABLE `?(\w+)`?/i;
 const INDEX = /^CREATE (?:UNIQUE |FULLTEXT )?INDEX `?(\w+)`? ON `?(\w+)`?/i;
 /** One column per statement, so the step stays a single inspectable object. */
-const COLUMN = /^ALTER TABLE `?(\w+)`? ADD COLUMN `?(\w+)`?[^,]*$/i;
+const COLUMN = /^ALTER TABLE `?(\w+)`? ADD COLUMN `?(\w+)`?(?:[^,()]|\((?:[^()]|\([^()]*\))*\))*$/i;
 /** Re-runnable data fix or column redefinition: it must be idempotent, so a crash needs no inspection. */
 const BACKFILL = /^(?:UPDATE `?(\w+)`? |ALTER TABLE `?(\w+)`? MODIFY COLUMN )/i;
 
