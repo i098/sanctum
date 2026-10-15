@@ -116,7 +116,7 @@ interface ChunkJob { readonly epoch: Epoch; readonly chunk_id: string; readonly 
 interface PlantedFact { readonly id: string; readonly at_s: number }
 
 /** When `sample` was captured, on the epoch's clock. */
-export const captureTime = (clock: Pick<Clock, 'sample_rate' | 'sample_start' | 'captured_at'>, sample: number) =>
+const captureTime = (clock: Pick<Clock, 'sample_rate' | 'sample_start' | 'captured_at'>, sample: number) =>
   new Date(Date.parse(clock.captured_at) + ((sample - clock.sample_start) / clock.sample_rate) * 1000).toISOString();
 
 /** Real capture time of each fact whose first sample lies in `[start, start + count)`. */
@@ -452,6 +452,15 @@ class SoakDriver {
     return link;
   }
 
+  /** Persists the real play time of each fact whose first sample is in the next frame, before the frame is sent. */
+  private recordPlanted(epoch: Epoch, count: number) {
+    const planted = factTimes(epoch.clock, this.facts, this.position, count);
+    if (Object.keys(planted).length === 0) return;
+    Object.assign(this.state.actual_at, planted);
+    if (this.options.manifest !== null) stampManifest(this.options.manifest, { actual_at: planted });
+    this.save();
+  }
+
   /** Sends frames from `position` at the epoch's real-time schedule until the audio ends, the socket closes or the driver stops. */
   private async pump(link: Link, epoch: Epoch): Promise<Ended> {
     const { socket } = link;
@@ -468,12 +477,7 @@ class SoakDriver {
       if (this.stopReason !== null || socket.readyState !== WebSocket.OPEN) continue;
       const count = Math.min(this.frameSamples, this.end - this.position);
       const samples = await this.readSamples(this.position, count);
-      const planted = factTimes(epoch.clock, this.facts, this.position, count);
-      if (Object.keys(planted).length > 0) {
-        Object.assign(this.state.actual_at, planted);
-        if (this.options.manifest !== null) stampManifest(this.options.manifest, { actual_at: planted });
-        this.save();
-      }
+      this.recordPlanted(epoch, count);
       socket.send(encodePcmFrame({ track: 0, sequence: epoch.sequence++, sample_start: this.position, sample_count: count }, samples));
       this.position += count;
       if (isSpeech(samples)) units.speech_seconds += count / this.rate;
