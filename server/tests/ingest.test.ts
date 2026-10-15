@@ -39,6 +39,7 @@ const RATE = 16_000;
 beforeAll(() => {
   liveLimits.providerRetryMs = 200;
   liveLimits.actionFeedMs = 100;
+  liveLimits.asrHintMs = 100;
 });
 
 /** Server with fake providers, a claimed listener and a started live session. */
@@ -153,15 +154,9 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
-  it.scoped('prompts Whisper with names heard in the meeting, plus item names only for a principal with context:read, also after a reconnect', () =>
+  it.scoped('prompts Whisper with readable committed item names, newest first, only for a principal with context:read', () =>
     Effect.gen(function* () {
       const { access, tokens, speech, socket, connect } = yield* setup;
-      socket.send(pcmFrame(0, 0));
-      const first = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
-      expect(yield* first!.prompt(0)).toBe('');
-      first!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the Falcon offsite is in Dublin.', confidence: 0.9, speaker: '0' });
-      yield* eventually(first!.prompt(0), prompt => prompt === 'Dublin, Falcon');
-      expect(yield* first!.prompt(1_600)).toBe('');
       const restricted = yield* seedMeeting(access.workspace_id);
       const item = (text: string, state: 'committed' | 'provisional', meeting_id: MeetingId | null = null) =>
         writeItem(access.workspace_id, {
@@ -171,65 +166,21 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       yield* item('The team keeps the Falcon tickets in Asana.', 'committed');
       yield* item('The Zebra board is not settled.', 'provisional');
       yield* item('The codename is Northwind.', 'committed', restricted);
+      // A capture-only device reads no items, so its chunks carry no names.
+      socket.send(pcmFrame(0, 0));
+      const device = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
+      expect(yield* device!.prompt()).toBe('');
       socket.close();
-      yield* eventually(Effect.sync(() => first!.finished), finished => finished === true);
-
-      const { socket: device } = yield* connect;
-      device.send(pcmFrame(1, 1_600));
-      yield* device.take('ack');
-      const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
-      expect(yield* second!.prompt(-1_600)).toBe('Dublin, Falcon');
-      device.close();
-      yield* eventually(Effect.sync(() => second!.finished), finished => finished === true);
+      yield* eventually(Effect.sync(() => device!.finished), finished => finished === true);
 
       tokens.set('device', { ...access, scopes: ['capture:ingest', 'context:read'] });
       const { socket: reader } = yield* connect;
-      reader.send(pcmFrame(2, 3_200));
-      const third = yield* eventually(Effect.sync(() => speech.streams[2]), stream => stream !== undefined);
-      expect(yield* third!.prompt(-3_200)).toBe('Dublin, Falcon, Asana');
-    }),
-  );
-
-  it.scoped('keeps names of an earlier meeting out of the next chunk once it has ended, in the same all-day capture', () =>
-    Effect.gen(function* () {
-      const { host, tokens, access, speech, epoch_id, socket, connect } = yield* setup;
-      socket.send(pcmFrame(0, 0));
-      const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
-      stream!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the codename is Bluebird today.', confidence: 0.9, speaker: '0' });
-      yield* eventually(stream!.prompt(0), prompt => prompt === 'Bluebird');
-      const [restricted] = yield* meetingsOf(access.workspace_id);
-      tokens.set('ender', { ...access, scopes: ['context:write'] });
-      expect((yield* api(host, 'ender', 'POST', `/meetings/${restricted!.id}/end`, { epoch_id, fence_sample: 1_600 })).body).toMatchObject({ state: 'closing' });
-      expect(yield* stream!.prompt(1_600)).toBe('');
-
-      socket.send(pcmFrame(1, 1_600));
-      yield* eventually(Effect.sync(() => stream!.received), received => received === 3_200);
-      expect(yield* stream!.prompt(1_600)).toBe('');
-      stream!.emit({ start_s: 0.1, end_s: 0.2, is_final: true, text: 'Good morning, the Walnut room is booked.', confidence: 0.9, speaker: '0' });
-      yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 2);
-      expect(yield* eventually(stream!.prompt(1_600), prompt => prompt === 'Walnut')).toBe('Walnut');
-      socket.close();
-      yield* eventually(Effect.sync(() => stream!.finished), finished => finished === true);
-
-      const { socket: resumed } = yield* connect;
-      resumed.send(pcmFrame(2, 3_200));
-      const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
-      expect(yield* second!.prompt(-1_600)).toBe('Walnut');
-    }),
-  );
-
-  it.scoped('keeps names of an earlier meeting out of the next one when it starts back to back without an End', () =>
-    Effect.gen(function* () {
-      const { access, speech, socket } = yield* setup;
-      for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
-      const stream = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 4_800);
-      stream!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the codename is Bluebird today.', confidence: 0.9, speaker: '0' });
-      stream!.emit({ start_s: 0.1, end_s: 0.2, is_final: true, text: 'That is all, thanks everyone, bye.', confidence: 0.9, speaker: '0' });
-      yield* eventually(stream!.prompt(1_600), prompt => prompt === 'Bluebird');
-      expect(yield* stream!.prompt(3_200)).toBe('');
-      stream!.emit({ start_s: 0.2, end_s: 0.3, is_final: true, text: 'Good morning everyone, the Walnut room is booked.', confidence: 0.9, speaker: '0' });
-      yield* eventually(meetingsOf(access.workspace_id), rows => rows.length === 2);
-      expect(yield* eventually(stream!.prompt(3_200), prompt => prompt === 'Walnut')).toBe('Walnut');
+      reader.send(pcmFrame(1, 1_600));
+      const stream = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
+      expect(yield* stream!.prompt()).toBe('Falcon, Asana');
+      // A name extracted later in the meeting joins the prompt at the next re-read.
+      yield* item('The Falcon standup is in the Walnut room.', 'committed');
+      expect(yield* eventually(stream!.prompt(), prompt => prompt !== 'Falcon, Asana')).toBe('Falcon, Walnut, Asana');
     }),
   );
 

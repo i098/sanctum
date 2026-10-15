@@ -113,15 +113,15 @@ const loadOpen = (key: CaptureKey) =>
     } satisfies OpenMeeting;
   });
 
-const OwnerRow = Schema.Struct({ meeting_id: MeetingId, boundary_revision: Schema.Number, sample_start: Schema.Number, sample_end: Schema.Number });
+const OwnerRow = Schema.Struct({ meeting_id: MeetingId, sample_start: Schema.Number, sample_end: Schema.Number });
 
 /** Current-revision range covering the first sample of `source`, if any meeting owns it. */
-export const ownerOf = (workspace_id: WorkspaceId, source: Pick<SourceRange, 'epoch_id' | 'track' | 'sample_start'>) =>
+const ownerOf = (workspace_id: WorkspaceId, source: SourceRange) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     SqlSchema.findOne({
       Request: Schema.Void,
       Result: OwnerRow,
-      execute: () => sql`SELECT r.meeting_id, r.boundary_revision, CAST(r.sample_start AS DOUBLE) AS sample_start, CAST(r.sample_end AS DOUBLE) AS sample_end FROM meeting_ranges r
+      execute: () => sql`SELECT r.meeting_id, CAST(r.sample_start AS DOUBLE) AS sample_start, CAST(r.sample_end AS DOUBLE) AS sample_end FROM meeting_ranges r
         JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
         WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track}
           AND r.sample_start <= ${source.sample_start} AND r.sample_end > ${source.sample_start} LIMIT 1`,

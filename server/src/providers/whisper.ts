@@ -8,7 +8,7 @@
  * (provider_connections). Whisper invents text such as "Thank you." on silence and room noise, so
  * audio without sustained sound is never sent, `vad_filter` drops silence inside a request, and a
  * segment Whisper scores as likely no speech is dropped. Each live chunk carries the stream's current
- * `initial_prompt`, so names said earlier are spelled the same way again. API and segment fields per
+ * `initial_prompt` of names, so a known name is spelled that way. API and segment fields per
  * developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo (checked 2026-10-15).
  */
 import { Context, Effect, Option, Queue, Redacted, Schema, type Scope, Stream } from 'effect';
@@ -51,11 +51,11 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
   {
     readonly provider: string;
     readonly model: string;
-    /** `prompt` is read once per chunk, with the offset of the chunk's first sample, and sent as Whisper's `initial_prompt` when not empty. */
+    /** `prompt` is read once per chunk and sent as Whisper's `initial_prompt` when not empty. */
     readonly openStream: (
       sample_rate: number,
       behind: (offset: number) => Effect.Effect<void>,
-      prompt?: (offset: number) => Effect.Effect<string>,
+      prompt?: () => Effect.Effect<string>,
     ) => Effect.Effect<AsrStream, Unavailable, Scope.Scope>;
     readonly transcribe: (sample_rate: number, samples: Int16Array) => Effect.Effect<ReadonlyArray<AsrResult>, Unavailable>;
   }
@@ -199,7 +199,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
       return yield* requestSegments(url, token, wavFile(sample_rate, [new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)]), limits, prompt);
     });
 
-  const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>, prompt: (offset: number) => Effect.Effect<string> = () => Effect.succeed('')) =>
+  const openStream = (sample_rate: number, behind: (offset: number) => Effect.Effect<void>, prompt: () => Effect.Effect<string> = () => Effect.succeed('')) =>
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
@@ -238,7 +238,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const shift = (offset - lead) / sample_rate;
         const skipped = Effect.as(behind(offset), [null] as ReadonlyArray<Answered | null>);
         if (Date.now() < pausedUntil) return skipped;
-        return Effect.flatMap(prompt(offset - lead), text => {
+        return Effect.flatMap(prompt(), text => {
           const request = transcribe(sample_rate, samples, text);
           // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
           // The duplicate is never sent during a 429 pause and never wins by failing: the original settles the chunk then.

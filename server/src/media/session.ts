@@ -29,9 +29,8 @@ import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
-import { asrPrompt, heardNames, knownNames, PROMPT_TERMS } from './asr-hint.ts';
+import { asrPrompt, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
-import { ownerOf } from '../meetings.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
@@ -54,6 +53,11 @@ export const liveLimits = {
    * reaches the listener within about this long.
    */
   actionFeedMs: 1_000,
+  /**
+   * Re-read interval of the Whisper prompt's item names. Extraction commits an item about 30 s after speech, so a name
+   * said in this meeting reaches the prompt within about that plus this long; one indexed read per socket per interval.
+   */
+  asrHintMs: 15_000,
 };
 
 /** Ends the session with a `rejected` message to the client. */
@@ -166,48 +170,32 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
-/** Finals read when a meeting's heard names are first needed: about half an hour of speech. */
-const HEARD_SEGMENTS = 500;
-
 /**
- * Whisper's prompt for the chunk that starts at an epoch sample: names heard in the meeting whose current range covers
- * that sample (`ownerOf`, as the transcript path places a final), then, for a principal with `context:read`, the names of
- * the newest committed items it may read. No meeting covers the sample: no heard names.
+ * Whisper's prompt for this session's chunks: names of the newest current committed items the capturing principal may read,
+ * with `searchContext`'s scope and visibility rules; a principal without `context:read` (a capture-only device) gets none.
+ * The items are re-read at most every `asrHintMs`, so names extracted from this meeting join the prompt as it goes.
  */
-const chunkPrompt = (access: AccessScope, { epoch_id, track }: typeof StartMessage.Type) =>
+const itemPrompt = (access: AccessScope) =>
   Effect.gen(function* () {
+    if (!access.scopes.includes('context:read')) return () => Effect.succeed('');
     const sql = yield* SqlClient.SqlClient;
-    const { workspace_id } = access;
-    const items = !access.scopes.includes('context:read')
-      ? []
-      : yield* Effect.flatMap(visibleScope(access), scope =>
-          sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${workspace_id} AND ci.state = 'committed'
-            AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
-            ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR item names not read', error), [])));
-    const known = knownNames(items.map(row => row.text));
-    /** The covering meeting's names and the creation time of the newest final read; a new meeting or revision starts over. */
-    let cached: { readonly key: string; readonly heard: Map<string, string>; readonly through: string | null } | null = null;
-    const heardAt = (sample_start: number) =>
-      Effect.gen(function* () {
-        const owner = yield* ownerOf(workspace_id, { epoch_id, track, sample_start }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        if (Option.isNone(owner)) return new Map<string, string>();
-        const { meeting_id, boundary_revision } = owner.value;
-        const key = `${meeting_id}:${boundary_revision}`;
-        const earlier = cached?.key === key ? cached : null;
-        const finals = yield* sql<{ text: string; created_at: string }>`SELECT s.text, CAST(s.created_at AS CHAR) AS created_at FROM transcript_segments s
-          JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
-            AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
-          WHERE s.workspace_id = ${workspace_id} AND s.status = 'final' AND r.meeting_id = ${meeting_id} AND r.boundary_revision = ${boundary_revision}
-            ${earlier?.through ? sql`AND s.created_at > ${earlier.through}` : sql``}
-          ORDER BY s.created_at DESC, s.sample_start DESC LIMIT ${HEARD_SEGMENTS}`;
-        cached = { key, heard: heardNames(finals.map(row => row.text), earlier?.heard), through: finals[0]?.created_at ?? earlier?.through ?? null };
-        return cached.heard;
+    const read = Effect.flatMap(visibleScope(access), scope =>
+      sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${access.workspace_id} AND ci.state = 'committed'
+        AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
+        ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`,
+    ).pipe(
+      Effect.map(rows => asrPrompt(rows.map(row => row.text))),
+      Effect.catchAll(error => Effect.as(Effect.logWarning('ASR item names not read', error), '')),
+      Effect.provideService(SqlClient.SqlClient, sql),
+    );
+    let prompt = '';
+    let readAt = -Infinity;
+    return () =>
+      Effect.suspend(() => {
+        if (Date.now() - readAt < liveLimits.asrHintMs) return Effect.succeed(prompt);
+        readAt = Date.now();
+        return Effect.tap(read, text => (prompt = text));
       });
-    return (sample: number) =>
-      heardAt(sample).pipe(
-        Effect.catchAll(error => Effect.as(Effect.logWarning('ASR meeting names not read', error), new Map<string, string>())),
-        Effect.map(heard => asrPrompt(heard, known)),
-      );
   });
 
 /**
@@ -228,7 +216,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let retryAt = 0;
     let providerDown = false;
     const { degrade, answered } = asrHealth(send);
-    const prompt = yield* chunkPrompt(access, start);
+    const prompt = yield* itemPrompt(access);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -262,7 +250,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const opened = yield* stt
-          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), offset => prompt(anchor + offset))
+          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), prompt)
           .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);

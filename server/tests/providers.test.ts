@@ -386,7 +386,7 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
-  it.scopedLive('sends the prompt current when each chunk goes out as initial_prompt, read at the chunk offset, and none while it is empty', () =>
+  it.scopedLive('sends the prompt current when each chunk goes out as initial_prompt, and none while it is empty', () =>
     Effect.gen(function* () {
       let arrived = () => {};
       const firstRequest = new Promise<void>(resolve => (arrived = resolve));
@@ -395,8 +395,7 @@ describe('Workers AI Whisper', () => {
         response.end(JSON.stringify({ result: { text: 'words', segments: [{ start: 0, end: 1, text: 'words' }] } }));
       });
       let prompt = '';
-      const offsets: Array<number> = [];
-      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void, offset => Effect.sync(() => (offsets.push(offset), prompt)));
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void, () => Effect.sync(() => prompt));
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       // 6.5 s of sound and a 300 ms pause end the first chunk; 1 s more is the second.
       const audio = new Int16Array(124_800).fill(8_000).fill(0, 104_000, 108_800);
@@ -407,10 +406,6 @@ describe('Workers AI Whisper', () => {
       yield* stream.finish;
       yield* collected.await;
       expect(server.requests.map(request => JSON.parse(request.body.toString()).initial_prompt)).toEqual([undefined, 'Falcon, Asana']);
-      expect(offsets).toHaveLength(2);
-      expect(offsets[0]).toBe(0);
-      expect(offsets[1]).toBeGreaterThan(104_000);
-      expect(offsets[1]).toBeLessThan(108_800);
     }),
   );
 
