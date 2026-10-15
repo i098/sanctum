@@ -159,6 +159,7 @@ Sync revokes only a membership that WorkOS granted (`workspace_members.org_issue
 | `npm run check:app` | Workspace typechecks, all Vitest suites against MySQL 8.4, the web build, Playwright in Chromium, the benchmark manifest, benchmark correctness smoke, and the accelerated 24-hour replay. Set `SANCTUM_TEST_MYSQL_URL` for the last two. |
 | `node scripts/benchmark.ts --mysql-url ...` | Full-scale TypeScript benchmark records (see [benchmarks/README.md](../benchmarks/README.md)). |
 | `node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated` | A day of synthetic source time: meeting boundaries and one owner per segment (RSS growth reported, not gated). |
+| `npm run soak:checkpoint -- --manifest manifest.json --hours 1 --out cp-1h.json --url <app>` | Read-only retrieval checkpoint (1, 5, 12 or 24 hours) of a soak run: asks the planted questions through context search and source lookups, then scores recall, answer accuracy, time-aware accuracy and latency. Options are in the header of [scripts/soak/checkpoint.ts](../scripts/soak/checkpoint.ts); not part of `npm run check:app`. |
 | `npm run sdk:generate -- --check` | Generated TypeScript and Python SDKs match the v1 OpenAPI document. |
 
 Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs poll for settled state.
