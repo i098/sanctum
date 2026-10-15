@@ -90,8 +90,15 @@ export const WORK_ACKNOWLEDGEMENT = 'Looking that up.';
 /**
  * "Sanctum, …" / "Hey Sanctum …" at the start of the turn or of a sentence in it; the rest is the request.
  * A live chunk of several seconds can hold talk before the request in the same segment.
+ * Whisper often writes the pause before "Sanctum" as a comma, so a comma also opens a request, but only when
+ * "Sanctum" is itself followed by a comma or by a question word and a question: "I told Sanctum yesterday" stays talk.
  */
-export const directRequest = (text: string) => /(?:^|[.?!])\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
+const FROM_SENTENCE = /(?:^|[.?!])\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu;
+const FROM_CLAUSE = /,\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b(?=\s*,|\s+(?:what|when|where|who|why|how|which)\b[^.!?]*\?\s*$)\W*(.*)$/isu;
+export const directRequest = (text: string) => {
+  const heard = text.trim();
+  return (FROM_SENTENCE.exec(heard) ?? FROM_CLAUSE.exec(heard))?.[1]?.trim() || null;
+};
 
 /** Splits a streamed reply into sentences so speech starts before the whole reply exists. */
 const sentences = <E>(text: Stream.Stream<string, E>) =>
@@ -155,6 +162,8 @@ const speak = (
         ),
       ),
     );
+    // The window stays open while the browser plays what was sent, so "Sanctum, stop" still cancels it.
+    yield* Effect.sleep(playedUntil - gate.now());
     // A cancel from the controller would interrupt this very fiber before sending, so close the window here.
     if (gate.active(listener_id)?.generation !== window.generation) return;
     const expired = !live();
