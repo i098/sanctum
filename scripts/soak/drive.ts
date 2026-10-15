@@ -5,7 +5,7 @@
  * resumes from the server watermark, and shares each meeting with its workspace so other agents can query.
  *
  * `--manifest` plays the corpus built by build-corpus.ts: each meeting's WAV at its `start_s`, silence in the gaps,
- * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0.epoch_s`.
+ * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0` slot: `epoch_s` in epoch seconds and `tz` 'UTC'.
  * Every new epoch is stamped with the real time, so an outage delays all later audio. The state file therefore records
  * `actual_at`, the real event time of each manifest fact as streamed (not `t0 + at_s`), and `outages`, the
  * cumulative delay behind T0 at each epoch after the first.
@@ -89,8 +89,8 @@ interface Outage {
 
 interface State {
   listener_id: string | null;
-  /** Run start: when sample 0 was captured. Written to the manifest's `t0.epoch_s`. */
-  t0: string | null;
+  /** Run start: epoch seconds when sample 0 was captured. Written to the manifest's `t0.epoch_s`. */
+  t0: number | null;
   offset: number;
   units: Units;
   counters: Counters;
@@ -370,14 +370,14 @@ class SoakDriver {
 
   // --- live stream ------------------------------------------------------------------------------------------
 
-  /** T0 is when sample 0 was captured. Each epoch is stamped with the real time, so after an outage a fact's event time is `state.actual_at`, not `t0 + at_s`. */
-  private setT0(t0: string) {
+  /** T0 is when sample 0 was captured, in epoch seconds. Each epoch is stamped with the real time, so after an outage a fact's event time is `state.actual_at`, not `t0 + at_s`. */
+  private setT0(t0: number) {
     this.state.t0 = t0;
     const { manifest } = this.options;
     if (manifest === null) return;
     const temp = `${manifest}.tmp`;
     const current = JSON.parse(readFileSync(manifest, 'utf8'));
-    writeFileSync(temp, `${JSON.stringify({ ...current, t0: { ...current.t0, epoch_s: Date.parse(t0) / 1000 } }, null, 2)}\n`);
+    writeFileSync(temp, `${JSON.stringify({ ...current, t0: { ...current.t0, epoch_s: t0, tz: 'UTC' } }, null, 2)}\n`);
     renameSync(temp, manifest);
     log('t0_set', { t0, manifest });
   }
@@ -385,12 +385,14 @@ class SoakDriver {
   private newEpoch(): Epoch {
     const now = Date.now();
     this.state.counters.epochs++;
-    if (this.state.t0 === null) this.setT0(new Date(now - (this.position / this.rate) * 1000).toISOString());
+    const afterT0 = this.state.t0 !== null;
+    if (this.state.t0 === null) this.setT0((now - (this.position / this.rate) * 1000) / 1000);
     const reason = this.epochsThisRun++ > 0 ? 'stream_restart' : this.state.offset > 0 ? 'resume' : 'start';
-    if (reason !== 'start') {
-      const nominal = Date.parse(this.state.t0!) + (this.position / this.rate) * 1000;
+    if (afterT0) {
+      const nominal = this.state.t0! * 1000 + (this.position / this.rate) * 1000;
       this.state.outages.push({ at_s: this.position / this.rate, resumed_at: new Date(now).toISOString(), lag_s: (now - nominal) / 1000, reason });
     }
+    this.save();
     return {
       id: randomUUID(),
       clock: { sample_rate: this.rate, channels: 1, encoding: 'pcm_s16le', sample_start: this.position, captured_at: new Date(now).toISOString(), timezone: 'UTC' },
@@ -458,7 +460,11 @@ class SoakDriver {
       if (this.stopReason !== null || socket.readyState !== WebSocket.OPEN) continue;
       const count = Math.min(this.frameSamples, this.end - this.position);
       const samples = await this.readSamples(this.position, count);
-      Object.assign(this.state.actual_at, factTimes(epoch.clock, this.facts, this.position, count));
+      const planted = factTimes(epoch.clock, this.facts, this.position, count);
+      if (Object.keys(planted).length > 0) {
+        Object.assign(this.state.actual_at, planted);
+        this.save();
+      }
       socket.send(encodePcmFrame({ track: 0, sequence: epoch.sequence++, sample_start: this.position, sample_count: count }, samples));
       this.position += count;
       if (isSpeech(samples)) units.speech_seconds += count / this.rate;
