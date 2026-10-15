@@ -50,7 +50,7 @@ export interface ExtractionInput {
   /** Kind and text of every current item of the meeting, so a repeat of any of them is rejected even when it is not in `snapshot`. */
   readonly known?: ReadonlyArray<Pick<ContextItem, 'kind' | 'text'>>;
   /**
-   * The last segment an earlier round already processed, shown as context so a sentence cut at the batch edge reaches the model whole.
+   * The last segment an earlier round processed on each track in this batch, shown as context so a sentence cut at the batch edge reaches the model whole.
    * A candidate must cite at least one of `segments`; the model is told not to extract the earlier line alone.
    */
   readonly earlier?: ReadonlyArray<TranscriptSegment>;

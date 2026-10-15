@@ -60,7 +60,7 @@ interface Target {
 }
 
 /**
- * Keeps a candidate only if every cited segment is in this batch (or the one earlier segment shown with it) and any quote appears in the
+ * Keeps a candidate only if every cited segment is in this batch (or the last processed segment per track shown with it) and any quote appears in the
  * cited text. A "spoken" claim without a quote is kept as an inference. Relative time is
  * re-resolved against the cited utterance that says the phrase (else the latest cited one) in the meeting timezone.
  */
