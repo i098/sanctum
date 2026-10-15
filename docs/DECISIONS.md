@@ -211,6 +211,10 @@ Chunk measurement on 2026-10-08, with a 22 s synthetic speech clip at normal lev
 
 Fixed cuts split words, and the 2 s cut lost the word "Sanctum" from the direct request; overlap repeats words.
 Sanctum therefore cuts each live chunk at the quietest 20 ms between 1.5 s and 2.5 s (`engineeringDefaults.liveAsr`).
+Continuous speech has no quiet 20 ms, and the second soak dry run cut "Northwind" into "North" and "wind".
+A cut with sound on it, one at or above `speechFloorRms`, may fall inside a word, so the next chunk also starts `overlapMs` (0.75 s) before it and the word is whole there; a quiet cut adds no overlap.
+The answer that closes a chunk before an overlap waits for the next chunk's first answer when it ends inside that overlap; the two are joined word by word, a fragment at either edge matches its whole word, and the whole form is kept.
+Answers that share no words stay separate, and a held answer is released when the stream ends.
 Results keep audio order, so one slow answer holds back every later chunk.
 Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
 With three chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.

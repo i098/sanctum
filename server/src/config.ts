@@ -51,14 +51,15 @@ export const engineeringDefaults = {
   },
   /**
    * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks cut at the
-   * quietest 20 ms between `minMs` and `maxMs` (measured in docs/DECISIONS.md), with at most
+   * quietest 20 ms between `minMs` and `maxMs` (measured in docs/DECISIONS.md); a cut at or above `speechFloorRms`
+   * may split a word, so the next chunk starts `overlapMs` before it. At most
    * `concurrency` chunks in flight; results still arrive in audio order, so in-flight chunks must
    * span the slowest answers (12–20 s, about 1 in 100) or later chunks wait and live falls behind.
    * A chunk unanswered after `hedgeMs` (above every normal answer) is sent once more; the first
    * success wins, a failed duplicate never does, and none is sent during a 429 pause. Audio without 100 ms in a row at `speechFloorRms` (PCM16 RMS, about -56 dBFS) is
    * never sent. A 429 pauses requests for its Retry-After, else `rateLimitBackoffMs`, and the chunks meanwhile are skipped.
    */
-  liveAsr: { minMs: 1_500, maxMs: 2_500, concurrency: 8, hedgeMs: 8_000, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },
+  liveAsr: { minMs: 1_500, maxMs: 2_500, overlapMs: 750, concurrency: 8, hedgeMs: 8_000, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },
   /**
    * Requested speech: open window, quiet audio that ends a direct-request turn, and echo memory
    * after playback. Finals arrive once per live chunk, so a turn waits `turnWaitMs` for the next

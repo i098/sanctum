@@ -278,6 +278,36 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
+  it.scopedLive('does not split a word the chunk cut falls in: the overlap makes it whole and repeats no word', () =>
+    Effect.gen(function* () {
+      const sentence = 'we chose northwind freight for shipping this quarter team agreed on friday'.split(' ');
+      const wordSamples = 6_400;
+      // Continuous speech: each word is one level, rising, so the quietest 20 ms of every cut window is its first frame, inside a word.
+      const audio = Int16Array.from({ length: sentence.length * wordSamples }, (_, at) => 1_000 * (Math.floor(at / wordSamples) + 1));
+      // A stand-in Whisper that hears a word cut by the chunk edge as its leading or trailing letters.
+      const server = yield* localServer((_request, body, response) => {
+        const { samples } = sentAudio(body);
+        const heard: Array<string> = [];
+        for (let from = 0; from < samples.length; ) {
+          let to = from;
+          while (to < samples.length && samples[to] === samples[from]) to++;
+          const word = sentence[samples[from]! / 1_000 - 1]!;
+          const kept = Math.ceil((word.length * (to - from)) / wordSamples);
+          heard.push(from === 0 ? word.slice(word.length - kept) : to === samples.length ? word.slice(0, kept) : word);
+          from = to;
+        }
+        response.end(JSON.stringify({ result: { text: heard.join(' '), segments: [{ start: 0, end: samples.length / 16_000, text: heard.join(' ') }] } }));
+      });
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600));
+      yield* stream.finish;
+      const texts = [...(yield* Effect.flatten(collected.await))].flatMap(batch => batch.results.map(result => result.text));
+      expect(server.requests).toHaveLength(3);
+      expect(texts.join(' ')).toBe(sentence.join(' '));
+    }),
+  );
+
   it.effect('reports missing settings as unavailable instead of pretending to transcribe', () =>
     Effect.gen(function* () {
       const stt = yield* Effect.provide(SpeechToText, SpeechToTextLive.pipe(Layer.provide(withConfig({ WORKERS_AI_ACCOUNT_ID: 'acct' }))));
