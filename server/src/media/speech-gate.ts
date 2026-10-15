@@ -69,7 +69,6 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
 /** One gate per API process by default: a listener's live socket always lands in the process that owns it. */
 export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
-/** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
 /** Reply text for one direct request on one listener; provided by the API entrypoint (speech-requests.ts). */
 export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
   SpeechReplies,
@@ -88,7 +87,11 @@ export class SpeechWorkRequests extends Context.Tag('sanctum/SpeechWorkRequests'
 /** Spoken instead of the answer when a direct request started research. */
 export const WORK_ACKNOWLEDGEMENT = 'Looking that up.';
 
-export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
+/**
+ * "Sanctum, …" / "Hey Sanctum …" at the start of the turn or of a sentence in it; the rest is the request.
+ * A live chunk of several seconds can hold talk before the request in the same segment.
+ */
+export const directRequest = (text: string) => /(?:^|[.?!])\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
 
 /** Splits a streamed reply into sentences so speech starts before the whole reply exists. */
 const sentences = <E>(text: Stream.Stream<string, E>) =>
@@ -184,13 +187,13 @@ export const speechController = (options: {
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
     let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
     const seenFinals = new Set<TranscriptSegment['id']>();
-    let turnTimer: Fiber.RuntimeFiber<void> | null = null;
-    let speaking: Fiber.RuntimeFiber<void> | null = null;
+    let turnTimer: Fiber.Fiber<void> = Fiber.void;
+    let speaking: Fiber.Fiber<void> = Fiber.void;
 
     const cancel = (reason: SpeechCancelReason) =>
       Effect.gen(function* () {
         const message = gate.cancel(listener_id, reason);
-        if (speaking) yield* Fiber.interrupt(speaking);
+        yield* Fiber.interrupt(speaking);
         if (message) yield* send(message);
       });
 
@@ -221,7 +224,7 @@ export const speechController = (options: {
         } else {
           turn = { epoch_id, segments: [segment], sample_start, sample_end };
         }
-        if (turnTimer) yield* Fiber.interrupt(turnTimer);
+        yield* Fiber.interrupt(turnTimer);
         turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
       });
 
@@ -237,10 +240,17 @@ export const speechController = (options: {
           if (role === 'interrupt') yield* cancel('barge_in');
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
+      /**
+       * Live speech-to-text answered the audio up to `sample_end`, and no later answer revisits it: a turn that ended `endOfTurnMs`
+       * before it is complete now, without the `turnWaitMs` wait. Its timer then finds no turn, and a newer turn's first segment replaces that timer.
+       */
+      onCovered: (sample_end: number) => (turn && sample_end - turn.sample_end >= endOfTurnSamples ? completeTurn : Effect.void),
+      /** A reply window is open, so a person speaking now interrupts it. */
+      replying: () => gate.active(listener_id) !== undefined,
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */
       onEnd: (reason: 'pause' | 'disconnect') =>
         Effect.gen(function* () {
-          if (turnTimer) yield* Fiber.interrupt(turnTimer);
+          yield* Fiber.interrupt(turnTimer);
           turn = null;
           yield* cancel(reason);
         }),

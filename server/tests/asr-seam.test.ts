@@ -29,15 +29,19 @@ describe('joinOverlap', () => {
 describe('stitchBatch', () => {
   const batch = (results: Said[], repeated_s: number) => ({ start_s: 0, end_s: 10, repeated_s, results });
 
-  it('passes a batch through when nothing closes inside the repeat', () => {
+  it('passes a batch through when nothing closes inside the repeat, settled only before the repeat', () => {
     const results = [said('one', 1, 3), said('two', 4, 6)];
-    expect(stitchBatch(null, batch(results, 1))).toEqual({ held: null, batch: { start_s: 0, end_s: 10, results } });
+    expect(stitchBatch(null, batch(results, 1))).toEqual({ held: null, batch: { start_s: 0, end_s: 10, settled_s: 9, results } });
+  });
+
+  it('settles a batch without answers only before the repeat, which the next batch may still answer', () => {
+    expect(stitchBatch(null, batch([], 1))).toEqual({ held: null, batch: { start_s: 0, end_s: 10, settled_s: 9, results: [] } });
   });
 
   it('holds the answer closing inside the repeat and ends the span where it starts', () => {
     const stitched = stitchBatch(null, batch([said('one', 1, 3), said('chose North', 8.5, 10)], 1));
     expect(stitched.held).toEqual(said('chose North', 8.5, 10));
-    expect(stitched.batch).toEqual({ start_s: 0, end_s: 8.5, results: [said('one', 1, 3)] });
+    expect(stitched.batch).toEqual({ start_s: 0, end_s: 8.5, settled_s: 8.5, results: [said('one', 1, 3)] });
   });
 
   it('never holds without a repeat', () => {
@@ -61,6 +65,6 @@ describe('stitchBatch', () => {
 
   it('never ends a span before its start', () => {
     const stitched = stitchBatch(null, batch([said('only', 0, 10)], 1));
-    expect(stitched.batch).toEqual({ start_s: 0, end_s: 0, results: [] });
+    expect(stitched.batch).toEqual({ start_s: 0, end_s: 0, settled_s: 0, results: [] });
   });
 });
