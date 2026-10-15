@@ -231,7 +231,7 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       const calls = yield* Ref.get(fake.calls);
       expect(calls.map(call => [call.earlier!.map(segment => segment.id), call.segments.length])).toEqual([[[], 40], [[half], 1]]);
       const { items } = yield* getContextSnapshot(owner!, meeting.meeting_id);
-      expect(items.map(item => [item.text, item.sources.map(source => source.segment_id)])).toEqual([['Peter owns the Falcon project', [half, rest]]]);
+      expect(items.map(item => [item.text, item.sources.map(source => ('segment_id' in source ? source.segment_id : null))])).toEqual([['Peter owns the Falcon project', [half, rest]]]);
     }));
 
   it.effect('shows the model an old item the new speech supersedes in a meeting of more than 200 items, and rejects repeats of any item', () =>

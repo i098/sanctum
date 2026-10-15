@@ -134,8 +134,22 @@ function resolveTime(mention: typeof TimeMention.Type, anchorMs: number, timeZon
 /** Case- and punctuation-insensitive text for verbatim checks. */
 const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
-/** `fold` without spaces: ASR splits and joins words ("North wind" for "Northwind"), so verbatim checks ignore word breaks. */
-export const squash = (text: string) => fold(text).replaceAll(' ', '');
+/**
+ * Whether `phrase` is verbatim in one of `runs`. ASR splits and joins words ("North wind" for "Northwind"), so spaces are
+ * ignored, but the match must still start and end on a word edge of the run ("ship" is not in "relationship").
+ */
+export function quoted(runs: ReadonlyArray<string>, phrase: string): boolean {
+  const target = fold(phrase).replaceAll(' ', '');
+  if (target === '') return false;
+  return runs.some(run => {
+    const words = fold(run).split(' ');
+    return words.some((_, start) => {
+      let joined = '';
+      for (let end = start; end < words.length && joined.length < target.length; end++) joined += words[end];
+      return joined === target;
+    });
+  });
+}
 
 /** Final segments inside the meeting, in time order, with short citation refs and meeting-relative milliseconds. */
 function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
@@ -180,6 +194,13 @@ Give a short title and a summary paragraph of at most 120 words. Leave out anyth
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
+/** Whether a candidate re-extracts the overlap: it cites no fresh segment, or its quote sits wholly in an earlier-round segment and in no fresh one. */
+export function echoesEarlier(quote: string | null, cited: ReadonlyArray<{ readonly text: string; readonly fresh: boolean }>): boolean {
+  if (!cited.some(line => line.fresh)) return true;
+  const holds = (fresh: boolean) => quote !== null && cited.some(line => line.fresh === fresh && quoted([line.text], quote));
+  return holds(false) && !holds(true);
+}
+
 /** Joined text of each run of transcript-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
 export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; readonly text: string }>): string[] {
   const texts: string[] = [];
@@ -192,7 +213,7 @@ export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; read
 
 /** Why a candidate's text, quote or time phrase is not supported by its cited lines, or null. */
 function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, known: ReadonlySet<string>): string | null {
-  const verbatim = (text: string) => squash(text) !== '' && heard.some(run => squash(run).includes(squash(text)));
+  const verbatim = (text: string) => quoted(heard, text);
   const checks: ReadonlyArray<readonly [boolean, string]> = [
     [fold(candidate.text) !== '' && !known.has(`${candidate.kind}:${fold(candidate.text)}`), 'empty or already in the context snapshot'],
     [candidate.derivation === 'inferred' || candidate.quote !== null, 'spoken candidate without a quote'],
@@ -207,11 +228,11 @@ function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, mee
   const cited = [...new Set(candidate.segments)].map(ref => byRef.get(ref));
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
-  if (!lines.some(line => fresh.has(line.segment.id))) return 'cites only segments an earlier round processed';
+  if (echoesEarlier(candidate.quote, lines.map(line => ({ text: line.segment.text, fresh: fresh.has(line.segment.id) })))) return 'cites only what an earlier round processed';
   const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))), known);
   if (reason !== null) return reason;
-  const phrase = candidate.time && fold(candidate.time.phrase);
-  const said = lines.find(line => phrase !== null && fold(line.segment.text).includes(phrase)) ?? lines[0]!;
+  const phrase = candidate.time?.phrase;
+  const said = lines.find(line => phrase !== undefined && quoted([line.segment.text], phrase)) ?? lines.reduce((a, b) => (b.index > a.index ? b : a));
   return {
     kind: candidate.kind,
     text: candidate.text.trim(),

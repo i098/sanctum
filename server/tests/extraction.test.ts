@@ -182,6 +182,8 @@ describe('extractCandidates', () => {
         candidates: [
           candidate({ kind: 'decision', text: 'Northwind Freight ships it.', quote: 'We chose Northwind Freight for shipping', segments: ['S1', 'S2'] }),
           candidate({ kind: 'decision', text: 'Northwind Freight was picked.', quote: 'We picked Northwind Freight for shipping', segments: ['S1', 'S2'] }),
+          candidate({ kind: 'decision', text: 'North is chosen.', quote: 'We chose Nor', segments: ['S1'] }),
+          candidate({ kind: 'decision', text: 'Wind is for shipping.', quote: 'ind freight for shipping', segments: ['S2'] }),
         ],
       });
       const found = yield* Effect.provide(extractCandidates({ meeting, segments: split, snapshot: [], epochs: anchors }), fixtureLlm([answer]));
@@ -195,6 +197,7 @@ describe('extractCandidates', () => {
         candidates: [
           candidate({ kind: 'project_fact', text: 'Peter owns the Falcon project.', quote: 'Falcon project owner is Peter', segments: ['S1', 'S2'] }),
           candidate({ kind: 'project_fact', text: 'Someone owns the Falcon project.', quote: 'The Falcon project owner', segments: ['S1'] }),
+          candidate({ kind: 'project_fact', text: 'The Falcon project has an owner.', quote: 'The Falcon project owner', segments: ['S1', 'S2'] }),
         ],
       });
       const requests: ProviderRequest[] = [];
