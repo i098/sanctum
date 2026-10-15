@@ -6,9 +6,10 @@
  *
  * `--manifest` plays the corpus built by build-corpus.ts: each meeting's WAV at its `start_s`, silence in the gaps,
  * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0` slot: `epoch_s` in epoch seconds and `tz` 'UTC'.
- * Every new epoch is stamped with the real time, so an outage delays all later audio. The state file therefore records
- * `actual_at`, the real event time of each manifest fact as streamed (not `t0 + at_s`), and `outages`, the
- * cumulative delay behind T0 at each epoch that began after T0.
+ * Every new epoch is stamped with the real time, so an outage delays all later audio. The driver therefore writes
+ * `actual_at`, the real event time of each planted fact as streamed (not `t0 + at_s`), into the manifest's `facts` (the
+ * scorer reads it there) and into the state file, which also records `outages`, the cumulative delay behind T0
+ * at each epoch that began after T0.
  *
  * Stops, in every case with a final chunk flush and share pass, on: end of audio, `--max-seconds`, a kill
  * switch (the `--kill-file` appearing, or SIGINT/SIGTERM/SIGUSR2), the cost hard stop, or a fatal rejection.
@@ -133,6 +134,17 @@ export function parseLimit(name: string, text: string) {
   const value = text.trim() === '' ? Number.NaN : Number(text);
   if (!Number.isFinite(value) || value < 0) throw new Error(`--${name} must be a number of at least 0, got '${text}'`);
   return value;
+}
+
+/** Atomically rewrites the corpus manifest: `t0` fills its `{epoch_s, tz}` slot, `actual_at` sets the real play time of the named facts. */
+export function stampManifest(path: string, stamp: { readonly t0?: number; readonly actual_at?: Readonly<Record<string, string>> }) {
+  const manifest = JSON.parse(readFileSync(path, 'utf8'));
+  if (stamp.t0 !== undefined) manifest.t0 = { ...manifest.t0, epoch_s: stamp.t0, tz: 'UTC' };
+  const { actual_at } = stamp;
+  if (actual_at !== undefined) manifest.facts = manifest.facts.map((fact: { id: string }) => (fact.id in actual_at ? { ...fact, actual_at: actual_at[fact.id] } : fact));
+  const temp = `${path}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`);
+  renameSync(temp, path);
 }
 
 interface Rejection { readonly reason: string; readonly message: string }
@@ -370,16 +382,12 @@ class SoakDriver {
 
   // --- live stream ------------------------------------------------------------------------------------------
 
-  /** T0 is when sample 0 was captured, in epoch seconds. Each epoch is stamped with the real time, so after an outage a fact's event time is `state.actual_at`, not `t0 + at_s`. */
+  /** T0 is when sample 0 was captured, in epoch seconds. Each epoch is stamped with the real time, so after an outage a fact's event time is its manifest `actual_at`, not `t0 + at_s`. */
   private setT0(t0: number) {
     this.state.t0 = t0;
-    const { manifest } = this.options;
-    if (manifest === null) return;
-    const temp = `${manifest}.tmp`;
-    const current = JSON.parse(readFileSync(manifest, 'utf8'));
-    writeFileSync(temp, `${JSON.stringify({ ...current, t0: { ...current.t0, epoch_s: t0, tz: 'UTC' } }, null, 2)}\n`);
-    renameSync(temp, manifest);
-    log('t0_set', { t0, manifest });
+    if (this.options.manifest === null) return;
+    stampManifest(this.options.manifest, { t0 });
+    log('t0_set', { t0, manifest: this.options.manifest });
   }
 
   private newEpoch(): Epoch {
@@ -463,6 +471,7 @@ class SoakDriver {
       const planted = factTimes(epoch.clock, this.facts, this.position, count);
       if (Object.keys(planted).length > 0) {
         Object.assign(this.state.actual_at, planted);
+        if (this.options.manifest !== null) stampManifest(this.options.manifest, { actual_at: planted });
         this.save();
       }
       socket.send(encodePcmFrame({ track: 0, sequence: epoch.sequence++, sample_start: this.position, sample_count: count }, samples));

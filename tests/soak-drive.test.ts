@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { costUsd, factTimes, parseLimit } from '../scripts/soak/drive.ts';
+import { costUsd, factTimes, parseLimit, stampManifest } from '../scripts/soak/drive.ts';
 import { manifestSource } from '../scripts/soak/source.ts';
 import { isSpeech, readWav, wavFile } from '../scripts/soak/wav.ts';
 
@@ -74,4 +74,30 @@ test('a safety limit that is empty, not a number, infinite or negative is refuse
   assert.equal(parseLimit('max-usd', '15'), 15);
   assert.equal(parseLimit('max-usd', '0.5'), 0.5);
   for (const bad of ['', ' ', 'abc', 'NaN', 'Infinity', '-1']) assert.throws(() => parseLimit('max-usd', bad), /--max-usd must be/);
+});
+
+test('the manifest gets t0 as {epoch_s, tz} and each fact its actual_at after a restart, keeping everything else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'soak-stamp-'));
+  try {
+    const path = join(dir, 'manifest.json');
+    const facts = [{ id: 'A', at_s: 10, aliases: ['x'] }, { id: 'B', at_s: 100, aliases: ['y'] }];
+    writeFileSync(path, JSON.stringify({ t0: { epoch_s: null, tz: null }, alias_match: 'whole_token', facts }));
+    const rate = 8_000;
+    const t0 = Date.parse('2026-10-14T00:00:00Z');
+    stampManifest(path, { t0: t0 / 1000 });
+    const first = { sample_rate: rate, sample_start: 0, captured_at: new Date(t0).toISOString() };
+    stampManifest(path, { actual_at: factTimes(first, facts, 0, 20 * rate) });
+    const outage_ms = 90_000;
+    const resumed = { sample_rate: rate, sample_start: 20 * rate, captured_at: new Date(t0 + 20_000 + outage_ms).toISOString() };
+    stampManifest(path, { actual_at: factTimes(resumed, facts, 20 * rate, 100 * rate) });
+    const stamped = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual(stamped.t0, { epoch_s: t0 / 1000, tz: 'UTC' });
+    assert.equal(stamped.alias_match, 'whole_token');
+    assert.deepEqual(stamped.facts, [
+      { id: 'A', at_s: 10, aliases: ['x'], actual_at: new Date(t0 + 10_000).toISOString() },
+      { id: 'B', at_s: 100, aliases: ['y'], actual_at: new Date(t0 + 100_000 + outage_ms).toISOString() },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
