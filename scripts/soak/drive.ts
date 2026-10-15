@@ -8,7 +8,7 @@
  * and at run start the driver writes the run's T0 (when sample 0 was captured) into the manifest's `t0` slot: `epoch_s` in epoch seconds and `tz` 'UTC'.
  * Every new epoch is stamped with the real time, so an outage delays all later audio. The state file therefore records
  * `actual_at`, the real event time of each manifest fact as streamed (not `t0 + at_s`), and `outages`, the
- * cumulative delay behind T0 at each epoch after the first.
+ * cumulative delay behind T0 at each epoch that began after T0.
  *
  * Stops, in every case with a final chunk flush and share pass, on: end of audio, `--max-seconds`, a kill
  * switch (the `--kill-file` appearing, or SIGINT/SIGTERM/SIGUSR2), the cost hard stop, or a fatal rejection.
