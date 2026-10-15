@@ -29,10 +29,10 @@ const meeting = Schema.decodeSync(Meeting)({
   processing: { transcript: 'complete', notes: 'pending', memory: 'pending', recording: 'complete' },
 });
 
-const segment = (startSeconds: number, endSeconds: number, text: string, speaker: string, status: 'final' | 'partial' = 'final', epoch_id: string = epoch) =>
+const segment = (startSeconds: number, endSeconds: number, text: string, speaker: string, status: 'final' | 'partial' = 'final', epoch_id: string = epoch, track = 0) =>
   Schema.decodeSync(TranscriptSegment)({
     id: randomUUID(),
-    source: { epoch_id, track: 0, sample_start: startSeconds * RATE, sample_end: endSeconds * RATE },
+    source: { epoch_id, track, sample_start: startSeconds * RATE, sample_end: endSeconds * RATE },
     text,
     status,
     revision: 1,
@@ -173,6 +173,47 @@ describe('extractCandidates', () => {
       expect(requests).toHaveLength(6);
       const invalid = JSON.stringify({ candidates: [candidate({ kind: 'rumour', text: 'x', segments: ['S1'] })] });
       expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([invalid, invalid])))).toMatchObject({ retryable: false, message: expect.stringMatching(/failed the context_candidates schema/) });
+    }));
+
+  it.effect('accepts a quote whose word the transcript split in two, and still rejects a paraphrase', () =>
+    Effect.gen(function* () {
+      const split = [segment(0, 2, 'We chose North', 'speaker_0'), segment(2, 3, 'wind freight for shipping.', 'speaker_0')];
+      const answer = JSON.stringify({
+        candidates: [
+          candidate({ kind: 'decision', text: 'Northwind Freight ships it.', quote: 'We chose Northwind Freight for shipping', segments: ['S1', 'S2'] }),
+          candidate({ kind: 'decision', text: 'Northwind Freight was picked.', quote: 'We picked Northwind Freight for shipping', segments: ['S1', 'S2'] }),
+          candidate({ kind: 'decision', text: 'North is chosen.', quote: 'We chose Nor', segments: ['S1'] }),
+          candidate({ kind: 'decision', text: 'Wind is for shipping.', quote: 'ind freight for shipping', segments: ['S2'] }),
+        ],
+      });
+      const found = yield* Effect.provide(extractCandidates({ meeting, segments: split, snapshot: [], epochs: anchors }), fixtureLlm([answer]));
+      expect(found.map(item => item.text)).toEqual(['Northwind Freight ships it.']);
+    }));
+
+  it.effect('shows the earlier round\'s last segment only to complete a fact in the new ones', () =>
+    Effect.gen(function* () {
+      const [before, after] = [segment(0, 2, 'The Falcon project owner', 'speaker_0'), segment(2, 3, 'is Peter.', 'speaker_0')];
+      const answer = JSON.stringify({
+        candidates: [
+          candidate({ kind: 'project_fact', text: 'Peter owns the Falcon project.', quote: 'Falcon project owner is Peter', segments: ['S1', 'S2'] }),
+          candidate({ kind: 'project_fact', text: 'Someone owns the Falcon project.', quote: 'The Falcon project owner', segments: ['S1'] }),
+          candidate({ kind: 'project_fact', text: 'The Falcon project has an owner.', quote: 'The Falcon project owner', segments: ['S1', 'S2'] }),
+        ],
+      });
+      const requests: ProviderRequest[] = [];
+      const found = yield* Effect.provide(extractCandidates({ meeting, segments: [after!], earlier: [before!], snapshot: [], epochs: anchors }), fixtureLlm([answer], requests));
+      expect(found).toMatchObject([{ text: 'Peter owns the Falcon project.', sources: [{ segment_id: before!.id }, { segment_id: after!.id }] }]);
+      expect(requests[0]!.prompt).toContain('S1 was processed in an earlier round');
+      expect(yield* Effect.provide(extractCandidates({ meeting, segments: [], earlier: [before!], snapshot: [], epochs: anchors }), fixtureLlm([], requests))).toEqual([]);
+      expect(requests).toHaveLength(1);
+    }));
+
+  it.effect('joins a sentence split across a round edge even when another track speaks between the halves', () =>
+    Effect.gen(function* () {
+      const [before, between, after] = [segment(0, 2, 'The Falcon project owner', 'speaker_1', 'final', epoch, 1), segment(2, 3, 'Turn.', 'speaker_0'), segment(3, 4, 'is Peter.', 'speaker_1', 'final', epoch, 1)];
+      const answer = JSON.stringify({ candidates: [candidate({ kind: 'project_fact', text: 'Peter owns the Falcon project.', quote: 'Falcon project owner is Peter', segments: ['S1', 'S3'] })] });
+      const found = yield* Effect.provide(extractCandidates({ meeting, segments: [between!, after!], earlier: [before!], snapshot: [], epochs: anchors }), fixtureLlm([answer]));
+      expect(found.map(item => item.text)).toEqual(['Peter owns the Falcon project.']);
     }));
 });
 

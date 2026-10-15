@@ -49,6 +49,11 @@ export interface ExtractionInput {
   readonly snapshot: ReadonlyArray<ContextItem>;
   /** Kind and text of every current item of the meeting, so a repeat of any of them is rejected even when it is not in `snapshot`. */
   readonly known?: ReadonlyArray<Pick<ContextItem, 'kind' | 'text'>>;
+  /**
+   * The last segment an earlier round processed on each track in this batch, shown as context so a sentence cut at the batch edge reaches the model whole.
+   * A candidate must cite at least one of `segments`; the model is told not to extract the earlier line alone.
+   */
+  readonly earlier?: ReadonlyArray<TranscriptSegment>;
   /** Anchor for every segment's epoch; without one a segment cannot be placed in time and extraction fails. */
   readonly epochs?: ReadonlyArray<EpochAnchor>;
 }
@@ -88,7 +93,9 @@ const NotesOutput = Schema.Struct({
 
 interface Line {
   readonly ref: string;
-  /** Position among the meeting's final segments in time order; consecutive positions are adjacent speech. */
+  /** Capture track (`epoch:track`) the segment belongs to; only segments of one track are adjacent speech. */
+  readonly lane: string;
+  /** Position among the final segments of its track in time order; consecutive positions are adjacent speech. */
   readonly index: number;
   readonly segment: TranscriptSegment;
   /** UTC epoch milliseconds of the segment start. */
@@ -129,11 +136,28 @@ function resolveTime(mention: typeof TimeMention.Type, anchorMs: number, timeZon
 /** Case- and punctuation-insensitive text for verbatim checks. */
 const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
+/**
+ * Whether `phrase` is verbatim in one of `runs`. ASR splits and joins words ("North wind" for "Northwind"), so spaces are
+ * ignored, but the match must still start and end on a word edge of the run ("ship" is not in "relationship").
+ */
+export function quoted(runs: ReadonlyArray<string>, phrase: string): boolean {
+  const target = fold(phrase).replaceAll(' ', '');
+  if (target === '') return false;
+  return runs.some(run => {
+    const words = fold(run).split(' ');
+    return words.some((_, start) => {
+      let joined = '';
+      for (let end = start; end < words.length && joined.length < target.length; end++) joined += words[end];
+      return joined === target;
+    });
+  });
+}
+
 /** Final segments inside the meeting, in time order, with short citation refs and meeting-relative milliseconds. */
 function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
   const anchors = new Map(input.epochs?.map(anchor => [anchor.epoch_id, anchor]));
   const started = Date.parse(input.meeting.started_at);
-  const placed: Array<Omit<Line, 'ref' | 'index'>> = [];
+  const placed: Array<Omit<Line, 'ref' | 'lane' | 'index'>> = [];
   for (const segment of input.segments) {
     if (segment.status !== 'final') continue;
     const anchor = anchors.get(segment.source.epoch_id);
@@ -143,7 +167,13 @@ function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
     if (at < started) continue;
     placed.push({ segment, at, source: { segment_id: segment.id, start_ms: Math.round(at - started), end_ms: Math.round(utc(segment.source.sample_end) - started) } });
   }
-  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => ({ ...line, ref: `S${i + 1}`, index: i })));
+  const seen = new Map<string, number>();
+  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => {
+    const lane = trackKey(line.segment.source);
+    const index = seen.get(lane) ?? 0;
+    seen.set(lane, index + 1);
+    return { ...line, ref: `S${i + 1}`, lane, index };
+  }));
 }
 
 function transcriptBlock(lines: ReadonlyArray<Line>, meeting: Meeting): string {
@@ -172,11 +202,21 @@ Give a short title and a summary paragraph of at most 120 words. Leave out anyth
 
 type ModelCandidate = (typeof CandidatesOutput.Type)['candidates'][number];
 
-/** Joined text of each run of transcript-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
-export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; readonly text: string }>): string[] {
+/** Whether a candidate re-extracts the overlap: it cites no fresh segment, or its quote sits wholly in an earlier-round segment and in no fresh one. */
+export function echoesEarlier(quote: string | null, cited: ReadonlyArray<{ readonly text: string; readonly fresh: boolean }>): boolean {
+  if (!cited.some(line => line.fresh)) return true;
+  const holds = (fresh: boolean) => quote !== null && cited.some(line => line.fresh === fresh && quoted([line.text], quote));
+  return holds(false) && !holds(true);
+}
+
+/** The capture track a segment came from; tracks interleave in time, so adjacency is judged within one track. */
+export const trackKey = (source: { readonly epoch_id: string; readonly track: number }) => `${source.epoch_id}:${source.track}`;
+
+/** Joined text of each run of track-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
+export function adjacentRuns(cited: ReadonlyArray<{ readonly lane: string; readonly index: number; readonly text: string }>): string[] {
   const texts: string[] = [];
-  [...cited].sort((a, b) => a.index - b.index).forEach((line, i, sorted) => {
-    if (i > 0 && line.index === sorted[i - 1]!.index + 1) texts[texts.length - 1] += ` ${line.text}`;
+  [...cited].sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.index - b.index)).forEach((line, i, sorted) => {
+    if (i > 0 && line.lane === sorted[i - 1]!.lane && line.index === sorted[i - 1]!.index + 1) texts[texts.length - 1] += ` ${line.text}`;
     else texts.push(line.text);
   });
   return texts;
@@ -184,7 +224,7 @@ export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; read
 
 /** Why a candidate's text, quote or time phrase is not supported by its cited lines, or null. */
 function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, known: ReadonlySet<string>): string | null {
-  const verbatim = (text: string) => fold(text) !== '' && heard.some(run => run.includes(fold(text)));
+  const verbatim = (text: string) => quoted(heard, text);
   const checks: ReadonlyArray<readonly [boolean, string]> = [
     [fold(candidate.text) !== '' && !known.has(`${candidate.kind}:${fold(candidate.text)}`), 'empty or already in the context snapshot'],
     [candidate.derivation === 'inferred' || candidate.quote !== null, 'spoken candidate without a quote'],
@@ -195,14 +235,15 @@ function unsupported(candidate: ModelCandidate, heard: ReadonlyArray<string>, kn
 }
 
 /** The grounded candidate, or why it was rejected. */
-function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, meeting: Meeting, known: ReadonlySet<string>): ExtractionCandidate | string {
+function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, meeting: Meeting, known: ReadonlySet<string>, fresh: ReadonlySet<string>): ExtractionCandidate | string {
   const cited = [...new Set(candidate.segments)].map(ref => byRef.get(ref));
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
-  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))).map(fold), known);
+  if (echoesEarlier(candidate.quote, lines.map(line => ({ text: line.segment.text, fresh: fresh.has(line.segment.id) })))) return 'cites only what an earlier round processed';
+  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ lane: line.lane, index: line.index, text: line.segment.text }))), known);
   if (reason !== null) return reason;
-  const phrase = candidate.time && fold(candidate.time.phrase);
-  const said = lines.find(line => phrase !== null && fold(line.segment.text).includes(phrase)) ?? lines[0]!;
+  const phrase = candidate.time?.phrase;
+  const said = lines.find(line => phrase !== undefined && quoted([line.segment.text], phrase)) ?? lines.reduce((a, b) => (b.at > a.at ? b : a));
   return {
     kind: candidate.kind,
     text: candidate.text.trim(),
@@ -254,20 +295,23 @@ function relevantContext(items: ReadonlyArray<ContextItem>, segmentText: string)
 /** Context candidates grounded in the meeting's final segments; the context slice validates access and commits them. */
 export const extractCandidates = (input: ExtractionInput): Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient> =>
   Effect.gen(function* () {
-    const lines = yield* timeline(input);
-    if (lines.length === 0) return [];
+    const fresh = new Set(input.segments.map(segment => segment.id));
+    const lines = yield* timeline({ ...input, segments: [...(input.earlier ?? []), ...input.segments] });
+    if (!lines.some(line => fresh.has(line.segment.id))) return [];
     const llm = yield* LlmClient;
     const existing = input.snapshot.filter(item => item.state !== 'superseded');
     const context = relevantContext(existing, lines.map(line => line.segment.text).join(' ')) || '(none)';
+    const earlier = lines.filter(line => !fresh.has(line.segment.id)).map(line => line.ref);
+    const overlap = earlier.length === 0 ? '' : `\n\n${earlier.join(', ')} was processed in an earlier round, shown only so a sentence cut at the round edge is whole: cite it only together with a later line that completes the fact, and extract nothing it says alone.`;
     const { value } = yield* generateWithFallback(llm, {
       name: 'context_candidates',
       output: CandidatesOutput,
       system: EXTRACTION_SYSTEM,
-      prompt: `Meeting timezone: ${input.meeting.timezone}\n\nExisting context:\n${context}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}`,
+      prompt: `Meeting timezone: ${input.meeting.timezone}\n\nExisting context:\n${context}\n\nTranscript:\n${transcriptBlock(lines, input.meeting)}${overlap}`,
     });
     const byRef = new Map(lines.map(line => [line.ref, line]));
     const known = new Set([...existing, ...(input.known ?? [])].map(item => `${item.kind}:${fold(item.text)}`));
-    const results = value.candidates.map(candidate => ground(candidate, byRef, input.meeting, known));
+    const results = value.candidates.map(candidate => ground(candidate, byRef, input.meeting, known, fresh));
     const rejected = results.flatMap((result, i) => (typeof result === 'string' ? [{ text: value.candidates[i]!.text, reason: result }] : []));
     if (rejected.length > 0) yield* Effect.logWarning('extraction dropped ungrounded candidates', rejected);
     return results.filter((result): result is ExtractionCandidate => typeof result !== 'string');
