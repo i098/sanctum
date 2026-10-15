@@ -237,10 +237,12 @@ A live caption arrives about 3 s later on average (estimate: half a chunk plus t
 
 In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
 In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
-Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of the finals of the listener's open meeting, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read, newest item first, each name once; the whole prompt stops after 20 names.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of the finals of the meeting that owns the chunk, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read, newest item first, each name once; the whole prompt stops after 20 names.
 Item names need `context:read` and the `searchContext` visibility, so names from a restricted meeting without `meeting_access` never enter the prompt, and a capture-only device gets heard names only; they are read once at session start.
-Heard names are read again from the open meeting's finals after each answer, and a reconnect reads them the same way; with no open meeting (after an End) there are none.
-So names from an earlier meeting of an all-day capture do not reach the next meeting, except in chunks sent before the answer that starts the next meeting is placed, because the boundary is known only from that answer.
+The prompt is computed when each chunk is sent, from the current `meeting_ranges` of the capture epoch and track: the meeting of the latest range at or before the chunk's first new sample owns the chunk if that range covers the sample or the meeting is still open, because the transcript path extends the open meeting with following speech.
+After an End or a close nothing owns the chunk until the next final is placed, so it carries no heard names; a reconnect reads the names the same way.
+The heard names come from the newest 500 finals of that meeting and are cached until its latest range or boundary revision changes, so nothing carries over to another meeting.
+A meeting that starts without an End (a gap or spoken cue) is known only from its first answer, so the chunks sent before that answer still belong to, and carry the names of, the meeting that was open.
 Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
 Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
 

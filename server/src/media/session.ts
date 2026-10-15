@@ -15,6 +15,7 @@ import {
   type DegradedMessage,
   type ListenerId,
   type MeetingId,
+  type MeetingState,
   type PcmFrame,
   ProviderConnectionId,
   RejectedMessage,
@@ -29,7 +30,7 @@ import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
-import { asrVocabulary, HEARD_TERMS, PROMPT_TERMS } from './asr-hint.ts';
+import { asrPrompt, heardNames, knownNames, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
 import { OPEN_STATES } from '../meeting-store.ts';
 import { publishFinalWindow } from '../transcripts.ts';
@@ -166,26 +167,16 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
-/** The newest finals of this listener's open meeting, oldest first; none when no meeting is open, so names never cross a meeting boundary. */
-const meetingFinals = (workspace_id: AccessScope['workspace_id'], listener: LiveSessionInput['listener']) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const key = listener.capture_group_id === null ? sql`o.listener_id = ${listener.id} AND o.capture_group_id IS NULL` : sql`o.capture_group_id = ${listener.capture_group_id}`;
-    const rows = yield* sql<{ text: string }>`SELECT s.text FROM transcript_segments s
-      JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
-        AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
-      JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
-      WHERE s.workspace_id = ${workspace_id} AND s.status = 'final' AND m.id = (SELECT o.id FROM meetings o
-        WHERE o.workspace_id = ${workspace_id} AND o.state IN ${sql.in(OPEN_STATES)} AND ${key} ORDER BY o.started_at DESC LIMIT 1)
-      ORDER BY s.created_at DESC, s.sample_start DESC LIMIT ${HEARD_TERMS * 4}`;
-    return rows.map(row => row.text).toReversed();
-  }).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR meeting names not read', error), [])));
+/** Finals read per meeting for its heard names: about half an hour of speech. */
+const HEARD_SEGMENTS = 500;
 
 /**
- * Whisper's prompt: names heard in this listener's open meeting, then, for a principal with `context:read`, the names of
- * the newest committed items it may read. A capture-only device gets heard names only.
+ * Whisper's prompt for the chunk that starts at an epoch sample: names heard in the meeting that owns that sample, then,
+ * for a principal with `context:read`, the names of the newest committed items it may read. The meeting of the latest
+ * range at or before the sample owns it when the range covers it, or while that meeting is open (the transcript path
+ * extends the open meeting with following speech); after an End or a close nothing owns it until the next final is placed.
  */
-const captureVocabulary = (access: AccessScope, listener: LiveSessionInput['listener']) =>
+const chunkPrompt = (access: AccessScope, { epoch_id, track }: typeof StartMessage.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { workspace_id } = access;
@@ -195,9 +186,32 @@ const captureVocabulary = (access: AccessScope, listener: LiveSessionInput['list
           sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${workspace_id} AND ci.state = 'committed'
             AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
             ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR item names not read', error), [])));
-    const vocabulary = asrVocabulary(items.map(row => row.text));
-    vocabulary.hear(yield* meetingFinals(workspace_id, listener));
-    return vocabulary;
+    const known = knownNames(items.map(row => row.text));
+    let cached: { readonly key: string; readonly heard: Map<string, string> } | null = null;
+    const heardAt = (sample: number) =>
+      Effect.gen(function* () {
+        const [owner] = yield* sql<{ meeting_id: string; boundary_revision: number; sample_end: number | string; state: MeetingState }>`
+          SELECT r.meeting_id, r.boundary_revision, r.sample_end, m.state FROM meeting_ranges r
+          JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+          WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${epoch_id} AND r.track = ${track} AND r.sample_start <= ${sample}
+          ORDER BY r.sample_start DESC LIMIT 1`;
+        if (owner === undefined || (sample >= Number(owner.sample_end) && !OPEN_STATES.includes(owner.state))) return new Map<string, string>();
+        const key = `${owner.meeting_id}:${owner.boundary_revision}:${owner.sample_end}`;
+        if (cached?.key !== key) {
+          const finals = yield* sql<{ text: string }>`SELECT s.text FROM transcript_segments s
+            JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+              AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
+            WHERE s.workspace_id = ${workspace_id} AND s.status = 'final' AND r.meeting_id = ${owner.meeting_id} AND r.boundary_revision = ${owner.boundary_revision}
+            ORDER BY s.created_at DESC, s.sample_start DESC LIMIT ${HEARD_SEGMENTS}`;
+          cached = { key, heard: heardNames(finals.map(row => row.text)) };
+        }
+        return cached.heard;
+      });
+    return (sample: number) =>
+      heardAt(sample).pipe(
+        Effect.catchAll(error => Effect.as(Effect.logWarning('ASR meeting names not read', error), new Map<string, string>())),
+        Effect.map(heard => asrPrompt(heard, known)),
+      );
   });
 
 /**
@@ -218,7 +232,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let retryAt = 0;
     let providerDown = false;
     const { degrade, answered } = asrHealth(send);
-    const vocabulary = yield* captureVocabulary(access, listener);
+    const prompt = yield* chunkPrompt(access, start);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -252,7 +266,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const opened = yield* stt
-          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), vocabulary.prompt)
+          .openStream(rate, offset => degrade('asr_backlog', anchor + offset), offset => prompt(anchor + offset))
           .pipe(Scope.extend(scope), Effect.either);
         if (Either.isLeft(opened)) {
           yield* Scope.close(scope, Exit.void);
@@ -270,7 +284,6 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(batch =>
             Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)).pipe(
-              Effect.tap(() => Effect.map(meetingFinals(workspace_id, listener), vocabulary.hear)),
               Effect.flatMap(end => (end === null ? Effect.void : speech.onCovered(end))),
             ),
           ),

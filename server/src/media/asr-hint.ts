@@ -1,8 +1,9 @@
 /**
- * Whisper's `initial_prompt` for one live session: the distinct capitalised terms this capture heard, newest
- * first, then the names of the workspace's committed items, newest item first. Whisper spells a name it was
- * told about that way again, so "Falcon" said earlier and "Asana" from an earlier meeting's item are heard
- * right. Bounded: a long prompt dilutes each name (measured on the soak clips, docs/DECISIONS.md).
+ * Whisper's `initial_prompt` for one live chunk: the distinct capitalised terms heard in the meeting that owns the
+ * chunk, newest first, then, for a principal with `context:read`, the names of the committed items it may read,
+ * newest item first. Whisper spells a name it was told about that way again, so "Falcon" said earlier in the meeting
+ * and "Asana" from a readable item are heard right. Bounded: a long prompt dilutes each name (measured on the soak
+ * clips, docs/DECISIONS.md).
  */
 export const HEARD_TERMS = 15;
 export const PROMPT_TERMS = 20;
@@ -22,24 +23,18 @@ export const properNouns = (text: string): Array<string> => {
   return terms;
 };
 
-/** `items`: the texts of the visible committed items, newest first, or none; each name keeps its first appearance. */
-export const asrVocabulary = (items: Iterable<string>) => {
-  const known = new Map<string, string>();
-  for (const text of items) for (const term of properNouns(text)) if (!known.has(term.toLowerCase())) known.set(term.toLowerCase(), term);
-  /** Oldest first; a repeated term moves to the newest place. */
-  let heard = new Map<string, string>();
-  return {
-    /** Replaces the heard names with the newest `HEARD_TERMS` of the current meeting's finals, given oldest first. */
-    hear: (finals: Iterable<string>) => {
-      const terms = new Map<string, string>();
-      for (const text of finals) {
-        for (const term of properNouns(text)) {
-          terms.delete(term.toLowerCase());
-          terms.set(term.toLowerCase(), term);
-        }
-      }
-      heard = new Map([...terms].slice(-HEARD_TERMS));
-    },
-    prompt: () => [...[...heard.values()].reverse(), ...[...known].filter(([key]) => !heard.has(key)).map(([, term]) => term)].slice(0, PROMPT_TERMS).join(', '),
-  };
+/** Terms by lower case, each keeping its first appearance. */
+const distinct = (terms: Iterable<string>) => {
+  const names = new Map<string, string>();
+  for (const term of terms) if (!names.has(term.toLowerCase())) names.set(term.toLowerCase(), term);
+  return names;
 };
+
+/** `items`: item texts, newest first. */
+export const knownNames = (items: Iterable<string>) => distinct([...items].flatMap(properNouns));
+
+/** The newest `HEARD_TERMS` names of `finals`, given newest first; a name said again counts as new. */
+export const heardNames = (finals: Iterable<string>) => new Map([...distinct([...finals].flatMap(text => properNouns(text).reverse()))].slice(0, HEARD_TERMS));
+
+export const asrPrompt = (heard: ReadonlyMap<string, string>, known: ReadonlyMap<string, string>) =>
+  [...heard.values(), ...[...known].filter(([key]) => !heard.has(key)).map(([, term]) => term)].slice(0, PROMPT_TERMS).join(', ');
