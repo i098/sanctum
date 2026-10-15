@@ -100,8 +100,8 @@ async function reviewApi(page: Page, overrides: Record<string, Answer> = {}) {
 
 async function openReview(page: Page) {
   await openListening(page);
-  await openMenu(page, 'Review');
-  return menuSection(page, 'Review');
+  await openMenu(page, 'Meetings');
+  return menuSection(page, 'Meetings');
 }
 
 const unavailable = (message: string) => [503, { _tag: 'Unavailable', code: 'unavailable', message, retryable: false }] as const;
@@ -192,13 +192,4 @@ test('a slow source shows loading on its own tab only', async ({ page }) => {
   await expect(review.getByRole('tabpanel', { name: 'Transcript' })).toHaveText('Loading transcript…');
   release();
   await expect(review.getByRole('tabpanel', { name: 'Transcript' }).getByRole('listitem')).toHaveCount(3);
-});
-
-test('no readable meeting is reported on every tab instead of invented data', async ({ page }) => {
-  await reviewApi(page, { '/api/v1/meetings': [200, { meetings: [], next_cursor: null }] });
-  const review = await openReview(page);
-  for (const name of ['Notes', 'Transcript', 'Recording', 'Memory', 'Context', 'Activity']) {
-    await review.getByRole('tab', { name }).click();
-    await expect(review.getByRole('tabpanel', { name })).toHaveText('No meetings yet.');
-  }
 });

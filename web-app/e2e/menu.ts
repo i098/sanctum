@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 
-/** One section of the Menu panel, by its rail name (Review, Agents, Settings). */
+/** One section of the Menu panel, by its rail name (Meetings, Agents, Settings). */
 export const menuSection = (page: Page, section: string): Locator => page.getByRole('dialog', { name: 'Menu' }).getByRole('region', { name: section });
 
 /** Opens the Menu panel from the footer and shows one section; returns that section. */

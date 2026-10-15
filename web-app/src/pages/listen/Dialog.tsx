@@ -46,7 +46,7 @@ export function Dialog({ title, open, onClose, children, closeLabel = 'Close', c
     <dialog ref={ref} className={className ? `listen-dialog ${className}` : 'listen-dialog'} aria-labelledby={titleId} onClose={event => open && event.target === event.currentTarget && onClose()} onKeyDown={wrapFocus}>
       <header className="listen-dialog-header">
         <h2 id={titleId}>{title}</h2>
-        <button type="button" onClick={onClose}>{closeLabel}</button>
+        <button type="button" data-quiet onClick={onClose}>{closeLabel}</button>
       </header>
       {open && children}
     </dialog>

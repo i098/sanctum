@@ -82,14 +82,17 @@ Owns `web-app/src/lib/capture/{controller,permissions,microphone,recorder,record
 
 ### listen-ui (T21 visual core)
 
-Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,MenuPanel.tsx,ReviewSection.tsx,InputPicker.tsx,input-level.ts}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
+Owns `web-app/src/pages/listen/{index.tsx,waveform.ts,rails.ts,captions.ts,listen.css,Dialog.tsx,MenuPanel.tsx,Fullscreen.tsx,MenuSearch.tsx,MeetingsSection.tsx,ReviewSection.tsx,InputPicker.tsx,input-level.ts}`, `web-app/src/main.tsx`, `web-app/e2e/listen-*.spec.ts`.
 
 - `Dialog.tsx`: `Dialog({ title, open, onClose, children, closeLabel?, className? })` with focus trap, Escape and focus return; MenuPanel and the welcome (`closeLabel` Skip) reuse it.
-- `MenuPanel.tsx`: `MenuPanel({ open, onClose, sections, active, onSelect })`, the one central overlay opened by the footer's Menu button or Ctrl/⌘+K: a rail of `MenuSection { id, label, body }` beside the active section's body. Adding a section is one more entry in `ListenPage`'s `sections` array (a component such as `ReviewSection.tsx` that takes `client` and renders no dialog of its own); a section's body mounts only while shown.
-- `InputPicker.tsx`: `InputPicker({ engine, check? })`, the microphone choice (through `CaptureView.chooseInput`); only with `check` does it also test the chosen input for sound while capture is stopped or paused; `InputCheckText({ input })` is that test's line for one `useInputLevel` reading; `input-level.ts`: `useInputLevel(deviceId)`, the live level and dead-input state of one input outside capture. Settings and the silent-input warning use the picker, and only Settings sets `check`; the welcome's microphone step uses the picker without `check` and draws its level bar and `InputCheckText` from one `useInputLevel` reading. The dead-input floor, threshold and run rule (`SILENT_PEAK`, `SILENT_SECONDS`, `deadRun`) live once in capture's `microphone.ts`, shared by the capture engine and the check.
+- `Fullscreen.tsx`: `useFullscreen()` returns `[fullscreen, toggle]` (the Settings > Display row and the F key share it; `useFullscreenKey(toggle)` binds the F key); `useIdle(active, ms)` is true after `ms` without input while `active`, and `ListenPage` uses it with fullscreen to fade the footer.
+- `MenuPanel.tsx`: `MenuPanel({ open, onClose, sections, active, onSelect, client, commands, onMeeting })`, the one central overlay opened by the footer's Menu button or Ctrl/⌘+K: a rail of `MenuSection { id, label, body }` beside the active section's body. Adding a section is one more entry in `ListenPage`'s `sections` array (a component such as `MeetingsSection.tsx` that takes `client` and renders no dialog of its own); a section's body mounts only while shown.
+- `MenuSearch.tsx`: the search box at the top of the Menu; while it holds text it replaces the rail and section. It lists decisions and commitments from `GET /api/v1/context/search`, meeting titles from the newest 200 meetings, `Open <section>` and the `commands` ListenPage passes (Fullscreen, Sign out). ↑/↓ and Enter choose; Escape clears the box before it closes the Menu. A meeting result sets `MeetingsSection`'s `request` (a new `{ id }` per choice, so choosing the same meeting again reopens it), which opens that meeting's Review beside the list, or says it could not be opened. There is no transcript full-text search.
+- `InputPicker.tsx`: `InputPicker({ engine, check? })`, the microphone choice (through `CaptureView.chooseInput`); only with `check` does it also test the chosen input for sound while capture is stopped or paused; `InputCheckText({ input })` is that test's line for one `useInputLevel` reading (a silent built-in input, label `/built-in|macbook/i`, adds a closed-laptop hint); the picker has a Refresh button and re-reads the input list on `devicechange`; `input-level.ts`: `useInputLevel(deviceId)`, the live level and dead-input state of one input outside capture. Settings and the silent-input warning use the picker, and only Settings sets `check`; the welcome's microphone step uses the picker without `check` and draws its level bar and `InputCheckText` from one `useInputLevel` reading. The dead-input floor, threshold and run rule (`SILENT_PEAK`, `SILENT_SECONDS`, `deadRun`) live once in capture's `microphone.ts`, shared by the capture engine and the check.
 - `waveform.ts`: `startWaveform(canvas, levels, listener)`, the kiosk orb canvas ported one-to-one; samples never enter React state.
 - `rails.ts`: `startTranscriptRail(lines, subscribeTranscript)` and `startActionFeed(feed, subscribeActions)`, the kiosk's side live updates.
 - Imports only `getCaptureEngine`, `subscribeTranscript`, `subscribeActions`, view.ts types and `microphone.ts` (light: no recorder) from capture; compares against `design/listener-reference.svg` at 1280x720 and a narrow laptop size.
+- `MeetingsSection.tsx`: the Menu's first section, a paged `listMeetings` list (live meeting under Now) beside the chosen meeting's Review; `ReviewSection({ client, meeting })` shows its six tabs and `loadReview(client, meeting, signal, update)` reads their sources.
 - Review tabs (T21 box 2) live in `ReviewPanels.tsx` and `review-data.ts`. They added three compatible API fields: `GET /meetings/{id}/actions` (`listMeetingActions` in `ActionsApi` and actions.ts), an optional `meeting_id` on `GET /context/changes`, and `pieces` plus `sample_rate` on `RecordingAccess` (playback.ts) to map a source sample to a playback offset.
 
 ### models (T04, T15)
@@ -107,13 +110,13 @@ Owns `server/src/matcher.ts`, `server/src/llm.ts`, `server/src/planner.ts`, `ser
 
 ### pipedream (T17)
 
-Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, `server/src/integration-accounts.ts`, `web-app/src/pages/listen/Integrations.tsx`, the `integration_accounts` statement in `008_actions`, `IntegrationsApi` and `IntegrationAccountsApi` in `packages/contracts/src/integrations.ts`.
+Owns `server/src/providers/pipedream.ts`, `server/src/integrations.ts`, `server/src/integration-accounts.ts`, `web-app/src/pages/listen/AppsSection.tsx`, the `integration_accounts` statement in `008_actions`, `IntegrationsApi` and `IntegrationAccountsApi` in `packages/contracts/src/integrations.ts`.
 
 - `providers/pipedream.ts`: `PipedreamClient` tag, `PipedreamLive`, `fixturePipedream(catalog)` (10,000-entry fixture support).
 - `integrations.ts`: `searchIntegrationActions(access, input: SearchIntegrationActionsInput): Effect<SearchIntegrationActionsOutput, Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `getIntegrationAction(access, input: GetIntegrationActionInput): Effect<GetIntegrationActionOutput, NotFound | Unavailable, R | PipedreamClient>`.
 - `integrations.ts`: `executeIntegrationAction(input: { access; account_id; action_key; version; configuration_ref; arguments; provider_idempotency_key }): Effect<{ receipt: Record<string, unknown> }, IntegrationFailure, R | PipedreamClient>`; `IntegrationFailure.ambiguous` marks unknown outcomes.
-- `integration-accounts.ts`: `IntegrationAccountsLive`, Settings' website-only connect flow (`/api/v1/integrations/connect`, `/integrations/accounts`, `/sync`, `/{id}/disconnect`); the Pipedream external user is `<workspace_id>.<principal_id>` from the session, never client input. Sync upserts the caller's Pipedream accounts, stores accounts Pipedream reports dead or no longer lists as disconnected, and grants nothing.
+- `integration-accounts.ts`: `IntegrationAccountsLive`, the Menu Apps section's website-only connect flow (`/api/v1/integrations/connect`, `/integrations/accounts`, `/sync`, `/{id}/disconnect`); the Pipedream external user is `<workspace_id>.<principal_id>` from the session, never client input. Sync upserts the caller's Pipedream accounts, stores accounts Pipedream reports dead or no longer lists as disconnected, and grants nothing.
 
 ### media (T08, server half of T09, T10, T11)
 
@@ -178,7 +181,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 
 ### interfaces (T22, T23)
 
-Owns `server/src/mcp.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/python/`, `sdk/examples/`, `web-app/src/pages/listen/AgentsSection.tsx`, `server/tests/api-contract.test.ts`, `server/tests/mcp.test.ts`.
+Owns `server/src/mcp.ts`, `scripts/generate-sdks.ts`, `sdk/typescript/`, `sdk/python/`, `sdk/examples/`, `web-app/src/pages/listen/AgentsSection.tsx`, `web-app/src/pages/listen/AgentWork.tsx`, `web-app/src/pages/listen/AccessTokens.tsx`, `server/tests/api-contract.test.ts`, `server/tests/mcp.test.ts`.
 
 - Generates OpenAPI from `SanctumApi`; mounts `/mcp` from main.ts.
 - MCP tools: `list_meetings`, `get_context`, `search_context`, `get_source`, `get_context_changes`, `add_context`, `revise_context`, `request_action`, `get_action`, `search_integration_actions`, `get_integration_action`.
@@ -230,7 +233,7 @@ Owns `server/src/workspaces.ts`, migration `014_workspace_deletion`, `WorkspaceA
 Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-app/src/pages/listen/{WorkosTeam.tsx,team.css}`, `web-app/e2e/team-csp.spec.ts` and the widget-token suite in `server/tests/signin.test.ts`; operation in [operations.md](operations.md#workos-organizations).
 
 - `widget-token.ts`: `WidgetTokenLive` mounts `GET`/`POST /api/v1/workspace/team` (link status; owner-only "Set up team") and `POST /api/v1/workspace/widget-token` from main.ts; it calls `WorkosClient.widgetToken` in `providers/workos.ts`.
-- `/auth/config` reports `workos_organizations`; SettingsSection lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server.
+- `/auth/config` reports `workos_organizations`; SettingsSection lazy-loads `WorkosTeam.tsx` for admins of a linked workspace and owners on such a server, and shows it inline on the Workspace row.
 - The `style-src` hashes in `web.ts` cover the widgets' fixed `<style>` elements; `team-csp.spec.ts` fails when a dependency bump changes one.
 
 ### onboarding (first-run welcome)
@@ -238,7 +241,7 @@ Owns `server/src/widget-token.ts`, `server/tests/support/team-server.ts`, `web-a
 Owns `server/src/onboarding.ts`, migration `020_onboarding`, `OnboardingApi` in contracts `onboarding.ts`, `server/tests/onboarding.test.ts`, `web-app/src/pages/listen/Welcome.tsx` and `web-app/e2e/listen-welcome.spec.ts`.
 
 - `OnboardingApi` is website only (`OpenApi.Exclude`, so not in the SDKs or MCP): `GET`/`POST /api/v1/onboarding` read and set `principals.onboarded_at` with the workspace name, and `POST /api/v1/workspace/name` renames the workspace for `workspace:admin`.
-- `TeamButton` in SettingsSection.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) for both Settings and the welcome; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
+- `TeamButton` in SettingsSection.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) in a dialog over the welcome; Settings shows the same `TeamBody` inline; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
 
 ## Hot files
 

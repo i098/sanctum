@@ -17,8 +17,9 @@ The SVG/HTML references here are illustrations made from the approved visual dec
 - The stage remains mostly empty around narrow spikes.
 - Below the waveform: small lowercase `listening` status and one quiet helper line, starting 220 px under the baseline (the deepest underside measured at full-scale input plus its glow), so ink never runs under text. While browser captions run, a second helper line, at most 300 px wide, says that live captions use the browser's speech service (in Chrome, Google's). After a recognition error that stops captions for the capture session, the same line says, while capture runs, that word-by-word captions are not available in this browser (`network`, `service-not-allowed`, `not-allowed`) or for this language (`language-not-supported`), and that lines appear after each phrase.
 - Footer sits approximately 24–32 px from the bottom and sides.
-- Lower left: a tiny state dot and brief capture/context health text.
-- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Fullscreen, Menu (also Ctrl/⌘+K).
+- Lower left: a tiny state dot and brief capture/context health text, then the microphone chip (the input in use; it opens the input picker).
+- Lower right: Pause, End meeting (only while a meeting is open, after one confirmation), Menu (also Ctrl/⌘+K). Fullscreen is not a footer control: it is a row in Menu > Settings > Display, and the F key toggles it (ignored while typing in a field or with Ctrl/⌘/Alt held).
+- In fullscreen the footer fades after 3 seconds without pointer, touch or key input, and any such input brings it back.
 - Side live updates sit in the band from the status down to the footer, beside the status: the live transcript rail on the left, the agent-work feed on the right (see "Side live updates").
 - No permanent sidebar, large heading, or cards on the default screen.
 
@@ -46,8 +47,10 @@ After End meeting, the helper line says that the meeting ended and that its note
 | Live dot / done | Lime `#c6f24e` |
 | Failed | Red `#ff5d5d` |
 
-Use the system sans-serif stack for readable content and a system monospace stack for tiny state/navigation labels.
-Header labels are roughly 10–14 px; status below the waveform is roughly 12 px.
+Use Inter (self-hosted variable font, no CDN) for all text and JetBrains Mono only for code, IDs and tokens.
+The scale lives in `web-app/src/styles.css`: body 15 px with line height 1.5, secondary 14 px, section headings 13 px semibold in sentence case, titles 18 px semibold. No tiny all-caps letter-spaced labels.
+Buttons are 14 px medium in sentence case, in four kinds (`web-app/src/pages/listen/listen.css`): one filled primary per area (`data-primary`), a quiet secondary fill for other buttons in a dialog, plain-text tertiary for low-weight actions (`data-quiet`, Close, tabs, rail items), and quiet red text for destructive actions (`data-danger`); only a final confirm fills red. No outlined, monospace or all-caps buttons anywhere in the app, including the WorkOS widgets in Team and the issuer's own pages; `web-app/e2e/button-style.spec.ts` fails on one. The button colors are the `--btn-*` tokens in `web-app/src/styles.css`.
+On the listening view the header, status and footer stay as approved; only the font family and the footer and rail text sizes follow the scale.
 Muted information remains readable; do not use unreadably low opacity as the only way to make the screen quiet.
 
 ## Waveform geometry
@@ -62,7 +65,7 @@ The glow is a canvas shadow in the state colour that grows with the overall leve
 ## Motion
 
 - Listening reacts to actual microphone spectrum and level, with no associated sound: each slot follows its band with fast attack and slow decay.
-- State looks follow the kiosk table: stopped and paused use its idle look, starting and reconnecting its connecting look, listening and degraded its listening look; changes tween over 0.9 s with a quartic ease-out.
+- State looks follow the kiosk table: stopped and paused use its idle look, starting and reconnecting its connecting look, listening and degraded its listening look, except degraded while waiting for a microphone, which uses the idle look; changes tween over 0.9 s with a quartic ease-out.
 - Only listening states read the microphone; every other state breathes gently without reacting to audio, so the line never implies audio is being captured or saved.
 - Quiet input returns toward a thin, gently breathing line.
 - Steady room noise, such as hum, fans and hiss, becomes a per-band noise floor within a few seconds and draws the same calm line. Only sound above that floor, such as speech, moves the needles. The capture stream stays unprocessed apart from echo cancellation.
@@ -85,18 +88,21 @@ See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) f
 
 ## Secondary views
 
-Review, Agents, and Settings are sections of one central Menu panel, opened only on request by the Menu button or Ctrl/⌘+K, with a section rail beside the active section.
-Use a restrained dark overlay and the same tokens; closing it returns to the listening screen without stopping capture.
+The Menu is the one central overlay for everything beyond listening; it opens only on request, from its footer button or Ctrl/⌘+K, and holds Meetings, Agents and Settings as sections in a rail beside the active section.
+Meetings is the first section: a paged list of meetings with the live meeting on top, and any meeting opens the same Review beside it.
+A search box at the top of the Menu replaces the rail while it holds text; it finds decisions, commitments, meetings and commands (Open a section, Fullscreen, Sign out), not transcript text. A meeting result opens that meeting in Meetings.
+Use restrained dark overlays and the same tokens; closing them returns to the listening screen without stopping capture.
+Agents opens on Work, the live agent actions and the receipts of the five most recent meetings, with an Access tokens tab to create, list and revoke tokens.
 Review contains Notes, Transcript, Recording, Memory, Context, and Activity.
 Source timestamps support navigation from a decision to transcript to authorized audio playback.
 Settings shows the website sign-in state: signed in (initials, the account name and email the issuer reported, the role as a small label, and Connect sign-in and Sign out only when a sign-in issuer is configured), signed out (a Sign in link), not configured (no route, or a non-JSON or 4xx answer from `/auth/config`) or unavailable (network error or 5xx).
-On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it opens Team over Settings with the WorkOS profile and members widgets on the same tokens, and full screen on phones.
-Signed in, the Integrations row lists the person's connected apps, each with the grants they made on it and Disconnect, then an app field with Connect an app; without Pipedream settings on the server it reads not configured, and signed out it waits for sign-in.
+On a server whose organizations come from WorkOS (hosted), the Workspace row adds a Team action for owners and admins of a linked workspace, and for the owner of an unlinked one, whose Team offers Set up team first; it shows Team inline under the Workspace row, with the WorkOS profile and members widgets on the same tokens.
+Signed in, the Apps section of the Menu shows the person's connected apps as tiles, each with the grants they made on it and Disconnect, then tiles for suggested apps (Gmail, Google Calendar, Google Drive, Google Docs, Notion, Slack, GitHub) not yet connected, each with Connect, and an Any other app tile with an app field and Connect an app; without Pipedream settings on the server it reads not configured, and signed out it waits for sign-in.
 Connect an app opens Pipedream's hosted Connect Link in a new tab, so the listening tab keeps capturing; coming back to the listening tab stores what was connected. Connecting grants nothing.
-Signed out, an outlined Sign in to listen button replaces the helper line under the status; the landing page header also has a Sign in link.
+Signed out, a solid Sign in to listen button replaces the helper line under the status; the landing page header also has a Sign in link.
 Both sign-in links, and the self-serve Create workspace sign-in, return to `/?signin=ok`, where a signed-in session shows "Signed in as <name>" (the email when the issuer gave no name) under the helper line until the next load, even when the issuer redirects back at once; Settings keeps showing the identity.
 A sign-in redirect that ends without a session (`/?signin=not_member|failed|unconfigured`) opens Settings once with the reason; `not_member` shows the issuer and subject for the operator.
-With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open a dialog over Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
+With the self-hosted embedded issuer, Settings adds a Profile row (Edit: display name and password) and a Team action on the Workspace row; both open inline under their row in Settings, and Team lists members and roles; owners and admins also see pending invitations with a copyable invitation link.
 A person's first signed-in visit opens Welcome to Sanctum over the listening view, on the Settings tokens and rows: one step at a time with Back and Next, focus on each step's heading, and Skip in the header (and Escape) at every step.
 The steps are what Sanctum records and who sees it; a microphone check (permission, the input picker and a level meter of a preview stream that is never recorded, saying so after 3 s without any sound); the workspace name, which owners and admins rename there, with the server's Team (Invite teammates, or Set up team for the owner of an unlinked hosted workspace); and Start listening, which closes it and starts capture.
 Skipping or finishing is stored for the person on the server, so the welcome does not open again on any device; Settings → Welcome → Show welcome again opens it.
