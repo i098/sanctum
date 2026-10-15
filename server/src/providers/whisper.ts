@@ -215,10 +215,10 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const sound = meanSquare(buffer, cut - (frame >> 1), cut + (frame >> 1)) >= limits.speechFloorRms ** 2;
         enqueue(cut, sound ? Math.min(overlap, cut) : 0);
       };
-      const transcribeChunk = ({ offset, lead, repeated, samples }: Chunk): Effect.Effect<ReadonlyArray<Answered>, Unavailable> => {
+      const transcribeChunk = ({ offset, lead, repeated, samples }: Chunk): Effect.Effect<ReadonlyArray<Answered | null>, Unavailable> => {
         queued -= samples.byteLength;
         const shift = (offset - lead) / sample_rate;
-        const skipped = Effect.as(behind(offset), [] as ReadonlyArray<Answered>);
+        const skipped = Effect.as(behind(offset), [null] as ReadonlyArray<Answered | null>);
         if (Date.now() < pausedUntil) return skipped;
         const request = transcribe(sample_rate, samples);
         // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
@@ -244,16 +244,28 @@ export function whisperSpeechToText(config: WhisperConfig) {
         );
       };
       // The answer closing a chunk whose end the next chunk repeats may stop inside a word that chunk hears whole, so it waits for that chunk's first answer.
+      // Coverage stops where the held answer starts, so audio whose text is not persisted is never recorded as covered.
       let held: AsrResult | null = null;
-      const stitch = ({ repeated_s, ...batch }: Answered): AsrBatch => {
+      const flushHeld = (): ReadonlyArray<AsrBatch> => {
+        const flushed = held;
+        held = null;
+        return flushed === null ? [] : [{ start_s: flushed.start_s, end_s: flushed.end_s, results: [flushed] }];
+      };
+      // A skipped chunk breaks adjacency: the next answer repeats the skipped audio, not the held answer's.
+      const stitch = (answered: Answered | null): ReadonlyArray<AsrBatch> => {
+        if (answered === null) return flushHeld();
+        const { repeated_s, ...batch } = answered;
         const [first, ...rest] = batch.results;
         const results = held !== null && first !== undefined ? [...joinOverlap(held, first), ...rest] : held !== null ? [held] : batch.results;
+        const start_s = held === null ? batch.start_s : Math.min(held.start_s, batch.start_s);
         const last = results.at(-1);
         const holds = last !== undefined && last.end_s > batch.end_s - repeated_s;
         held = holds ? last : null;
-        return { ...batch, results: holds ? results.slice(0, -1) : results };
+        if (!holds) return [{ ...batch, start_s, results }];
+        const kept = results.slice(0, -1);
+        const end_s = Math.min(batch.end_s, Math.max(start_s, last.start_s, ...kept.map(result => result.end_s)));
+        return [{ start_s, end_s, results: kept }];
       };
-      const flushHeld = Stream.suspend(() => (held === null ? Stream.empty : Stream.make({ start_s: held.start_s, end_s: held.end_s, results: [held] } satisfies AsrBatch)));
       return {
         send: samples => {
           if (!open) return false;
@@ -267,8 +279,8 @@ export function whisperSpeechToText(config: WhisperConfig) {
           Stream.takeWhile((chunk): chunk is Chunk => chunk !== null),
           Stream.mapEffect(transcribeChunk, { concurrency: limits.concurrency }),
           Stream.flattenIterables,
-          Stream.map(stitch),
-          Stream.concat(flushHeld),
+          Stream.mapConcat(stitch),
+          Stream.concat(Stream.suspend(() => Stream.fromIterable(flushHeld()))),
           Stream.tapError(() => Effect.sync(() => (open = false))),
         ),
         finish: Effect.sync(() => {
