@@ -234,6 +234,31 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       expect(items.map(item => [item.text, item.sources.map(source => ('segment_id' in source ? source.segment_id : null))])).toEqual([['Peter owns the Falcon project', [half, rest]]]);
     }));
 
+  it.effect('shows the last processed segment of every track a round touches, not only the first batch segment\'s track', () =>
+    Effect.gen(function*() {
+      const sql = yield* SqlClient.SqlClient;
+      const [owner, device] = yield* seedWorkspace('Tracks', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)
+          VALUES (${meeting.workspace_id}, ${meeting.meeting_id}, 1, ${meeting.epoch_id}, 1, 0, ${16_000 * 36_000})`;
+      yield* Effect.forEach(Array.from({ length: 39 }, (_, index) => index), index => seedSegment(meeting, index, index + 1, `Turn ${index}.`), { discard: true });
+      const half = yield* seedSegment(meeting, 39, 40, 'The Falcon project owner', 'final', 1);
+      yield* seedSegment(meeting, 40, 41, 'Turn 40.');
+      const rest = yield* seedSegment(meeting, 41, 42, 'is Peter.', 'final', 1);
+      const cite = (...ids: string[]) => ids.map(id => ({ segment_id: TranscriptSegmentId.make(id), start_ms: 0, end_ms: 0 }));
+      const fake = yield* fakeExtractor(input =>
+        input.segments.some(segment => segment.id === rest)
+          ? [candidate(half, { kind: 'project_fact', text: 'Peter owns the Falcon project', quote: 'Falcon project owner is Peter', time: null, sources: cite(half, rest) })]
+          : []);
+      const refresh = refreshContext(fake.extract);
+      yield* refresh(job(meeting, owner!.principal.id));
+      yield* refresh(job(meeting, owner!.principal.id));
+      const calls = yield* Ref.get(fake.calls);
+      expect(calls[1]!.earlier!.map(segment => segment.id)).toContain(half);
+      const { items } = yield* getContextSnapshot(owner!, meeting.meeting_id);
+      expect(items.map(item => item.text)).toEqual(['Peter owns the Falcon project']);
+    }));
+
   it.effect('shows the model an old item the new speech supersedes in a meeting of more than 200 items, and rejects repeats of any item', () =>
     Effect.gen(function*() {
       const [owner, device] = yield* seedWorkspace('Large', ['owner', 'device']);

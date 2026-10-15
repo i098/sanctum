@@ -93,7 +93,9 @@ const NotesOutput = Schema.Struct({
 
 interface Line {
   readonly ref: string;
-  /** Position among the meeting's final segments in time order; consecutive positions are adjacent speech. */
+  /** Capture track (`epoch:track`) the segment belongs to; only segments of one track are adjacent speech. */
+  readonly lane: string;
+  /** Position among the final segments of its track in time order; consecutive positions are adjacent speech. */
   readonly index: number;
   readonly segment: TranscriptSegment;
   /** UTC epoch milliseconds of the segment start. */
@@ -155,7 +157,7 @@ export function quoted(runs: ReadonlyArray<string>, phrase: string): boolean {
 function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
   const anchors = new Map(input.epochs?.map(anchor => [anchor.epoch_id, anchor]));
   const started = Date.parse(input.meeting.started_at);
-  const placed: Array<Omit<Line, 'ref' | 'index'>> = [];
+  const placed: Array<Omit<Line, 'ref' | 'lane' | 'index'>> = [];
   for (const segment of input.segments) {
     if (segment.status !== 'final') continue;
     const anchor = anchors.get(segment.source.epoch_id);
@@ -165,7 +167,13 @@ function timeline(input: ExtractionInput): Effect.Effect<Line[], Unavailable> {
     if (at < started) continue;
     placed.push({ segment, at, source: { segment_id: segment.id, start_ms: Math.round(at - started), end_ms: Math.round(utc(segment.source.sample_end) - started) } });
   }
-  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => ({ ...line, ref: `S${i + 1}`, index: i })));
+  const seen = new Map<string, number>();
+  return Effect.succeed(placed.sort((a, b) => a.at - b.at).map((line, i) => {
+    const lane = trackKey(line.segment.source);
+    const index = seen.get(lane) ?? 0;
+    seen.set(lane, index + 1);
+    return { ...line, ref: `S${i + 1}`, lane, index };
+  }));
 }
 
 function transcriptBlock(lines: ReadonlyArray<Line>, meeting: Meeting): string {
@@ -201,11 +209,14 @@ export function echoesEarlier(quote: string | null, cited: ReadonlyArray<{ reado
   return holds(false) && !holds(true);
 }
 
-/** Joined text of each run of transcript-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
-export function adjacentRuns(cited: ReadonlyArray<{ readonly index: number; readonly text: string }>): string[] {
+/** The capture track a segment came from; tracks interleave in time, so adjacency is judged within one track. */
+export const trackKey = (source: { readonly epoch_id: string; readonly track: number }) => `${source.epoch_id}:${source.track}`;
+
+/** Joined text of each run of track-adjacent cited segments; a quote must sit inside one run, never stitch across a gap. */
+export function adjacentRuns(cited: ReadonlyArray<{ readonly lane: string; readonly index: number; readonly text: string }>): string[] {
   const texts: string[] = [];
-  [...cited].sort((a, b) => a.index - b.index).forEach((line, i, sorted) => {
-    if (i > 0 && line.index === sorted[i - 1]!.index + 1) texts[texts.length - 1] += ` ${line.text}`;
+  [...cited].sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.index - b.index)).forEach((line, i, sorted) => {
+    if (i > 0 && line.lane === sorted[i - 1]!.lane && line.index === sorted[i - 1]!.index + 1) texts[texts.length - 1] += ` ${line.text}`;
     else texts.push(line.text);
   });
   return texts;
@@ -229,10 +240,10 @@ function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, mee
   if (cited.length === 0 || cited.some(line => line === undefined)) return 'cites unknown transcript segments';
   const lines = cited as Line[];
   if (echoesEarlier(candidate.quote, lines.map(line => ({ text: line.segment.text, fresh: fresh.has(line.segment.id) })))) return 'cites only what an earlier round processed';
-  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ index: line.index, text: line.segment.text }))), known);
+  const reason = unsupported(candidate, adjacentRuns(lines.map(line => ({ lane: line.lane, index: line.index, text: line.segment.text }))), known);
   if (reason !== null) return reason;
   const phrase = candidate.time?.phrase;
-  const said = lines.find(line => phrase !== undefined && quoted([line.segment.text], phrase)) ?? lines.reduce((a, b) => (b.index > a.index ? b : a));
+  const said = lines.find(line => phrase !== undefined && quoted([line.segment.text], phrase)) ?? lines.reduce((a, b) => (b.at > a.at ? b : a));
   return {
     kind: candidate.kind,
     text: candidate.text.trim(),

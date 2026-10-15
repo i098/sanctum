@@ -29,10 +29,10 @@ const meeting = Schema.decodeSync(Meeting)({
   processing: { transcript: 'complete', notes: 'pending', memory: 'pending', recording: 'complete' },
 });
 
-const segment = (startSeconds: number, endSeconds: number, text: string, speaker: string, status: 'final' | 'partial' = 'final', epoch_id: string = epoch) =>
+const segment = (startSeconds: number, endSeconds: number, text: string, speaker: string, status: 'final' | 'partial' = 'final', epoch_id: string = epoch, track = 0) =>
   Schema.decodeSync(TranscriptSegment)({
     id: randomUUID(),
-    source: { epoch_id, track: 0, sample_start: startSeconds * RATE, sample_end: endSeconds * RATE },
+    source: { epoch_id, track, sample_start: startSeconds * RATE, sample_end: endSeconds * RATE },
     text,
     status,
     revision: 1,
@@ -206,6 +206,14 @@ describe('extractCandidates', () => {
       expect(requests[0]!.prompt).toContain('S1 was processed in an earlier round');
       expect(yield* Effect.provide(extractCandidates({ meeting, segments: [], earlier: [before!], snapshot: [], epochs: anchors }), fixtureLlm([], requests))).toEqual([]);
       expect(requests).toHaveLength(1);
+    }));
+
+  it.effect('joins a sentence split across a round edge even when another track speaks between the halves', () =>
+    Effect.gen(function* () {
+      const [before, between, after] = [segment(0, 2, 'The Falcon project owner', 'speaker_1', 'final', epoch, 1), segment(2, 3, 'Turn.', 'speaker_0'), segment(3, 4, 'is Peter.', 'speaker_1', 'final', epoch, 1)];
+      const answer = JSON.stringify({ candidates: [candidate({ kind: 'project_fact', text: 'Peter owns the Falcon project.', quote: 'Falcon project owner is Peter', segments: ['S1', 'S3'] })] });
+      const found = yield* Effect.provide(extractCandidates({ meeting, segments: [between!, after!], earlier: [before!], snapshot: [], epochs: anchors }), fixtureLlm([answer]));
+      expect(found.map(item => item.text)).toEqual(['Peter owns the Falcon project.']);
     }));
 });
 
