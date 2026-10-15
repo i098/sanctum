@@ -2,13 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { SqlClient } from '@effect/sql';
 import { beforeAll, expect, layer } from '@effect/vitest';
-import { type AccessScope, type CaptureEpochId, encodePcmFrame, type MeetingId } from '@sanctum/contracts';
+import { type AccessScope, type CaptureEpochId, ContextItemId, encodePcmFrame, type MeetingId } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
-import { createProfile } from '../src/store.ts';
+import { writeItem } from '../src/context.ts';
 import { coverageIn, finalSegments, uncovered } from '../src/transcripts.ts';
 import { deleteWorkspace } from '../src/workspaces.ts';
 import {
@@ -152,22 +152,28 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
-  it.scoped('prompts Whisper with names this capture heard and the workspace profiles, also after a reconnect', () =>
+  it.scoped('prompts Whisper with names this capture heard and the names of committed workspace items, also after a reconnect', () =>
     Effect.gen(function* () {
       const { access, speech, socket, connect } = yield* setup;
       socket.send(pcmFrame(0, 0));
       const first = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
       expect(first!.prompt()).toBe('');
-      first!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the Falcon tickets live in Asana.', confidence: 0.9, speaker: '0' });
-      yield* eventually(Effect.sync(() => first!.prompt()), prompt => prompt === 'Falcon, Asana');
-      yield* createProfile(access.workspace_id, { kind: 'organization', principal_id: null, display_name: 'Northwind Freight', details: {} });
+      first!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the Falcon offsite is in Dublin.', confidence: 0.9, speaker: '0' });
+      yield* eventually(Effect.sync(() => first!.prompt()), prompt => prompt === 'Falcon, Dublin');
+      const item = (text: string, state: 'committed' | 'provisional') =>
+        writeItem(access.workspace_id, {
+          id: ContextItemId.make(randomUUID()), revision: 1, meeting_id: null, kind: 'project_fact', text, state, derivation: 'spoken', event_at: null,
+          valid_from: null, valid_until: null, time: null, author: { type: 'system', id: access.principal.id }, sources: [], supersedes: null,
+        }, { change: 'item_added' });
+      yield* item('The team keeps the Falcon tickets in Asana.', 'committed');
+      yield* item('The Zebra board is not settled.', 'provisional');
       socket.close();
       yield* eventually(Effect.sync(() => first!.finished), finished => finished === true);
 
       const { socket: resumed } = yield* connect;
       resumed.send(pcmFrame(1, 1_600));
       const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
-      expect(second!.prompt()).toBe('Falcon, Asana, Northwind Freight');
+      expect(second!.prompt()).toBe('Dublin, Asana, Falcon');
     }),
   );
 

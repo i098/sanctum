@@ -164,16 +164,17 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
-/** Whisper's prompt: names this capture already heard, so a reconnect keeps them, then the workspace's people and organizations. */
+/** Whisper's prompt: names this capture already heard, so a reconnect keeps them, then the names the workspace's current committed items use most. */
 const captureVocabulary = (workspace_id: AccessScope['workspace_id'], { epoch_id, track }: typeof StartMessage.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [profiles, heard] = yield* Effect.all([
-      sql<{ display_name: string }>`SELECT display_name FROM profiles WHERE workspace_id = ${workspace_id} ORDER BY updated_at DESC LIMIT ${KNOWN_TERMS}`,
+    const [items, heard] = yield* Effect.all([
+      sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${workspace_id} AND ci.state = 'committed'
+        AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id) ORDER BY ci.created_at DESC LIMIT ${KNOWN_TERMS * 10}`,
       sql<{ text: string }>`SELECT text FROM transcript_segments WHERE workspace_id = ${workspace_id} AND epoch_id = ${epoch_id} AND track = ${track}
         AND status = 'final' ORDER BY sample_start DESC LIMIT ${HEARD_TERMS * 4}`,
     ]).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR vocabulary not read', error), [[], []] as const)));
-    const vocabulary = asrVocabulary(profiles.map(row => row.display_name).reverse());
+    const vocabulary = asrVocabulary(items.map(row => row.text));
     for (const row of heard.toReversed()) vocabulary.heard(row.text);
     return vocabulary;
   });

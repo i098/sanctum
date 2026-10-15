@@ -237,7 +237,8 @@ A live caption arrives about 3 s later on average (estimate: half a chunk plus t
 
 In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
 In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
-Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, then the 15 most recently updated workspace profile names, nearest the audio.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, then the 30 capitalised words that the most current committed context items of the workspace name (each counted once per item, from the newest 300 items, read at session start), nearest the audio.
+Profiles are not a source, because no production path writes them.
 A reconnect reads the capture's last finals again, so the names stay.
 Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
 Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
@@ -246,11 +247,13 @@ Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start o
 | --- | --- | --- | --- | --- |
 | None | "a sauna" | "fountain stand-up ... walnut realm" | 256 | 3.0 s / 9.2 s |
 | Names heard in the meeting | "a sauna" | "Falcon stand-up ... walnut realm" | 246 | 2.6 s / 6.9 s |
-| Names heard plus an "Asana" profile | "Asana" | "Falcon stand-up ... walnut realm" | 251 | 2.8 s / 8.5 s |
+| Names heard plus "Asana" as a known name | "Asana" | "Falcon stand-up ... walnut realm" | 251 | 2.8 s / 8.5 s |
 
-A name never said before and not in a profile stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
+A name never said before and not named by a committed item stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
+The known-name row was measured with "Asana" from a profile, last in the prompt; the replay was not run again with "Asana" from a seeded committed item, because the dry-run audio is not on the development host.
+So F00-5 is fixed only in a workspace whose earlier committed items name "Asana"; the soak says "Asana" first at 1470 s, so it stays open there unless an earlier run left such an item.
 "Walnut realm" is in the audio itself (Nova-3 and `@cf/openai/whisper` hear it too); the transcript sentence now carries "Falcon" and "walnut".
-A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart.
+A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart; the most-named known names therefore go last.
 The prompt adds no audio, so the cost per audio minute does not change; the answer time stayed within run-to-run noise.
 whisper-large-v3 (non-turbo) is not in the Workers AI catalog.
 The older `@cf/openai/whisper` wrote "Asana" in 1 of 3 chunk windows and "Assana" in 2, changed "For the record" to "Though the record", and one answer took 68 s, so turbo stays.

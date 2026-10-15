@@ -1,11 +1,12 @@
 /**
  * Whisper's `initial_prompt` for one live session: the most recent distinct capitalised terms the meeting
- * produced, then the workspace's known names, nearest the audio. Whisper spells a name it was told about
- * that way again, so "Falcon" said earlier and "Asana" from a profile are heard right. Bounded: a long
- * prompt dilutes each name (measured on the soak clips), and Whisper reads only the last 224 prompt tokens.
+ * produced, then the names the workspace's committed items use most, nearest the audio. Whisper spells a
+ * name it was told about that way again, so "Falcon" said earlier and "Asana" from an earlier meeting's
+ * items are heard right. Bounded: a long prompt dilutes each name (measured on the soak clips), and
+ * Whisper reads only the last 224 prompt tokens.
  */
 export const HEARD_TERMS = 15;
-export const KNOWN_TERMS = 15;
+export const KNOWN_TERMS = 30;
 const TERM_CHARS = 40;
 /** Words Whisper capitalises after a comma in run-on speech; they are not names. */
 const NOT_NAMES = new Set(['and', 'but', 'so', 'or', 'okay', 'ok', 'yeah', 'yes', 'no', 'oh', 'well', 'um', 'uh', 'the', 'a', 'an', 'it', 'we', 'you', 'they', 'this', 'that', 'what', 'how', 'why']);
@@ -16,7 +17,7 @@ export const properNouns = (text: string): Array<string> => {
   const words = text.split(/\s+/);
   for (let i = 1; i < words.length; i++) {
     const word = words[i]!.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
-    if (/[.!?]["')\]]*$/.test(words[i - 1]!) || !/^\p{Lu}[\p{L}\p{N}'’-]+$/u.test(word) || /^I['’]/.test(word) || NOT_NAMES.has(word.toLowerCase())) continue;
+    if (/[.!?]["')\]]*$/.test(words[i - 1]!) || !/^\p{Lu}[\p{L}\p{N}'’-]+$/u.test(word) || /^I['’]/.test(word) || NOT_NAMES.has(word.toLowerCase()) || word.length > TERM_CHARS) continue;
     terms.push(word);
   }
   return terms;
@@ -27,24 +28,41 @@ const recentTerms = (limit: number) => {
   const terms = new Map<string, string>();
   return {
     add: (term: string) => {
-      const spelled = term.trim();
-      if (spelled === '' || spelled.length > TERM_CHARS) return;
-      terms.delete(spelled.toLowerCase());
-      terms.set(spelled.toLowerCase(), spelled);
+      terms.delete(term.toLowerCase());
+      terms.set(term.toLowerCase(), term);
       if (terms.size > limit) terms.delete(terms.keys().next().value!);
     },
     terms,
   };
 };
 
-/** `known`: the workspace's names, least important first. */
-export const asrVocabulary = (known: Iterable<string>) => {
-  const names = recentTerms(KNOWN_TERMS);
-  for (const name of known) names.add(name);
+/**
+ * The `KNOWN_TERMS` proper nouns named by the most items, least first; a tie goes to the newer item.
+ * `items`: item texts, newest first. A name counts once per item, so one long item does not crowd out the rest.
+ */
+const knownNames = (items: Iterable<string>) => {
+  const counts = new Map<string, { term: string; items: number }>();
+  for (const text of items) {
+    const named = new Set<string>();
+    for (const term of properNouns(text)) {
+      const key = term.toLowerCase();
+      if (named.has(key)) continue;
+      named.add(key);
+      const known = counts.get(key);
+      if (known) known.items++;
+      else counts.set(key, { term, items: 1 });
+    }
+  }
+  return new Map([...counts].sort(([, a], [, b]) => b.items - a.items).slice(0, KNOWN_TERMS).reverse().map(([key, { term }]) => [key, term]));
+};
+
+/** `items`: the texts of the workspace's committed items, newest first. */
+export const asrVocabulary = (items: Iterable<string>) => {
+  const names = knownNames(items);
   const heard = recentTerms(HEARD_TERMS);
   return {
     /** Adds the proper nouns of one final transcript text. */
     heard: (text: string) => properNouns(text).forEach(heard.add),
-    prompt: () => [...[...heard.terms.values()].filter(term => !names.terms.has(term.toLowerCase())), ...names.terms.values()].join(', '),
+    prompt: () => [...[...heard.terms.values()].filter(term => !names.has(term.toLowerCase())), ...names.values()].join(', '),
   };
 };
