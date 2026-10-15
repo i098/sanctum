@@ -12,7 +12,7 @@
  */
 import { Context, Effect, Option, Queue, Redacted, Schema, type Scope, Stream } from 'effect';
 import { MAX_FRAME_SAMPLES, Unavailable } from '@sanctum/contracts';
-import { joinOverlap } from './asr-seam.ts';
+import { stitchBatch } from './asr-seam.ts';
 import { wavFile } from './object-store.ts';
 
 export interface AsrResult {
@@ -254,17 +254,9 @@ export function whisperSpeechToText(config: WhisperConfig) {
       // A skipped chunk breaks adjacency: the next answer repeats the skipped audio, not the held answer's.
       const stitch = (answered: Answered | null): ReadonlyArray<AsrBatch> => {
         if (answered === null) return flushHeld();
-        const { repeated_s, ...batch } = answered;
-        const [first, ...rest] = batch.results;
-        const results = held !== null && first !== undefined ? [...joinOverlap(held, first), ...rest] : held !== null ? [held] : batch.results;
-        const start_s = held === null ? batch.start_s : Math.min(held.start_s, batch.start_s);
-        const last = results.at(-1);
-        const holds = last !== undefined && repeated_s > 0 && last.end_s > batch.end_s - repeated_s;
-        held = holds ? last : null;
-        if (!holds) return [{ ...batch, start_s, results }];
-        const kept = results.slice(0, -1);
-        const end_s = Math.min(batch.end_s, Math.max(start_s, last.start_s, ...kept.map(result => result.end_s)));
-        return [{ start_s, end_s, results: kept }];
+        const stitched = stitchBatch(held, answered);
+        held = stitched.held;
+        return [stitched.batch];
       };
       return {
         send: samples => {

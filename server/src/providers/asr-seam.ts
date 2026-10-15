@@ -43,3 +43,39 @@ export function joinOverlap<R extends Timed>(older: R, newer: R): ReadonlyArray<
   }
   return [older, newer];
 }
+
+interface Answer extends Timed {
+  readonly end_s: number;
+}
+
+/** The audio span a batch answers for and the results found in it. */
+interface Span<R extends Answer> {
+  readonly start_s: number;
+  readonly end_s: number;
+  readonly results: ReadonlyArray<R>;
+}
+
+/** `held` joined with the batch's first result; with no result, `held` stands alone. */
+const withHeld = <R extends Answer>(held: R | null, results: ReadonlyArray<R>): ReadonlyArray<R> => {
+  if (held === null) return results;
+  const [first, ...rest] = results;
+  return first === undefined ? [held] : [...joinOverlap(held, first), ...rest];
+};
+
+/**
+ * Takes the `held` answer of the previous batch and the next `batch`, whose last `repeated_s` seconds the following
+ * batch repeats. The answer closing that repeat may stop inside a word the following batch hears whole, so it is held back
+ * and the batch's span ends where it starts: coverage never claims audio whose text is not yet passed on.
+ */
+export function stitchBatch<R extends Answer>(
+  held: R | null,
+  { repeated_s, ...batch }: Span<R> & { readonly repeated_s: number },
+): { readonly held: R | null; readonly batch: Span<R> } {
+  const results = withHeld(held, batch.results);
+  const start_s = held === null ? batch.start_s : Math.min(held.start_s, batch.start_s);
+  const last = results.at(-1);
+  if (last === undefined || repeated_s <= 0 || last.end_s <= batch.end_s - repeated_s) return { held: null, batch: { ...batch, start_s, results } };
+  const kept = results.slice(0, -1);
+  const end_s = Math.min(batch.end_s, Math.max(start_s, last.start_s, ...kept.map(result => result.end_s)));
+  return { held: last, batch: { start_s, end_s, results: kept } };
+}
