@@ -45,7 +45,7 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const ALL_SCOPES = AccessScopeName.literals;
 /** Human and device scopes follow the membership role; agent scopes come only from credentials. */
-const ROLE_SCOPES: Record<WorkspaceRole, ReadonlyArray<AccessScopeName>> = {
+export const ROLE_SCOPES: Record<WorkspaceRole, ReadonlyArray<AccessScopeName>> = {
   owner: ALL_SCOPES,
   admin: ALL_SCOPES,
   member: ALL_SCOPES.filter(scope => scope !== 'workspace:admin'),
@@ -269,7 +269,9 @@ export const authorizeMeeting = (access: AccessScope, meeting_id: MeetingId, nee
       row !== undefined &&
       (access.meetings.kind === 'allowlist'
         ? access.meetings.meeting_ids.includes(meeting_id)
-        : row.visibility === 'workspace' || (need === 'read' ? row.access !== null : row.access === 'write' || row.access === 'owner'));
+        : need === 'read'
+          ? row.visibility === 'workspace' || row.access !== null
+          : row.access === 'write' || row.access === 'owner');
     if (!allowed) return yield* new NotFound({ message: 'Meeting not found' });
   }).pipe(Effect.catchTag('SqlError', Effect.die));
 

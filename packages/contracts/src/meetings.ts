@@ -168,6 +168,10 @@ export const MapSpeaker = Schema.Struct({
 });
 export type MapSpeaker = typeof MapSpeaker.Type;
 
+/** Who may read a meeting: its explicit grants only, or every workspace principal whose scopes allow `context:read`. */
+export const ShareMeeting = Schema.Struct({ visibility: Schema.Literal('restricted', 'workspace') });
+export type ShareMeeting = typeof ShareMeeting.Type;
+
 const meetingId = HttpApiSchema.param('meeting_id', MeetingId);
 
 /** Plan section 12 meeting routes; owned by the meetings slice. */
@@ -179,6 +183,7 @@ export class MeetingsApi extends HttpApiGroup.make('meetings')
   .add(HttpApiEndpoint.post('endMeeting')`/meetings/${meetingId}/end`.setPayload(EndMeeting).addSuccess(Meeting).annotate(OpenApi.Exclude, true))
   .add(HttpApiEndpoint.post('splitMeeting')`/meetings/${meetingId}/split`.setPayload(SplitMeeting).addSuccess(SplitResult))
   .add(HttpApiEndpoint.get('getTranscript')`/meetings/${meetingId}/transcript`.setUrlParams(TranscriptParams).addSuccess(TranscriptPage))
+  .add(HttpApiEndpoint.post('shareMeeting')`/meetings/${meetingId}/share`.setPayload(ShareMeeting).addSuccess(Meeting).annotate(OpenApi.Exclude, true))
   .add(HttpApiEndpoint.post('recordingAccess')`/meetings/${meetingId}/recording-access`.addSuccess(RecordingAccess))
   .add(HttpApiEndpoint.get('getNotes')`/meetings/${meetingId}/notes`.addSuccess(MeetingNotes))
   .add(HttpApiEndpoint.get('exportMeeting')`/meetings/${meetingId}/export`.addSuccess(MeetingExport))

@@ -38,6 +38,11 @@ export const seedMeeting = (device: AccessScope, options: { readonly started_at:
   yield* sql`INSERT INTO meetings (id, workspace_id, listener_id, state, timezone, started_at, processing, visibility, created_at, updated_at)
       VALUES (${meeting_id}, ${workspace_id}, ${listener}, 'active', ${timezone}, ${options.started_at},
         '{"transcript":"partial","notes":"pending","memory":"pending","recording":"pending"}', ${options.visibility ?? 'workspace'}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+  if (options.visibility !== 'restricted') {
+    // Workspace visibility grants reads only; the workspace's principals get explicit write so tests that write context to an open meeting stay meaningful.
+    yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+        SELECT workspace_id, ${meeting_id}, principal_id, 'write', principal_id, UTC_TIMESTAMP(6) FROM workspace_members WHERE workspace_id = ${workspace_id}`;
+  }
   yield* sql`INSERT INTO meeting_ranges (workspace_id, meeting_id, boundary_revision, epoch_id, track, sample_start, sample_end)
       VALUES (${workspace_id}, ${meeting_id}, 1, ${epoch_id}, 0, 0, ${SAMPLE_RATE * 36_000})`;
   return { workspace_id, meeting_id, epoch_id } satisfies FixtureMeeting;

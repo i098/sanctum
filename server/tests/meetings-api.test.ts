@@ -2,7 +2,7 @@ import { HttpServer } from '@effect/platform';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, Unauthenticated } from '@sanctum/contracts';
 import { Context, Effect, Layer } from 'effect';
-import { Authenticator } from '../src/auth.ts';
+import { Authenticator, ROLE_SCOPES } from '../src/auth.ts';
 import { dbLayer } from '../src/db.ts';
 import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
@@ -109,6 +109,56 @@ describe('MeetingsApi over HTTP', () => {
       expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, {})).status).toBe(403);
       expect((yield* call(base, 'owner', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch, fence_sample: 40 * RATE })).status).toBe(403);
       expect((yield* call(base, 'device', 'POST', `/meetings/${meeting}/end`, { epoch_id: epoch, fence_sample: 40 * RATE })).body).toMatchObject({ id: meeting, state: 'closing' });
+    }),
+  );
+
+  it.scoped('shares a device-captured meeting with the workspace through a workspace owner, and restricts it again', () =>
+    Effect.gen(function* () {
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      const fixture = yield* Effect.provide(
+        Effect.gen(function* () {
+          yield* migrate(loadMigrations());
+          const [owner, device, member, agent] = (yield* seedWorkspace('Share', ['owner', 'device', 'member', 'agent'])).map(access => ({ ...access, scopes: ROLE_SCOPES[access.role] }));
+          const listener = yield* seedListener(device!);
+          const epoch = yield* seedEpoch(listener);
+          yield* hear(listener, epoch, 0, 30, 'first topic is the launch date');
+          const [other] = yield* seedWorkspace('Elsewhere', ['owner']);
+          const reader: AccessScope = { ...agent!, scopes: ['context:read'] };
+          return { owner: owner!, device: device!, member: member!, reader, other: other!, epoch, meeting: (yield* meetingsOf(listener.workspace_id))[0]!.id };
+        }),
+        dbLayer(database.mysql),
+      );
+      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: fixture.owner, device: fixture.device, member: fixture.member, reader: fixture.reader, other: fixture.other }));
+      const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
+      if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
+      const base = `http://127.0.0.1:${address.port}`;
+      const { meeting, epoch } = fixture;
+      const share = (token: string, visibility: string) => call(base, token, 'POST', `/meetings/${meeting}/share`, { visibility });
+
+      expect((yield* call(base, 'reader', 'GET', `/meetings/${meeting}/transcript`)).status).toBe(404);
+      expect((yield* share('member', 'workspace')).status).toBe(404);
+      expect((yield* share('other', 'workspace')).status).toBe(404);
+      expect((yield* share('reader', 'workspace')).status).toBe(403);
+      // The capturing device owns the meeting but holds only capture:ingest, so it cannot share.
+      expect((yield* share('device', 'workspace')).status).toBe(403);
+      expect((yield* call(base, 'reader', 'GET', `/meetings/${meeting}/transcript`)).status).toBe(404);
+
+      expect((yield* share('owner', 'everyone')).status).toBe(400);
+      expect((yield* share('owner', 'workspace')).body).toMatchObject({ id: meeting, visibility: 'workspace' });
+      for (const token of ['reader', 'member']) {
+        expect((yield* call(base, token, 'GET', `/meetings/${meeting}/transcript`)).body).toMatchObject({ segments: [{ text: 'first topic is the launch date' }] });
+      }
+      expect((yield* call(base, 'reader', 'GET', '/meetings')).body).toMatchObject({ meetings: [{ id: meeting }] });
+      expect((yield* call(base, 'other', 'GET', `/meetings/${meeting}`)).status).toBe(404);
+      // Sharing grants reads only: a member holding write scopes still cannot change the meeting.
+      expect((yield* call(base, 'member', 'POST', `/meetings/${meeting}/split`, { expected_revision: 1, at: { epoch_id: epoch, sample: 10 * RATE } })).status).toBe(404);
+
+      // Readers see the meeting but cannot change who else does.
+      expect((yield* share('reader', 'restricted')).status).toBe(403);
+      expect((yield* share('member', 'restricted')).status).toBe(403);
+
+      expect((yield* share('owner', 'restricted')).body).toMatchObject({ visibility: 'restricted' });
+      expect((yield* call(base, 'reader', 'GET', `/meetings/${meeting}/transcript`)).status).toBe(404);
     }),
   );
 });
