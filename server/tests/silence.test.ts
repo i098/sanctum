@@ -122,6 +122,7 @@ describe('speech gate', () => {
       yield* session.onCovered(((11_000 + endOfTurnMs) * RATE) / 1000);
       yield* settle(100);
       expect(session.requests).toEqual(['what is next?']);
+      expect(session.replying()).toBe(false); // the reply ended, so live chunks are long again
       yield* settle(turnWaitMs);
       expect(session.requests).toEqual(['what is next?']);
     }));
@@ -231,13 +232,16 @@ describe('speech gate', () => {
   it.effect('stops on barge-in and never emits the interrupted generation again', () =>
     Effect.gen(function* () {
       const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
+      expect(session.replying()).toBe(false);
       yield* session.onSegment(heard('Sanctum, summarize the meeting', 30_000, 31_000));
       yield* settle(turnWaitMs + 1_500);
+      expect(session.replying()).toBe(true); // live chunks are short while the reply plays
       const before = session.chunks().length;
       expect(before).toBeGreaterThan(0);
       const { generation, request_id } = session.chunks()[0]!;
       yield* session.onSegment(heard('wait, hold on', 33_000, 33_400, 'partial'));
       expect(session.sent.at(-1)).toEqual({ _tag: 'speech_cancel', generation, reason: 'barge_in' });
+      expect(session.replying()).toBe(false);
       expect(session.gate.mayEmit(request_id, generation)).toBe(false);
       yield* settle(5_000);
       expect(session.chunks()).toHaveLength(before);
@@ -305,11 +309,14 @@ describe('speech gate', () => {
       expect(gate.mayEmit(request_id, generation)).toBe(false);
     }));
 
-  it('recognizes only a leading direct address', () => {
+  it('recognizes a direct address only at the start of the turn or of a sentence', () => {
     expect(directRequest('Hey Sanctum, book the room')).toBe('book the room');
     expect(directRequest('okay sanctum: what time is it')).toBe('what time is it');
+    expect(directRequest("Okay, let's move on. Sanctum, what is next?")).toBe('what is next?');
+    expect(directRequest('Is that done? Hey Sanctum, book the room')).toBe('book the room');
     expect(directRequest('Sanctum')).toBeNull();
     expect(directRequest('ask sanctum later')).toBeNull();
+    expect(directRequest('Okay. I told Sanctum yesterday, what is next?')).toBeNull();
     expect(directRequest('Sanctuary is a word')).toBeNull();
   });
 });

@@ -223,6 +223,7 @@ The next chunk then also starts `overlapMs` (0.75 s) before the cut, so the word
 While Sanctum replies (a reply window is open), chunks run 1.5–2.5 s instead (`replyMinMs`, `replyMaxMs`) with the same pause and quietest-cut rules.
 A barge-in such as "Sanctum, stop" is then final within about 2.5 s of audio plus the answer, not up to 10 s.
 Short chunks mishear more names, but only audio heard during a reply pays that cost.
+A long chunk can hold talk before a direct request in one Whisper segment, so "Sanctum" opens a request at the start of a turn or after `.`, `?` or `!`; a mention inside a sentence ("I told Sanctum yesterday") does not.
 
 Replay of the dry-run audio through the live adapter on 2026-10-15 (the 11 planted facts, 60 s around each; Whisper large-v3-turbo):
 

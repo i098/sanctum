@@ -69,7 +69,6 @@ export const makeSpeechGate = (now: () => number = Date.now) => {
 /** One gate per API process by default: a listener's live socket always lands in the process that owns it. */
 export class SpeechGate extends Context.Reference<SpeechGate>()('sanctum/SpeechGate', { defaultValue: () => makeSpeechGate() }) {}
 
-/** "Sanctum, …" / "Hey Sanctum …" at the start of a turn; the rest is the request. */
 /** Reply text for one direct request on one listener; provided by the API entrypoint (speech-requests.ts). */
 export class SpeechReplies extends Context.Tag('sanctum/SpeechReplies')<
   SpeechReplies,
@@ -88,7 +87,11 @@ export class SpeechWorkRequests extends Context.Tag('sanctum/SpeechWorkRequests'
 /** Spoken instead of the answer when a direct request started research. */
 export const WORK_ACKNOWLEDGEMENT = 'Looking that up.';
 
-export const directRequest = (text: string) => /^\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
+/**
+ * "Sanctum, …" / "Hey Sanctum …" at the start of the turn or of a sentence in it; the rest is the request.
+ * A live chunk of several seconds can hold talk before the request in the same segment.
+ */
+export const directRequest = (text: string) => /(?:^|[.?!])\W*(?:(?:hey|hi|ok|okay)\W+)?sanctum\b\W*(.*)$/isu.exec(text.trim())?.[1]?.trim() || null;
 
 /** Splits a streamed reply into sentences so speech starts before the whole reply exists. */
 const sentences = <E>(text: Stream.Stream<string, E>) =>
