@@ -13,7 +13,7 @@
 
 [Try it](https://sanctum.42nights.dev) · [Self-host](#self-host) · [Docs](https://i098.github.io/sanctum/) · [Changelog](CHANGELOG.md) · [Contribute](CONTRIBUTING.md)
 
-<img src=".github/assets/listen.png" alt="The Sanctum Listen screen while recording: a lively teal waveform on a dark background, with Pause, Review, Agents, Fullscreen and Settings at the bottom">
+<img src=".github/assets/listen.png" alt="The Sanctum Listen screen while recording: a lively teal waveform on a dark background, a microphone chip at the bottom left, and Pause and Menu at the bottom right">
 
 *The Listen screen while recording: fullscreen and silent, with the waveform following the live microphone.*
 
