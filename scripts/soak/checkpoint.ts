@@ -1,33 +1,37 @@
 /**
- * Soak retrieval checkpoint: asks the planted questions through `GET /api/v1/context/search`
- * (keyword form, natural-language form, time-range form, never-said controls), resolves the cited
- * segments of matching items through `GET /api/v1/sources/{id}`, scores the answers and writes JSON.
+ * Soak retrieval checkpoint: asks the corpus manifest's questions for one checkpoint through
+ * `GET /api/v1/context/search` (keyword form and natural-language form of each; `as_of` and `range`
+ * questions use the `from`/`to` window; a range question with no keywords lists the window and
+ * follows `next_cursor`), resolves the cited segments of matching items through
+ * `GET /api/v1/sources/{id}`, scores the answers and writes JSON.
  * It only reads; it never records, writes context or calls a paid model.
  *
  * Usage: node scripts/soak/checkpoint.ts --manifest manifest.json --hours 1|5|12|24 --out cp-1h.json
  *          (--url https://sanctum.example [--token-env SANCTUM_SOAK_TOKEN] | --fixture search-fixture.json)
  * T0 and its time zone come from `manifest.t0` (`epoch_s`, `tz`), which the driver fills in when the run starts.
+ * A fact's real play time comes from its `actual_at` when the driver recorded one, else T0 + `at_s`.
  *
- * Time-range questions use the `from`/`to` search parameters added with the search-range change; until
- * the hosted app serves them, run against a fixture of that response shape:
+ * A fixture replaces the hosted app with recorded responses:
  *   { "search": { "<q>|<from>|<to>": { "items": [ContextItem...] } }, "sources": { "<segment_id>": Source } }
- * with empty `from`/`to` for unranged queries.
+ * with empty parts for a missing `q`, `from` or `to`.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { askable, matches, scoreCheckpoint, t0Ms } from './score.ts';
-import type { Answer, DueFact, Item, Manifest } from './score.ts';
+import { dueQuestions, matches, scoreCheckpoint, t0Ms, windowOf } from './score.ts';
+import type { Answer, DueFact, Item, Manifest, QuestionAnswers } from './score.ts';
 
-const LIMIT = 20;
+const KEYWORD_LIMIT = 20;
+const LISTING_PAGE = 200;
+const LISTING_PAGES = 10;
 const CHECKPOINT_HOURS = ['1', '5', '12', '24'];
 
 interface ApiItem { readonly text: string; readonly event_at: string | null; readonly sources: ReadonlyArray<{ readonly segment_id?: string }> }
 interface ApiSource { readonly kind: string; readonly event_at?: string }
 interface Fixture { readonly search: Readonly<Record<string, { readonly items: ReadonlyArray<ApiItem> }>>; readonly sources: Readonly<Record<string, ApiSource>> }
 
-/** Where answers come from: the hosted API or a recorded fixture. */
+/** Where answers come from: the hosted API or a recorded fixture. A null `q` lists the window. */
 interface Backend {
-  search(q: string, range: { readonly from?: string; readonly to?: string }): Promise<ReadonlyArray<ApiItem>>;
+  search(q: string | null, window: { readonly from?: string; readonly to?: string }): Promise<ReadonlyArray<ApiItem>>;
   source(segmentId: string): Promise<ApiSource>;
 }
 
@@ -39,8 +43,16 @@ function httpBackend(url: string, token: string): Backend {
   };
   return {
     search: async (q, { from, to }) => {
-      const params = new URLSearchParams(Object.entries({ q, limit: String(LIMIT), from, to }).filter((e): e is [string, string] => e[1] !== undefined));
-      return (await get<{ items: ApiItem[] }>('/context/search', params)).items;
+      const items: ApiItem[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < (q === null ? LISTING_PAGES : 1); page++) {
+        const params = new URLSearchParams(Object.entries({ q: q ?? undefined, limit: String(q === null ? LISTING_PAGE : KEYWORD_LIMIT), from, to, cursor: cursor ?? undefined }).filter((e): e is [string, string] => e[1] !== undefined));
+        const result: { items: ApiItem[]; next_cursor: string | null } = await get('/context/search', params);
+        items.push(...result.items);
+        cursor = result.next_cursor;
+        if (cursor === null) break;
+      }
+      return items;
     },
     source: id => get<ApiSource>(`/sources/${id}`),
   };
@@ -63,35 +75,36 @@ export function fixtureBackend(fixture: Fixture): Backend {
 }
 
 /** One timed search. A failure is an answer with an error, so one bad call does not hide the other metrics. */
-async function ask(backend: Backend, q: string, range: { from?: string; to?: string } = {}, resolveFor?: DueFact): Promise<Answer> {
+async function ask(backend: Backend, q: string | null, window: { from?: string; to?: string }, expected: ReadonlyArray<DueFact>): Promise<Answer> {
   const started = performance.now();
   const failures: string[] = [];
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
   try {
-    const found = await backend.search(q, range);
+    const found = await backend.search(q, window);
     const ms = performance.now() - started;
-    const items: Item[] = await Promise.all(found.slice(0, LIMIT).map(async item => {
-      const resolve = resolveFor && matches(item.text, resolveFor.answers);
+    const answers = expected.flatMap(f => f.answers);
+    const items: Item[] = await Promise.all(found.map(async item => {
+      const resolve = matches(item.text, answers);
       const segments = resolve ? item.sources.flatMap(s => (s.segment_id ? [s.segment_id] : [])) : [];
       const times = await Promise.all(segments.map(async id => {
-        try { return Date.parse((await backend.source(id)).event_at ?? ''); } catch (error) { failures.push(`${q}: source ${id}: ${reason(error)}`); return Number.NaN; }
+        try { return Date.parse((await backend.source(id)).event_at ?? ''); } catch (error) { failures.push(`${q ?? "listing"}: source ${id}: ${reason(error)}`); return Number.NaN; }
       }));
       return { text: item.text, event_at: item.event_at, source_ms: times.filter(t => !Number.isNaN(t)) };
     }));
     return failures.length ? { items, ms, error: failures.join('; ') } : { items, ms };
   } catch (error) {
-    return { items: [], ms: performance.now() - started, error: `${q}: ${reason(error)}` };
+    return { items: [], ms: performance.now() - started, error: `${q ?? "listing"}: ${reason(error)}` };
   }
 }
 
 export async function runCheckpoint(backend: Backend, manifest: Manifest, hours: number) {
-  const { facts, ranges } = askable(manifest, hours);
-  const iso = (offset_s: number) => new Date(t0Ms(manifest) + offset_s * 1000).toISOString();
-  const answers: { facts: Record<string, { keyword: Answer; natural: Answer }>; ranges: Record<string, Answer>; controls: Record<string, Answer> } = { facts: {}, ranges: {}, controls: {} };
+  const t0_ms = t0Ms(manifest);
+  const answers: Record<string, QuestionAnswers> = {};
   // Sequential on purpose: concurrent calls would put queueing time into the latency percentiles.
-  for (const fact of facts) answers.facts[fact.id] = { keyword: await ask(backend, fact.query, {}, fact), natural: await ask(backend, fact.question, {}, fact) };
-  for (const r of ranges) answers.ranges[r.id] = await ask(backend, r.query, { from: iso(r.from_s), to: iso(r.to_s) });
-  for (const c of manifest.controls ?? []) answers.controls[c.id] = await ask(backend, c.query);
+  for (const q of dueQuestions(manifest, hours)) {
+    const window = windowOf(q, t0_ms);
+    answers[q.id] = { keyword: await ask(backend, q.keywords, window, q.facts), natural: await ask(backend, q.question, window, q.facts) };
+  }
   return scoreCheckpoint({ hours, manifest, answers });
 }
 
