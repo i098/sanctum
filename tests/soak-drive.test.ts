@@ -8,11 +8,11 @@ import { costUsd, factTimes, parseLimit, stampManifest } from '../scripts/soak/d
 import { manifestSource } from '../scripts/soak/source.ts';
 import { isSpeech, readWav, wavFile } from '../scripts/soak/wav.ts';
 
-test('a 24 h schedule with 960 speech minutes and the Aura-2 audio build stays under the $15 hard stop', () => {
+test('Cerebras extraction cost: one 40 minute meeting is about $1, and a full 24 h schedule crosses the $15 stop', () => {
+  const meeting = { speech_seconds: 40 * 60, run_seconds: 3600, chunk_puts: 120 };
+  assert.ok(costUsd(meeting) > 1 && costUsd(meeting) < 1.2, `one meeting costs ${costUsd(meeting)}`);
   const day = { speech_seconds: 960 * 60, run_seconds: 86_400, chunk_puts: 2880 };
-  assert.ok(costUsd(day, 1.85) < 15);
-  assert.ok(costUsd({ ...day, speech_seconds: 1440 * 60 }, 1.85) > 12);
-  assert.ok(costUsd({ ...day, speech_seconds: 2_200 * 60 }, 1.85) >= 15, 'a runaway speech total must cross the stop');
+  assert.ok(costUsd(day, 1.85) >= 15, 'the whole day must cross the default stop, so the stop measures real spend');
 });
 
 test('silence below the -56 dBFS gate is not billed as speech', () => {

@@ -24,9 +24,9 @@ import {
 import { Effect, Schema } from 'effect';
 import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { resolveTime } from './context-time.ts';
-import { lockMeeting, meetingItems, type NewItem, writeItem } from './context.ts';
+import { lockMeeting, meetingItems, meetingItemTexts, type NewItem, relevantItems, writeItem } from './context.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
-import { adjacentRuns, type ExtractionInput } from './extraction.ts';
+import { adjacentRuns, contentTerms, type ExtractionInput, MATCHING_ITEMS, RECENT_ITEMS } from './extraction.ts';
 import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
@@ -110,13 +110,15 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
   );
   const batch = pending.slice(0, BATCH_SEGMENTS);
   if (batch.length === 0) return { processed: 0, added: 0, rejected: 0, backlog: false };
-  const { items } = yield* meetingItems(workspace_id, meeting_id);
+  const spoken = batch.map(toSegment);
+  const items = yield* relevantItems(workspace_id, meeting_id, [...contentTerms(spoken.map(segment => segment.text).join(' '))], RECENT_ITEMS, MATCHING_ITEMS);
+  const known = yield* meetingItemTexts(workspace_id, meeting_id);
   const epochs = yield* decodeRows(
    EpochAnchorRow,
    sql`SELECT id AS epoch_id, sample_rate, sample_start, captured_at FROM capture_epochs
           WHERE workspace_id = ${workspace_id} AND ${sql.in('id', [...new Set(batch.map(segment => segment.epoch_id))])}`,
   );
-  const candidates = yield* extract({ meeting, segments: batch.map(toSegment), snapshot: items, epochs }).pipe(
+  const candidates = yield* extract({ meeting, segments: spoken, snapshot: items, known, epochs }).pipe(
    Effect.mapError(error => new JobFailure({ message: error.message, retryable: error.retryable })),
   );
   const byId = new Map(batch.map((segment, index) => [segment.id as string, { ...segment, index }]));

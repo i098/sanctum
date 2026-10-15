@@ -176,6 +176,43 @@ describe('extractCandidates', () => {
     }));
 });
 
+describe('bounded existing context', () => {
+  const item = (kind: string, text: string) => ({ ...snapshot[0]!, id: randomUUID(), kind, text }) as ContextItem;
+  /** 431 items (the size of the second soak dry run), about 130 characters each, each with its own vocabulary. */
+  const large = [
+    item('project_fact', 'The remote control product launch date is November 3rd, 2026, confirmed with the supplier.'),
+    ...Array.from({ length: 430 }, (_, i) => item('decision', `Topic${i} budget review number ${i} agreed with team member${i}: keep scope${i} steady through the quarter.`)),
+  ];
+  const prompt = (items: ReadonlyArray<ContextItem>, answer = JSON.stringify({ candidates: [] })) =>
+    Effect.gen(function* () {
+      const requests: ProviderRequest[] = [];
+      const said = segment(0, 3, 'The launch will slip to December 1st.', 'speaker_0');
+      const found = yield* Effect.provide(extractCandidates({ meeting, segments: [said], snapshot: items, epochs: anchors }), fixtureLlm([answer], requests));
+      return { found, prompt: requests[0]!.prompt };
+    });
+
+  it.effect('keeps the context block under budget on a large meeting', () =>
+    Effect.gen(function* () {
+      const { prompt: text } = yield* prompt(large);
+      const block = text.slice(text.indexOf('Existing context:\n'), text.indexOf('\n\nTranscript:'));
+      expect(block.length).toBeLessThanOrEqual(4_100);
+      expect(block.split('\n').length).toBeLessThan(60);
+    }));
+
+  it.effect('still shows the item a new fact supersedes, however old', () =>
+    Effect.gen(function* () {
+      const { prompt: text } = yield* prompt(large);
+      expect(text).toContain('launch date is November 3rd, 2026');
+      expect(text).not.toContain('Topic100 ');
+    }));
+
+  it.effect('rejects a repeat of an item left out of the prompt', () =>
+    Effect.gen(function* () {
+      const repeat = JSON.stringify({ candidates: [candidate({ kind: 'decision', text: 'Topic100 budget review number 100 agreed with team member100: keep scope100 steady through the quarter.', quote: 'launch will slip', segments: ['S1'] })] });
+      expect((yield* prompt(large, repeat)).found).toEqual([]);
+    }));
+});
+
 describe('extraction model fallback', () => {
   const input = { meeting, segments, snapshot, epochs: anchors };
   const notesAnswer = JSON.stringify({ title: 'Beta', summary: 'The team limited pilot access.', sections: [{ heading: 'Access', points: [{ text: 'Pilot access stays limited.', segments: ['S1'] }] }] });

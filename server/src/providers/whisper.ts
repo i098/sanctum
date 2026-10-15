@@ -1,8 +1,9 @@
 /**
  * Speech-to-text on Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`, plan
  * section 09) over REST, sending mono PCM16 WAV. Whisper is batch-only: a live stream buffers PCM
- * and posts short chunks cut at the quietest moment (`engineeringDefaults.liveAsr`), so every
- * result is final and arrives once per chunk. Times are seconds from the first sample sent on
+ * and posts short chunks cut at the quietest moment (`engineeringDefaults.liveAsr`). A cut with sound on it
+ * may fall inside a word, so the next chunk starts `overlapMs` before it and `joinOverlap` repeats no word;
+ * every result is final. Times are seconds from the first sample sent on
  * that stream or request; callers map them to epoch samples through the anchor they persisted
  * (provider_connections). Whisper invents text such as "Thank you." on silence and room noise, so
  * audio without sustained sound is never sent, `vad_filter` drops silence inside a request, and a
@@ -11,6 +12,7 @@
  */
 import { Context, Effect, Option, Queue, Redacted, Schema, type Scope, Stream } from 'effect';
 import { MAX_FRAME_SAMPLES, Unavailable } from '@sanctum/contracts';
+import { stitchBatch } from './asr-seam.ts';
 import { wavFile } from './object-store.ts';
 
 export interface AsrResult {
@@ -105,9 +107,16 @@ function hasSustainedSound(samples: Int16Array, frame: number, floorRms: number)
 }
 
 interface Chunk {
+  /** First sample this chunk answers for; the `lead` samples before it repeat the previous chunk's end. */
   readonly offset: number;
+  readonly lead: number;
+  /** Samples at the end of this chunk that the next chunk repeats. */
+  readonly repeated: number;
   readonly samples: Int16Array;
 }
+
+/** An answer plus how much of its end the next answer repeats, for `stitch`. */
+type Answered = AsrBatch & { readonly repeated_s: number };
 
 interface WhisperConfig {
   /** `serverConfig.workersAi`: the account's REST base URL (`.../accounts/<id>/ai`) and a Workers AI token. */
@@ -116,6 +125,7 @@ interface WhisperConfig {
   readonly liveAsr: {
     readonly minMs: number;
     readonly maxMs: number;
+    readonly overlapMs: number;
     readonly concurrency: number;
     readonly hedgeMs: number;
     readonly requestTimeoutMs: number;
@@ -181,27 +191,34 @@ export function whisperSpeechToText(config: WhisperConfig) {
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
-      const [min, max, frame] = [samplesIn(limits.minMs), samplesIn(limits.maxMs), samplesIn(20)];
+      const [min, max, frame, overlap] = [samplesIn(limits.minMs), samplesIn(limits.maxMs), samplesIn(20), samplesIn(limits.overlapMs)];
       const chunks = yield* Queue.unbounded<Chunk | null>();
-      // Under `max` samples stay after each send, and one frame holds at most MAX_FRAME_SAMPLES.
-      const buffer = new Int16Array(max + MAX_FRAME_SAMPLES);
+      // The `lead` samples repeated from the last send plus under `max` samples stay after each send, and one frame holds at most MAX_FRAME_SAMPLES.
+      const buffer = new Int16Array(overlap + max + MAX_FRAME_SAMPLES);
       let filled = 0;
+      let lead = 0;
       let offset = 0;
       let queued = 0;
       let pausedUntil = 0;
       let open = true;
-      const enqueue = (length: number) => {
+      /** `repeated` samples at the end of this chunk start the next one: a cut with sound on it may fall inside a word, a quiet cut falls between words. */
+      const enqueue = (length: number, repeated: number) => {
         const samples = buffer.slice(0, length);
-        buffer.copyWithin(0, length, filled);
-        filled -= length;
-        chunks.unsafeOffer({ offset, samples });
-        offset += length;
+        chunks.unsafeOffer({ offset, lead, repeated, samples });
+        offset += length - lead;
         queued += samples.byteLength;
+        lead = repeated;
+        buffer.copyWithin(0, length - lead, filled);
+        filled -= length - lead;
       };
-      const transcribeChunk = ({ offset, samples }: Chunk): Effect.Effect<ReadonlyArray<AsrBatch>, Unavailable> => {
+      const enqueueCut = (cut: number) => {
+        const sound = meanSquare(buffer, cut - (frame >> 1), cut + (frame >> 1)) >= limits.speechFloorRms ** 2;
+        enqueue(cut, sound ? Math.min(overlap, cut) : 0);
+      };
+      const transcribeChunk = ({ offset, lead, repeated, samples }: Chunk): Effect.Effect<ReadonlyArray<Answered | null>, Unavailable> => {
         queued -= samples.byteLength;
-        const shift = offset / sample_rate;
-        const skipped = Effect.as(behind(offset), [] as ReadonlyArray<AsrBatch>);
+        const shift = (offset - lead) / sample_rate;
+        const skipped = Effect.as(behind(offset), [null] as ReadonlyArray<Answered | null>);
         if (Date.now() < pausedUntil) return skipped;
         const request = transcribe(sample_rate, samples);
         // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
@@ -210,7 +227,12 @@ export function whisperSpeechToText(config: WhisperConfig) {
         return request.pipe(
           Effect.raceFirst(hedge),
           Effect.map(results => [
-            { start_s: shift, end_s: shift + samples.length / sample_rate, results: results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })) },
+            {
+              start_s: offset / sample_rate,
+              end_s: shift + samples.length / sample_rate,
+              repeated_s: repeated / sample_rate,
+              results: results.map(result => ({ ...result, start_s: result.start_s + shift, end_s: result.end_s + shift })),
+            },
           ]),
           Effect.catchIf(
             error => error.retry_after_ms !== undefined,
@@ -221,12 +243,27 @@ export function whisperSpeechToText(config: WhisperConfig) {
           ),
         );
       };
+      // The answer closing a chunk whose end the next chunk repeats may stop inside a word that chunk hears whole, so it waits for that chunk's first answer.
+      // Coverage stops where the held answer starts, so audio whose text is not persisted is never recorded as covered.
+      let held: AsrResult | null = null;
+      const flushHeld = (): ReadonlyArray<AsrBatch> => {
+        const flushed = held;
+        held = null;
+        return flushed === null ? [] : [{ start_s: flushed.start_s, end_s: flushed.end_s, results: [flushed] }];
+      };
+      // A skipped chunk breaks adjacency: the next answer repeats the skipped audio, not the held answer's.
+      const stitch = (answered: Answered | null): ReadonlyArray<AsrBatch> => {
+        if (answered === null) return flushHeld();
+        const stitched = stitchBatch(held, answered);
+        held = stitched.held;
+        return [stitched.batch];
+      };
       return {
         send: samples => {
           if (!open) return false;
           buffer.set(samples, filled);
           filled += samples.length;
-          while (filled >= max) enqueue(quietestCut(buffer, min, max, frame));
+          while (filled >= lead + max) enqueueCut(quietestCut(buffer, lead + min, lead + max, frame));
           return true;
         },
         backlogBytes: () => queued,
@@ -234,12 +271,14 @@ export function whisperSpeechToText(config: WhisperConfig) {
           Stream.takeWhile((chunk): chunk is Chunk => chunk !== null),
           Stream.mapEffect(transcribeChunk, { concurrency: limits.concurrency }),
           Stream.flattenIterables,
+          Stream.mapConcat(stitch),
+          Stream.concat(Stream.suspend(() => Stream.fromIterable(flushHeld()))),
           Stream.tapError(() => Effect.sync(() => (open = false))),
         ),
         finish: Effect.sync(() => {
           if (!open) return;
           open = false;
-          if (filled > 0) enqueue(filled);
+          if (filled > lead) enqueue(filled, 0);
           chunks.unsafeOffer(null);
         }),
       } satisfies AsrStream;

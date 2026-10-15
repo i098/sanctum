@@ -5,7 +5,7 @@ import { ConfigProvider, Effect, Layer, Option, Queue, Redacted, Stream } from '
 import { engineeringDefaults } from '../src/config.ts';
 import { SpeechToTextLive } from '../src/media/providers.ts';
 import { ObjectStore } from '../src/providers/object-store.ts';
-import { SpeechToText, whisperSpeechToText } from '../src/providers/whisper.ts';
+import { type AsrBatch, SpeechToText, whisperSpeechToText } from '../src/providers/whisper.ts';
 import { R2ObjectStoreLive } from '../src/providers/r2.ts';
 
 /** Local HTTP stand-in for a provider; records requests and answers with `respond`. */
@@ -275,6 +275,92 @@ describe('Workers AI Whisper', () => {
         },
       ]);
       expect(stream.backlogBytes()).toBe(0);
+    }),
+  );
+
+  it.scopedLive('does not split a word the chunk cut falls in: the overlap makes it whole and repeats no word', () =>
+    Effect.gen(function* () {
+      const sentence = 'we chose northwind freight for shipping this quarter team agreed on friday'.split(' ');
+      const wordSamples = 6_400;
+      // Continuous speech: each word is one level, rising, so the quietest 20 ms of every cut window is its first frame, inside a word.
+      const audio = Int16Array.from({ length: sentence.length * wordSamples }, (_, at) => 1_000 * (Math.floor(at / wordSamples) + 1));
+      // A stand-in Whisper that hears a word cut by the chunk edge as its leading or trailing letters.
+      const server = yield* localServer((_request, body, response) => {
+        const { samples } = sentAudio(body);
+        const heard: Array<string> = [];
+        for (let from = 0; from < samples.length; ) {
+          let to = from;
+          while (to < samples.length && samples[to] === samples[from]) to++;
+          const word = sentence[samples[from]! / 1_000 - 1]!;
+          const kept = Math.ceil((word.length * (to - from)) / wordSamples);
+          heard.push(from === 0 ? word.slice(word.length - kept) : to === samples.length ? word.slice(0, kept) : word);
+          from = to;
+        }
+        response.end(JSON.stringify({ result: { text: heard.join(' '), segments: [{ start: 0, end: samples.length / 16_000, text: heard.join(' ') }] } }));
+      });
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600));
+      yield* stream.finish;
+      const batches = [...(yield* Effect.flatten(collected.await))];
+      const texts = batches.flatMap(batch => batch.results.map(result => result.text));
+      expect(server.requests).toHaveLength(3);
+      expect(texts.join(' ')).toBe(sentence.join(' '));
+      // Coverage never claims audio whose text a later batch still carries.
+      for (const batch of batches) for (const result of batch.results) expect(result.start_s >= batch.start_s && result.end_s <= batch.end_s).toBe(true);
+    }),
+  );
+
+  /** Three chunks of continuous speech; the stand-in answers by position: the first closes on a held segment, so the next chunk decides it. */
+  const heldThenChunks = (later: (position: 'middle' | 'last', response: ServerResponse) => void) =>
+    Effect.gen(function* () {
+      const audio = Int16Array.from({ length: 12 * 6_400 }, (_, at) => 1_000 * (Math.floor(at / 6_400) + 1));
+      const server = yield* localServer((_request, body, response) => {
+        const { samples } = sentAudio(body);
+        const length = samples.length / 16_000;
+        if (samples[0] === 1_000) {
+          response.end(JSON.stringify({ result: { text: 'we chose the plan', segments: [{ start: 0, end: 1, text: 'we chose' }, { start: 1, end: length, text: 'the plan' }] } }));
+        } else later(samples.at(-1) === 12_000 ? 'last' : 'middle', response);
+      });
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600));
+      yield* stream.finish;
+      const emitted: Array<AsrBatch> = [];
+      const outcome = yield* Effect.either(Stream.runForEach(stream.results, batch => Effect.sync(() => emitted.push(batch))));
+      return { emitted, outcome };
+    });
+
+  it.scopedLive('never covers audio past a held answer when the next chunk fails', () =>
+    Effect.gen(function* () {
+      const { emitted, outcome } = yield* heldThenChunks((position, response) =>
+        position === 'middle' ? response.writeHead(400).end() : response.end(JSON.stringify({ result: { text: 'late', segments: [{ start: 0, end: 1, text: 'late' }] } })),
+      );
+      expect(outcome._tag).toBe('Left');
+      expect(emitted.flatMap(batch => batch.results.map(result => result.text))).toEqual(['we chose']);
+      for (const batch of emitted) expect(batch.end_s).toBeLessThanOrEqual(1);
+    }),
+  );
+
+  it.scopedLive('releases a held answer alone when the next chunk is skipped, never joining it to the answer after the gap', () =>
+    Effect.gen(function* () {
+      const { emitted, outcome } = yield* heldThenChunks((position, response) =>
+        position === 'middle'
+          ? response.writeHead(429, { 'retry-after': '1' }).end()
+          : response.end(JSON.stringify({ result: { text: 'plan b', segments: [{ start: 0, end: 1, text: 'plan b' }] } })),
+      );
+      expect(outcome._tag).toBe('Right');
+      expect(emitted.flatMap(batch => batch.results.map(result => result.text))).toEqual(['we chose', 'the plan', 'plan b']);
+    }),
+  );
+
+  it.scopedLive('answers a chunk that nothing repeats at once, even when its last segment ends past the audio', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'last words', segments: [{ start: 0, end: 5, text: 'last words' }] } })));
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      stream.send(new Int16Array(16_000).fill(8_000));
+      yield* stream.finish;
+      expect([...(yield* Effect.flatten(collected.await))]).toMatchObject([{ start_s: 0, end_s: 1, results: [{ text: 'last words' }] }]);
     }),
   );
 
