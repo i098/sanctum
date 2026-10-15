@@ -259,7 +259,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const results = held !== null && first !== undefined ? [...joinOverlap(held, first), ...rest] : held !== null ? [held] : batch.results;
         const start_s = held === null ? batch.start_s : Math.min(held.start_s, batch.start_s);
         const last = results.at(-1);
-        const holds = last !== undefined && last.end_s > batch.end_s - repeated_s;
+        const holds = last !== undefined && repeated_s > 0 && last.end_s > batch.end_s - repeated_s;
         held = holds ? last : null;
         if (!holds) return [{ ...batch, start_s, results }];
         const kept = results.slice(0, -1);

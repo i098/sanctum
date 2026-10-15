@@ -353,6 +353,17 @@ describe('Workers AI Whisper', () => {
     }),
   );
 
+  it.scopedLive('answers a chunk that nothing repeats at once, even when its last segment ends past the audio', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'last words', segments: [{ start: 0, end: 5, text: 'last words' }] } })));
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      const collected = yield* Effect.fork(Stream.runCollect(stream.results));
+      stream.send(new Int16Array(16_000).fill(8_000));
+      yield* stream.finish;
+      expect([...(yield* Effect.flatten(collected.await))]).toMatchObject([{ start_s: 0, end_s: 1, results: [{ text: 'last words' }] }]);
+    }),
+  );
+
   it.effect('reports missing settings as unavailable instead of pretending to transcribe', () =>
     Effect.gen(function* () {
       const stt = yield* Effect.provide(SpeechToText, SpeechToTextLive.pipe(Layer.provide(withConfig({ WORKERS_AI_ACCOUNT_ID: 'acct' }))));
