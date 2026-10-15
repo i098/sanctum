@@ -15,6 +15,11 @@ describe('ASR hint', () => {
     expect(asrPrompt(heard, known)).toBe('Falcon, Dublin, PETER, Asana, Northwind');
   });
 
+  it('merges newer finals before the names read earlier', () => {
+    const earlier = heardNames(['the Falcon met Peter']);
+    expect([...heardNames(['then Dublin and PETER'], earlier).values()]).toEqual(['PETER', 'Dublin', 'Falcon']);
+  });
+
   it('keeps the newest heard names and bounds the whole prompt', () => {
     const known = knownNames([`see ${Array.from({ length: PROMPT_TERMS }, (_, i) => `Known${i}`).join(' ')}`]);
     expect(asrPrompt(new Map(), known).split(', ')).toHaveLength(PROMPT_TERMS);

@@ -53,8 +53,8 @@ interface FakeStream {
   readonly sample_rate: number;
   received: number;
   backlog: number;
-  /** The Whisper prompt the session gives a chunk starting at the audio received so far, read as the provider would when it sends that chunk. */
-  readonly prompt: Effect.Effect<string>;
+  /** The Whisper prompt the session gives a chunk whose first sample is at `offset` from this connection's anchor. */
+  readonly prompt: (offset: number) => Effect.Effect<string>;
   finished: boolean;
   /** The connection's scope closed (socket and keep-alive released). */
   released: boolean;
@@ -93,7 +93,7 @@ export function fakeSpeech() {
         const stream: FakeStream = {
           sample_rate,
           received: 0,
-          prompt: Effect.suspend(() => prompt(stream.received)),
+          prompt,
           backlog: 0,
           finished: false,
           released: false,

@@ -51,7 +51,7 @@ export class SpeechToText extends Context.Tag('sanctum/SpeechToText')<
   {
     readonly provider: string;
     readonly model: string;
-    /** `prompt` is read once per chunk, with the offset of the chunk's new audio, and sent as Whisper's `initial_prompt` when not empty. */
+    /** `prompt` is read once per chunk, with the offset of the chunk's first sample, and sent as Whisper's `initial_prompt` when not empty. */
     readonly openStream: (
       sample_rate: number,
       behind: (offset: number) => Effect.Effect<void>,
@@ -238,7 +238,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
         const shift = (offset - lead) / sample_rate;
         const skipped = Effect.as(behind(offset), [null] as ReadonlyArray<Answered | null>);
         if (Date.now() < pausedUntil) return skipped;
-        return Effect.flatMap(prompt(offset), text => {
+        return Effect.flatMap(prompt(offset - lead), text => {
           const request = transcribe(sample_rate, samples, text);
           // A slow answer holds back every later one, so a chunk still unanswered after `hedgeMs` is sent again; the loser is cancelled.
           // The duplicate is never sent during a 429 pause and never wins by failing: the original settles the chunk then.

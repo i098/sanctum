@@ -1,9 +1,9 @@
 /**
- * Whisper's `initial_prompt` for one live chunk: the distinct capitalised terms heard in the meeting that owns the
- * chunk, newest first, then, for a principal with `context:read`, the names of the committed items it may read,
- * newest item first. Whisper spells a name it was told about that way again, so "Falcon" said earlier in the meeting
- * and "Asana" from a readable item are heard right. Bounded: a long prompt dilutes each name (measured on the soak
- * clips, docs/DECISIONS.md).
+ * Whisper's `initial_prompt` for one live chunk: the distinct capitalised terms heard in the meeting whose current range
+ * covers the chunk's first sample (none when no meeting covers it), newest first, then, for a principal with
+ * `context:read`, the names of the committed items it may read, newest item first. Whisper spells a name it was told
+ * about that way again. Names never come from another meeting or from items the principal may not read.
+ * Bounded: a long prompt dilutes each name (measured on the soak clips, docs/DECISIONS.md).
  */
 export const HEARD_TERMS = 15;
 export const PROMPT_TERMS = 20;
@@ -33,8 +33,9 @@ const distinct = (terms: Iterable<string>) => {
 /** `items`: item texts, newest first. */
 export const knownNames = (items: Iterable<string>) => distinct([...items].flatMap(properNouns));
 
-/** The newest `HEARD_TERMS` names of `finals`, given newest first; a name said again counts as new. */
-export const heardNames = (finals: Iterable<string>) => new Map([...distinct([...finals].flatMap(text => properNouns(text).reverse()))].slice(0, HEARD_TERMS));
+/** The newest `HEARD_TERMS` names of `finals`, given newest first, then of `earlier` names; a name said again counts as new. */
+export const heardNames = (finals: Iterable<string>, earlier: ReadonlyMap<string, string> = new Map()) =>
+  new Map([...distinct([...[...finals].flatMap(text => properNouns(text).reverse()), ...earlier.values()])].slice(0, HEARD_TERMS));
 
 export const asrPrompt = (heard: ReadonlyMap<string, string>, known: ReadonlyMap<string, string>) =>
   [...heard.values(), ...[...known].filter(([key]) => !heard.has(key)).map(([, term]) => term)].slice(0, PROMPT_TERMS).join(', ');

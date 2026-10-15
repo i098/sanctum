@@ -237,12 +237,13 @@ A live caption arrives about 3 s later on average (estimate: half a chunk plus t
 
 In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
 In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
-Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of the finals of the meeting that owns the chunk, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read, newest item first, each name once; the whole prompt stops after 20 names.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of the finals of the meeting whose current range covers the chunk's first sample, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read, newest item first, each name once; the whole prompt stops after 20 names.
 Item names need `context:read` and the `searchContext` visibility, so names from a restricted meeting without `meeting_access` never enter the prompt, and a capture-only device gets heard names only; they are read once at session start.
-The prompt is computed when each chunk is sent, from the current `meeting_ranges` of the capture epoch and track: the meeting of the latest range at or before the chunk's first new sample owns the chunk if that range covers the sample or the meeting is still open, because the transcript path extends the open meeting with following speech.
-After an End or a close nothing owns the chunk until the next final is placed, so it carries no heard names; a reconnect reads the names the same way.
-The heard names come from the newest 500 finals of that meeting and are cached until its latest range or boundary revision changes, so nothing carries over to another meeting.
-A meeting that starts without an End (a gap or spoken cue) is known only from its first answer, so the chunks sent before that answer still belong to, and carry the names of, the meeting that was open.
+The prompt is computed when each chunk is sent, with the transcript path's own owner lookup (`ownerOf`): only a meeting whose current range covers the chunk's first sample gives heard names, and an uncovered sample gives none.
+So no name crosses a meeting boundary: after an End, and at the start of a meeting that begins without one (a gap or spoken cue), the chunk has no owner yet and carries no heard names; a reconnect reads the names the same way.
+The cost is accuracy: ranges grow only as answers are placed, so a chunk's first sample is covered only when an earlier answer already reached it, mostly the overlap of a chunk cut inside speech; a chunk cut at a pause starts past every range and carries item names only.
+This differs from the measured variant below, which kept the heard names across chunks; the replay must be run again for this rule.
+The heard names of a meeting are read from its newest 500 finals once, then only from finals created after the newest one read; a new meeting or boundary revision starts over.
 Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
 Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
 
@@ -266,10 +267,10 @@ The item source was the real soak workspace's 529 committed items (none names "A
 | Chosen order, no seed item (real soak workspace as is) | a sauna (no item names Asana) | Falcon | Northwind Freight | 2 of 2 | 2.4-2.5 s / 8.1-8.7 s |
 
 All other planted facts (L1, V0, F00-0 to F00-4) were heard the same or better with every hint; F00-7 (1950 s) is outside the replay.
-The chosen order is the only measured variant that fixed both F00-5 and F00-6 in 2 of 2 runs.
+That order was the only measured variant that fixed both F00-5 and F00-6 in 2 of 2 runs; the ordering is kept, but the covered-only owner rule above was not in the replay.
 
 A name never said before and not named by a visible committed item stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
-So F00-5 stays open in the soak until a committed item names "Asana"; F00-6 is fixed with or without the seed.
+With that variant F00-5 stayed open in the soak until a committed item names "Asana", and F00-6 was fixed with or without the seed; neither result is measured for the covered-only rule.
 "Walnut realm" is in the audio itself (Nova-3 and `@cf/openai/whisper` hear it too); the transcript sentence now carries "Falcon" and "walnut".
 A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart.
 The prompt adds no audio, so the cost per audio minute does not change; the answer time stayed within run-to-run noise.

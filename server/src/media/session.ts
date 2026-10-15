@@ -15,7 +15,6 @@ import {
   type DegradedMessage,
   type ListenerId,
   type MeetingId,
-  type MeetingState,
   type PcmFrame,
   ProviderConnectionId,
   RejectedMessage,
@@ -32,7 +31,7 @@ import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { asrPrompt, heardNames, knownNames, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
-import { OPEN_STATES } from '../meeting-store.ts';
+import { ownerOf } from '../meetings.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
@@ -167,14 +166,13 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
-/** Finals read per meeting for its heard names: about half an hour of speech. */
+/** Finals read when a meeting's heard names are first needed: about half an hour of speech. */
 const HEARD_SEGMENTS = 500;
 
 /**
- * Whisper's prompt for the chunk that starts at an epoch sample: names heard in the meeting that owns that sample, then,
- * for a principal with `context:read`, the names of the newest committed items it may read. The meeting of the latest
- * range at or before the sample owns it when the range covers it, or while that meeting is open (the transcript path
- * extends the open meeting with following speech); after an End or a close nothing owns it until the next final is placed.
+ * Whisper's prompt for the chunk that starts at an epoch sample: names heard in the meeting whose current range covers
+ * that sample (`ownerOf`, as the transcript path places a final), then, for a principal with `context:read`, the names of
+ * the newest committed items it may read. No meeting covers the sample: no heard names.
  */
 const chunkPrompt = (access: AccessScope, { epoch_id, track }: typeof StartMessage.Type) =>
   Effect.gen(function* () {
@@ -187,24 +185,22 @@ const chunkPrompt = (access: AccessScope, { epoch_id, track }: typeof StartMessa
             AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
             ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR item names not read', error), [])));
     const known = knownNames(items.map(row => row.text));
-    let cached: { readonly key: string; readonly heard: Map<string, string> } | null = null;
-    const heardAt = (sample: number) =>
+    /** The covering meeting's names and the creation time of the newest final read; a new meeting or revision starts over. */
+    let cached: { readonly key: string; readonly heard: Map<string, string>; readonly through: string | null } | null = null;
+    const heardAt = (sample_start: number) =>
       Effect.gen(function* () {
-        const [owner] = yield* sql<{ meeting_id: string; boundary_revision: number; sample_end: number | string; state: MeetingState }>`
-          SELECT r.meeting_id, r.boundary_revision, r.sample_end, m.state FROM meeting_ranges r
-          JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
-          WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${epoch_id} AND r.track = ${track} AND r.sample_start <= ${sample}
-          ORDER BY r.sample_start DESC LIMIT 1`;
-        if (owner === undefined || (sample >= Number(owner.sample_end) && !OPEN_STATES.includes(owner.state))) return new Map<string, string>();
-        const key = `${owner.meeting_id}:${owner.boundary_revision}:${owner.sample_end}`;
-        if (cached?.key !== key) {
-          const finals = yield* sql<{ text: string }>`SELECT s.text FROM transcript_segments s
-            JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
-              AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
-            WHERE s.workspace_id = ${workspace_id} AND s.status = 'final' AND r.meeting_id = ${owner.meeting_id} AND r.boundary_revision = ${owner.boundary_revision}
-            ORDER BY s.created_at DESC, s.sample_start DESC LIMIT ${HEARD_SEGMENTS}`;
-          cached = { key, heard: heardNames(finals.map(row => row.text)) };
-        }
+        const owner = yield* ownerOf(workspace_id, { epoch_id, track, sample_start }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        if (Option.isNone(owner)) return new Map<string, string>();
+        const { meeting_id, boundary_revision } = owner.value;
+        const key = `${meeting_id}:${boundary_revision}`;
+        const earlier = cached?.key === key ? cached : null;
+        const finals = yield* sql<{ text: string; created_at: string }>`SELECT s.text, CAST(s.created_at AS CHAR) AS created_at FROM transcript_segments s
+          JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+            AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
+          WHERE s.workspace_id = ${workspace_id} AND s.status = 'final' AND r.meeting_id = ${meeting_id} AND r.boundary_revision = ${boundary_revision}
+            ${earlier?.through ? sql`AND s.created_at > ${earlier.through}` : sql``}
+          ORDER BY s.created_at DESC, s.sample_start DESC LIMIT ${HEARD_SEGMENTS}`;
+        cached = { key, heard: heardNames(finals.map(row => row.text), earlier?.heard), through: finals[0]?.created_at ?? earlier?.through ?? null };
         return cached.heard;
       });
     return (sample: number) =>
