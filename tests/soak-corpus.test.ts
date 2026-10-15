@@ -7,6 +7,13 @@ test('planted facts and checkpoint questions are consistent', () => {
   assert.equal(new Set(FACTS.map(fact => fact.id)).size, FACTS.length);
 });
 
+test('every meeting plants at least 8 facts with distinct sentences and distinct bulk keyword queries', () => {
+  for (let meeting = 0; meeting < 24; meeting++) assert.ok(FACTS.filter(fact => fact.meeting === meeting && fact.kind === 'fact').length >= 8, `meeting ${meeting}`);
+  assert.equal(new Set(FACTS.map(fact => fact.spoken)).size, FACTS.length);
+  const bulk = FACTS.filter(fact => /^F\d\d-\d$/.test(fact.id));
+  assert.equal(new Set(bulk.map(fact => fact.keywords.toLowerCase())).size, bulk.length);
+});
+
 test('relative-date fact C is scored by expect, never by aliases', () => {
   const c = FACTS.find(fact => fact.id === 'C')!;
   assert.deepEqual(c.expect, { kind: 'weekday_after', weekday: 'Friday' });
