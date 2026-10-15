@@ -16,8 +16,8 @@
  * Exit codes: 0 finished or killed, 1 fatal, 3 cost hard stop.
  *
  * Cost: the hard stop compares `costUsd` of measured units (speech seconds sent, wall seconds run, chunk
- * PUTs) plus `--baseline-usd` (spent building the audio) with `--max-usd`. Extraction is priced at its
- * ceiling per speech minute because the API does not meter it; see RATES.
+ * PUTs) plus `--baseline-usd` (spent building the audio) with `--max-usd`. Extraction is priced at an
+ * estimate per speech minute because the API does not meter it; see RATES.
  *
  * Needs `SANCTUM_SOAK_TOKEN`: a token of the soak workspace owner (not an enrolled device) holding `capture:ingest`,
  * `context:read` and `context:write`. One principal registers the listener, streams and shares, because only a
@@ -47,10 +47,14 @@ const MAX_BUFFERED_BYTES = 512 * 1024;
 const SHARE_MS = 60_000;
 const STATUS_MS = 30_000;
 
-/** Prices fetched 2026-10-14 (see README.md); extraction is a ceiling, not a measurement. */
+/**
+ * Prices fetched 2026-10-14 (see README.md); extraction is an estimate, not a measurement.
+ * Extraction runs on Cerebras ($0.99 per M input, $1.49 per M output tokens). The second 1 h dry run made 148 `context.refresh`
+ * calls for 40 speech minutes, averaging about 5.8 k input tokens (the meeting's growing context plus up to 40 segments) and 0.5 k output.
+ */
 const RATES = {
   whisper_per_audio_min: 0.0005,
-  extraction_per_audio_min: 8 / 960,
+  extraction_per_audio_min: 4 * ((6_000 * 0.99 + 500 * 1.49) / 1e6), // 4 refresh calls per speech minute
   container_per_s: 0.7 / 86_400,
   r2_put: 4.5e-6,
 };
