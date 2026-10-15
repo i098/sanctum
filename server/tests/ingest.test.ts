@@ -31,6 +31,7 @@ import {
 import { serverLayer } from '../src/main.ts';
 import { finalizeSealed, jobsOf, meetingsOf, rangesOf } from './support/capture.ts';
 import { memoryObjectStore } from './support/object-store.ts';
+import { seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const RATE = 16_000;
@@ -152,28 +153,30 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     }),
   );
 
-  it.scoped('prompts Whisper with names this capture heard and the names of committed workspace items, also after a reconnect', () =>
+  it.scoped('prompts Whisper with names this capture heard, then names of committed items the owner may read, also after a reconnect', () =>
     Effect.gen(function* () {
       const { access, speech, socket, connect } = yield* setup;
       socket.send(pcmFrame(0, 0));
       const first = yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 1_600);
       expect(first!.prompt()).toBe('');
       first!.emit({ start_s: 0, end_s: 0.1, is_final: true, text: 'For the record, the Falcon offsite is in Dublin.', confidence: 0.9, speaker: '0' });
-      yield* eventually(Effect.sync(() => first!.prompt()), prompt => prompt === 'Falcon, Dublin');
-      const item = (text: string, state: 'committed' | 'provisional') =>
+      yield* eventually(Effect.sync(() => first!.prompt()), prompt => prompt === 'Dublin, Falcon');
+      const restricted = yield* seedMeeting(access.workspace_id);
+      const item = (text: string, state: 'committed' | 'provisional', meeting_id: MeetingId | null = null) =>
         writeItem(access.workspace_id, {
-          id: ContextItemId.make(randomUUID()), revision: 1, meeting_id: null, kind: 'project_fact', text, state, derivation: 'spoken', event_at: null,
+          id: ContextItemId.make(randomUUID()), revision: 1, meeting_id, kind: 'project_fact', text, state, derivation: 'spoken', event_at: null,
           valid_from: null, valid_until: null, time: null, author: { type: 'system', id: access.principal.id }, sources: [], supersedes: null,
         }, { change: 'item_added' });
       yield* item('The team keeps the Falcon tickets in Asana.', 'committed');
       yield* item('The Zebra board is not settled.', 'provisional');
+      yield* item('The codename is Northwind.', 'committed', restricted);
       socket.close();
       yield* eventually(Effect.sync(() => first!.finished), finished => finished === true);
 
       const { socket: resumed } = yield* connect;
       resumed.send(pcmFrame(1, 1_600));
       const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream !== undefined);
-      expect(second!.prompt()).toBe('Dublin, Asana, Falcon');
+      expect(second!.prompt()).toBe('Dublin, Falcon, Asana');
     }),
   );
 

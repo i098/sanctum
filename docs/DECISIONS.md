@@ -237,8 +237,8 @@ A live caption arrives about 3 s later on average (estimate: half a chunk plus t
 
 In the offline replay the longer chunks heard "Asana", "Falcon" and "Northwind" right.
 In production (soak dry runs 3 and 4) the same chunks still wrote "a sauna" for "Asana" and "felting" for "Falcon", although "Falcon" had been said six times before.
-Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, then the 30 capitalised words that the most current committed context items of the workspace name (each counted once per item, from the newest 300 items, read at session start), nearest the audio.
-Profiles are not a source, because no production path writes them.
+Each live chunk therefore sends Whisper an `initial_prompt` of names (`server/src/media/asr-hint.ts`): the 15 most recent distinct capitalised words inside sentences of this capture's finals, newest first, then the capitalised words of the newest 100 current committed context items that the capturing principal may read (the `searchContext` visibility), newest item first, each name once; the whole prompt stops after 20 names.
+The item names are read once at session start; names from a restricted meeting without `meeting_access` never enter the prompt.
 A reconnect reads the capture's last finals again, so the names stay.
 Fillers that Whisper capitalises after a comma ("But", "Okay") are not names.
 Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start offsets, 2026-10-15):
@@ -247,13 +247,28 @@ Replay of the dry-run 4 audio (0 to 1760 s through the live adapter, two start o
 | --- | --- | --- | --- | --- |
 | None | "a sauna" | "fountain stand-up ... walnut realm" | 256 | 3.0 s / 9.2 s |
 | Names heard in the meeting | "a sauna" | "Falcon stand-up ... walnut realm" | 246 | 2.6 s / 6.9 s |
-| Names heard plus "Asana" as a known name | "Asana" | "Falcon stand-up ... walnut realm" | 251 | 2.8 s / 8.5 s |
 
-A name never said before and not named by a committed item stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
-The known-name row was measured with "Asana" from a profile, last in the prompt; the replay was not run again with "Asana" from a seeded committed item, because the dry-run audio is not on the development host.
-So F00-5 is fixed only in a workspace whose earlier committed items name "Asana"; the soak says "Asana" first at 1470 s, so it stays open there unless an earlier run left such an item.
+Seeded replay of the hint variants (2026-10-15): dry-run 4 corpus `audio/m00.wav`, 0 to 1760 s, through the real live chunker against production Workers AI whisper-large-v3-turbo, start offsets 0 s and 3.3 s.
+The item source was the real soak workspace's 529 committed items (none names "Asana"); the seed was one extra, newest committed item "The Falcon tickets live in Asana."
+
+| Hint | F00-5 "tickets live in Asana" | F00-6 "Falcon standup" | V1 "Northwind Freight" | Runs | Answer p50 / p95 |
+| --- | --- | --- | --- | --- | --- |
+| No hint (main) | a sauna | fountain (production: felting) | north wind freight | 1 | 3.0 s / 9.2 s |
+| 15 heard, then top 30 item names by count | Asana | Felting | Northwind Freight | 2 of 2 | 2.3-2.8 s / 7.5 s |
+| 15 heard, then top 15 item names by count | a sauna (Asana, count 1, cut) | Falcon | Northwind Freight | 2 of 2 | 2.4-2.5 s / 7.0-9.7 s |
+| 15 heard, then top 10 item names by count | a sauna (cut) | Falcon | Northwind Freight | 2 of 2 | 2.3-2.4 s / 6.6-8.0 s |
+| 15 heard, then 15 item names by recency | Asana | Falcon | Northwind Freight | 2 of 2 | 2.6-2.9 s / 8.2-8.4 s |
+| 20 item names by recency first, then heard, cap 20 | Asana | Felting | Northwind Freight | 2 of 2 | 2.6 s / 8.2-8.8 s |
+| **Heard newest first, then item names by recency, cap 20 total (chosen)** | **Asana** | **Falcon** | **Northwind Freight** | 2 of 2 | 2.5-2.7 s / 7.7-8.6 s |
+| Chosen order, no seed item (real soak workspace as is) | a sauna (no item names Asana) | Falcon | Northwind Freight | 2 of 2 | 2.4-2.5 s / 8.1-8.7 s |
+
+All other planted facts (L1, V0, F00-0 to F00-4) were heard the same or better with every hint; F00-7 (1950 s) is outside the replay.
+The chosen order is the only measured variant that fixed both F00-5 and F00-6 in 2 of 2 runs.
+
+A name never said before and not named by a visible committed item stays a guess: unprompted, turbo and Nova-3 ($0.0052 per audio minute) wrote "a sauna", and Nova-3 wrote "Asana" with the key term.
+So F00-5 stays open in the soak until a committed item names "Asana"; F00-6 is fixed with or without the seed.
 "Walnut realm" is in the audio itself (Nova-3 and `@cf/openai/whisper` hear it too); the transcript sentence now carries "Falcon" and "walnut".
-A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart; the most-named known names therefore go last.
+A long prompt dilutes each name: with 23 names before "Asana" one of three chunk windows still wrote "a sauna", and a bound of 8 heard names lost "Falcon" between its mentions 240 s apart.
 The prompt adds no audio, so the cost per audio minute does not change; the answer time stayed within run-to-run noise.
 whisper-large-v3 (non-turbo) is not in the Workers AI catalog.
 The older `@cf/openai/whisper` wrote "Asana" in 1 of 3 chunk windows and "Assana" in 2, changed "For the record" to "Though the record", and one answer took 68 s, so turbo stays.

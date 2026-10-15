@@ -29,7 +29,8 @@ import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
-import { asrVocabulary, HEARD_TERMS, KNOWN_TERMS } from './asr-hint.ts';
+import { asrVocabulary, HEARD_TERMS, PROMPT_TERMS } from './asr-hint.ts';
+import { visibleScope, visibleWhere } from '../context-changes.ts';
 import { publishFinalWindow } from '../transcripts.ts';
 import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
@@ -164,13 +165,16 @@ const asrHealth = (send: LiveSessionInput['send']) => {
   };
 };
 
-/** Whisper's prompt: names this capture already heard, so a reconnect keeps them, then the names the workspace's current committed items use most. */
-const captureVocabulary = (workspace_id: AccessScope['workspace_id'], { epoch_id, track }: typeof StartMessage.Type) =>
+/** Whisper's prompt: names this capture already heard, so a reconnect keeps them, then the names of the newest committed items the capturing principal may read. */
+const captureVocabulary = (access: AccessScope, { epoch_id, track }: typeof StartMessage.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const { workspace_id } = access;
     const [items, heard] = yield* Effect.all([
-      sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${workspace_id} AND ci.state = 'committed'
-        AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id) ORDER BY ci.created_at DESC LIMIT ${KNOWN_TERMS * 10}`,
+      Effect.flatMap(visibleScope(access), scope =>
+        sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${workspace_id} AND ci.state = 'committed'
+          AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
+          ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`),
       sql<{ text: string }>`SELECT text FROM transcript_segments WHERE workspace_id = ${workspace_id} AND epoch_id = ${epoch_id} AND track = ${track}
         AND status = 'final' ORDER BY sample_start DESC LIMIT ${HEARD_TERMS * 4}`,
     ]).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('ASR vocabulary not read', error), [[], []] as const)));
@@ -197,7 +201,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let retryAt = 0;
     let providerDown = false;
     const { degrade, answered } = asrHealth(send);
-    const vocabulary = yield* captureVocabulary(workspace_id, start);
+    const vocabulary = yield* captureVocabulary(access, start);
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {

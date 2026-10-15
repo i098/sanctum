@@ -1,12 +1,11 @@
 /**
- * Whisper's `initial_prompt` for one live session: the most recent distinct capitalised terms the meeting
- * produced, then the names the workspace's committed items use most, nearest the audio. Whisper spells a
- * name it was told about that way again, so "Falcon" said earlier and "Asana" from an earlier meeting's
- * items are heard right. Bounded: a long prompt dilutes each name (measured on the soak clips), and
- * Whisper reads only the last 224 prompt tokens.
+ * Whisper's `initial_prompt` for one live session: the distinct capitalised terms this capture heard, newest
+ * first, then the names of the workspace's committed items, newest item first. Whisper spells a name it was
+ * told about that way again, so "Falcon" said earlier and "Asana" from an earlier meeting's item are heard
+ * right. Bounded: a long prompt dilutes each name (measured on the soak clips, docs/DECISIONS.md).
  */
 export const HEARD_TERMS = 15;
-export const KNOWN_TERMS = 30;
+export const PROMPT_TERMS = 20;
 const TERM_CHARS = 40;
 /** Words Whisper capitalises after a comma in run-on speech; they are not names. */
 const NOT_NAMES = new Set(['and', 'but', 'so', 'or', 'okay', 'ok', 'yeah', 'yes', 'no', 'oh', 'well', 'um', 'uh', 'the', 'a', 'an', 'it', 'we', 'you', 'they', 'this', 'that', 'what', 'how', 'why']);
@@ -23,46 +22,20 @@ export const properNouns = (text: string): Array<string> => {
   return terms;
 };
 
-/** Up to `limit` distinct terms, case-insensitive; a repeated term moves to the most recent place and the oldest goes first. */
-const recentTerms = (limit: number) => {
-  const terms = new Map<string, string>();
-  return {
-    add: (term: string) => {
-      terms.delete(term.toLowerCase());
-      terms.set(term.toLowerCase(), term);
-      if (terms.size > limit) terms.delete(terms.keys().next().value!);
-    },
-    terms,
-  };
-};
-
-/**
- * The `KNOWN_TERMS` proper nouns named by the most items, least first; a tie goes to the newer item.
- * `items`: item texts, newest first. A name counts once per item, so one long item does not crowd out the rest.
- */
-const knownNames = (items: Iterable<string>) => {
-  const counts = new Map<string, { term: string; items: number }>();
-  for (const text of items) {
-    const named = new Set<string>();
-    for (const term of properNouns(text)) {
-      const key = term.toLowerCase();
-      if (named.has(key)) continue;
-      named.add(key);
-      const known = counts.get(key);
-      if (known) known.items++;
-      else counts.set(key, { term, items: 1 });
-    }
-  }
-  return new Map([...counts].sort(([, a], [, b]) => b.items - a.items).slice(0, KNOWN_TERMS).reverse().map(([key, { term }]) => [key, term]));
-};
-
-/** `items`: the texts of the workspace's committed items, newest first. */
+/** `items`: the texts of the workspace's visible committed items, newest first; each name keeps its first appearance. */
 export const asrVocabulary = (items: Iterable<string>) => {
-  const names = knownNames(items);
-  const heard = recentTerms(HEARD_TERMS);
+  const known = new Map<string, string>();
+  for (const text of items) for (const term of properNouns(text)) if (!known.has(term.toLowerCase())) known.set(term.toLowerCase(), term);
+  /** Oldest first; a repeated term moves to the newest place. */
+  const heard = new Map<string, string>();
   return {
-    /** Adds the proper nouns of one final transcript text. */
-    heard: (text: string) => properNouns(text).forEach(heard.add),
-    prompt: () => [...[...heard.terms.values()].filter(term => !names.has(term.toLowerCase())), ...names.values()].join(', '),
+    /** Adds the proper nouns of one final transcript text, keeping the newest `HEARD_TERMS`. */
+    heard: (text: string) =>
+      properNouns(text).forEach(term => {
+        heard.delete(term.toLowerCase());
+        heard.set(term.toLowerCase(), term);
+        if (heard.size > HEARD_TERMS) heard.delete(heard.keys().next().value!);
+      }),
+    prompt: () => [...[...heard.values()].reverse(), ...[...known].filter(([key]) => !heard.has(key)).map(([, term]) => term)].slice(0, PROMPT_TERMS).join(', '),
   };
 };
