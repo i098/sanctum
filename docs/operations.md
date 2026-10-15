@@ -45,6 +45,7 @@ Extraction and meeting notes use the `extraction` role: Cerebras `qwen-3.8-27b` 
 Each extraction call may take 120 s (`modelRequest.extractionTimeoutMs`); other roles keep 60 s.
 A refresh round reads at most 40 final segments (`BATCH_SEGMENTS` in [context-jobs.ts](../server/src/context-jobs.ts)).
 `context.refresh`, `memory.commit` and `notes.summarize` get 24 attempts (`jobs.maxAttemptsByKind`), about 83 minutes at the capped 5-minute backoff, so a closed meeting's backlog survives a provider outage; other kinds get 5.
+`notes.summarize` summarizes in windows of 120 lines and sets its own run limit from the meeting's size (15 minutes plus two extraction-timeout calls per stage, at most 60 minutes, `notesCeilingMs` in [extraction.ts](../server/src/extraction.ts)); background model calls retry a loaded provider after 2 seconds (or its `Retry-After`, at most 10 seconds), while spoken-work calls keep the quick 250 ms retry.
 See the [spoken work decision](DECISIONS.md#spoken-work-decision---2026-10-10) for the trigger prerequisites.
 With `PLANNER_MODEL_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` set, the planner defaults to `claude-sonnet-5-5`.
 An explicit `<ROLE>_MODEL` stays unchanged; otherwise the selected provider supplies the default for each role.
