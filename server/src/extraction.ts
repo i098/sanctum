@@ -206,6 +206,41 @@ function ground(candidate: ModelCandidate, byRef: ReadonlyMap<string, Line>, mee
   };
 }
 
+/** Characters of existing context one extraction prompt carries (about 1k tokens), however large the meeting grows. */
+const CONTEXT_BUDGET_CHARS = 4_000;
+/** Newest items always offered first, so the model sees what was just said even without a shared term. */
+const RECENT_ITEMS = 12;
+
+/** Distinct content words as 5-letter prefixes, so "launch" matches "launched" and "shipping" matches "shipped". */
+const terms = (text: string) => new Set(fold(text).split(' ').filter(word => word.length > 3).map(word => word.slice(0, 5)));
+
+/**
+ * The existing-context prompt block for these new segments, oldest first, within `CONTEXT_BUDGET_CHARS`: the newest
+ * `RECENT_ITEMS`, then items that share terms with the segments, rarest shared terms first, so a fact that
+ * supersedes or repeats an older one still sees it. `items` run oldest to newest, as `meetingItems` returns them.
+ * ponytail: term overlap, no embeddings; add a vector lookup if paraphrased supersession is missed.
+ */
+function relevantContext(items: ReadonlyArray<ContextItem>, segmentText: string): string {
+  const spoken = terms(segmentText);
+  const itemTerms = items.map(item => terms(item.text));
+  const frequency = new Map<string, number>();
+  for (const own of itemTerms) for (const term of own) frequency.set(term, (frequency.get(term) ?? 0) + 1);
+  const ranked = items.map((_, index) => ({ index, score: [...itemTerms[index]!].reduce((sum, term) => sum + (spoken.has(term) ? 1 / frequency.get(term)! : 0), 0) }));
+  const order = [
+    ...ranked.slice(-RECENT_ITEMS).reverse(),
+    ...ranked.slice(0, -RECENT_ITEMS).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score || b.index - a.index),
+  ];
+  const lines = items.map(item => `- ${item.kind}: ${item.text}`);
+  const chosen: number[] = [];
+  let used = 0;
+  for (const { index } of order) {
+    if (used + lines[index]!.length + 1 > CONTEXT_BUDGET_CHARS) continue;
+    used += lines[index]!.length + 1;
+    chosen.push(index);
+  }
+  return chosen.sort((a, b) => a - b).map(index => lines[index]).join('\n');
+}
+
 /** Context candidates grounded in the meeting's final segments; the context slice validates access and commits them. */
 export const extractCandidates = (input: ExtractionInput): Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, LlmClient> =>
   Effect.gen(function* () {
@@ -213,7 +248,7 @@ export const extractCandidates = (input: ExtractionInput): Effect.Effect<Readonl
     if (lines.length === 0) return [];
     const llm = yield* LlmClient;
     const existing = input.snapshot.filter(item => item.state !== 'superseded');
-    const context = existing.map(item => `- ${item.kind}: ${item.text}`).join('\n') || '(none)';
+    const context = relevantContext(existing, lines.map(line => line.segment.text).join(' ')) || '(none)';
     const { value } = yield* generateWithFallback(llm, {
       name: 'context_candidates',
       output: CandidatesOutput,
