@@ -1,7 +1,7 @@
 /**
  * Speech-to-text on Cloudflare Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`, plan
  * section 09) over REST, sending mono PCM16 WAV. Whisper is batch-only: a live stream buffers PCM
- * and posts chunks of at least `minMs` cut in a pause (`engineeringDefaults.liveAsr`). Without a pause by `maxMs`
+ * and posts chunks of at least `minMs` (`replyMinMs` while Sanctum replies) cut in a pause (`engineeringDefaults.liveAsr`). Without a pause by `maxMs` (`replyMaxMs`)
  * the cut falls at the quietest 20 ms, maybe inside a word, so the next chunk starts `overlapMs` before it and `joinOverlap` repeats no word;
  * every result is final. Times are seconds from the first sample sent on
  * that stream or request; callers map them to epoch samples through the anchor they persisted
@@ -29,12 +29,14 @@ export interface AsrResult {
 export interface AsrBatch {
   readonly start_s: number;
   readonly end_s: number;
+  /** Present when the next batch answers the audio after it again: no answer for the span's end past it is final yet. */
+  readonly settled_s?: number;
   readonly results: ReadonlyArray<AsrResult>;
 }
 
 export interface AsrStream {
-  /** Queues audio without waiting; `false` once the connection is gone. */
-  readonly send: (samples: Int16Array) => boolean;
+  /** Queues audio without waiting; `false` once the connection is gone. `replying`: Sanctum is speaking, so chunks are cut short for a fast barge-in. */
+  readonly send: (samples: Int16Array, replying: boolean) => boolean;
   /** Bytes queued by `send` but not yet sent to the provider. */
   readonly backlogBytes: () => number;
   /** Answers in audio order; ends after `finish` once the provider answered everything, fails on a provider error. Audio the provider did not answer is absent. */
@@ -127,6 +129,8 @@ interface WhisperConfig {
   readonly liveAsr: {
     readonly minMs: number;
     readonly maxMs: number;
+    readonly replyMinMs: number;
+    readonly replyMaxMs: number;
     readonly overlapMs: number;
     readonly concurrency: number;
     readonly hedgeMs: number;
@@ -193,19 +197,23 @@ export function whisperSpeechToText(config: WhisperConfig) {
     Effect.gen(function* () {
       yield* configured;
       const samplesIn = (ms: number) => Math.round((ms * sample_rate) / 1000);
-      const [min, max, frame, overlap, pause] = [samplesIn(limits.minMs), samplesIn(limits.maxMs), samplesIn(20), samplesIn(limits.overlapMs), samplesIn(PAUSE_MS)];
+      const [frame, overlap, pause] = [samplesIn(20), samplesIn(limits.overlapMs), samplesIn(PAUSE_MS)];
+      const silentChunk = { min: samplesIn(limits.minMs), max: samplesIn(limits.maxMs) };
+      const replyChunk = { min: samplesIn(limits.replyMinMs), max: samplesIn(limits.replyMaxMs) };
       const quiet = limits.speechFloorRms ** 2;
       const chunks = yield* Queue.unbounded<Chunk | null>();
       // The `lead` samples repeated from the last send plus under `max` samples and one window stay after each send, and one frame holds at most MAX_FRAME_SAMPLES.
-      const buffer = new Int16Array(overlap + max + frame + MAX_FRAME_SAMPLES);
+      const buffer = new Int16Array(overlap + silentChunk.max + frame + MAX_FRAME_SAMPLES);
       let filled = 0;
       let lead = 0;
       let offset = 0;
       let queued = 0;
       let pausedUntil = 0;
       let open = true;
-      // The pause search starts half a pause before `min`, so a pause cut, which falls in its middle, never leaves a chunk shorter than `min`.
-      let scan = min - (pause >> 1);
+      // The pause search starts half a pause before the reply minimum, so a reply can end a chunk at once; a pause cut, which falls
+      // in the middle of the pause, is taken only at or past the minimum in force.
+      const scanStart = replyChunk.min - (pause >> 1);
+      let scan = scanStart;
       let quietRun = 0;
       /** `repeated` samples at the end of this chunk start the next one: a cut outside a pause may fall inside a word. */
       const enqueue = (length: number, repeated: number) => {
@@ -216,7 +224,7 @@ export function whisperSpeechToText(config: WhisperConfig) {
         lead = repeated;
         buffer.copyWithin(0, length - lead, filled);
         filled -= length - lead;
-        scan = lead + min - (pause >> 1);
+        scan = lead + scanStart;
         quietRun = 0;
       };
       const transcribeChunk = ({ offset, lead, repeated, samples }: Chunk): Effect.Effect<ReadonlyArray<Answered | null>, Unavailable> => {
@@ -263,14 +271,15 @@ export function whisperSpeechToText(config: WhisperConfig) {
         return [stitched.batch];
       };
       return {
-        send: samples => {
+        send: (samples, replying) => {
           if (!open) return false;
+          const { min, max } = replying ? replyChunk : silentChunk;
           buffer.set(samples, filled);
           filled += samples.length;
           while (scan + frame <= filled) {
             quietRun = meanSquare(buffer, scan, scan + frame) < quiet ? quietRun + frame : 0;
             scan += frame;
-            if (quietRun >= pause) enqueue(scan - (pause >> 1), 0);
+            if (quietRun >= pause && scan - (pause >> 1) >= lead + min) enqueue(scan - (pause >> 1), 0);
             else if (scan >= lead + max) enqueue(quietestCut(buffer, lead + min, lead + max, frame), overlap);
           }
           return true;

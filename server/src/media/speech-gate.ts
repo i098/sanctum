@@ -238,10 +238,12 @@ export const speechController = (options: {
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
       /**
-       * Live speech-to-text answered the audio up to `sample_end`: a turn that ended `endOfTurnMs` before it is complete now, without the
-       * `turnWaitMs` wait. Its timer then finds no turn, and a newer turn's first segment replaces that timer.
+       * Live speech-to-text answered the audio up to `sample_end`, and no later answer revisits it: a turn that ended `endOfTurnMs`
+       * before it is complete now, without the `turnWaitMs` wait. Its timer then finds no turn, and a newer turn's first segment replaces that timer.
        */
       onCovered: (sample_end: number) => (turn && sample_end - turn.sample_end >= endOfTurnSamples ? completeTurn : Effect.void),
+      /** A reply window is open, so a person speaking now interrupts it. */
+      replying: () => gate.active(listener_id) !== undefined,
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */
       onEnd: (reason: 'pause' | 'disconnect') =>
         Effect.gen(function* () {

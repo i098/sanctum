@@ -25,6 +25,7 @@ import {
   TranscriptSegment,
 } from '@sanctum/contracts';
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
+import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
 import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
@@ -33,8 +34,11 @@ import { SpeechSynthesizer } from '../providers/speech.ts';
 import { SpeechGate, SpeechReplies, SpeechWorkRequests, speechController } from './speech-gate.ts';
 
 export const liveLimits = {
-  /** Provider send backlog at which live ASR is skipped and the range left to batch reconciliation: more than one unsent chunk of `liveAsr.maxMs` plus overlap at 48 kHz. */
-  asrBacklogBytes: 1024 * 1024,
+  /**
+   * Unsent audio at which live ASR is skipped and the range left to batch reconciliation: two chunks of at least `liveAsr.minMs`.
+   * One chunk, at most `maxMs` plus overlap, and a frame stay under it.
+   */
+  asrBacklogMs: 2 * engineeringDefaults.liveAsr.minMs,
   /** Wait before reopening a failed or overloaded provider connection. */
   providerRetryMs: 5_000,
   /** Watermark persistence and ownership-fencing interval. */
@@ -92,7 +96,10 @@ const partialSegment = (stt: { readonly provider: string; readonly model: string
     created_at: new Date().toISOString(),
   });
 
-/** Maps one provider answer to epoch samples: partials go to the client only; finals and the span they answered become evidence in one write, or not at all. Returns the persisted span's end. */
+/**
+ * Maps one provider answer to epoch samples: partials go to the client only; finals and the span they answered become evidence in one write, or not at all.
+ * Returns the end of the persisted span that no later answer revisits.
+ */
 const relayBatch = (
   { access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>,
   stt: { readonly provider: string; readonly model: string },
@@ -131,7 +138,7 @@ const relayBatch = (
       capture_group_id: listener.capture_group_id,
     });
     for (const segment of segments) yield* send({ _tag: 'transcript', segment });
-    return window.sample_end;
+    return span({ start_s: batch.start_s, end_s: batch.settled_s ?? batch.end_s }).sample_end;
   }).pipe(Effect.catchAll(error => Effect.as(Effect.logWarning('Live final not persisted; batch reconciliation covers the range', error), null)));
 
 /**
@@ -160,13 +167,16 @@ const asrHealth = (send: LiveSessionInput['send']) => {
  * The live-ASR lane of one session: at most one provider connection, anchored at the sample it
  * started from. Gaps, overload and failures detach it and report the range as degraded.
  */
-const liveAsr = ({ access, listener, start, send, covered }: Omit<LiveSessionInput, 'resume_from_sample'> & { readonly covered: (sample_end: number) => Effect.Effect<void> }) =>
+const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInput, 'resume_from_sample'> & {
+  readonly speech: { readonly onCovered: (sample_end: number) => Effect.Effect<void>; readonly replying: () => boolean };
+}) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const stt = yield* SpeechToText;
     const { workspace_id } = access;
     const { epoch_id, track } = start;
     const rate = start.clock.sample_rate;
+    const backlogBytes = Math.round((liveLimits.asrBacklogMs * rate) / 1000) * 2;
     let lane: Lane | null = null;
     let retryAt = 0;
     let providerDown = false;
@@ -222,7 +232,7 @@ const liveAsr = ({ access, listener, start, send, covered }: Omit<LiveSessionInp
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(batch =>
             Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)).pipe(
-              Effect.flatMap(end => (end === null ? Effect.void : covered(end))),
+              Effect.flatMap(end => (end === null ? Effect.void : speech.onCovered(end))),
             ),
           ),
           Effect.catchAll(error =>
@@ -241,14 +251,14 @@ const liveAsr = ({ access, listener, start, send, covered }: Omit<LiveSessionInp
     const feed = (frame: PcmFrame) =>
       Effect.gen(function* () {
         if (lane !== null && frame.sample_start !== lane.next_sample) yield* rotate('source_gap');
-        if (lane !== null && lane.stream.backlogBytes() + frame.samples.byteLength > liveLimits.asrBacklogBytes) {
+        if (lane !== null && lane.stream.backlogBytes() + frame.samples.byteLength > backlogBytes) {
           yield* rotate('provider_backlog');
           retryAt = Date.now() + liveLimits.providerRetryMs;
           yield* degrade('asr_backlog', frame.sample_start);
         }
         if (lane === null && Date.now() >= retryAt) yield* open(frame.sample_start);
         if (lane === null) return;
-        if (lane.stream.send(frame.samples)) lane.next_sample = frame.sample_start + frame.sample_count;
+        if (lane.stream.send(frame.samples, speech.replying())) lane.next_sample = frame.sample_start + frame.sample_count;
         else yield* rotate('provider_closed');
       });
 
@@ -283,6 +293,7 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
     return {
       onSegment: (_segment: TranscriptSegment) => Effect.void,
       onCovered: (_sample_end: number) => Effect.void,
+      replying: () => false,
       onEnd: (_reason: 'pause' | 'disconnect') => Effect.sync(() => Option.map(gate, value => value.cancel(listener.id, 'disconnect'))),
     };
   });
@@ -316,7 +327,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
     // Every transcript the client sees also reaches the speech gate (barge-in and direct requests).
     const relay = (message: ServerControlMessage) =>
       Effect.zipRight(send(message), message._tag === 'transcript' ? speech.onSegment(message.segment) : Effect.void);
-    const asr = yield* liveAsr({ access, listener, start, send: relay, covered: speech.onCovered });
+    const asr = yield* liveAsr({ access, listener, start, send: relay, speech });
 
     const flush = Effect.gen(function* () {
       if (watermark === persisted) return;

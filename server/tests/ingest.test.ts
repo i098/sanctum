@@ -209,7 +209,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       expect(yield* socket.take('recovered')).toEqual({ _tag: 'recovered' }); // first answer on each socket
       // A late answer the old lane flushes after the rotation is for audio before the backlog.
       slow!.pending.push({ start_s: 0.05, end_s: 0.1, is_final: false, text: 'late', confidence: null, speaker: null });
-      slow!.backlog = liveLimits.asrBacklogBytes;
+      slow!.backlog = ((liveLimits.asrBacklogMs * RATE) / 1000) * 2;
       socket.send(pcmFrame(1, 1_600));
       expect(yield* socket.take('degraded')).toEqual({ _tag: 'degraded', reason: 'asr_backlog', from_sample: 1_600 });
       yield* socket.take('ack');

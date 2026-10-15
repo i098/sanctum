@@ -53,14 +53,15 @@ export const engineeringDefaults = {
   /**
    * Live speech-to-text. Whisper is batch-only, so live audio goes out in chunks of `minMs` to `maxMs`
    * (measured in docs/DECISIONS.md): the first 200 ms pause under `speechFloorRms` after `minMs` ends a chunk. Without one by `maxMs`
-   * the cut falls at the quietest 20 ms, maybe inside a word, so the next chunk starts `overlapMs` before it. At most
+   * the cut falls at the quietest 20 ms, maybe inside a word, so the next chunk starts `overlapMs` before it. While Sanctum replies,
+   * chunks run `replyMinMs` to `replyMaxMs` instead, so a barge-in such as "Sanctum, stop" is heard fast. At most
    * `concurrency` chunks in flight; results still arrive in audio order, so in-flight chunks must
    * span the slowest answers (12–20 s, about 1 in 100) or later chunks wait and live falls behind.
    * A chunk unanswered after `hedgeMs` (above every normal answer) is sent once more; the first
    * success wins, a failed duplicate never does, and none is sent during a 429 pause. Audio without 100 ms in a row at `speechFloorRms` (PCM16 RMS, about -56 dBFS) is
    * never sent. A 429 pauses requests for its Retry-After, else `rateLimitBackoffMs`, and the chunks meanwhile are skipped.
    */
-  liveAsr: { minMs: 6_000, maxMs: 10_000, overlapMs: 750, concurrency: 4, hedgeMs: 8_000, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },
+  liveAsr: { minMs: 6_000, maxMs: 10_000, replyMinMs: 1_500, replyMaxMs: 2_500, overlapMs: 750, concurrency: 4, hedgeMs: 8_000, requestTimeoutMs: 60_000, speechFloorRms: 50, rateLimitBackoffMs: 30_000 },
   /**
    * Requested speech: open window, quiet audio that ends a direct-request turn, and echo memory
    * after playback. Finals arrive once per live chunk: a turn ends once live speech-to-text answered

@@ -161,7 +161,7 @@ describe('Workers AI Whisper', () => {
       expect(yield* stt.transcribe(16_000, click)).toEqual([]);
       const stream = yield* stt.openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
-      for (let at = 0; at < 144_000; at += 1_600) stream.send(room.subarray(0, 1_600));
+      for (let at = 0; at < 144_000; at += 1_600) stream.send(room.subarray(0, 1_600), false);
       yield* stream.finish;
       // Room noise is one long pause: the first chunk ends at `minMs`.
       expect([...(yield* Effect.flatten(collected.await))]).toEqual([
@@ -205,7 +205,7 @@ describe('Workers AI Whisper', () => {
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       // 10 s of sound without a pause: each chunk is cut at `maxMs`, at the first quietest 20 ms after `minMs`.
       const feed = () => {
-        for (let at = 0; at < 100; at++) stream.send(new Int16Array(1_600).fill(8_000));
+        for (let at = 0; at < 100; at++) stream.send(new Int16Array(1_600).fill(8_000), false);
       };
       feed();
       expect(yield* Queue.take(behind)).toBe(0);
@@ -234,7 +234,7 @@ describe('Workers AI Whisper', () => {
       });
       const stream = yield* stt.openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
-      stream.send(new Int16Array(16_000).fill(8_000));
+      stream.send(new Int16Array(16_000).fill(8_000), false);
       yield* stream.finish;
       expect([...(yield* Effect.flatten(collected.await))]).toMatchObject([{ results: [{ text: 'first send' }] }]);
       expect(server.requests).toHaveLength(2);
@@ -263,9 +263,9 @@ describe('Workers AI Whisper', () => {
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
       // 9 s of loud audio with a 300 ms pause at 6.5 s.
       const audio = new Int16Array(144_000).fill(8_000).fill(0, 104_000, 108_800);
-      for (let at = 0; at < audio.length; at += 1_600) expect(stream.send(audio.subarray(at, at + 1_600))).toBe(true);
+      for (let at = 0; at < audio.length; at += 1_600) expect(stream.send(audio.subarray(at, at + 1_600), false)).toBe(true);
       yield* stream.finish;
-      expect(stream.send(new Int16Array(1))).toBe(false);
+      expect(stream.send(new Int16Array(1), false)).toBe(false);
       const results = [...(yield* Effect.flatten(collected.await))];
       expect(server.requests.map(request => sentAudio(request.body).samples.length).sort()).toEqual([144_000 - cut, cut].sort());
       expect(results).toEqual([
@@ -306,7 +306,7 @@ describe('Workers AI Whisper', () => {
       });
       const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
-      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600));
+      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600), false);
       yield* stream.finish;
       const batches = [...(yield* Effect.flatten(collected.await))];
       const texts = batches.flatMap(batch => batch.results.map(result => result.text));
@@ -316,6 +316,20 @@ describe('Workers AI Whisper', () => {
       expect(texts.join(' ')).toBe(sentence.join(' '));
       // Coverage never claims audio whose text a later batch still carries.
       for (const batch of batches) for (const result of batch.results) expect(result.start_s >= batch.start_s && result.end_s <= batch.end_s).toBe(true);
+    }),
+  );
+
+  it.scopedLive('cuts chunks short once Sanctum replies, so a spoken stop is final within 2.5 s of audio', () =>
+    Effect.gen(function* () {
+      const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'sanctum stop', segments: [{ start: 0.2, end: 0.6, text: 'sanctum stop' }] } })));
+      const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
+      // Continuous sound, such as a reply's echo under the person: 1 s before the reply starts, then 2 s while it plays. The stream never finishes.
+      const audio = continuousSpeech(8);
+      for (let at = 0; at < 48_000; at += 1_600) stream.send(audio.subarray(at, at + 1_600), at >= 16_000);
+      const [first] = [...(yield* Stream.runCollect(Stream.take(stream.results, 1)))];
+      expect(first).toMatchObject({ start_s: 0, results: [{ text: 'sanctum stop' }] });
+      expect(first!.end_s).toBeLessThanOrEqual(2.5);
+      expect(sentAudio(server.requests[0]!.body).samples.length).toBeLessThanOrEqual(40_000);
     }),
   );
 
@@ -331,7 +345,7 @@ describe('Workers AI Whisper', () => {
         } else later(samples.at(-1) === 43 * 500 ? 'last' : 'middle', response);
       });
       const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
-      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600));
+      for (let at = 0; at < audio.length; at += 1_600) stream.send(audio.subarray(at, at + 1_600), false);
       yield* stream.finish;
       const emitted: Array<AsrBatch> = [];
       const outcome = yield* Effect.either(Stream.runForEach(stream.results, batch => Effect.sync(() => emitted.push(batch))));
@@ -366,7 +380,7 @@ describe('Workers AI Whisper', () => {
       const server = yield* localServer((_request, _body, response) => response.end(JSON.stringify({ result: { text: 'last words', segments: [{ start: 0, end: 5, text: 'last words' }] } })));
       const stream = yield* whisper(server.url).openStream(16_000, () => Effect.void);
       const collected = yield* Effect.fork(Stream.runCollect(stream.results));
-      stream.send(new Int16Array(16_000).fill(8_000));
+      stream.send(new Int16Array(16_000).fill(8_000), false);
       yield* stream.finish;
       expect([...(yield* Effect.flatten(collected.await))]).toMatchObject([{ start_s: 0, end_s: 1, results: [{ text: 'last words' }] }]);
     }),

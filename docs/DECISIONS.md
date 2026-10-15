@@ -220,6 +220,9 @@ Sanctum therefore sends live chunks of at least 6 s (`minMs`, `engineeringDefaul
 The first 200 ms pause under `speechFloorRms` after 6 s ends the chunk with no overlap; a stop consonant or a joint inside a word is shorter.
 Without a pause by 10 s (`maxMs`), the cut falls at the quietest 20 ms, which may be inside a word.
 The next chunk then also starts `overlapMs` (0.75 s) before the cut, so the word is whole there.
+While Sanctum replies (a reply window is open), chunks run 1.5–2.5 s instead (`replyMinMs`, `replyMaxMs`) with the same pause and quietest-cut rules.
+A barge-in such as "Sanctum, stop" is then final within about 2.5 s of audio plus the answer, not up to 10 s.
+Short chunks mishear more names, but only audio heard during a reply pays that cost.
 
 Replay of the dry-run audio through the live adapter on 2026-10-15 (the 11 planted facts, 60 s around each; Whisper large-v3-turbo):
 
@@ -237,13 +240,15 @@ Answers that share no words stay separate. A held answer is released when the st
 Results keep audio order, so one slow answer holds back every later chunk.
 Production runs on 2026-10-09 (44.1 kHz browser audio) measured answers of 2–8 s, median about 3.7 s, and about 1 answer in 100 after 12 s or never.
 With three 2 s chunks in flight, one 12 s answer stopped new requests until the send backlog (512 KiB, 5.9 s of 44.1 kHz audio) reported `asr_backlog`.
-Four chunks of at least 6 s are therefore in flight (`concurrency`), more than the slowest answers, and a second unsent chunk reports `asr_backlog` (1 MiB holds one 10.75 s chunk at 48 kHz).
+Four chunks of at least 6 s are therefore in flight (`concurrency`), more than the slowest answers.
+Unsent audio of 12 s (`asrBacklogMs`, two chunks of at least 6 s, counted at the session sample rate) reports `asr_backlog`; one 10.75 s chunk and a frame stay under it.
 A chunk without an answer after `hedgeMs` (8 s) is sent again; the first answer wins, but the duplicate never wins by failing and is not sent during a 429 pause.
 Whisper invents text such as "Thank you." on silence; `vad_filter` removes it without a change to the error rate above.
 In production, `vad_filter` still let "You" and "Thank you." through on near-silent audio.
 Sanctum therefore also drops a segment whose `no_speech_prob` is above 0.6, Whisper's `no_speech_threshold`.
 The provider ignores `avg_logprob`, so confident filler on silence is dropped too.
 A turn ends once live speech-to-text has answered 0.7 s (`endOfTurnMs`) past its last final, also with no text: in the chunk of the request when that chunk runs on into silence, else in the next chunk, at most 10 s later.
+The 0.75 s that the next chunk repeats does not count, because that chunk can still hear words of the request there.
 A direct request can still end in a later chunk, so otherwise the speech gate waits `turnWaitMs` (15 s, above one 10 s chunk and its answer) for new finals before it ends a turn.
 Echo memory (`echoTailMs`) lasts as long, because an echo is heard one chunk later too.
 
