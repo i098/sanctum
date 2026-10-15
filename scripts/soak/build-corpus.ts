@@ -78,14 +78,14 @@ const PROJECTS = ['Falcon', 'Harbor', 'Maple', 'Cobalt', 'Garden', 'Granite', 'L
   'Beacon', 'Copper', 'Dolphin', 'Ember', 'Glacier', 'Hazel', 'Indigo', 'Jasmine', 'Canyon', 'Summit', 'River', 'Sunrise'];
 /** `word` appears verbatim in `say`, so the keyword query "<project> <word>" matches the item. A value `a|b` is spoken as `a` and accepted as `a` or `b`. */
 const BULK_TOPICS: ReadonlyArray<{ word: string; say: (p: string, v: string) => string; ask: (p: string) => string; values: ReadonlyArray<string> }> = [
-  { word: 'owner', say: (p, v) => `The ${p} project owner is ${v}.`, ask: p => `Who owns the ${p} project?`, values: ['Tomas', 'Wen', 'Ingrid', 'Rafael', 'Keiko', 'Omar', 'Sofia', 'Daniel', 'Nadia', 'Hugo', 'Leila', 'Viktor'] },
-  { word: 'offsite', say: (p, v) => `The ${p} offsite is in ${v}.`, ask: p => `Where is the ${p} offsite?`, values: ['Lisbon', 'Oslo', 'Denver', 'Kyoto', 'Austin', 'Dublin', 'Prague', 'Seattle', 'Nairobi', 'Lima', 'Vienna', 'Tallinn'] },
+  { word: 'owner', say: (p, v) => `The ${p} project owner is ${v}.`, ask: p => `Who owns the ${p} project?`, values: ['Peter', 'Anna', 'Ingrid', 'Rafael', 'Maria', 'Omar', 'Sofia', 'Daniel', 'Nadia', 'Frank', 'Julia', 'Henry'] },
+  { word: 'offsite', say: (p, v) => `The ${p} offsite is in ${v}.`, ask: p => `Where is the ${p} offsite?`, values: ['Lisbon', 'Oslo', 'Denver', 'Kyoto', 'Austin', 'Dublin', 'Prague', 'Seattle', 'Boston', 'Paris', 'Vienna', 'Miami'] },
   { word: 'review', say: (p, v) => `The ${p} review is on ${v}.`, ask: p => `When is the ${p} review?`, values: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] },
   { word: 'banner', say: (p, v) => `The ${p} banner color is ${v}.`, ask: p => `What color is the ${p} banner?`, values: ['teal', 'crimson', 'amber', 'violet', 'ivory', 'scarlet', 'olive', 'navy', 'magenta', 'bronze', 'lavender', 'turquoise'] },
   { word: 'engineers', say: (p, v) => `The ${p} team has ${v.split('|')[0]} engineers.`, ask: p => `How many engineers are on the ${p} team?`, values: ['three|3', 'four|4', 'five|5', 'six|6', 'seven|7', 'eight|8', 'nine|9', 'ten|10', 'eleven|11', 'twelve|12', 'thirteen|13', 'fourteen|14'] },
   { word: 'tickets', say: (p, v) => `The ${p} tickets live in ${v}.`, ask: p => `Where do the ${p} tickets live?`, values: ['Trello', 'Asana', 'Notion', 'Linear', 'Airtable', 'Basecamp'] },
-  { word: 'standup', say: (p, v) => `The ${p} standup is in the ${v} room.`, ask: p => `Which room is the ${p} standup in?`, values: ['Cedar', 'Birch', 'Aspen', 'Redwood', 'Sequoia', 'Spruce', 'Pine', 'Elm'] },
-  { word: 'mascot', say: (p, v) => `The ${p} mascot is the ${v}.`, ask: p => `What is the ${p} mascot?`, values: ['otter', 'heron', 'badger', 'lynx', 'gecko', 'puffin', 'walrus', 'ferret', 'marmot', 'osprey'] },
+  { word: 'standup', say: (p, v) => `The ${p} standup is in the ${v} room.`, ask: p => `Which room is the ${p} standup in?`, values: ['Cedar', 'Birch', 'Aspen', 'Redwood', 'Oak', 'Spruce', 'Walnut', 'Cherry'] },
+  { word: 'mascot', say: (p, v) => `The ${p} mascot is the ${v}.`, ask: p => `What is the ${p} mascot?`, values: ['otter', 'eagle', 'badger', 'tiger', 'panda', 'horse', 'walrus', 'rabbit', 'whale', 'monkey'] },
 ];
 
 const BULK = PROJECTS.flatMap((project, meeting) => BULK_TOPICS.map((topic, t) => {

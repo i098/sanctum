@@ -16,8 +16,8 @@
  * Exit codes: 0 finished or killed, 1 fatal, 3 cost hard stop.
  *
  * Cost: the hard stop compares `costUsd` of measured units (speech seconds sent, wall seconds run, chunk
- * PUTs) plus `--baseline-usd` (spent building the audio) with `--max-usd`. Extraction is priced at its
- * ceiling per speech minute because the API does not meter it; see RATES.
+ * PUTs) plus `--baseline-usd` (spent building the audio) with `--max-usd`. Extraction is priced at an
+ * estimate per speech minute because the API does not meter it; see RATES.
  *
  * Needs `SANCTUM_SOAK_TOKEN`: a token of the soak workspace owner (not an enrolled device) holding `capture:ingest`,
  * `context:read` and `context:write`. One principal registers the listener, streams and shares, because only a
