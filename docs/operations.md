@@ -171,7 +171,7 @@ Under heavy host load, run Playwright with `--workers=1`; timing-sensitive specs
 
 ## 24-hour soak
 
-The soak streams 24 hours of synthetic meeting audio into the hosted app at real speed and asks planted questions at 1, 5, 12 and 24 hours. It is the named gate in [release-evidence.md](release-evidence.md); the accelerated replay above is not a soak. Run it in a dedicated soak workspace, never the real one. Live recording and paid model calls on the hosted instance each need the owner's go. The driver stops at $15 cumulative measured cost.
+The soak streams 24 hours of synthetic meeting audio into the hosted app at real speed and asks planted questions at 1, 5, 12 and 24 hours. It is the named gate in [release-evidence.md](release-evidence.md); the accelerated replay above is not a soak. Run it in a dedicated soak workspace, never the real one. Live recording and paid model calls on the hosted instance each need the owner's go. The driver stops at $15 cumulative cost by default (`--max-usd`); a full 24-hour schedule costs about $29, so raise the limit for the real run ([cost stop](../scripts/soak/README.md)).
 
 | Part | File |
 | --- | --- |
