@@ -40,8 +40,8 @@ interface LedgerJob {
 export type Extractor<R> = (input: ExtractionInput) => Effect.Effect<ReadonlyArray<ExtractionCandidate>, Unavailable, R>;
 
 
-/** Final segments one refresh reads; the rest wait for the next round. */
-const BATCH_SEGMENTS = 100;
+/** Final segments one refresh reads; the rest wait for the next round. About 40 lines keep one call well under the extraction timeout even on the Workers AI fallback (100 lines took 35-99 s there). */
+const BATCH_SEGMENTS = 40;
 
 const Payload = Schema.Struct({ meeting_id: MeetingId });
 

@@ -3,7 +3,7 @@
  * provider and model, bounds every attempt with a timeout, retries only transient transport
  * failures a bounded number of times, and decodes structured output with Effect Schema.
  * This service reports a missing key or provider failure as `Unavailable`; it never substitutes output.
- * The spoken-work caller owns the classifier fallback (docs/DECISIONS.md).
+ * The callers own fallbacks between roles: spoken work (classifier to planner) and extraction (docs/DECISIONS.md).
  */
 import { Context, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
 import { Unavailable } from '@sanctum/contracts';
@@ -26,8 +26,8 @@ interface Prompt {
 }
 
 export interface Llm {
-  /** Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements). */
-  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I> }) => Effect.Effect<Generated<A>, Unavailable>;
+  /** Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements); `timeoutMs` replaces the per-attempt default. */
+  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number }) => Effect.Effect<Generated<A>, Unavailable>;
   /** Text deltas; interruption aborts the request, and a stalled stream fails. Never retried, so no text repeats. */
   readonly stream: (role: ModelRoleName, request: Prompt) => Stream.Stream<string, Unavailable>;
   /**
@@ -84,9 +84,9 @@ export function makeLlm(
     );
 
   return {
-    generate: (role, { name, output, ...prompt }) => {
+    generate: (role, { name, output, timeoutMs, ...prompt }) => {
       const { $schema: _, ...schema }: Record<string, unknown> = { ...JSONSchema.make(output) };
-      return call(role, budget.timeoutMs, (provider, base, signal) => {
+      return call(role, timeoutMs ?? budget.timeoutMs, (provider, base, signal) => {
         if (!provider.complete) throw new ProviderError('provider has no text generation', false);
         return provider.complete({ ...base, ...prompt, json: { name, schema } }, signal);
       }).pipe(

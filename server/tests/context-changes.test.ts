@@ -17,6 +17,7 @@ import { Effect, Either, Layer, Ref, Stream } from 'effect';
 import { getContextChanges } from '../src/context-changes.ts';
 import { commitMemory, refreshContext, SYSTEM_ACTOR } from '../src/context-jobs.ts';
 import { type ExtractionInput, extractCandidates } from '../src/extraction.ts';
+import { enqueueJob } from '../src/jobs.ts';
 import { requestContextRefresh, requestMemoryCommit } from '../src/context-schedule.ts';
 import { appendContextEvent } from '../src/context-events.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem } from '../src/context.ts';
@@ -197,16 +198,34 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       expect(yield* refreshContext(recovered.extract)(job(meeting, owner!.principal.id))).toMatchObject({ status: 'succeeded', result: { added: 1 } });
     }));
 
-  it.effect('processes a long backlog in bounded rounds', () =>
+  it.effect('processes a long backlog in rounds of at most 40 segments', () =>
     Effect.gen(function*() {
       const [owner, device] = yield* seedWorkspace('Backlog', ['owner', 'device']);
       const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
-      yield* Effect.forEach(Array.from({ length: 105 }, (_, index) => index), index => seedSegment(meeting, index, index + 1, `Turn ${index}.`), { discard: true });
+      yield* Effect.forEach(Array.from({ length: 85 }, (_, index) => index), index => seedSegment(meeting, index, index + 1, `Turn ${index}.`), { discard: true });
       const fake = yield* fakeExtractor(() => []);
       const refresh = refreshContext(fake.extract);
       expect(yield* refresh(job(meeting, owner!.principal.id))).toMatchObject({ status: 'paused', resume_after_ms: 0 });
+      expect(yield* refresh(job(meeting, owner!.principal.id))).toMatchObject({ status: 'paused', resume_after_ms: 0 });
       expect(yield* refresh(job(meeting, owner!.principal.id))).toMatchObject({ status: 'succeeded', result: { processed: 5 } });
-      expect((yield* Ref.get(fake.calls)).map(call => call.segments.length)).toEqual([100, 5]);
+      expect((yield* Ref.get(fake.calls)).map(call => call.segments.length)).toEqual([40, 40, 5]);
+    }));
+
+  it.effect('drains a closed meeting\'s whole backlog in its memory commit and then marks memory complete', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Closed backlog', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      const segments = yield* Effect.forEach(Array.from({ length: 85 }, (_, index) => index), index => seedSegment(meeting, index, index + 1, `We pause hiring ${index}.`));
+      const fake = yield* fakeExtractor(input => [candidate(input.segments[0]!.id, { quote: 'pause hiring', kind: 'decision', text: `Hiring paused (${input.segments[0]!.id})`, time: null })]);
+      const commit = commitMemory(fake.extract);
+      expect(yield* commit(job(meeting, null))).toMatchObject({ status: 'paused', resume_after_ms: 0 });
+      expect(yield* commit(job(meeting, null))).toMatchObject({ status: 'paused', resume_after_ms: 0 });
+      expect(yield* commit(job(meeting, null))).toMatchObject({ status: 'succeeded', result: { processed: 5, committed: 3 } });
+      const sql = yield* SqlClient.SqlClient;
+      const [processed] = yield* sql<{ n: string }>`SELECT COUNT(*) AS n FROM context_processed_segments WHERE meeting_id = ${meeting.meeting_id}`;
+      expect(Number(processed!.n)).toBe(segments.length);
+      const [processing] = yield* sql<{ memory: string }>`SELECT processing->>'$.memory' AS memory FROM meetings WHERE id = ${meeting.meeting_id}`;
+      expect(processing).toEqual({ memory: 'complete' });
     }));
 
   it.effect('distills settled items into memory at close and is safe to retry', () =>
@@ -272,5 +291,16 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       expect(after).toEqual([{ kind: 'context.refresh', status: 'running' }, { kind: 'memory.commit', status: 'pending' }]);
       const both = yield* Effect.all([requestMemoryCommit(request), requestMemoryCommit(request)], { concurrency: 2 }).pipe(Effect.either);
       expect(Either.isRight(both) && new Set(both.right).size).toBe(1);
+    }));
+
+  it.effect('lets model-bound jobs retry for over an hour while other kinds keep five attempts', () =>
+    Effect.gen(function*() {
+      const [owner, device] = yield* seedWorkspace('Attempts', ['owner', 'device']);
+      const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
+      const request = { workspace_id: meeting.workspace_id, work_key: `meeting:${meeting.meeting_id}`, payload: {}, requested_by: owner!.principal.id };
+      yield* Effect.forEach(['context.refresh', 'memory.commit', 'notes.summarize', 'recording.assemble'] as const, kind => enqueueJob({ ...request, kind }), { discard: true });
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{ kind: string; max_attempts: number }>`SELECT kind, max_attempts FROM jobs WHERE workspace_id = ${meeting.workspace_id} ORDER BY kind`;
+      expect(rows.map(row => [row.kind, Number(row.max_attempts)])).toEqual([['context.refresh', 24], ['memory.commit', 24], ['notes.summarize', 24], ['recording.assemble', 5]]);
     }));
 });

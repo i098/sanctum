@@ -6,10 +6,11 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { ContextItem, Meeting, TranscriptSegment, Unavailable, UtcTimestamp, CaptureEpochId } from '@sanctum/contracts';
-import { Effect, Schema } from 'effect';
+import { Effect, Layer, Schema } from 'effect';
+import { engineeringDefaults } from '../src/config.ts';
 import { type EpochAnchor, extractCandidates, summarizeMeeting } from '../src/extraction.ts';
-import { fixtureLlm } from '../src/llm.ts';
-import type { ProviderRequest } from '../src/providers/types.ts';
+import { fixtureLlm, LlmClient, makeLlm } from '../src/llm.ts';
+import { type ModelProvider, ProviderError, type ProviderRequest } from '../src/providers/types.ts';
 
 const RATE = 16_000;
 const epoch = CaptureEpochId.make(randomUUID());
@@ -139,7 +140,7 @@ describe('extractCandidates', () => {
       const candidates = yield* Effect.provide(extractCandidates({ meeting, segments, snapshot, epochs: anchors }), fixtureLlm([modelAnswer], requests));
       expect(candidates).toEqual(labeled);
       const [request] = requests;
-      expect(request).toMatchObject({ model: '@cf/qwen/qwen3.8-27b', reasoning: 'low', json: { name: 'context_candidates' } });
+      expect(request).toMatchObject({ model: 'qwen-3.8-27b', reasoning: 'low', json: { name: 'context_candidates' } });
       expect(request!.prompt).toContain('S1 [Sat 2026-10-31 17:00:00] speaker_0: Okay, we decided');
       expect(request!.prompt).toContain("S3 [Sat 2026-10-31 17:05:00] speaker_0: Let's ship the beta tomorrow at 10.");
       expect(request!.prompt).toContain('- decision: Use MySQL for storage.');
@@ -167,10 +168,65 @@ describe('extractCandidates', () => {
       const input = { meeting, segments, snapshot, epochs: anchors };
       const down = new Unavailable({ message: 'Workers AI HTTP 503', retryable: true });
       const requests: ProviderRequest[] = [];
-      expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([down, down, down, modelAnswer], requests)))).toMatchObject({ _tag: 'Unavailable', retryable: true });
-      expect(requests).toHaveLength(3);
+      // Three attempts on the extraction role, then three on the fallback.
+      expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([down, down, down, down, down, down, modelAnswer], requests)))).toMatchObject({ _tag: 'Unavailable', retryable: true });
+      expect(requests).toHaveLength(6);
       const invalid = JSON.stringify({ candidates: [candidate({ kind: 'rumour', text: 'x', segments: ['S1'] })] });
-      expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([invalid])))).toMatchObject({ retryable: false, message: expect.stringMatching(/failed the context_candidates schema/) });
+      expect(yield* Effect.flip(Effect.provide(extractCandidates(input), fixtureLlm([invalid, invalid])))).toMatchObject({ retryable: false, message: expect.stringMatching(/failed the context_candidates schema/) });
+    }));
+});
+
+describe('extraction model fallback', () => {
+  const input = { meeting, segments, snapshot, epochs: anchors };
+  const notesAnswer = JSON.stringify({ title: 'Beta', summary: 'The team limited pilot access.', sections: [{ heading: 'Access', points: [{ text: 'Pilot access stays limited.', segments: ['S1'] }] }] });
+  /** Providers that record each request under their name and replay `answers`; an `Error` answer is thrown. */
+  const providers = (cerebrasAnswers: ReadonlyArray<string | Error> | undefined, workersAnswers: ReadonlyArray<string | Error>) => {
+    const seen: Array<{ provider: string; request: ProviderRequest }> = [];
+    const stub = (provider: string, answers: ReadonlyArray<string | Error>): ModelProvider => {
+      const queue = [...answers];
+      return {
+        complete: async request => {
+          seen.push({ provider, request });
+          const answer = queue.shift() ?? new Error('no answer left');
+          if (answer instanceof Error) throw answer;
+          return answer;
+        },
+      };
+    };
+    const llm = makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': stub('workers-ai', workersAnswers), ...(cerebrasAnswers ? { cerebras: stub('cerebras', cerebrasAnswers) } : {}) });
+    return { seen, layer: Layer.succeed(LlmClient, llm) };
+  };
+  const failure = new ProviderError('Cerebras HTTP 500', false);
+
+  it.effect('extracts on Cerebras Qwen and leaves Workers AI unused while it answers', () =>
+    Effect.gen(function* () {
+      const { seen, layer } = providers([modelAnswer], []);
+      expect(yield* Effect.provide(extractCandidates(input), layer)).toEqual(labeled);
+      expect(seen.map(entry => [entry.provider, entry.request.model, entry.request.reasoning])).toEqual([['cerebras', 'qwen-3.8-27b', 'low']]);
+    }));
+
+  it.effect('falls back to Workers AI Qwen when Cerebras fails or has no key', () =>
+    Effect.gen(function* () {
+      const failed = providers([failure], [modelAnswer]);
+      expect(yield* Effect.provide(extractCandidates(input), failed.layer)).toEqual(labeled);
+      expect(failed.seen.map(entry => [entry.provider, entry.request.model])).toEqual([['cerebras', 'qwen-3.8-27b'], ['workers-ai', '@cf/qwen/qwen3.8-27b']]);
+      const unconfigured = providers(undefined, [modelAnswer]);
+      expect(yield* Effect.provide(extractCandidates(input), unconfigured.layer)).toEqual(labeled);
+      expect(unconfigured.seen.map(entry => entry.provider)).toEqual(['workers-ai']);
+    }));
+
+  it.effect('summarizes on the same fallback and records the model that answered', () =>
+    Effect.gen(function* () {
+      const { seen, layer } = providers([failure], [notesAnswer]);
+      const notes = yield* Effect.provide(summarizeMeeting({ meeting, segments, epochs: anchors }), layer);
+      expect(notes.model).toBe('@cf/qwen/qwen3.8-27b');
+      expect(seen.map(entry => entry.provider)).toEqual(['cerebras', 'workers-ai']);
+    }));
+
+  it.effect('fails with the fallback error when both providers fail', () =>
+    Effect.gen(function* () {
+      const { layer } = providers([failure], [new ProviderError('Workers AI HTTP 400', false)]);
+      expect(yield* Effect.flip(Effect.provide(extractCandidates(input), layer))).toMatchObject({ _tag: 'Unavailable', retryable: false, message: expect.stringContaining('Workers AI HTTP 400') });
     }));
 });
 
@@ -189,7 +245,7 @@ describe('summarizeMeeting', () => {
       const notes = yield* Effect.provide(summarizeMeeting({ meeting, segments, epochs: anchors }), fixtureLlm([answer]));
       expect(notes).toEqual({
         meeting_id: meeting.id,
-        model: '@cf/qwen/qwen3.8-27b',
+        model: 'qwen-3.8-27b',
         title: 'Beta rollout',
         summary: 'The team limited pilot access and scheduled the beta.',
         sections: [
