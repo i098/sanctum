@@ -5,7 +5,7 @@ import { expect, layer } from '@effect/vitest';
 import { type AccessScope, ArtifactId, type MeetingId, TranscriptSegmentId, Unauthenticated } from '@sanctum/contracts';
 import { Context, Effect, Either, Layer } from 'effect';
 import { Authenticator } from '../src/auth.ts';
-import { addContextItem, getContextSnapshot, reviseContextItem, searchContext } from '../src/context.ts';
+import { addContextItem, getContextSnapshot, reviseContextItem, searchContext, termFilter } from '../src/context.ts';
 import { getSource } from '../src/context-changes.ts';
 import { serverLayer } from '../src/main.ts';
 import { migratedDatabase, grantMeeting, seedMeeting, seedSegment } from './support/context.ts';
@@ -161,6 +161,26 @@ layer(migratedDatabase, { timeout: 120_000 })('context items', it => {
       expect((yield* searchContext(agent!, { q: 'hiring' })).items).toEqual([]);
       expect((yield* searchContext(agent!, { q: '?!' })).items).toEqual([]);
       expect(yield* Effect.flip(searchContext(agent!, { q: 'budget', meeting_id: restricted.meeting_id }))).toMatchObject({ _tag: 'NotFound' });
+    }));
+
+  it.effect('finds a hyphenated word by its joined and spaced spellings, and the reverse for hyphenated text', () =>
+    Effect.gen(function*() {
+      const [, agent, device] = yield* seedWorkspace('SearchHyphen', ['owner', 'agent', 'device']);
+      const open = yield* seedMeeting(device!, { started_at: STARTED });
+      const segment = yield* seedSegment(open, 1, 3, 'Planning.');
+      const hyphen = yield* addContextItem(agent!, { ...decision(open.meeting_id, segment, 'Team off-site is in May', 0), text: 'Team off-site is in May' });
+      const joined = yield* addContextItem(agent!, { ...decision(open.meeting_id, segment, 'Offsite dinner booked', 1), text: 'Offsite dinner booked' });
+      const spaced = yield* addContextItem(agent!, { ...decision(open.meeting_id, segment, 'Plan the off site agenda', 2), text: 'Plan the off site agenda' });
+      yield* addContextItem(agent!, { ...decision(open.meeting_id, segment, 'Airplane tickets booked', 3), text: 'Airplane tickets booked' });
+      const ids = (q: string) => searchContext(agent!, { q }).pipe(Effect.map(page => page.items.map(item => item.id).sort()));
+
+      expect(yield* ids('offsite')).toEqual([hyphen.id, joined.id].sort());
+      expect(yield* ids('off-site')).toEqual([hyphen.id, joined.id, spaced.id].sort());
+      expect(yield* ids('off site')).toEqual([hyphen.id, spaced.id].sort());
+      expect(yield* ids('plan')).toEqual([spaced.id]);
+      const sql = yield* SqlClient.SqlClient;
+      const plan = yield* sql<{ type: string; key: string | null }>`EXPLAIN SELECT ci.id FROM context_items ci WHERE ${termFilter(sql, ['team', 'off-site'])}`;
+      expect(plan[0]).toMatchObject({ type: 'fulltext', key: 'context_items_text_joined' });
     }));
 
   it.effect('filters search by time range and kind and pages it newest first without gaps', () =>

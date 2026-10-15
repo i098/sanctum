@@ -122,7 +122,9 @@ describe('speech gate', () => {
       yield* session.onCovered(((11_000 + endOfTurnMs) * RATE) / 1000);
       yield* settle(100);
       expect(session.requests).toEqual(['what is next?']);
-      expect(session.replying()).toBe(false); // the reply ended, so live chunks are long again
+      expect(session.replying()).toBe(true); // all audio is sent, but the browser is still playing it
+      yield* settle(500);
+      expect(session.replying()).toBe(false); // played out, so live chunks are long again
       yield* settle(turnWaitMs);
       expect(session.requests).toEqual(['what is next?']);
     }));
@@ -247,6 +249,19 @@ describe('speech gate', () => {
       expect(session.chunks()).toHaveLength(before);
     }));
 
+  it.effect('cancels a stop heard after all audio was sent but before it finished playing', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.make('One point.'));
+      yield* session.onSegment(heard('Sanctum, summarize the meeting', 70_000, 71_000));
+      yield* settle(turnWaitMs);
+      expect(session.chunks()).toHaveLength(2); // sent in one burst; playing takes 200 ms
+      const { generation } = session.chunks()[0]!;
+      expect(session.replying()).toBe(true);
+      yield* session.onSegment(heard('Sanctum, stop', 71_500, 72_000));
+      expect(session.sent.at(-1)).toEqual({ _tag: 'speech_cancel', generation, reason: 'barge_in' });
+      expect(session.gate.mayEmit(session.chunks()[0]!.request_id, generation)).toBe(false);
+    }));
+
   it.effect('treats a late transcript of the request itself as neither a request nor a barge-in', () =>
     Effect.gen(function* () {
       const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
@@ -317,6 +332,11 @@ describe('speech gate', () => {
     expect(directRequest('Sanctum')).toBeNull();
     expect(directRequest('ask sanctum later')).toBeNull();
     expect(directRequest('Okay. I told Sanctum yesterday, what is next?')).toBeNull();
+    expect(directRequest("Okay, let's move on, Sanctum, what was the launch date?")).toBe('what was the launch date?');
+    expect(directRequest("Okay, let's move on, hey Sanctum what was the launch date?")).toBe('what was the launch date?');
+    expect(directRequest('I told Sanctum yesterday')).toBeNull();
+    expect(directRequest('Yesterday, I told Sanctum, what is next?')).toBeNull();
+    expect(directRequest('Next, Sanctum can handle that, right?')).toBeNull();
     expect(directRequest('Sanctuary is a word')).toBeNull();
   });
 });

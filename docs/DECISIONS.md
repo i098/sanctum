@@ -221,9 +221,12 @@ The first 200 ms pause under `speechFloorRms` after 6 s ends the chunk with no o
 Without a pause by 10 s (`maxMs`), the cut falls at the quietest 20 ms, which may be inside a word.
 The next chunk then also starts `overlapMs` (0.75 s) before the cut, so the word is whole there.
 While Sanctum replies (a reply window is open), chunks run 1.5–2.5 s instead (`replyMinMs`, `replyMaxMs`) with the same pause and quietest-cut rules.
-A barge-in such as "Sanctum, stop" is then final within about 2.5 s of audio plus the answer, not up to 10 s.
+The window stays open until the browser has played the whole reply, not until the last chunk is sent, because Aura-2 audio arrives faster than real time and the browser can still have 4–8 s to play.
+A barge-in such as "Sanctum, stop" is then final within about 2.5 s of audio plus the answer, not up to 10 s, and it cancels a reply that is fully sent but still playing.
 Short chunks mishear more names, but only audio heard during a reply pays that cost.
-A long chunk can hold talk before a direct request in one Whisper segment, so "Sanctum" opens a request at the start of a turn or after `.`, `?` or `!`; a mention inside a sentence ("I told Sanctum yesterday") does not.
+A long chunk can hold talk before a direct request in one Whisper segment, so "Sanctum" opens a request at the start of a turn or after `.`, `?` or `!`.
+Whisper also writes the pause before "Sanctum" as a comma, so after a comma "Sanctum" opens a request only when it is followed by a comma or by a question word and a question ("Okay, let's move on, Sanctum, what was the launch date?").
+A mention inside a sentence ("I told Sanctum yesterday") does not.
 
 Replay of the dry-run audio through the live adapter on 2026-10-15 (the 11 planted facts, 60 s around each; Whisper large-v3-turbo):
 
