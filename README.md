@@ -8,7 +8,6 @@
 [![Release](https://img.shields.io/github/v/release/i098/sanctum?style=for-the-badge&logo=github&label=&color=2563eb)](https://github.com/i098/sanctum/releases/latest)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/FSL--1.1--ALv2-0d9488?style=for-the-badge)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/i098/sanctum?style=for-the-badge&logo=github&color=d97706)](https://github.com/i098/sanctum/stargazers)
-[![Last commit](https://img.shields.io/github/last-commit/i098/sanctum?style=for-the-badge&logo=git&logoColor=white&label=updated&color=6b7280)](https://github.com/i098/sanctum/commits/main)
 [![Sponsor](https://img.shields.io/badge/Sponsor-db61a2?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/i098)
 
 [Try it](https://sanctum.42nights.dev) · [Self-host](#self-host) · [Docs](https://i098.github.io/sanctum/) · [Changelog](CHANGELOG.md) · [Contribute](CONTRIBUTING.md)
