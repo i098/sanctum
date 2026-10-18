@@ -3,7 +3,7 @@
  * production `PipedreamClient` interface, recording every call. Never used by the application.
  */
 import { Effect, Layer } from 'effect';
-import { type ActionComponent, type ActionProp, IntegrationFailure, type OptionChoice, PipedreamClient, type PipedreamService, type ProxyRequest } from '../../src/providers/pipedream.ts';
+import { type ActionComponent, type ActionProp, type ConnectedAccount, IntegrationFailure, type OptionChoice, PipedreamClient, type PipedreamService, type ProxyRequest } from '../../src/providers/pipedream.ts';
 
 /** Test catalog entry: a component plus fixture-only behavior. */
 export interface FixtureAction extends ActionComponent {
@@ -24,6 +24,8 @@ export interface PipedreamFixture {
   /** Mutable catalog by key: replace an entry to simulate a version bump. */
   readonly actions: Map<string, FixtureAction>;
   readonly calls: ReadonlyArray<FixtureCall>;
+  /** Connected accounts by external user; `deleteAccount` removes one. */
+  readonly accounts: Map<string, ReadonlyArray<ConnectedAccount>>;
   /** The next call of `operation` fails with `error`. */
   readonly failNext: (operation: Operation, error: IntegrationFailure) => void;
   /** JSON body the fixture proxy answers with. */
@@ -42,6 +44,7 @@ const words = (text: string) => text.toLowerCase().split(/[^a-z0-9]+/).filter(Bo
 export const fixturePipedream = (catalog: ReadonlyArray<FixtureAction>): PipedreamFixture => {
   const actions = new Map(catalog.map(action => [action.key, action]));
   const calls: Array<FixtureCall> = [];
+  const accounts = new Map<string, ReadonlyArray<ConnectedAccount>>();
   const failures = new Map<Operation, IntegrationFailure>();
   let proxyResponse: (request: ProxyRequest) => unknown = () => ({});
 
@@ -93,14 +96,18 @@ export const fixturePipedream = (catalog: ReadonlyArray<FixtureAction>): Pipedre
     runAction: request => call('runAction', request, () => ({ exports: { $summary: `ran ${request.id}` }, ret: found(request.id).ret ?? null })),
     proxy: request => call('proxy', request, () => new TextEncoder().encode(JSON.stringify(proxyResponse(request)))),
     createConnectToken: user => call('createConnectToken', user, () => ({ connect_link_url: 'https://pipedream.com/_static/connect.html?token=ctok_fixture&connectLink=true' })),
-    listAccounts: user => call('listAccounts', user, () => []),
-    deleteAccount: account => call('deleteAccount', account, () => undefined),
+    listAccounts: user => call('listAccounts', user, () => accounts.get(user) ?? []),
+    deleteAccount: account =>
+      call('deleteAccount', account, () => {
+        for (const [user, listed] of accounts) accounts.set(user, listed.filter(connected => connected.id !== account));
+      }),
   };
 
   return {
     layer: Layer.succeed(PipedreamClient, service),
     actions,
     calls,
+    accounts,
     failNext: (operation, error) => {
       failures.set(operation, error);
     },

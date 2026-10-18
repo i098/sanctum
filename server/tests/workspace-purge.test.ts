@@ -2,17 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, TranscriptSegmentId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect, Option } from 'effect';
+import { Effect, Layer, Option } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { openSession } from '../src/auth.ts';
 import { addContextItem, reviseContextItem } from '../src/context.ts';
 import { claimJob, completeJob, type Lease, sweepJobs } from '../src/job-runner.ts';
+import type { ClaimedJob } from '../src/job-types.ts';
 import { enqueueJob } from '../src/jobs.ts';
+import { IntegrationFailure } from '../src/providers/pipedream.ts';
 import { addMember } from '../src/store.ts';
 import { PURGED_TABLES, purgeWorkspace } from '../src/workspaces.ts';
 import { migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { type MemoryObjectStore, memoryObjectStore } from './support/object-store.ts';
+import { fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 
 const researcher = { display_name: 'Researcher', scopes: ['context:read'], meetings: { kind: 'accessible' }, expires_at: null } as const;
 
@@ -65,6 +68,14 @@ const counts = (workspace_id: WorkspaceId) =>
 
 const claim = Effect.map(claimJob(['workspace.purge'], 60_000), Option.getOrThrow);
 
+const purge = (job: ClaimedJob, store: MemoryObjectStore, pipedream: PipedreamFixture = fixturePipedream([])) =>
+  Effect.provide(purgeWorkspace(job), Layer.merge(store.layer, pipedream.layer));
+
+/** A stored Pipedream account of `owner` in its workspace, under the workspace's external user. */
+const storeAccount = (owner: AccessScope, provider_account_id: string) =>
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
+    VALUES (${randomUUID()}, ${owner.workspace_id}, ${owner.principal.id}, ${`${owner.workspace_id}.${owner.principal.id}`}, ${provider_account_id}, 'google_drive', 'active', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`);
+
 layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
   it.effect('purges objects and rows exactly once across a worker restart and leaves other workspaces alone', () =>
     Effect.gen(function* () {
@@ -76,7 +87,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       yield* addMember({ workspace_id: a.workspace_id, principal_id: b.owner.principal.id, role: 'member' });
       const keptBefore = yield* counts(b.workspace_id);
       const jobId = yield* deleteNow(a.owner);
-      const run = (lease: Lease) => Effect.provide(purgeWorkspace(lease.job), store.layer);
+      const run = (lease: Lease) => purge(lease.job, store);
 
       // First attempt dies mid-purge: some objects are deleted, then the worker is gone without completing.
       store.failNext('delete', { after: 3 });
@@ -124,7 +135,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const sync = yield* enqueueJob({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
       yield* deleteNow(a.owner);
       const lease = yield* claim;
-      expect(yield* Effect.provide(purgeWorkspace(lease.job), store.layer)).toMatchObject({ status: 'succeeded', result: { purged: true } });
+      expect(yield* purge(lease.job, store)).toMatchObject({ status: 'succeeded', result: { purged: true } });
       const rows = yield* sql<{ id: string; kind: string }>`SELECT id, kind FROM jobs WHERE workspace_id = ${a.workspace_id} ORDER BY kind`;
       expect(rows.map(row => [row.id, row.kind])).toEqual([[sync, 'workos.sync'], [lease.job.id, 'workspace.purge']]);
     }),
@@ -148,9 +159,9 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       }
       yield* deleteNow(a.owner);
       const lease = yield* claim;
-      const outcome = yield* Effect.provide(purgeWorkspace(lease.job), store.layer);
+      const outcome = yield* purge(lease.job, store);
       expect(outcome).toMatchObject({ status: 'succeeded', result: { purged: true, rows_deleted: { auth_invitation: 1, auth_member: 1, auth_organization: 1 } } });
-      expect(yield* Effect.provide(purgeWorkspace(lease.job), store.layer)).toEqual(outcome);
+      expect(yield* purge(lease.job, store)).toEqual(outcome);
       const left = yield* sql<{ organizationId: string }>`SELECT organizationId FROM auth_invitation UNION ALL SELECT organizationId FROM auth_member UNION ALL SELECT id FROM auth_organization`;
       expect(left.map(row => row.organizationId)).toEqual([b.workspace_id, b.workspace_id, b.workspace_id]);
       const sessions = yield* sql<{ activeOrganizationId: string | null }>`SELECT activeOrganizationId FROM auth_session ORDER BY activeOrganizationId IS NULL DESC`;
@@ -166,9 +177,54 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       yield* deleteNow(a.owner);
       yield* sql`UPDATE workspaces SET deleted_at = NULL, purge_after = NULL WHERE id = ${a.workspace_id}`;
       const lease = yield* claim;
-      expect(yield* Effect.provide(purgeWorkspace(lease.job), store.layer)).toMatchObject({ status: 'succeeded', result: { purged: false } });
+      expect(yield* purge(lease.job, store)).toMatchObject({ status: 'succeeded', result: { purged: false } });
       expect(store.deleted).toEqual([]);
       expect((yield* counts(a.workspace_id))['meetings']).toBe(1);
+    }),
+  );
+
+  it.effect('disconnects the purged workspace Pipedream accounts after a provider failure and keeps every other workspace account', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = memoryObjectStore();
+      const pipedream = fixturePipedream([]);
+      const a = yield* seed('Purged', store);
+      const b = yield* seed('Kept', store);
+      const userA = `${a.workspace_id}.${a.owner.principal.id}`;
+      const userB = `${b.workspace_id}.${b.owner.principal.id}`;
+      yield* storeAccount(a.owner, 'apn_a_drive');
+      // The same provider account stored by both workspaces is still needed by B.
+      yield* storeAccount(a.owner, 'apn_shared');
+      yield* storeAccount(b.owner, 'apn_shared');
+      yield* storeAccount(b.owner, 'apn_b_drive');
+      const connected = (id: string) => ({ id, app: 'google_drive', dead: false });
+      // `apn_a_unsynced` was connected at Pipedream but never synced into a row.
+      pipedream.accounts.set(userA, [connected('apn_a_drive'), connected('apn_a_unsynced')]);
+      pipedream.accounts.set(userB, [connected('apn_shared'), connected('apn_b_drive')]);
+      const jobId = yield* deleteNow(a.owner);
+
+      pipedream.failNext('deleteAccount', new IntegrationFailure({ message: 'Pipedream responded 503', status: 503, retryable: true, ambiguous: true }));
+      const first = yield* claim;
+      expect(yield* Effect.flip(purge(first.job, store, pipedream))).toMatchObject({ _tag: 'JobFailure', retryable: true, message: expect.stringContaining('Pipedream') });
+      // Nothing is deleted while a required disconnect fails, so the retry still finds every account.
+      expect(store.deleted).toEqual([]);
+      expect((yield* counts(a.workspace_id))['integration_accounts']).toBe(2);
+      yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${jobId}`;
+      yield* sweepJobs;
+
+      const second = yield* claim;
+      const outcome = yield* purge(second.job, store, pipedream);
+      expect(outcome).toMatchObject({ status: 'succeeded', result: { purged: true, accounts_disconnected: 2, accounts_kept_shared: 1, rows_deleted: { integration_accounts: 2 } } });
+      expect(pipedream.accounts.get(userA)).toEqual([]);
+      expect(pipedream.accounts.get(userB)).toEqual([connected('apn_shared'), connected('apn_b_drive')]);
+      const deletes = pipedream.calls.filter(call => call.operation === 'deleteAccount').map(call => call.request);
+      expect(deletes.sort()).toEqual(['apn_a_drive', 'apn_a_drive', 'apn_a_unsynced']);
+      expect(pipedream.calls.some(call => call.operation === 'listAccounts' && call.request === userB)).toBe(false);
+      expect((yield* counts(b.workspace_id))['integration_accounts']).toBe(2);
+      // A rerun after the rows committed returns the receipt without calling Pipedream again.
+      const calls = pipedream.calls.length;
+      expect(yield* purge(second.job, store, pipedream)).toEqual(outcome);
+      expect(pipedream.calls.length).toBe(calls);
     }),
   );
 

@@ -2,8 +2,8 @@
  * Workspace deletion. The owner confirms with the exact workspace name; the
  * workspace is then marked deleted, which refuses every membership, session and agent credential
  * of it at once (auth.ts joins only live workspaces), and a `workspace.purge` job becomes due after
- * the grace period, during which the owner can restore it. The purge deletes the workspace's R2
- * objects by prefix, then its rows, and records a receipt.
+ * the grace period, during which the owner can restore it. The purge disconnects the workspace's
+ * Pipedream accounts, deletes its R2 objects by prefix, then its rows, and records a receipt.
  * Nothing else starts a purge: retention is still open (docs/DECISIONS.md).
  */
 import { HttpApiBuilder } from '@effect/platform';
@@ -17,6 +17,7 @@ import type { JobHandler } from './job-types.ts';
 import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { closeWorkspaceSockets } from './media/open-sockets.ts';
 import { ObjectStore } from './providers/object-store.ts';
+import { PipedreamClient } from './providers/pipedream.ts';
 import { bumpPermissionRevision, write } from './store.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -135,6 +136,9 @@ const PurgeReceipt = Schema.Struct({
   purged: Schema.Literal(true),
   deleted_by: PrincipalId,
   prefixes: Schema.Array(Schema.String),
+  /** Accounts the completing attempt confirmed gone at Pipedream, and accounts another workspace still stores. */
+  accounts_disconnected: Schema.Number,
+  accounts_kept_shared: Schema.Number,
   rows_deleted: Schema.Record({ key: Schema.String, value: Schema.Number }),
 });
 type PurgeReceipt = typeof PurgeReceipt.Type;
@@ -156,11 +160,38 @@ const deletePrefix = (prefix: string) =>
   }).pipe(Effect.catchTag('ObjectStoreError', error => new JobFailure({ message: `Purge ${error.operation} failed: ${error.message}`, retryable: true })));
 
 /**
- * `workspace.purge`: objects first, then rows in one transaction that also writes the receipt onto
+ * Deletes at Pipedream every account of the workspace: each stored row, and each account a member
+ * connected under the workspace's external user (`<workspace_id>.<principal_id>`) that was never
+ * synced. An account another workspace also stores stays connected. Runs before anything is
+ * deleted, so a failure leaves the rows to retry from; a delete of an account already gone succeeds.
+ */
+const disconnectAccounts = (workspace_id: WorkspaceId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const client = yield* PipedreamClient;
+    const rows = yield* sql<{ provider_account_id: string }>`SELECT provider_account_id FROM integration_accounts WHERE workspace_id = ${workspace_id}`;
+    const accounts = new Set(rows.map(row => row.provider_account_id));
+    // Unconfigured: nothing can be listed, and a stored row fails its delete below instead of being skipped.
+    if (client.configured) {
+      const members = yield* sql<{ principal_id: string }>`SELECT principal_id FROM workspace_members WHERE workspace_id = ${workspace_id}`;
+      for (const member of members) {
+        for (const account of yield* client.listAccounts(`${workspace_id}.${member.principal_id}`)) accounts.add(account.id);
+      }
+    }
+    if (accounts.size === 0) return { accounts_disconnected: 0, accounts_kept_shared: 0 };
+    const shared = yield* sql<{ provider_account_id: string }>`SELECT DISTINCT provider_account_id FROM integration_accounts
+      WHERE workspace_id <> ${workspace_id} AND provider_account_id IN ${sql.in([...accounts])}`;
+    for (const row of shared) accounts.delete(row.provider_account_id);
+    yield* Effect.forEach(accounts, account => client.deleteAccount(account), { discard: true });
+    return { accounts_disconnected: accounts.size, accounts_kept_shared: shared.length };
+  }).pipe(Effect.catchTag('IntegrationFailure', error => new JobFailure({ message: `Pipedream disconnect failed: ${error.message}`, retryable: error.retryable })));
+
+/**
+ * `workspace.purge`: Pipedream accounts first, then objects, then rows in one transaction that also writes the receipt onto
  * this job, so a rerun after a crash returns that receipt instead of counting nothing twice. The
  * `workspaces` row stays as a tombstone with its name cleared: the job row holding the receipt references it.
  */
-export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore> = job =>
+export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | PipedreamClient> = job =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const workspace_id = job.workspace_id;
@@ -178,6 +209,7 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore> = job
       WHERE id = ${workspace_id} AND deleted_at IS NOT NULL AND purge_after <= UTC_TIMESTAMP(6) FOR UPDATE`);
     if (due.length === 0) return { status: 'succeeded' as const, result: { purged: false, reason: 'Workspace is not deleted or not yet due' } };
 
+    const disconnected = yield* disconnectAccounts(workspace_id);
     const prefixes = [`workspaces/${workspace_id}/`, `meetings/${workspace_id}/`];
     yield* Effect.forEach(prefixes, deletePrefix, { discard: true });
 
@@ -204,7 +236,7 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore> = job
           rows_deleted['principals'] = (yield* write(sql`DELETE x FROM principals x WHERE x.id ${orphaned}`)).affectedRows;
         }
         yield* sql`UPDATE workspaces SET name = '' WHERE id = ${workspace_id}`;
-        const receipt: PurgeReceipt = { purged: true, deleted_by, prefixes, rows_deleted };
+        const receipt: PurgeReceipt = { purged: true, deleted_by, prefixes, ...disconnected, rows_deleted };
         yield* sql`UPDATE jobs SET result = ${JSON.stringify(receipt)} WHERE id = ${job.id}`;
         return receipt;
       }),
