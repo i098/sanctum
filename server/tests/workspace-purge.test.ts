@@ -193,14 +193,11 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const userA = `${a.workspace_id}.${a.owner.principal.id}`;
       const userB = `${b.workspace_id}.${b.owner.principal.id}`;
       yield* storeAccount(a.owner, 'apn_a_drive');
-      // The same provider account stored by both workspaces is still needed by B.
-      yield* storeAccount(a.owner, 'apn_shared');
-      yield* storeAccount(b.owner, 'apn_shared');
       yield* storeAccount(b.owner, 'apn_b_drive');
       const connected = (id: string) => ({ id, app: 'google_drive', dead: false });
       // `apn_a_unsynced` was connected at Pipedream but never synced into a row.
       pipedream.accounts.set(userA, [connected('apn_a_drive'), connected('apn_a_unsynced')]);
-      pipedream.accounts.set(userB, [connected('apn_shared'), connected('apn_b_drive')]);
+      pipedream.accounts.set(userB, [connected('apn_b_drive')]);
       const jobId = yield* deleteNow(a.owner);
 
       pipedream.failNext('deleteAccount', new IntegrationFailure({ message: 'Pipedream responded 503', status: 503, retryable: true, ambiguous: true }));
@@ -208,19 +205,19 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       expect(yield* Effect.flip(purge(first.job, store, pipedream))).toMatchObject({ _tag: 'JobFailure', retryable: true, message: expect.stringContaining('Pipedream') });
       // Nothing is deleted while a required disconnect fails, so the retry still finds every account.
       expect(store.deleted).toEqual([]);
-      expect((yield* counts(a.workspace_id))['integration_accounts']).toBe(2);
+      expect((yield* counts(a.workspace_id))['integration_accounts']).toBe(1);
       yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${jobId}`;
       yield* sweepJobs;
 
       const second = yield* claim;
       const outcome = yield* purge(second.job, store, pipedream);
-      expect(outcome).toMatchObject({ status: 'succeeded', result: { purged: true, accounts_disconnected: 2, accounts_kept_shared: 1, rows_deleted: { integration_accounts: 2 } } });
+      expect(outcome).toMatchObject({ status: 'succeeded', result: { purged: true, accounts_disconnected: 2, rows_deleted: { integration_accounts: 1 } } });
       expect(pipedream.accounts.get(userA)).toEqual([]);
-      expect(pipedream.accounts.get(userB)).toEqual([connected('apn_shared'), connected('apn_b_drive')]);
+      expect(pipedream.accounts.get(userB)).toEqual([connected('apn_b_drive')]);
       const deletes = pipedream.calls.filter(call => call.operation === 'deleteAccount').map(call => call.request);
       expect(deletes.sort()).toEqual(['apn_a_drive', 'apn_a_drive', 'apn_a_unsynced']);
       expect(pipedream.calls.some(call => call.operation === 'listAccounts' && call.request === userB)).toBe(false);
-      expect((yield* counts(b.workspace_id))['integration_accounts']).toBe(2);
+      expect((yield* counts(b.workspace_id))['integration_accounts']).toBe(1);
       // A rerun after the rows committed returns the receipt without calling Pipedream again.
       const calls = pipedream.calls.length;
       expect(yield* purge(second.job, store, pipedream)).toEqual(outcome);

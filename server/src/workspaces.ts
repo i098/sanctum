@@ -136,9 +136,8 @@ const PurgeReceipt = Schema.Struct({
   purged: Schema.Literal(true),
   deleted_by: PrincipalId,
   prefixes: Schema.Array(Schema.String),
-  /** Accounts the completing attempt confirmed gone at Pipedream, and accounts another workspace still stores. */
+  /** Accounts the completing attempt confirmed gone at Pipedream. */
   accounts_disconnected: Schema.Number,
-  accounts_kept_shared: Schema.Number,
   rows_deleted: Schema.Record({ key: Schema.String, value: Schema.Number }),
 });
 type PurgeReceipt = typeof PurgeReceipt.Type;
@@ -162,8 +161,8 @@ const deletePrefix = (prefix: string) =>
 /**
  * Deletes at Pipedream every account of the workspace: each stored row, and each account a member
  * connected under the workspace's external user (`<workspace_id>.<principal_id>`) that was never
- * synced. An account another workspace also stores stays connected. Runs before anything is
- * deleted, so a failure leaves the rows to retry from; a delete of an account already gone succeeds.
+ * synced. Runs before anything is deleted, so a failure leaves the rows to retry from; a delete of
+ * an account already gone succeeds.
  */
 const disconnectAccounts = (workspace_id: WorkspaceId) =>
   Effect.gen(function* () {
@@ -178,12 +177,8 @@ const disconnectAccounts = (workspace_id: WorkspaceId) =>
         for (const account of yield* client.listAccounts(`${workspace_id}.${member.principal_id}`)) accounts.add(account.id);
       }
     }
-    if (accounts.size === 0) return { accounts_disconnected: 0, accounts_kept_shared: 0 };
-    const shared = yield* sql<{ provider_account_id: string }>`SELECT DISTINCT provider_account_id FROM integration_accounts
-      WHERE workspace_id <> ${workspace_id} AND provider_account_id IN ${sql.in([...accounts])}`;
-    for (const row of shared) accounts.delete(row.provider_account_id);
     yield* Effect.forEach(accounts, account => client.deleteAccount(account), { discard: true });
-    return { accounts_disconnected: accounts.size, accounts_kept_shared: shared.length };
+    return { accounts_disconnected: accounts.size };
   }).pipe(Effect.catchTag('IntegrationFailure', error => new JobFailure({ message: `Pipedream disconnect failed: ${error.message}`, retryable: error.retryable })));
 
 /**

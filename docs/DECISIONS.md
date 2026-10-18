@@ -309,7 +309,7 @@ A final window inside a meeting that closed before its transcript was complete (
 Accepted: a workspace owner deleting the workspace deletes all its data, including meetings restricted to other principals; one owner suffices.
 The grace-period undo protects against mistakes; after it, a durable `workspace.purge` job deletes the recordings, transcripts, memory and rows.
 This is not a retention policy: no recording expires automatically.
-The purge disconnects the workspace's Pipedream-connected accounts before it deletes recordings and rows, and keeps an account that another workspace also stores ([operations.md](operations.md#recovery)).
+The purge disconnects the workspace's Pipedream-connected accounts before it deletes recordings and rows ([operations.md](operations.md#recovery)).
 
 ## Deployment decision — 2026-10-02
 
