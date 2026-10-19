@@ -15,6 +15,7 @@ import { purgeWorkspace } from '../src/workspaces.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { memoryObjectStore } from './support/object-store.ts';
+import { fixturePipedream } from './support/pipedream.ts';
 
 const ISSUER = 'https://issuer.fixture.test';
 const CLIENT_ID = 'sanctum-fixture';
@@ -476,7 +477,7 @@ describe('OIDC sign-in', () => {
           yield* mark(workspace_id, -1);
           yield* enqueueJob({ workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: first.principal_id }, requested_by: null });
           const lease = Option.getOrThrow(yield* claimJob(['workspace.purge'], 60_000));
-          yield* Effect.provide(purgeWorkspace(lease.job), memoryObjectStore().layer);
+          yield* Effect.provide(purgeWorkspace(lease.job), Layer.merge(memoryObjectStore().layer, fixturePipedream([]).layer));
         }).pipe(Effect.provide(db));
       yield* mark(second.workspace_id, 7);
       yield* purge(first.workspace_id);
