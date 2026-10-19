@@ -210,8 +210,9 @@ Metric names are the runner's (`scripts/soak/score.ts`); query latency is in mil
 - **Purge job failed**: only a non-retryable error ends it, such as an invalid payload, a Pipedream 4xx other than 429, or missing Pipedream credentials while the workspace stores accounts. After fixing the cause, requeue it: `UPDATE jobs SET status = 'pending', attempts = 0, available_at = UTC_TIMESTAMP(6), lease_token = NULL, lease_until = NULL WHERE kind = 'workspace.purge' AND status = 'failed' AND workspace_id = '<id>'`.
 - **Rollback**: set `SANCTUM_IMAGE` to the previous validated tag and `docker compose up -d api worker`; data volumes and R2 objects are untouched and migrations are never reversed, so a previous image must support the current schema.
 
-## Not yet selected
+## Activation decisions
 
 The sign-in issuer and MCP authorization server are decided (WorkOS AuthKit hosted, embedded Better Auth self-hosted). The hosted site is configured for WorkOS AuthKit ([Cloudflare](#cloudflare)); the embedded issuer is built ([Self-hosted sign-in](#self-hosted-sign-in)) but runs in no deployment.
-Saved-meeting retention and speech outside detected meetings remain open ([DECISIONS.md](DECISIONS.md)).
-Until they are selected, production activation is refused and no recording expires automatically (only an owner's workspace deletion purges data).
+The recording policies were selected on 2026-10-19 ([DECISIONS.md](DECISIONS.md#recording-policy-decisions---2026-10-19)): saved recordings and transcripts stay until the user deletes them, and all captured speech is saved as provisional conversations.
+No recording expires automatically; only an owner's workspace deletion purges data.
+Production activation stays refused until an operator lists all four decisions in `SANCTUM_SELECTED_DECISIONS`, which needs separate approval; the hosted Worker lists only the two sign-in decisions and runs in development mode.

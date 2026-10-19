@@ -46,7 +46,7 @@ Do not add AI/agent co-author attribution to commits.
 ## Decisions and release boundaries
 
 Confirmed choices are recorded in docs/DECISIONS.md; do not repeatedly ask them.
-Unresolved sign-in and recording policies remain explicit; finish independent code without silently inventing a policy.
+Sign-in and recording policies are decided in docs/DECISIONS.md; do not invent policy beyond those records.
 Repository creation is not permission to provision paid services, send messages, create real events, run production migrations, publish packages, deploy, or activate live recording.
 Ask at those boundaries when the user has not already authorized the specific action.
 Report implementation, local tests, model evaluation, deployment, and live verification separately.

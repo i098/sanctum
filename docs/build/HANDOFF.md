@@ -21,8 +21,8 @@ Implement actual behavior and tests, not only the illustrative interface.
 
 Read docs/DECISIONS.md before dependent work.
 Website capture, TypeScript + Effect, MySQL, R2, silent behavior, automatic meeting boundaries, and the visual direction are settled.
-Sign-in and MCP authorization are decided in docs/DECISIONS.md; the hosted site is configured for WorkOS AuthKit and the embedded self-hosted issuer is built but runs in no deployment. The recording policies have not yet been selected.
-Do not silently invent the recording policies; complete independent implementation and fixtures while they remain open.
+Sign-in and MCP authorization are decided in docs/DECISIONS.md; the hosted site is configured for WorkOS AuthKit and the embedded self-hosted issuer is built but runs in no deployment. The recording policies were selected on 2026-10-19: keep saved recordings and transcripts until the user deletes them, and save all captured speech as provisional conversations.
+Selecting these policies does not activate production or recording; each activation still needs separate approval.
 No prior data import or legacy API compatibility is required unless separately requested.
 
 Work through the checklist in vertical slices with internal verification checkpoints.

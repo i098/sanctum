@@ -113,19 +113,30 @@ Both planner passes use the `planner` role; this slice merges after the planner 
 The plan estimated about USD 3.17 a month for all added inference at light use (40 meetings, 80 research runs), of which about USD 1.38 is this research; recorded usage, not the estimate, shows actual cost.
 Anthropic stays selectable for research with `RESEARCH_MODEL_PROVIDER=anthropic`.
 
-## Still open
+## Recording policy decisions - 2026-10-19
+
+On 2026-10-19, the owner answered "Yes" to the recommended option for each policy, in separate iMessage threads.
 
 ### Saved-meeting retention
 
-How long should saved recordings and transcripts remain before automatic deletion?
-No automatic expiration has been selected.
+Accepted option: "Keep saved recordings and transcripts until the user deletes them."
+Owner's answer: "Yes".
+No automatic expiration applies.
 Do not infer permission to delete data.
 
 ### Speech outside detected meetings
 
-Should all captured speech become provisional conversations, or should only detected meetings be archived?
-If only detected meetings are archived, choose how long to hold speech while determining its meeting.
-This unassigned-speech buffer is different from the browser queue of recordings waiting to upload.
+Accepted option: "Save all captured speech as provisional conversations."
+Owner's answer: "Yes".
+Sanctum keeps all captured speech, not only detected meetings, so no unassigned-speech hold period applies.
+The browser queue of recordings waiting to upload is a different mechanism and does not change.
+Provisional conversations keep the access rules of the [detected-meeting ownership decision](#detected-meeting-ownership-decision--2026-10-08); this decision adds no sharing permission.
+
+### Activation boundary
+
+These decisions do not activate production or recording.
+Listing `meeting_retention` and `outside_meeting_speech` in `SANCTUM_SELECTED_DECISIONS` for a production deployment needs separate approval.
+Recording activation, model spending, live integration writes, production migrations, package publication and deployment each still need their own approval.
 
 ## Deployment inputs
 

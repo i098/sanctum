@@ -21,8 +21,8 @@ Implement actual behavior and tests, not only the illustrative interface.
 
 Read docs/DECISIONS.md before dependent work.
 Website capture, TypeScript + Effect, MySQL, R2, silent behavior, automatic meeting boundaries, and the visual direction are settled.
-Sign-in and MCP authorization are decided in docs/DECISIONS.md; the hosted site is configured for WorkOS AuthKit and the embedded self-hosted issuer is built but runs in no deployment. The recording policies have not yet been selected.
-Do not silently invent the recording policies; complete independent implementation and fixtures while they remain open.
+Sign-in and MCP authorization are decided in docs/DECISIONS.md; the hosted site is configured for WorkOS AuthKit and the embedded self-hosted issuer is built but runs in no deployment. The recording policies were selected on 2026-10-19: keep saved recordings and transcripts until the user deletes them, and save all captured speech as provisional conversations.
+Selecting these policies does not activate production or recording; each activation still needs separate approval.
 No prior data import or legacy API compatibility is required unless separately requested.
 
 Work through the checklist in vertical slices with internal verification checkpoints.
@@ -96,15 +96,13 @@ A mock dashboard or an API-shaped stub does not satisfy this contract.
 - Integrations: Pipedream with catalog discovery and the specified Google operations.
 - Interaction: silent background operation; speak only in a requested interaction.
 
-### Still to choose
+### Decided after the first brief
 
 - MCP authorization server and identity issuer: decided on 2026-10-08 in docs/DECISIONS.md (WorkOS AuthKit hosted, embedded Better Auth self-hosted, both standard OIDC and OAuth selected by configuration).
-- Saved meeting retention: how long confirmed recordings and transcripts are kept before automatic deletion; no automatic expiry has been authorized.
-- Unassigned audio buffer: how long to hold captured speech before it has been assigned to a meeting, if the policy archives detected meetings only. This is separate from the offline upload recovery queue.
-- Speech outside a detected meeting: requires an explicit archive policy before unattended production capture is enabled.
+- Saved meeting retention: decided on 2026-10-19 in docs/DECISIONS.md. Keep saved recordings and transcripts until the user deletes them; no automatic expiry applies.
+- Speech outside a detected meeting: decided on 2026-10-19 in docs/DECISIONS.md. Save all captured speech as provisional conversations, so no unassigned audio buffer applies. The offline upload recovery queue is separate.
 
-Do not invent these answers while implementing.
-Complete independent work and keep dependent integration clearly marked until the answer exists.
+Do not invent policy beyond these records.
 For local tests, use fixture identities, a disposable database, synthetic audio, and a local object-store fake.
 For production activation, require explicit workspace timezone, selected microphone, storage credentials, outside-meeting policy, and a working identity issuer.
 Do not automatically create paid services, publish packages, run production migrations, or activate recording merely by executing this brief.
@@ -118,7 +116,7 @@ Do not automatically create paid services, publish packages, run production migr
 - One coalesced context job per active meeting, after 25 seconds with new speech or four new turns.
 - A five-minute speech gap can trigger boundary evaluation; it does not itself establish that a meeting ended.
 - Signed playback URLs expire after five minutes; new URLs require a fresh access check.
-- Completed recordings/transcripts have no automatic expiration until a retention policy is selected.
+- Completed recordings/transcripts have no automatic expiration; they stay until the user deletes them (docs/DECISIONS.md, 2026-10-19).
 
 These values are acceptance-test inputs and calibration starting points.
 Keep them in a small configuration object, not scattered literals or a large user-facing settings system.
