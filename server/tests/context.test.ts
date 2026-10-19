@@ -302,10 +302,13 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       // Planted facts and questions of the 24-hour soak corpus (scripts/soak/build-corpus.ts).
       const facts = ['The Falcon project owner is Peter.', 'The Harbor project owner is Anna.', 'The Falcon offsite is in Lisbon.', 'The Falcon team has five engineers.',
         'The Falcon tickets live in Trello.', 'Priya owns onboarding.', 'Dana sends the signed contract by Friday.', 'The release is coming in May.',
-        'We chose Northwind Freight for shipping.', 'Falcon budget approved at 40k.', 'Marcus takes over onboarding.'];
-      const later = yield* Effect.provide(seedSegment(meeting, 900, 905, 'For the record, Marcus takes over onboarding.'), db);
+        'We chose Northwind Freight for shipping.', 'Falcon budget approved at 40k.', 'Marcus takes over onboarding.',
+        'We decided the launch date is November 3.', 'The launch has moved to November 17.', 'The launch is now December 1.'];
+      // Later facts cite later segments, so their event time is newer.
+      const later = new Map([['Marcus takes over onboarding.', 900], ['The launch has moved to November 17.', 600], ['The launch is now December 1.', 1200]]);
       for (const [revision, text] of facts.entries()) {
-        const cited = text.startsWith('Marcus') ? later : segment;
+        const at = later.get(text);
+        const cited = at === undefined ? segment : yield* Effect.provide(seedSegment(meeting, at, at + 5, `For the record, ${text}`), db);
         expect((yield* request('owner', '/context/items', { ...decision(meeting.meeting_id, cited, `fact-${revision}`, revision), text })).status).toBe(201);
       }
       const search = (q: string, token = 'owner') =>
@@ -321,6 +324,9 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         ['When is it coming?', ['The release is coming in May.']],
         ['Which vendor was chosen at the start?', ['We chose Northwind Freight for shipping.']],
         ['Who owns onboarding now?', ['Marcus takes over onboarding.', 'Priya owns onboarding.']],
+        ['Who is in charge of onboarding now?', ['Marcus takes over onboarding.', 'Priya owns onboarding.']],
+        ['Which shipping company did we pick?', ['We chose Northwind Freight for shipping.']],
+        ["What's the launch date now?", ['The launch is now December 1.', 'The launch has moved to November 17.', 'We decided the launch date is November 3.']],
         ['Who approved the Q3 audit?', []],
         ['Who signed the lease?', []],
         ['Who is it?', []],

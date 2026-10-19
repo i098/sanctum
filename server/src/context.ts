@@ -419,7 +419,6 @@ const DETERMINERS = new Set(['which', 'what', 'whose', 'any']);
 /** A word after these is the question's verb ("who owns", "was chosen", "we decide"), which the fact often words differently. */
 const VERB_LEADS = new Set(['who', 'is', 'are', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'has', 'have', 'had', 'will', 'would', 'can', 'could',
  'should', 'we', 'you', 'they', 'i']);
-const COPULAS = new Set(['is', 'are', 'was', 'were']);
 /** Time words and clock times ("as of T0+04:00") ask for an order or a window; `from`, `to` and newest-first carry those. */
 const TIME_WORDS = new Set(['current', 'currently', 'now', 'latest', 'newest', 'recent', 'start', 'history', 'order', 'before', 'after', 'since', 'until', 'between']);
 const CLOCK = /\S*\d{1,2}:\d{2}\S*/g;
@@ -434,40 +433,37 @@ const stem = (word: string) => {
 /**
  * The words of a question, without question, helper, time and negated ("not Northwood") words. Names (a capital letter after
  * the first word, or a digit) are kept as written; other words of three or more letters lose one inflection ending. A word
- * is soft when it is the question's verb, or names the answer's kind: the words after "which"/"what", or the last word of
- * "what is the ..." ("What is the current launch date?" asks about `launch`). Every other word is required.
+ * is soft when it is the question's verb, or names the answer's kind (the words after "which"/"what"). Every other word is
+ * required.
  */
 const questionTerms = (q: string) => {
  const names: string[] = [], required: string[] = [], soft: string[] = [];
- let previous = '', kind = false, attribute = false;
+ let previous = '', kind = false;
  for (const [index, token] of (q.replace(CLOCK, ' ').match(TOKEN) ?? []).entries()) {
   const word = token.toLowerCase();
   const before = previous;
   previous = word;
-  if (QUESTION_WORDS.has(word)) {
-   attribute ||= DETERMINERS.has(before) && COPULAS.has(word);
-   kind = DETERMINERS.has(word);
-  } else if (before === 'not' || TIME_WORDS.has(word)) continue;
+  if (QUESTION_WORDS.has(word)) kind = DETERMINERS.has(word);
+  else if (before === 'not' || TIME_WORDS.has(word)) continue;
   else if ((index > 0 && /^\p{Lu}/u.test(token)) || /\p{N}/u.test(token)) names.push(word);
   else if (word.length >= 3) (kind || VERB_LEADS.has(before) ? soft : required).push(stem(word));
  }
- if (attribute && required.length > 0) soft.push(required.pop()!);
  return { names, required, soft };
 };
 
 /**
  * A query without question or helper words is a keyword query: every word is required. A question requires its names and
- * required words; with no required word it needs half of its soft words. `null` when nothing is left to match.
+ * half of its required words; with no required word it needs one soft word. `null` when nothing is left to match.
  */
 const searchFilter = (sql: SqlClient.SqlClient, q: string) => {
  const words = q.toLowerCase().match(TOKEN) ?? [];
  if (!words.some(word => QUESTION_WORDS.has(word))) return words.length === 0 ? null : termFilter(sql, words);
  const { names, required, soft } = questionTerms(q);
- if (required.length > 0 || (soft.length === 0 && names.length > 0)) return termFilter(sql, [...names, ...required]);
- if (soft.length === 0) return null;
+ const terms = required.length > 0 ? required : soft;
+ if (terms.length === 0) return names.length === 0 ? null : termFilter(sql, names);
  // ponytail: OR-style count scans the caller's items instead of the FULLTEXT index; bounded by workspace scope and filters.
- const matched = soft.map(word => sql`(${termFilter(sql, [word])} > 0)`).reduce((sum, term) => sql`${sum} + ${term}`);
- return sql.and([termFilter(sql, names), sql`${matched} >= ${Math.ceil(soft.length / 2)}`]);
+ const matched = terms.map(word => sql`(${termFilter(sql, [word])} > 0)`).reduce((sum, term) => sql`${sum} + ${term}`);
+ return sql.and([termFilter(sql, names), sql`${matched} >= ${Math.ceil(required.length / 2) || 1}`]);
 };
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
