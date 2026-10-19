@@ -301,26 +301,34 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         });
       // Planted facts and questions of the 24-hour soak corpus (scripts/soak/build-corpus.ts).
       const facts = ['The Falcon project owner is Peter.', 'The Harbor project owner is Anna.', 'The Falcon offsite is in Lisbon.', 'The Falcon team has five engineers.',
-        'The Falcon tickets live in Trello.', 'Priya owns onboarding.', 'Dana sends the signed contract by Friday.', 'The release is coming in May.'];
+        'The Falcon tickets live in Trello.', 'Priya owns onboarding.', 'Dana sends the signed contract by Friday.', 'The release is coming in May.',
+        'We chose Northwind Freight for shipping.', 'Falcon budget approved at 40k.', 'Marcus takes over onboarding.'];
+      const later = yield* Effect.provide(seedSegment(meeting, 900, 905, 'For the record, Marcus takes over onboarding.'), db);
       for (const [revision, text] of facts.entries()) {
-        expect((yield* request('owner', '/context/items', { ...decision(meeting.meeting_id, segment, `fact-${revision}`, revision), text })).status).toBe(201);
+        const cited = text.startsWith('Marcus') ? later : segment;
+        expect((yield* request('owner', '/context/items', { ...decision(meeting.meeting_id, cited, `fact-${revision}`, revision), text })).status).toBe(201);
       }
       const search = (q: string, token = 'owner') =>
         request(token, `/context/search?${new URLSearchParams({ q })}`).pipe(Effect.map(({ status, body }) => ({ status, texts: body.items.map(item => item.text) })));
 
       expect(yield* search('Falcon owner')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
-      for (const [q, text] of [
-        ['Who owns the Falcon project?', 'The Falcon project owner is Peter.'],
-        ['Where is the Falcon offsite?', 'The Falcon offsite is in Lisbon.'],
-        ['How many engineers are on the Falcon team?', 'The Falcon team has five engineers.'],
-        ['Where do the Falcon tickets live?', 'The Falcon tickets live in Trello.'],
-        ['Who owns onboarding?', 'Priya owns onboarding.'],
-        ['When does Dana send the contract?', 'Dana sends the signed contract by Friday.'],
-        ['When is it coming?', 'The release is coming in May.'],
+      for (const [q, texts] of [
+        ['Who owns the Falcon project?', ['The Falcon project owner is Peter.']],
+        ['Where is the Falcon offsite?', ['The Falcon offsite is in Lisbon.']],
+        ['How many engineers are on the Falcon team?', ['The Falcon team has five engineers.']],
+        ['Where do the Falcon tickets live?', ['The Falcon tickets live in Trello.']],
+        ['When does Dana send the contract?', ['Dana sends the signed contract by Friday.']],
+        ['When is it coming?', ['The release is coming in May.']],
+        ['Which vendor was chosen at the start?', ['We chose Northwind Freight for shipping.']],
+        ['Who owns onboarding now?', ['Marcus takes over onboarding.', 'Priya owns onboarding.']],
+        ['Who approved the Q3 audit?', []],
+        ['Who signed the lease?', []],
+        ['Who is it?', []],
+        ['Does it?', []],
+        ['?!', []],
       ] as const) {
-        expect((yield* search(q)).texts[0], q).toBe(text);
+        expect(yield* search(q), q).toEqual({ status: 200, texts });
       }
-      for (const q of ['Who approved the Q3 audit?', 'Who is it?', 'Does it?', '?!']) expect(yield* search(q), q).toEqual({ status: 200, texts: [] });
       expect(yield* search('Who owns the Falcon project?', 'stranger')).toEqual({ status: 200, texts: [] });
     }));
 });

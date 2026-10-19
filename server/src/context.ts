@@ -413,24 +413,61 @@ export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string
 const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by', 'com', 'de', 'en', 'for', 'from', 'how', 'i', 'in', 'is', 'it', 'la',
  'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'what', 'when', 'where', 'who', 'will', 'with', 'und', 'www',
  'which', 'whom', 'whose', 'why', 'do', 'does', 'did', 'has', 'have', 'had', 'were', 'been', 'any', 'many', 'much', 'there',
- 'we', 'our', 'us', 'you', 'your', 'they', 'their', 'can', 'could', 'would', 'should']);
+ 'we', 'our', 'us', 'you', 'your', 'they', 'their', 'can', 'could', 'would', 'should', 'and', 'its', 'not']);
+/** Words that name the kind of answer ("which vendor", "any restrictions"); the fact names the answer, not its kind. */
+const DETERMINERS = new Set(['which', 'what', 'whose', 'any']);
+/** A word after these is the question's verb ("who owns", "was chosen", "we decide"), which the fact often words differently. */
+const VERB_LEADS = new Set(['who', 'is', 'are', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'has', 'have', 'had', 'will', 'would', 'can', 'could',
+ 'should', 'we', 'you', 'they', 'i']);
+const COPULAS = new Set(['is', 'are', 'was', 'were']);
+/** Time words and clock times ("as of T0+04:00") ask for an order or a window; `from`, `to` and newest-first carry those. */
+const TIME_WORDS = new Set(['current', 'currently', 'now', 'latest', 'newest', 'recent', 'start', 'history', 'order', 'before', 'after', 'since', 'until', 'between']);
+const CLOCK = /\S*\d{1,2}:\d{2}\S*/g;
+const TOKEN = /[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu;
 
 // ponytail: one-suffix stemmer for the prefix match ("speaking" -> "speak*"); swap for a real stemmer when recall measures need it.
 const stem = (word: string) => {
- const root = word.replace(/ies$|ing$|(?<!e)ed$|(?<!s)s$/, '');
+ const root = word.replace(/ies$|ing$|(?<!e)ed$|en$|(?<!s)s$/, '');
  return root.length >= 3 && !QUESTION_WORDS.has(root) ? root : word;
 };
 
 /**
- * A query without question or helper words is a keyword query: every word is required. Any other query is a question:
- * its remaining words lose one inflection ending and rank items by FULLTEXT relevance, so "Who owns the Falcon project?"
- * ranks by `own*`, `falcon*` and `project*`. Words shorter than three characters are not indexed, so a question drops them.
+ * The words of a question, without question, helper, time and negated ("not Northwood") words. Names (a capital letter after
+ * the first word, or a digit) are kept as written; other words of three or more letters lose one inflection ending. A word
+ * is soft when it is the question's verb, or names the answer's kind: the words after "which"/"what", or the last word of
+ * "what is the ..." ("What is the current launch date?" asks about `launch`). Every other word is required.
  */
-const searchTerms = (q: string) => {
- const words = q.toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? [];
- const content = words.filter(word => !QUESTION_WORDS.has(word));
- if (content.length === words.length) return { words, question: false };
- return { words: content.map(word => stem(word.replaceAll('-', ''))).filter(word => word.length >= 3), question: true };
+const questionTerms = (q: string) => {
+ const names: string[] = [], required: string[] = [], soft: string[] = [];
+ let previous = '', kind = false, attribute = false;
+ for (const [index, token] of (q.replace(CLOCK, ' ').match(TOKEN) ?? []).entries()) {
+  const word = token.toLowerCase();
+  const before = previous;
+  previous = word;
+  if (QUESTION_WORDS.has(word)) {
+   attribute ||= DETERMINERS.has(before) && COPULAS.has(word);
+   kind = DETERMINERS.has(word);
+  } else if (before === 'not' || TIME_WORDS.has(word)) continue;
+  else if ((index > 0 && /^\p{Lu}/u.test(token)) || /\p{N}/u.test(token)) names.push(word);
+  else if (word.length >= 3) (kind || VERB_LEADS.has(before) ? soft : required).push(stem(word));
+ }
+ if (attribute && required.length > 0) soft.push(required.pop()!);
+ return { names, required, soft };
+};
+
+/**
+ * A query without question or helper words is a keyword query: every word is required. A question requires its names and
+ * required words; with no required word it needs half of its soft words. `null` when nothing is left to match.
+ */
+const searchFilter = (sql: SqlClient.SqlClient, q: string) => {
+ const words = q.toLowerCase().match(TOKEN) ?? [];
+ if (!words.some(word => QUESTION_WORDS.has(word))) return words.length === 0 ? null : termFilter(sql, words);
+ const { names, required, soft } = questionTerms(q);
+ if (required.length > 0 || (soft.length === 0 && names.length > 0)) return termFilter(sql, [...names, ...required]);
+ if (soft.length === 0) return null;
+ // ponytail: OR-style count scans the caller's items instead of the FULLTEXT index; bounded by workspace scope and filters.
+ const matched = soft.map(word => sql`(${termFilter(sql, [word])} > 0)`).reduce((sum, term) => sql`${sum} + ${term}`);
+ return sql.and([termFilter(sql, names), sql`${matched} >= ${Math.ceil(soft.length / 2)}`]);
 };
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
@@ -442,28 +479,21 @@ const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
 };
 
 /**
- * Authorized lexical retrieval over current items. Without `q` it lists by the other filters. A keyword query lists its
- * matches newest event first, and `next_cursor` resumes after the last item. A question returns one page of its best
- * matches by relevance, then newest event, with no `next_cursor`.
- * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`.
+ * Authorized lexical retrieval over current items, newest event first. Without `q` it lists by the other filters.
+ * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
  */
 export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
   yield* requireScope(access, 'context:read');
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
-  const search = input.q === undefined ? { words: [], question: false } : searchTerms(input.q);
-  if (input.q !== undefined && search.words.length === 0) return searchPage([], 1);
-  const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const sql = yield* SqlClient.SqlClient;
-  const filters = [sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after)];
+  const terms = input.q === undefined ? sql`1=1` : searchFilter(sql, input.q);
+  if (terms === null) return searchPage([], 1);
+  const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
+  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after), terms]);
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
-  if (search.question) {
-   const against = sql`MATCH(ci.text, ci.text_joined) AGAINST (${search.words.map(word => `${word}*`).join(' ')} IN BOOLEAN MODE)`;
-   const order = sql`${against} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`;
-   return { items: yield* latestItems(access.workspace_id, sql.and([...filters, against]), limit, order), next_cursor: null } satisfies ContextSearchPage;
-  }
-  return searchPage(yield* latestItems(access.workspace_id, sql.and([...filters, termFilter(sql, search.words)]), limit + 1), limit);
+  return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
  });
 
 /** HTTP handlers for `ContextApi`; SDK and MCP adapters call the same domain functions. */
