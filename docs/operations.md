@@ -192,7 +192,7 @@ sudo -n tailscale serve --bg --https=8460 http://127.0.0.1:8460
 
 Metric names are the runner's (`scripts/soak/score.ts`); query latency is in milliseconds. Bars are the `BARS` table in `scripts/soak/serve.ts` (proposals from the plan board; calibrate them after the 1-hour dry run): `recall_at_5`, `recall_at_20`, `answer_accuracy`, `latest_accuracy` (not judged at 1 hour), `time_aware_accuracy`, `control_pass_rate`, latency `p50` and `p95`, and the `errors` count must be 0. `natural_recall_at_20` is shown without a bar. Driver measurements (ASR lag, database growth, cost) are not on this page.
 
-**Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`, as in [sdk/README.md](../sdk/README.md). Search needs every 3-letter-or-longer term in one item, so send keywords, not sentences. Newest matches come first; the agent decides which fact is latest.
+**Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`, as in [sdk/README.md](../sdk/README.md). Search ignores question words and needs every other word in one item, so a question finds a fact only when the fact uses its words. Newest matches come first; the agent decides which fact is latest.
 
 **Cleanup.** Delete the soak workspace in Settings; rows and R2 objects purge after the grace period.
 

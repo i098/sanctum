@@ -406,6 +406,31 @@ export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string
  return sql.and(words.map(word));
 };
 
+/**
+ * MySQL's default InnoDB FULLTEXT stopwords, which are never indexed (so a required one matches no row), plus the question
+ * and helper words of a spoken question that rarely appear in the fact that answers it.
+ */
+const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by', 'com', 'de', 'en', 'for', 'from', 'how', 'i', 'in', 'is', 'it', 'la',
+ 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'what', 'when', 'where', 'who', 'will', 'with', 'und', 'www',
+ 'which', 'whom', 'whose', 'why', 'do', 'does', 'did', 'has', 'have', 'had', 'were', 'been', 'any', 'many', 'much', 'there',
+ 'we', 'our', 'us', 'you', 'your', 'they', 'their', 'can', 'could', 'would', 'should']);
+
+// ponytail: one-suffix stemmer for the prefix match ("speaking" -> "speak*"); swap for a real stemmer when recall measures need it.
+const stem = (word: string) => {
+ const root = word.replace(/ies$|ing$|(?<!e)ed$|(?<!s)s$/, '');
+ return root.length >= 3 ? root : word;
+};
+
+/**
+ * The words a search requires: the words of `q` without question and helper words, unless only those remain, so
+ * "Who owns the Falcon project?" requires `own*`, `falcon*` and `project*`. A plain word loses one inflection ending.
+ */
+const searchTerms = (q: string) => {
+ const words = q.toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? [];
+ const content = words.filter(word => !QUESTION_WORDS.has(word));
+ return (content.length > 0 ? content : words).map(word => (word.includes('-') ? word : stem(word)));
+};
+
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
 const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
  const items = rows.slice(0, limit);
@@ -423,7 +448,7 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   yield* requireScope(access, 'context:read');
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
-  const terms = input.q === undefined ? [] : (input.q.toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? []);
+  const terms = input.q === undefined ? [] : searchTerms(input.q);
   if (input.q !== undefined && terms.length === 0) return searchPage([], 1);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const sql = yield* SqlClient.SqlClient;

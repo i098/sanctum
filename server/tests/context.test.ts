@@ -270,4 +270,56 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* call('GET', `/sources/${segment}`)).toMatchObject({ status: 200, body: { kind: 'segment', text: 'Keep pilot access limited.' } });
       expect((yield* call('GET', `/sources/${randomUUID()}`)).status).toBe(404);
     }));
+
+  it.scoped('answers full questions with the facts that answer them, only in the caller workspace', () =>
+    Effect.gen(function*() {
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+      const db = dbLayer(database.mysql);
+      yield* Effect.provide(migrate(loadMigrations()), db);
+      const [owner, device] = yield* Effect.provide(seedWorkspace('Questions', ['owner', 'device']), db);
+      const [stranger] = yield* Effect.provide(seedWorkspace('Stranger', ['owner']), db);
+      const meeting = yield* Effect.provide(seedMeeting(device!, { started_at: STARTED }), db);
+      const segment = yield* Effect.provide(seedSegment(meeting, 270, 275, 'For the record, the Falcon project owner is Peter.'), db);
+      const tokens: Record<string, AccessScope> = { 'Bearer owner': owner!, 'Bearer stranger': stranger! };
+      const auth = Layer.succeed(Authenticator, {
+        authenticate: request => {
+          const access = tokens[request.headers.authorization ?? ''];
+          return access === undefined ? Effect.fail(new Unauthenticated({ message: 'no credentials' })) : Effect.succeed(access);
+        },
+      });
+      const server = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth));
+      const address = Context.get(server, HttpServer.HttpServer).address;
+      const base = `http://127.0.0.1:${address._tag === 'TcpAddress' ? address.port : 0}/api/v1`;
+      const request = (token: string, path: string, body?: unknown) =>
+        Effect.promise(async () => {
+          const response = await fetch(`${base}${path}`, {
+            method: body === undefined ? 'GET' : 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+          return { status: response.status, body: (await response.json()) as { items: ReadonlyArray<{ text: string }> } };
+        });
+      // Planted facts and questions of the 24-hour soak corpus (scripts/soak/build-corpus.ts).
+      const facts = ['The Falcon project owner is Peter.', 'The Harbor project owner is Anna.', 'The Falcon offsite is in Lisbon.', 'The Falcon team has five engineers.',
+        'The Falcon tickets live in Trello.', 'Priya owns onboarding.', 'Dana sends the signed contract by Friday.'];
+      for (const [revision, text] of facts.entries()) {
+        expect((yield* request('owner', '/context/items', { ...decision(meeting.meeting_id, segment, `fact-${revision}`, revision), text })).status).toBe(201);
+      }
+      const search = (q: string, token = 'owner') =>
+        request(token, `/context/search?${new URLSearchParams({ q })}`).pipe(Effect.map(({ status, body }) => ({ status, texts: body.items.map(item => item.text) })));
+
+      for (const [q, text] of [
+        ['Falcon owner', 'The Falcon project owner is Peter.'],
+        ['Who owns the Falcon project?', 'The Falcon project owner is Peter.'],
+        ['Where is the Falcon offsite?', 'The Falcon offsite is in Lisbon.'],
+        ['How many engineers are on the Falcon team?', 'The Falcon team has five engineers.'],
+        ['Where do the Falcon tickets live?', 'The Falcon tickets live in Trello.'],
+        ['Who owns onboarding?', 'Priya owns onboarding.'],
+        ['When does Dana send the contract?', 'Dana sends the signed contract by Friday.'],
+      ] as const) {
+        expect(yield* search(q), q).toEqual({ status: 200, texts: [text] });
+      }
+      for (const q of ['Who approved the Q3 audit?', 'Who is it?', '?!']) expect(yield* search(q), q).toEqual({ status: 200, texts: [] });
+      expect(yield* search('Who owns the Falcon project?', 'stranger')).toEqual({ status: 200, texts: [] });
+    }));
 });
