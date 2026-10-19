@@ -5,7 +5,7 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 
 ## Processes
 
-Base images (`node`, `mysql`, `caddy`) come from the Docker Hub library mirror at `public.ecr.aws/docker/library/` with unchanged tags, because anonymous Docker Hub pulls hit its rate limit on shared CI runners.
+Base images (`node`, `mysql`, `caddy`) come from the Docker Hub library mirror at `mirror.gcr.io/library/` with unchanged tags, because anonymous Docker Hub and ECR Public pulls hit rate limits on CI runners.
 
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 

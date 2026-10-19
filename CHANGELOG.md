@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Internal: base images come from the `mirror.gcr.io` mirror, because ECR Public refused anonymous CI pulls ([#194](https://github.com/i098/sanctum/issues/194)).
+
 ## [0.1.0] - 2026-10-14
 
 ### Added
