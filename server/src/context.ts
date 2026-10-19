@@ -418,17 +418,19 @@ const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by
 // ponytail: one-suffix stemmer for the prefix match ("speaking" -> "speak*"); swap for a real stemmer when recall measures need it.
 const stem = (word: string) => {
  const root = word.replace(/ies$|ing$|(?<!e)ed$|(?<!s)s$/, '');
- return root.length >= 3 ? root : word;
+ return root.length >= 3 && !QUESTION_WORDS.has(root) ? root : word;
 };
 
 /**
- * The words a search requires: the words of `q` without question and helper words, unless only those remain, so
- * "Who owns the Falcon project?" requires `own*`, `falcon*` and `project*`. A plain word loses one inflection ending.
+ * A query without question or helper words is a keyword query: every word is required. Any other query is a question:
+ * its remaining words lose one inflection ending and rank items by FULLTEXT relevance, so "Who owns the Falcon project?"
+ * ranks by `own*`, `falcon*` and `project*`. Words shorter than three characters are not indexed, so a question drops them.
  */
 const searchTerms = (q: string) => {
  const words = q.toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? [];
  const content = words.filter(word => !QUESTION_WORDS.has(word));
- return (content.length > 0 ? content : words).map(word => (word.includes('-') ? word : stem(word)));
+ if (content.length === words.length) return { words, question: false };
+ return { words: content.map(word => stem(word.replaceAll('-', ''))).filter(word => word.length >= 3), question: true };
 };
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
@@ -440,21 +442,28 @@ const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
 };
 
 /**
- * Authorized lexical retrieval over current items, newest event first. Without `q` it lists by the other filters.
- * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
+ * Authorized lexical retrieval over current items. Without `q` it lists by the other filters. A keyword query lists its
+ * matches newest event first, and `next_cursor` resumes after the last item. A question returns one page of its best
+ * matches by relevance, then newest event, with no `next_cursor`.
+ * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`.
  */
 export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
   yield* requireScope(access, 'context:read');
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
-  const terms = input.q === undefined ? [] : searchTerms(input.q);
-  if (input.q !== undefined && terms.length === 0) return searchPage([], 1);
+  const search = input.q === undefined ? { words: [], question: false } : searchTerms(input.q);
+  if (input.q !== undefined && search.words.length === 0) return searchPage([], 1);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const sql = yield* SqlClient.SqlClient;
-  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after), termFilter(sql, terms)]);
+  const filters = [sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after)];
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
-  return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
+  if (search.question) {
+   const against = sql`MATCH(ci.text, ci.text_joined) AGAINST (${search.words.map(word => `${word}*`).join(' ')} IN BOOLEAN MODE)`;
+   const order = sql`${against} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`;
+   return { items: yield* latestItems(access.workspace_id, sql.and([...filters, against]), limit, order), next_cursor: null } satisfies ContextSearchPage;
+  }
+  return searchPage(yield* latestItems(access.workspace_id, sql.and([...filters, termFilter(sql, search.words)]), limit + 1), limit);
  });
 
 /** HTTP handlers for `ContextApi`; SDK and MCP adapters call the same domain functions. */
