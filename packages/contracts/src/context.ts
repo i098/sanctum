@@ -179,7 +179,7 @@ const sourceId = HttpApiSchema.param('source_id', Schema.UUID);
 const Limit = Schema.NumberFromString.pipe(Schema.compose(PageLimit));
 
 /**
- * `GET /api/v1/context/search`: best match first, then newest first by event time; a `q` with question words needs its names and other words, not its verb or answer kind. `q` omitted lists every authorized item that matches the other
+ * `GET /api/v1/context/search`: newest first by event time; a `q` with question words is answered by the configured model from at most 40 authorized word matches. `q` omitted lists every authorized item that matches the other
  * filters; `from` is inclusive, `to` exclusive, both against `event_at` (else `created_at`).
  */
 export const SearchContextParams = Schema.Struct({

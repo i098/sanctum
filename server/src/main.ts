@@ -19,7 +19,7 @@ import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpD
 import { ListenerStreamLive } from './media/ingest.ts';
 import { MediaProvidersLive, SpeechSynthesizerLive, type SpeechToText } from './media/providers.ts';
 import { SpeechRepliesLive, SpeechWorkRequestsLive } from './speech-requests.ts';
-import { LlmLive } from './llm.ts';
+import { type LlmClient, LlmLive } from './llm.ts';
 import { SignInFromEnv, type SignInSettings, SignInLive } from './signin.ts';
 import { loadMigrations } from './migrate.ts';
 import { type WorkosOrganizations, WorkosOrganizationsFromEnv } from './org-sync.ts';
@@ -37,21 +37,22 @@ const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.u
 export const serverLayer = (
   config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
-  // Tests replace providers, the handler set, the MCP authorization server or the sign-in issuer; production uses the defaults.
+  // Tests replace providers, models, the handler set, the MCP authorization server or the sign-in issuer; production uses the defaults.
   overrides: {
     readonly media?: Layer.Layer<ObjectStore | SpeechToText, ConfigError.ConfigError>;
     readonly api?: Layer.Layer<HttpApi.Api, never, SqlClient.SqlClient | Authenticator>;
     readonly mcp?: Layer.Layer<McpAuthorizationServer>;
     readonly signIn?: Layer.Layer<SignInSettings>;
     readonly organizations?: Layer.Layer<WorkosOrganizations>;
+    readonly llm?: Layer.Layer<LlmClient, ConfigError.ConfigError>;
   } = {},
 ) =>
   HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
     Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
-    Layer.provide([SpeechSynthesizerLive, Layer.merge(SpeechRepliesLive, SpeechWorkRequestsLive).pipe(Layer.provide(LlmLive))]),
-    Layer.provide(overrides.api ?? ApiLive(loadMigrations())),
+    Layer.provide([SpeechSynthesizerLive, Layer.merge(SpeechRepliesLive, SpeechWorkRequestsLive).pipe(Layer.provide(overrides.llm ?? LlmLive))]),
+    Layer.provide((overrides.api ?? ApiLive(loadMigrations())).pipe(Layer.provide(overrides.llm ?? LlmLive))),
     Layer.provide(overrides.media ?? MediaProvidersLive),
     Layer.provide(withMcpDelegation(authenticator)),
     Layer.provide(overrides.mcp ?? McpAuthorizationFromEnv),
