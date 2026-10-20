@@ -372,18 +372,18 @@ export const getContextSnapshot = (access: AccessScope, meeting_id: MeetingId) =
   );
  });
 
-const SearchCursor = Schema.parseJson(Schema.Tuple(UtcTimestamp, ContextItemId));
+const SearchCursor = Schema.parseJson(Schema.Tuple(Schema.NonNegativeInt, UtcTimestamp, ContextItemId));
 
 const utc = Schema.encodeSync(DbUtc);
 
-/** Filters on kind, event-time range and the resume position of a cursor. */
-const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, after: typeof SearchCursor.Type | null) => {
+/** Filters on kind and event-time range, and the resume position of a cursor in `score DESC, event time DESC, id` order. */
+const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, score: Statement.Fragment, after: typeof SearchCursor.Type | null) => {
  const at = sql`COALESCE(ci.event_at, ci.created_at)`;
  return [
   ...(input.kind === undefined ? [] : [sql`ci.kind = ${input.kind}`]),
   ...(input.from === undefined ? [] : [sql`${at} >= ${utc(input.from)}`]),
   ...(input.to === undefined ? [] : [sql`${at} < ${utc(input.to)}`]),
-  ...(after === null ? [] : [sql`(${at} < ${utc(after[0])} OR (${at} = ${utc(after[0])} AND ci.id > ${after[1]}))`]),
+  ...(after === null ? [] : [sql`(${score} < ${after[0]} OR (${score} = ${after[0]} AND (${at} < ${utc(after[1])} OR (${at} = ${utc(after[1])} AND ci.id > ${after[2]}))))`]),
  ];
 };
 
@@ -455,23 +455,27 @@ const nextClause = (word: string, before: string, state: Clause): Clause => {
 /**
  * The words of a question, without question, helper and time words. Names (a capital letter after the first word, or a digit)
  * are kept as written; other words of three or more letters lose one inflection ending. A word is soft when it is the
- * question's verb ("who owns"), names the answer's kind ("which vendor"), or heads the subject of "what is"/"who is"
- * ("the launch date", "the owner of onboarding"). Every other word is required.
+ * question's verb ("who owns", "was chosen"), names the answer's kind ("which vendor"), heads the subject of "what is"/"who is"
+ * ("the launch date", "the owner of onboarding"), or is the object of a helper verb after the subject of a yes/no question
+ * ("Does onboarding have an owner?"). Every other word is required.
  */
 const questionTerms = (q: string) => {
  const words = { name: [] as string[], none: [] as string[] };
  const terms: Array<{ term: string; soft: boolean; subject: number }> = [];
- let previous = '', named = -1, state: Clause = { clause: 0, kind: false, subject: -1 };
- for (const [index, token] of (q.replace(CLOCK, ' ').match(TOKEN) ?? []).entries()) {
+ const tokens = q.replace(CLOCK, ' ').match(TOKEN) ?? [];
+ const yesNo = AUXILIARIES.has(tokens[0]?.toLowerCase() ?? '');
+ let previous = '', named = -1, object = false, state: Clause = { clause: 0, kind: false, subject: -1 };
+ for (const [index, token] of tokens.entries()) {
   const word = token.toLowerCase();
   const before = previous;
   previous = word;
   state = nextClause(word, before, state);
+  object ||= yesNo && named === state.clause && AUXILIARIES.has(word);
   if (QUESTION_WORDS.has(word)) continue;
   const role = wordRole(token, index === 0);
   const verb = SUBJECT_LEADS.has(before) || (AUXILIARIES.has(before) && named === state.clause);
   if (role !== 'none') named = state.clause;
-  if (role === 'term') terms.push({ term: stem(word), soft: state.kind || verb, subject: state.subject });
+  if (role === 'term') terms.push({ term: stem(word), soft: state.kind || verb || object, subject: state.subject });
   else words[role].push(word);
  }
  // The head of a "what is"/"who is" subject is its last required word.
@@ -481,35 +485,36 @@ const questionTerms = (q: string) => {
 };
 
 /**
- * `must` selects the items; `score`, when set, counts an item's soft words, and only the items with the highest count are
- * listed. A query without question or helper words is a keyword query: every word is required. A question requires its
- * names and required words. Without required words, its soft words decide: the items with the most of them come back, from
- * those that match one of them, or, when the question names something ("What is the Falcon mascot?"), from the named items.
- * `null` matches nothing.
+ * `must` selects the items and `score` counts the ranked words an item contains; results list the highest score first and
+ * the newest first within a score. A query without question or helper words is a keyword query: every word is required.
+ * A question requires its names and required words, and ranks by its required words, so every listed item has the same
+ * score and the newest comes first. A question without required words ranks by its soft words: it lists the items that
+ * contain one of them, or, when it names something ("What is the Falcon mascot?"), the named items. `null` matches nothing.
  */
 const searchFilter = (sql: SqlClient.SqlClient, q: string) => {
  const words = q.toLowerCase().match(TOKEN) ?? [];
- if (!words.some(word => QUESTION_WORDS.has(word))) return words.length === 0 ? null : { must: termFilter(sql, words) };
- const { names, required, soft } = questionTerms(q);
- if (required.length > 0) return { must: termFilter(sql, [...names, ...required]) };
- if (names.length === 0 && soft.length === 0) return null;
- if (soft.length === 0) return { must: termFilter(sql, names) };
- const matches = soft.map(word => termFilter(sql, [word]));
- const score = sql.join(' + ', true)(matches.map(match => sql`(CASE WHEN ${match} THEN 1 ELSE 0 END)`));
- return { must: names.length === 0 ? sql.or(matches) : termFilter(sql, names), score };
+ const { names, required, soft } = words.some(word => QUESTION_WORDS.has(word)) ? questionTerms(q) : { names: [], required: words, soft: [] };
+ const ranked = required.length > 0 ? required : soft;
+ if (names.length === 0 && ranked.length === 0) return null;
+ const matches = ranked.map(word => termFilter(sql, [word]));
+ return {
+  must: names.length > 0 || required.length > 0 ? termFilter(sql, [...names, ...required]) : sql.or(matches),
+  score: sql.join(' + ', true, '0')(matches.map(match => sql`(CASE WHEN ${match} THEN 1 ELSE 0 END)`)),
+ };
 };
 
-/** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
-const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
- const items = rows.slice(0, limit);
- const last = rows.length > limit ? items.at(-1) : undefined;
- const next_cursor = last === undefined ? null : Buffer.from(Schema.encodeSync(SearchCursor)([last.event_at ?? last.created_at, last.id])).toString('base64url');
- return { items, next_cursor } satisfies ContextSearchPage;
+const RankedRow = Schema.extend(ItemRow, Schema.Struct({ score: DbSafeInt }));
+
+/** The first `limit` of `limit + 1` ranked rows, with a cursor after the last one when a further row exists. */
+const searchPage = (rows: ReadonlyArray<typeof RankedRow.Type>, limit: number) => {
+ const last = rows.length > limit ? rows[limit - 1] : undefined;
+ const next_cursor = last === undefined ? null : Buffer.from(Schema.encodeSync(SearchCursor)([last.score, last.event_at ?? last.created_at, last.id])).toString('base64url');
+ return { items: rows.slice(0, limit).map(toItem), next_cursor } satisfies ContextSearchPage;
 };
 
 /**
- * Authorized lexical retrieval over current items, newest event first. Without `q` it lists by the other filters.
- * `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
+ * Authorized lexical retrieval over current items, highest score first, then newest event first. Without `q` it lists by the
+ * other filters. `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
  */
 export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
@@ -517,16 +522,20 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
   const sql = yield* SqlClient.SqlClient;
-  const filter = input.q === undefined ? { must: sql`1=1` } : searchFilter(sql, input.q);
+  const filter = input.q === undefined ? { must: sql`1=1`, score: sql`0` } : searchFilter(sql, input.q);
   if (filter === null) return searchPage([], 1);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
-  const scoped = (cursor: typeof after) => [sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, cursor), filter.must];
-  const best = filter.score === undefined ? null : (yield* sql<{ best: number | string | null }>`SELECT MAX(${filter.score}) AS best FROM context_items ci
-        WHERE ci.workspace_id = ${access.workspace_id} AND ${sql.and(scoped(null))}
-          AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)`)[0]?.best ?? null;
-  const where = sql.and([...scoped(after), ...(best === null ? [] : [sql`${filter.score!} = ${Number(best)}`])]);
+  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, filter.score, after), filter.must]);
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
-  return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
+  const rows = yield* decodeRows(
+   RankedRow,
+   sql`SELECT ci.*, ${filter.score} AS score FROM context_items ci
+        WHERE ci.workspace_id = ${access.workspace_id} AND ${where}
+          AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
+        ORDER BY score DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id
+        LIMIT ${limit + 1}`,
+  );
+  return searchPage(rows, limit);
  });
 
 /** HTTP handlers for `ContextApi`; SDK and MCP adapters call the same domain functions. */

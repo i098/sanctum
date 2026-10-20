@@ -306,7 +306,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         'We chose Northwind Freight for shipping.', 'Falcon budget approved at 40k.', 'Marcus takes over onboarding.',
         'We decided the launch date is November 3.', 'The launch has moved to November 17.', 'The launch is now December 1.',
         'Dana is not attending the offsite.', 'Omar placed the laptop order.', 'Omar placed the catering booking.', 'The vendor invoice is due Friday.',
-        'Billing starts Monday.', 'The sprint starts Tuesday.'];
+        'Billing starts Monday.', 'The sprint starts Tuesday.', 'The budget review is Thursday.'];
       // Later facts cite later segments, so their event time is newer.
       const later = new Map([['We chose Northwind Freight for shipping.', 500], ['Marcus takes over onboarding.', 900], ['The launch has moved to November 17.', 600],
         ['The launch is now December 1.', 1200], ['The vendor invoice is due Friday.', 1500], ['The sprint starts Tuesday.', 1600]]);
@@ -330,7 +330,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         ['When does Dana send the contract?', ['Dana sends the signed contract by Friday.']],
         ['When is it coming?', ['The release is coming in May.']],
         ['Which vendor was chosen?', ['The vendor invoice is due Friday.', 'We chose Northwind Freight for shipping.']],
-        ['Which shipping vendor was chosen?', ['We chose Northwind Freight for shipping.']],
+        ['Which shipping vendor was chosen?', ['We chose Northwind Freight for shipping.', 'The vendor invoice is due Friday.', 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']],
         ['Who owns onboarding now?', onboarding],
         ['Who is in charge of onboarding now?', onboarding],
         ['Who is the owner of onboarding?', onboarding],
@@ -341,9 +341,9 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         ['Who placed the order?', ['Omar placed the laptop order.']],
         ['Was budget approved?', ['Falcon budget approved at 40k.']],
         ['Has the launch moved?', ['The launch has moved to November 17.']],
-        ['Does onboarding have an owner?', []],
+        ['Does onboarding have an owner?', onboarding],
         ['When does billing start?', ['Billing starts Monday.']],
-        ['What is the Falcon mascot?', ['The Falcon mascot is the otter.']],
+        ['When does the sprint start?', ['The sprint starts Tuesday.']],
         ['Where is the launch offsite?', []],
         ['What color is the onboarding banner?', []],
         ['Who approved the Q3 audit?', []],
@@ -355,10 +355,18 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         expect(yield* search(q), q).toEqual({ status: 200, texts });
       }
       expect(yield* search('What was the launch date as of T0+04:00?', 'owner', { to: '2026-09-26T17:09:00Z' })).toEqual({ status: 200, texts: ['We decided the launch date is November 3.'] });
-      const first = yield* page('Which shipping company did we pick?', 'owner', { limit: '1' });
-      expect(first.texts).toEqual(['We chose Northwind Freight for shipping.']);
-      expect((yield* page('Which shipping company did we pick?', 'owner', { limit: '1', cursor: first.next! })).texts)
-        .toEqual(['Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']);
+      const mascot = (yield* search('What is the Falcon mascot?')).texts;
+      expect(mascot[0]).toBe('The Falcon mascot is the otter.');
+      expect([...mascot.slice(1)].sort()).toEqual(['Falcon budget approved at 40k.', 'The Falcon offsite is in Lisbon.', 'The Falcon project owner is Peter.',
+        'The Falcon team has five engineers.', 'The Falcon tickets live in Trello.']);
+      const pages: Array<string> = [];
+      for (let cursor: string | null | undefined; cursor !== null;) {
+        const next = yield* page('Which shipping vendor was chosen?', 'owner', { limit: '1', ...(cursor === undefined ? {} : { cursor }) });
+        pages.push(...next.texts);
+        cursor = next.next;
+      }
+      expect(pages).toEqual(['We chose Northwind Freight for shipping.', 'The vendor invoice is due Friday.',
+        'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']);
       expect(yield* search('Who owns the Falcon project?', 'stranger')).toEqual({ status: 200, texts: [] });
     }));
 });
