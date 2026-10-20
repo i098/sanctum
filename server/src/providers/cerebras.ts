@@ -13,6 +13,7 @@ export const cerebras = (options: { readonly apiKey: string; readonly baseUrl?: 
       messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.prompt }],
       max_completion_tokens: request.maxOutputTokens,
       ...(request.reasoning ? { reasoning_effort: request.reasoning } : {}),
+      temperature: request.temperature,
       ...(request.json ? { response_format: { type: 'json_schema', json_schema: { name: request.json.name, strict: true, schema: request.json.schema } } } : {}),
     }, signal);
     const completion = await response.json() as Completion;

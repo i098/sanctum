@@ -9,6 +9,8 @@ export interface ProviderRequest {
   readonly reasoning: 'none' | 'low' | 'medium' | 'high' | null;
   /** Strict JSON Schema output; absent means plain text. */
   readonly json?: { readonly name: string; readonly schema: Record<string, unknown> };
+  /** Sampling temperature for providers that support it; absent leaves the provider default. */
+  readonly temperature?: number;
 }
 
 export interface ResearchSource {

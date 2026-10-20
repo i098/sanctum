@@ -457,20 +457,23 @@ const groundingPrompt = (q: string, candidates: ReadonlyArray<ContextItem>) => {
 
 /**
  * Meaning-based selection for a question: the configured classifier model (falling back to the planner model, as spoken work
- * does) picks, from at most `CANDIDATE_LIMIT` authorized candidates in `scope`, the ids of the items that answer `q`. A ref
- * outside the candidates fails the search; a model failure surfaces as `Unavailable`, never as a lexical guess.
+ * does) picks, from at most `CANDIDATE_LIMIT` authorized candidates in `scope`, the ids of the items that answer `q`. A question
+ * whose content words find no candidate but that has a time window grounds over the newest items in that window. A ref outside
+ * the candidates fails the search; a model failure surfaces as `Unavailable`, never as a lexical guess.
  */
-const groundedIds = (workspace_id: string, q: string, scope: ReadonlyArray<Statement.Fragment>) =>
+const groundedIds = (workspace_id: string, input: SearchContextParams, scope: ReadonlyArray<Statement.Fragment>) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
+  const q = input.q!;
   const words = questionWords(q);
-  if (words.length === 0) return [];
-  const match = candidateMatch(sql, words);
-  const order = sql`${match.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`;
-  const candidates = yield* latestItems(workspace_id, sql.and([...scope, match.must]), CANDIDATE_LIMIT, order);
+  const match = words.length === 0 ? null : candidateMatch(sql, words);
+  const matched = match === null ? []
+   : yield* latestItems(workspace_id, sql.and([...scope, match.must]), CANDIDATE_LIMIT, sql`${match.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
+  const windowed = input.from !== undefined || input.to !== undefined;
+  const candidates = matched.length === 0 && windowed ? yield* latestItems(workspace_id, sql.and(scope), CANDIDATE_LIMIT) : matched;
   if (candidates.length === 0) return [];
   const llm = yield* LlmClient;
-  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(q, candidates) };
+  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(q, candidates), temperature: 0 };
   const { value } = yield* llm.generate('classifier', request).pipe(Effect.catchAll(() => llm.generate('planner', request)));
   const byRef = new Map(candidates.map((item, i) => [`c${i + 1}`, item.id]));
   if (value.relevant.some(ref => !byRef.has(ref))) return yield* new Unavailable({ message: 'Grounding chose an item outside its candidates', retryable: false });
@@ -514,7 +517,7 @@ const questionPage = (access: AccessScope, input: SearchContextParams, scoped: R
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const continued = input.cursor !== undefined;
-  const ids = continued ? yield* cursorIds(access, input, input.cursor!) : yield* groundedIds(access.workspace_id, input.q!, scoped);
+  const ids = continued ? yield* cursorIds(access, input, input.cursor!) : yield* groundedIds(access.workspace_id, input, scoped);
   if (ids.length === 0) return searchPage([], 1);
   const visible = yield* latestItems(access.workspace_id, sql.and([...scoped, sql`ci.id IN ${sql.in(ids)}`]), CANDIDATE_LIMIT);
   const byId = new Map(visible.map(item => [item.id, item]));

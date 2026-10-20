@@ -24,7 +24,8 @@
 The owner chose bounded meaning-based grounding on the existing stack ("A"), after word rules failed ordinary questions.
 Accepted: a context-search query that contains a question or helper word is a question.
 The server collects at most 40 current items that the caller may read, inside the request's meeting, kind and time filters, that share a content word with the question.
-The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it.
+When no item shares a content word and the request has `from` or `to`, the candidates are the newest 40 such items inside that window; an empty window returns no items.
+The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it, at temperature 0 where the provider supports it.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
 The chosen items list newest first, and the search cursor carries the rest of that choice, bound to the caller, the query and the permission revision.
 Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
