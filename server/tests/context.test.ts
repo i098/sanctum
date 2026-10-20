@@ -348,6 +348,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         "What's the launch date now?": launches,
         'What was the launch date as of T0+04:00?': launches,
         'Which vendor was chosen?': ['We chose Northwind Freight for shipping.', 'Our shipping vendor is Northwind.'],
+        'What happened before T0+04:00?': ['Priya owns onboarding.', 'We decided the launch date is November 3.'],
       });
 
       expect(yield* search('Falcon owner')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
@@ -371,6 +372,14 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(prompts.at(-1)).toContain('Anna chose the venue.');
       expect(prompts.at(-1)).not.toContain('Freight');
       for (const q of ['Who approved the Q3 audit?', 'Who is it?', '?!']) expect(yield* search(q), q).toEqual({ status: 200, texts: [] });
+      // A question whose words match no item grounds over the newest items in its window; an empty window stays empty.
+      expect(yield* search('What happened before T0+04:00?', 'owner', { to: '2026-09-26T17:09:00Z' }))
+       .toEqual({ status: 200, texts: ['We decided the launch date is November 3.', 'Priya owns onboarding.'] });
+      expect(prompts.at(-1)).toContain('The Falcon project owner is Peter.');
+      expect(prompts.at(-1)).not.toContain('November 17');
+      const windowAsked = prompts.length;
+      expect(yield* search('What happened before T0+04:00?', 'owner', { to: '2026-09-26T16:00:00Z' })).toEqual({ status: 200, texts: [] });
+      expect(prompts).toHaveLength(windowAsked);
       const asked = prompts.length;
       expect(yield* search('Who owns the Falcon project?', 'stranger')).toEqual({ status: 200, texts: [] });
       expect(prompts).toHaveLength(asked);
