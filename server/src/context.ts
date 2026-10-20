@@ -416,15 +416,16 @@ const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by
  'we', 'our', 'us', 'you', 'your', 'they', 'their', 'can', 'could', 'would', 'should', 'and', 'its', 'not', 's']);
 /** Words that name the kind of answer ("which vendor", "any restrictions"); the fact names the answer, not its kind. */
 const DETERMINERS = new Set(['which', 'what', 'whose', 'any']);
-/** A word after these is the question's verb ("who owns", "was chosen", "we decide"), which the fact often words differently. */
-const VERB_LEADS = new Set(['who', 'is', 'are', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'has', 'have', 'had', 'will', 'would', 'can', 'could',
- 'should', 'we', 'you', 'they', 'i']);
+/** A word after these is the question's verb ("who owns", "we decide"), which the fact often words differently. */
+const SUBJECT_LEADS = new Set(['who', 'we', 'you', 'they', 'i']);
+/** A word after these is the verb when the clause has named its subject ("which vendor was chosen"), else the subject ("when does onboarding start"). */
+const AUXILIARIES = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'has', 'have', 'had', 'will', 'would', 'can', 'could', 'should']);
 /** "what is", "which was", "who is": the question asks for the value or person of its subject's head word. */
 const ASKS = new Set(['what', 'which', 'who']);
 const BE = new Set(['is', 'are', 'was', 'were', 's']);
 const CLAUSE_ENDS = new Set(['and', 'or', 'what', 'which', 'who', 'whom', 'whose', 'when', 'where', 'how', 'why']);
 /** Time words and clock times ("as of T0+04:00") ask for an order or a window; `from`, `to` and newest-first carry those. */
-const TIME_WORDS = new Set(['current', 'currently', 'now', 'latest', 'newest', 'recent', 'start', 'history', 'order', 'before', 'after', 'since', 'until', 'between']);
+const TIME_WORDS = new Set(['current', 'currently', 'now', 'latest', 'newest', 'recent', 'before', 'after', 'since', 'until', 'between']);
 const CLOCK = /\S*\d{1,2}:\d{2}\S*/g;
 const TOKEN = /[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu;
 
@@ -434,9 +435,8 @@ const stem = (word: string) => {
  return root.length >= 3 && !QUESTION_WORDS.has(root) ? root : word;
 };
 
-/** What a word that is not a question or helper word contributes to a question: a name, an excluded word, a term, or nothing. */
-const wordRole = (token: string, first: boolean, before: string) => {
- if (before === 'not') return 'excluded';
+/** What a word that is not a question or helper word contributes to a question: a name, a term, or nothing. */
+const wordRole = (token: string, first: boolean) => {
  if (TIME_WORDS.has(token.toLowerCase())) return 'none';
  if ((!first && /^\p{Lu}/u.test(token)) || /\p{N}/u.test(token)) return 'name';
  return token.length >= 3 ? 'term' : 'none';
@@ -456,44 +456,47 @@ const nextClause = (word: string, before: string, state: Clause): Clause => {
  * The words of a question, without question, helper and time words. Names (a capital letter after the first word, or a digit)
  * are kept as written; other words of three or more letters lose one inflection ending. A word is soft when it is the
  * question's verb ("who owns"), names the answer's kind ("which vendor"), or heads the subject of "what is"/"who is"
- * ("the launch date", "the owner of onboarding"). Every other word is required. "not X" excludes items containing X.
+ * ("the launch date", "the owner of onboarding"). Every other word is required.
  */
 const questionTerms = (q: string) => {
- const words = { name: [] as string[], excluded: [] as string[], none: [] as string[] };
+ const words = { name: [] as string[], none: [] as string[] };
  const terms: Array<{ term: string; soft: boolean; subject: number }> = [];
- let previous = '', state: Clause = { clause: 0, kind: false, subject: -1 };
+ let previous = '', named = -1, state: Clause = { clause: 0, kind: false, subject: -1 };
  for (const [index, token] of (q.replace(CLOCK, ' ').match(TOKEN) ?? []).entries()) {
   const word = token.toLowerCase();
   const before = previous;
   previous = word;
   state = nextClause(word, before, state);
   if (QUESTION_WORDS.has(word)) continue;
-  const role = wordRole(token, index === 0, before);
-  if (role === 'term') terms.push({ term: stem(word), soft: state.kind || VERB_LEADS.has(before), subject: state.subject });
+  const role = wordRole(token, index === 0);
+  const verb = SUBJECT_LEADS.has(before) || (AUXILIARIES.has(before) && named === state.clause);
+  if (role !== 'none') named = state.clause;
+  if (role === 'term') terms.push({ term: stem(word), soft: state.kind || verb, subject: state.subject });
   else words[role].push(word);
  }
  // The head of a "what is"/"who is" subject is its last required word.
  const heads = new Map(terms.filter(t => !t.soft && t.subject >= 0).map(t => [t.subject, t]));
  for (const head of heads.values()) head.soft = true;
- return { names: words.name, excluded: words.excluded, required: terms.filter(t => !t.soft).map(t => t.term), soft: terms.filter(t => t.soft).map(t => t.term) };
+ return { names: words.name, required: terms.filter(t => !t.soft).map(t => t.term), soft: terms.filter(t => t.soft).map(t => t.term) };
 };
 
 /**
- * `must` selects the items; `prefer`, when set, narrows them only if an item in scope matches it. A query without question
- * or helper words is a keyword query: every word is required. A question requires its names and required words and none of
- * its excluded words. Without required words, its soft words decide: one of them must match, or, when the question names
- * something ("What is the Falcon mascot?"), they narrow the named items when any of those match. `null` matches nothing.
+ * `must` selects the items; `score`, when set, counts an item's soft words, and only the items with the highest count are
+ * listed. A query without question or helper words is a keyword query: every word is required. A question requires its
+ * names and required words. Without required words, its soft words decide: the items with the most of them come back, from
+ * those that match one of them, or, when the question names something ("What is the Falcon mascot?"), from the named items.
+ * `null` matches nothing.
  */
 const searchFilter = (sql: SqlClient.SqlClient, q: string) => {
  const words = q.toLowerCase().match(TOKEN) ?? [];
  if (!words.some(word => QUESTION_WORDS.has(word))) return words.length === 0 ? null : { must: termFilter(sql, words) };
- const { names, excluded, required, soft } = questionTerms(q);
- const exclude = excluded.map(word => sql`NOT ${termFilter(sql, [word])}`);
- if (required.length > 0 || (names.length > 0 && soft.length === 0)) return { must: sql.and([termFilter(sql, [...names, ...required]), ...exclude]) };
- if (soft.length === 0) return null;
- const softMatch = sql.or(soft.map(word => termFilter(sql, [word])));
- if (names.length === 0) return { must: sql.and([softMatch, ...exclude]) };
- return { must: sql.and([termFilter(sql, names), ...exclude]), prefer: softMatch };
+ const { names, required, soft } = questionTerms(q);
+ if (required.length > 0) return { must: termFilter(sql, [...names, ...required]) };
+ if (names.length === 0 && soft.length === 0) return null;
+ if (soft.length === 0) return { must: termFilter(sql, names) };
+ const matches = soft.map(word => termFilter(sql, [word]));
+ const score = sql.join(' + ', true)(matches.map(match => sql`(CASE WHEN ${match} THEN 1 ELSE 0 END)`));
+ return { must: names.length === 0 ? sql.or(matches) : termFilter(sql, names), score };
 };
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
@@ -518,8 +521,10 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   if (filter === null) return searchPage([], 1);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   const scoped = (cursor: typeof after) => [sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, cursor), filter.must];
-  const preferred = filter.prefer !== undefined && (yield* latestItems(access.workspace_id, sql.and([...scoped(null), filter.prefer]), 1)).length > 0;
-  const where = sql.and([...scoped(after), ...(preferred ? [filter.prefer!] : [])]);
+  const best = filter.score === undefined ? null : (yield* sql<{ best: number | string | null }>`SELECT MAX(${filter.score}) AS best FROM context_items ci
+        WHERE ci.workspace_id = ${access.workspace_id} AND ${sql.and(scoped(null))}
+          AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)`)[0]?.best ?? null;
+  const where = sql.and([...scoped(after), ...(best === null ? [] : [sql`${filter.score!} = ${Number(best)}`])]);
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
   return searchPage(yield* latestItems(access.workspace_id, where, limit + 1), limit);
  });
