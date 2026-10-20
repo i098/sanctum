@@ -15,9 +15,9 @@ const tables = Effect.gen(function* () {
 
 describe('migration files', () => {
   it('are numbered, parsed into inspectable steps and create every plan section 07 table', () => {
-    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    expect(migrations.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
     // 023 adds a generated column and its FULLTEXT index: MySQL fills it for existing rows, so no backfill.
-    expect(migrations.find(migration => migration.version === 23)!.steps.map(step => step.object)).toEqual([
+    expect(migrations.at(-1)!.steps.map(step => step.object)).toEqual([
       { kind: 'column', table: 'context_items', column: 'text_joined' },
       { kind: 'index', table: 'context_items', index: 'context_items_text_joined' },
     ]);

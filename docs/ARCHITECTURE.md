@@ -146,7 +146,7 @@ Plan T13 lists `recordings.ts`; its playback half lives in `playback.ts` so medi
 
 ### context (T16)
 
-Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/context-changes.ts`, `server/src/context-jobs.ts`, `server/src/context-schedule.ts`, migrations `007_context`, `023_context_text_joined` and `024_question_snapshots`, `ContextApi` in contracts context.ts.
+Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/context-changes.ts`, `server/src/context-jobs.ts`, `server/src/context-schedule.ts`, migrations `007_context` and `023_context_text_joined`, `ContextApi` in contracts context.ts.
 
 - `context-events.ts`: `appendContextEvent(input: { workspace_id; meeting_id: MeetingId | null; item: { id; revision } | null; change: ContextChangeKind; actor: PrincipalId; source_revision?: number }): Effect<number, SqlError, R>`, inside the caller's transaction.
 - `context.ts`: `getContextSnapshot(access, meeting_id): Effect<ContextSnapshot, NotFound, R>` and `addContextItem(access, input: AddContextItem): Effect<ContextItem, RevisionConflict | HashConflict | NotFound, R>`.

@@ -30,8 +30,8 @@ Each candidate line gives the item's ref, time, stored kind and text, so a store
 The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it, with reasoning effort `medium` and at temperature 0 where the provider supports it.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
 Each page makes at most one model call over the next 40 candidates. The chosen items list newest first.
-The first page stores the question's candidate ids, in order, as a snapshot for one day; later pages ground the same candidates, so items added, changed or retracted between pages shift no page.
-The search cursor stays within the shared 512-character bound: it names the snapshot, the candidate position and the positions of chosen items not yet returned; the snapshot is bound to the caller, the query and the permission revision.
+The search cursor stays within the shared 512-character bound and needs no stored state: it names the candidate page (source, offset and a fingerprint of its items and revisions) and a bitmask of chosen items not yet returned, bound to the caller, the query and the permission revision.
+If that page changed between requests (an item added, revised, retracted or no longer visible), the cursor is unknown and the caller searches again; a held position never applies to a shifted page.
 A page whose candidates answer nothing returns no items and a cursor while candidates remain.
 Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
 A fixture judge proves the integration in `server/tests/context.test.ts`; it is not evidence of the real model's answer quality.

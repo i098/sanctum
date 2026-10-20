@@ -1,2 +1,2 @@
 commit:
-  fix_message: "fix: {{.Step}}: {{.Summary}}"
+  fix_message: "fix: {{.Step}}: apply pipeline fix"
