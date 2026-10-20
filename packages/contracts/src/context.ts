@@ -177,6 +177,8 @@ const meetingId = HttpApiSchema.param('meeting_id', MeetingId);
 const itemId = HttpApiSchema.param('item_id', ContextItemId);
 const sourceId = HttpApiSchema.param('source_id', Schema.UUID);
 const Limit = Schema.NumberFromString.pipe(Schema.compose(PageLimit));
+/** A search cursor; a question's cursor carries up to 39 selected but unreturned item ids, so it outgrows the shared 512-character `Cursor`. */
+const SearchCursor = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(4096));
 
 /**
  * `GET /api/v1/context/search`: newest first by event time; a `q` with question words is answered by the configured model from at most 40 authorized word matches,
@@ -190,12 +192,12 @@ export const SearchContextParams = Schema.Struct({
   kind: Schema.optional(ContextKind),
   from: Schema.optional(UtcTimestamp),
   to: Schema.optional(UtcTimestamp),
-  cursor: Schema.optional(Cursor),
+  cursor: Schema.optional(SearchCursor),
   limit: Schema.optional(Limit),
 });
 export type SearchContextParams = typeof SearchContextParams.Type;
 
-export const ContextSearchPage = Schema.Struct({ items: Schema.Array(ContextItem), next_cursor: Schema.NullOr(Cursor) });
+export const ContextSearchPage = Schema.Struct({ items: Schema.Array(ContextItem), next_cursor: Schema.NullOr(SearchCursor) });
 export type ContextSearchPage = typeof ContextSearchPage.Type;
 
 /** Plan section 12 context routes; api.ts registers the group behind `Authenticated`. */

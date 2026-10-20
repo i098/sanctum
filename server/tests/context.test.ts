@@ -423,6 +423,20 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       yield* plant('venue', venueMeeting, Array.from({ length: 45 }, (_, i) => [`Venue note ${i}`, 300 + i] as const), 2);
       yield* search('Which venue notes exist?', 'venue');
       expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(40);
+      // A page that selects more than its limit carries the rest in a cursor longer than 512 characters, and pages them in order.
+      const notes = Array.from({ length: 45 }, (_, i) => `Venue note ${i}`);
+      judged['Which venue notes exist?'] = notes;
+      const notesStart = prompts.length;
+      const noted: Array<string> = [];
+      for (let cursor: string | null | undefined; cursor !== null;) {
+        const next = yield* page('Which venue notes exist?', 'venue', cursor === undefined ? {} : { cursor });
+        expect(next.status).toBe(200);
+        if (cursor === undefined) expect(next.next!.length).toBeGreaterThan(512);
+        noted.push(...next.texts!);
+        cursor = next.next;
+      }
+      expect(noted).toEqual(notes.toReversed());
+      expect(prompts).toHaveLength(notesStart + 2);
 
       // A 51-item window pages its candidates 40 at a time, one grounding call per page: a page that selects nothing still
       // continues, and the oldest item, the answer, is reached on the next page.
