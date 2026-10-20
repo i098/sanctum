@@ -355,7 +355,7 @@ describe('Cerebras classifier client', () => {
       expect(server.seen[1]).toMatchObject({ path: '/ai/v1/chat/completions', body: { model: '@cf/qwen/qwen3.8-27b' } });
     }));
 
-  it.scopedLive('sends a request-scoped temperature to Cerebras only, and none by default', () =>
+  it.scopedLive('sends a request-scoped temperature to Cerebras only and a request-scoped reasoning effort', () =>
     Effect.gen(function* () {
       const server = yield* replayServer([completion('{"work":true}'), completion('{"work":true}'), completion('{"work":true}')]);
       const llm = makeLlm(roles, {
@@ -364,9 +364,11 @@ describe('Cerebras classifier client', () => {
       }, budget);
       const input = { ...ask, output: Schema.Struct({ work: Schema.Boolean }) };
       yield* llm.generate('classifier', input);
-      yield* llm.generate('classifier', { ...input, temperature: 0 });
-      yield* llm.generate('planner', { ...input, temperature: 0 });
-      expect(server.seen.map(request => (request.body as Record<string, unknown>).temperature)).toEqual([undefined, 0, undefined]);
+      yield* llm.generate('classifier', { ...input, temperature: 0, reasoning: 'medium' });
+      yield* llm.generate('planner', { ...input, temperature: 0, reasoning: 'medium' });
+      const bodies = server.seen.map(request => request.body as Record<string, unknown>);
+      expect(bodies.map(body => body.temperature)).toEqual([undefined, 0, undefined]);
+      expect(bodies.map(body => body.reasoning_effort)).toEqual(['low', 'medium', 'medium']);
     }));
 
   it.scopedLive('waits and retries a 429 queue_exceeded on an opted-in background call', () =>

@@ -26,7 +26,7 @@ Accepted: a context-search query that contains a question or helper word is a qu
 The server sends the model at most 40 current items that the caller may read, inside the request's meeting, kind and time filters, that share a content word with the question, best word match first.
 When no item shares a content word and the request has `from` or `to`, the candidates are the items inside that window, newest first; an empty window returns no items.
 When the request has `from` or `to`, the prompt states that window; the server does not rewrite the question.
-The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it, at temperature 0 where the provider supports it.
+The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it, with reasoning effort `medium` and at temperature 0 where the provider supports it.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
 Each page makes at most one model call over the next 40 candidates. The chosen items list newest first.
 The search cursor carries the chosen items not yet returned and the next candidate position, bound to the caller, the query and the permission revision.

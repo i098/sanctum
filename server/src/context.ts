@@ -493,7 +493,7 @@ const groundedIds = (workspace_id: string, input: SearchContextParams, scope: Re
   const { candidates, next } = yield* questionCandidates(workspace_id, input, scope, start);
   if (candidates.length === 0) return { ids: [], next };
   const llm = yield* LlmClient;
-  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(input, candidates), temperature: 0 };
+  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(input, candidates), temperature: 0, reasoning: 'medium' as const };
   const { value } = yield* llm.generate('classifier', request).pipe(Effect.catchAll(() => llm.generate('planner', request)));
   const byRef = new Map(candidates.map((item, i) => [`c${i + 1}`, item.id]));
   if (value.relevant.some(ref => !byRef.has(ref))) return yield* new Unavailable({ message: 'Grounding chose an item outside its candidates', retryable: false });
