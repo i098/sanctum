@@ -2,8 +2,8 @@
 
 Evidence for the clean build of [docs/build/tasks/plan.md](build/tasks/plan.md) at the delivery branch head.
 Each state and acceptance row below says what was run, where the proof lives, and what remains unrun and why.
-Nothing here claims delivered external side effects or uptime; the one deployment is described under Deployed.
-The only model-quality evidence is the small Workers AI smoke comparison under Workers AI text models; it is not a quality benchmark.
+Nothing here claims delivered external side effects or production acceptance; the development deployment is described under Deployed.
+Model evidence includes the public speech baseline below and small synthetic comparisons; neither establishes production quality.
 
 ## States
 
@@ -11,11 +11,11 @@ The only model-quality evidence is the small Workers AI smoke comparison under W
 | --- | --- | --- |
 | Implemented | Yes, with the open items below | T01–T25 on this branch; slice ownership and seams in [ARCHITECTURE.md](ARCHITECTURE.md). |
 | Locally tested | Yes | This slice passed `npm run check:app`: workspace typechecks, 681 Vitest tests against MySQL, 98 Playwright checks, web builds, benchmark smoke and accelerated day replay. `npm run check`, docs render/build, Fallow and Sentrux also passed. Earlier delivery evidence includes seven Python SDK checks and the Rust benchmark reference. |
-| Model-evaluated | Partial (smoke only) | Speaker behavior and real-meeting speech-to-text remain fixture-only; no approved real meeting recordings were available. Live Whisper chunk lengths were measured on synthetic speech ([DECISIONS.md](DECISIONS.md#speech-to-text-decision--2026-10-08)). Workers AI text roles had a synthetic smoke comparison. Aura-2 had one live byte check; see Workers AI speech output. |
+| Model-evaluated | Partial | The [public speech baseline](#public-speech-baseline---2026-10-19) covers three meetings and has an offline scoring replay. Speaker quality, real-room quality and the speech acceptance threshold remain unverified or unselected. Live Whisper chunk lengths were measured on synthetic speech ([DECISIONS.md](DECISIONS.md#speech-to-text-decision--2026-10-08)). Workers AI text roles had a synthetic smoke comparison. Aura-2 had one live byte check; see Workers AI speech output. |
 | Web-built | Yes | `npm run build -w web-app` (Vite) inside `check:app`; the API serves the build (`server/tests/capabilities.test.ts`, deep links and security headers). |
 | Migrated | Disposable databases and the Cloudflare deployment's database | Every test suite migrates a fresh MySQL 8.4 database (`server/tests/migrations.test.ts` covers fresh, repeated, concurrent, interrupted and edited runs). The `sanctum` database on the Aiven MySQL 8.4 service (`sql_require_primary_key=1`) was migrated with the image's `node server/dist/migrate.js` over verified TLS; every migration applied unchanged. |
 | Deployed | Yes, development mode | Cloudflare, 42nights account ([operations.md](operations.md#cloudflare)): Worker `sanctum` at `https://app.sanctum.42nights.dev` (custom domain; the apex `https://sanctum.42nights.dev` answers 308 to it), Container applications `sanctum-sanctumapi` and `sanctum-sanctumjobs`, R2 bucket `sanctum-recordings`, `SANCTUM_ENV=development` with no provider keys. The deployed commit is recorded on the pull request that added the deployment. |
-| Live-verified | Deployment only | Through the Worker, recorded before the app moved from the apex to `app.sanctum.42nights.dev`: the website loads, `/healthz` is ok and `/readyz` is ready (MySQL reachable over TLS, schema current), `/api/v1/meetings` answers 200 with the owner session and 401 without it, Listen in Chromium with a fake microphone upgrades the listener WebSocket and uploads 30-second chunks to the private bucket, a presigned GET for an uploaded chunk returns the WAV (unsigned is refused), and the job worker keeps polling MySQL while the API container sleeps. No live microphone session against real providers, no meeting playback through Review (detected meetings start restricted), no staging environment and no 24-hour soak. |
+| Live-verified | Development checks only | Through the Worker, recorded before the app moved from the apex to `app.sanctum.42nights.dev`: the website loads, `/healthz` is ok and `/readyz` is ready (MySQL reachable over TLS, schema current), `/api/v1/meetings` answers 200 with the owner session and 401 without it, Listen in Chromium with a fake microphone upgrades the listener WebSocket and uploads 30-second chunks to the private bucket, a presigned GET for an uploaded chunk returns the WAV (unsigned is refused), and the job worker keeps polling MySQL while the API container sleeps. The [24-hour soak](#completed-24-hour-soak---2026-10-16) completed but failed retrieval acceptance. No live microphone session against real providers, no meeting playback through Review (detected meetings start restricted), and no staging environment. |
 
 ## Acceptance (plan section 18)
 
@@ -39,6 +39,43 @@ The only model-quality evidence is the small Workers AI smoke comparison under W
 | Effect lifecycle | Pass, one gap | `jobs.test.ts` and `worker-recovery.test.ts` (lease loss interrupts handlers, killed workers recover, accepted work survives the API), `api-contract.test.ts` and `mcp.test.ts` (client abort cancels the server handler), `ingest.test.ts` (sockets). Pool exhaustion is not tested separately. |
 | SDK/MCP | Pass | `sdk/typescript/tests`, `sdk/python/tests` (both examples end to end against the fixture server), `server/tests/mcp.test.ts` (eleven tools, discovery, schema equality with REST, conflict, revoke, separate principals). |
 | Compatibility | Pass, one gap | Notes, exports, matching and meeting deep links: `server/tests/capabilities.test.ts`, `notes.test.ts`, `matching.test.ts`. Requested speech works for a principal with context access (`silence.test.ts`); a room device credential lacks `context:read`, so a request spoken at a device gets no reply yet. |
+
+## Public speech baseline - 2026-10-19
+
+The production Whisper adapter transcribed three complete public meetings: AMI ES2002a and ICSI Bed002 and Bmr002, totaling 132.3 minutes.
+The pooled word error rate (WER) was 20.8% with primary normalization and 25.0% with literal normalization.
+WER is substitutions plus deletions plus insertions, divided by reference words.
+Primary normalization removes listed hesitation fillers and marked reference fragments; both modes normalize punctuation, numbers, aliases and contractions.
+The reference combines speakers' words in time order, so overlapping speech can increase errors compared with speaker-attributed scoring.
+All audio spans received an adapter answer, with zero failed chunks; this does not mean every spoken word survived.
+
+Sources: [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) and [ICSI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/icsi/).
+These are research-room headset mixes, not Sanctum browser-microphone recordings.
+Audio ran faster than real time, so request latency does not measure live end-to-end latency.
+Speaker quality, meeting-boundary accuracy and real-room quality remain unverified.
+No speech acceptance threshold has been selected; the measured baseline is not a production pass.
+
+The offline replay recorded on 2026-10-20 used the saved hypotheses, cached reference annotations and frozen scorer, with no provider calls.
+It reproduced both pooled percentages and all six saved alignment files byte for byte.
+The historical Bed002 manifest digest has 63 characters: it omits the first `d` of the actual 64-character SHA-256.
+The replay preserved that exception; it does not independently prove the intended Bed002 audio bytes or the earlier origin of saved hypotheses.
+These results and limits summarize retained evaluation records; the public corpus links identify the source material, not the private scoring artifacts.
+
+## Completed 24-hour soak - 2026-10-16
+
+The direct-WebSocket driver acknowledged all 86,400 seconds and stopped at 2026-10-16T20:45:32Z; the final checkpoint completed at 20:58:59Z.
+It accepted 2,886 chunks and rejected none.
+The run used public AMI/ICSI audio as filler and synthetic spoken facts for retrieval scoring, not real-speech WER scoring.
+It was not a browser-microphone test.
+
+The run failed retrieval acceptance.
+Natural-language recall@20 was 0% at every checkpoint.
+The retained report records keyword recall of 82.91% against 90%, and time-aware accuracy of 50%.
+The [result-page gates](https://github.com/i098/sanctum/blob/d90cb8fd238abad35afc7b0f8ea809e2d928c31a/scripts/soak/serve.ts#L46-L53) apply the 24-hour 90% bar to recall@20, not recall@5; natural-language recall has no enforced bar.
+The run also recorded nine outages, 48 heartbeat failures and one `asr_backlog` event; completion is not uninterrupted-uptime proof.
+These results preceded the [search fix](https://github.com/i098/sanctum/pull/199).
+That fix's [head CI](https://github.com/i098/sanctum/actions/runs/39486202606/job/118847532186) passed application checks, not a post-fix soak.
+Post-fix long-run acceptance remains unverified; the [soak procedure and existing pass bars](operations.md#24-hour-soak) still apply.
 
 ## Workers AI speech output
 
@@ -132,8 +169,8 @@ No deployment, live secret change, production migration, live recording or real 
 
 | Gate | Reason |
 | --- | --- |
-| Approved model/audio comparison | Needs approved real meeting recordings and provider credentials; neither is in scope. |
-| 24-hour staging soak | Not run. There is no staging environment; the plan is a hosted run in a dedicated soak workspace with retrieval checkpoints at 1, 5, 12 and 24 hours. The results page, its pass bars and the run steps are in [operations.md](operations.md#24-hour-soak). Until the 1-hour dry run and the 24-hour run record results here, the accelerated replay covers one synthetic day of source time only. |
+| Speech acceptance | The public comparison and offline scoring replay completed; see the [baseline and limits](#public-speech-baseline---2026-10-19). Speaker, boundary and real-room evaluation remain unrun, and the acceptance threshold remains unselected. Any new provider run needs separate spending approval; private audio also needs approved recordings and a named consent owner. |
+| Post-fix 24-hour soak acceptance | The [2026-10-16 run](#completed-24-hour-soak---2026-10-16) completed but failed retrieval gates before the search fix. No post-fix soak establishes acceptance. There is no staging environment; a new hosted run needs separate authorization. The [procedure and pass bars](operations.md#24-hour-soak) remain unchanged. |
 | Rust/TypeScript parity | Needs a controlled benchmark host named in the manifest (T01); the matched harness and one uncontrolled-host run exist, and the steps a controlled run must take are in [benchmarks/README.md](../benchmarks/README.md). |
 | Production activation, package publication, recording activation | Each needs its own authorization (plan section 16, [DECISIONS.md](DECISIONS.md)); the Cloudflare deployment runs in development mode. |
 | Sign-in issuer, MCP authorization server | Decided ([DECISIONS.md](DECISIONS.md), 2026-10-08). Hosted is configured for WorkOS AuthKit ([operations.md](operations.md#cloudflare)); the isolated-browser sign-in run is not recorded yet. The self-hosted embedded Better Auth issuer exists ([operations.md](operations.md#self-hosted-sign-in)) but runs in no deployment. Local runs did not exercise a Client ID Metadata Document authorization or MCP acceptance of an issuer-signed access token. Self-hosted team management (Better Auth organizations, migration 013) is covered by its MySQL API tests (invite, accept, role change, removal) and by Chromium specs that fake the `/idp` routes (Team opens over Settings, a person outside the team, the phone layout); it runs in no deployment either. A browser run of invite, accept, role change and removal against the real embedded issuer has not been run. |
@@ -151,5 +188,5 @@ No deployment, live secret change, production migration, live recording or real 
 | Item | Why it stays unticked |
 | --- | --- |
 | T01: named reference hardware and CPU/RAM limits | The manifest and result format exist, but no controlled benchmark host is named; the fields stay `null` and `unverified`. |
-| T26: approved model/audio comparison and 24-hour soak | Unrun; see Unrun gates. |
+| T26: approved model/audio comparison and 24-hour soak | Partial, not accepted: public speech scores and their offline replay exist, but speaker, boundary and real-room quality remain unverified and the speech threshold is unselected. The completed soak failed retrieval gates before the search fix; post-fix acceptance remains unverified. See the evidence sections and Unrun gates. |
 | T26: matched Rust/TypeScript harness | The harness, the Rust reference and one uncontrolled-host run with source and fixture hashes are published, including `pcm_ingest` saturation and a 300 s memory bound. Parity gates, reference-hardware budgets and MySQL concurrency sweeps need a controlled host and concurrent drivers. |
