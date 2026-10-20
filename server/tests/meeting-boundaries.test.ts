@@ -109,6 +109,78 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
+  for (const [earlierText, laterText] of [['the earlier sentence', 'yes'], ['welcome everyone', 'goodbye']]) {
+    it.effect(`attaches earlier "${earlierText}" before "${laterText}" and promotes the full span`, () =>
+      withDatabase(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const { listener, epoch } = yield* setup;
+          const later = yield* speak(listener, epoch, 61, 62, laterText!);
+          yield* onFinalSegments({ ...listener, segments: [later] });
+          const [meeting] = yield* meetingsOf(listener.workspace_id);
+          expect(meeting!.state).toBe('provisional');
+          const earlier = yield* speak(listener, epoch, 0, 1, earlierText!);
+          yield* onFinalSegments({ ...listener, segments: [earlier] });
+          expect(yield* meetingsOf(listener.workspace_id)).toEqual([{
+            ...meeting!, state: 'active', started_at: '2026-09-28 16:00:00.000000',
+          }]);
+          expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s LEFT JOIN meeting_ranges r
+            ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+              AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
+              AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
+            WHERE s.workspace_id = ${listener.workspace_id} ORDER BY s.sample_start`).toEqual([
+              { text: earlierText, meeting_id: meeting!.id },
+              { text: laterText, meeting_id: meeting!.id },
+            ]);
+        }),
+        { migrated: true },
+      ),
+    );
+  }
+
+  for (const separateEpoch of [false, true]) {
+    it.effect(`gives earlier speech separate restricted ownership ${separateEpoch ? 'across epochs' : 'outside the adjacency gap'}`, () =>
+      withDatabase(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const { owner, device, listener, epoch } = yield* setup;
+          const earlierEpoch = separateEpoch ? yield* seedEpoch(listener, '2026-09-28 15:59:00.000000') : epoch;
+          const later = yield* speak(listener, epoch, 601, 602, 'yes');
+          yield* onFinalSegments({ ...listener, segments: [later] });
+          const [current] = yield* meetingsOf(listener.workspace_id);
+          const earlier = yield* speak(listener, earlierEpoch, 0, 1, 'the earlier sentence');
+          yield* onFinalSegments({ ...listener, segments: [earlier] });
+          const meetings = yield* meetingsOf(listener.workspace_id);
+          expect(meetings.map(row => row.state)).toEqual(['closing', 'provisional']);
+          const recovered = meetings[0]!;
+          expect(meetings[1]!.id).toBe(current!.id);
+          expect(yield* rangesOf(recovered.id)).toEqual([{ epoch_id: earlierEpoch, sample_start: 0, sample_end: RATE }]);
+          expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 601 * RATE, sample_end: 602 * RATE }]);
+          expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s JOIN meeting_ranges r
+            ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+              AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
+              AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
+            WHERE s.workspace_id = ${listener.workspace_id} ORDER BY s.text`).toEqual([
+              { text: 'the earlier sentence', meeting_id: recovered.id },
+              { text: 'yes', meeting_id: current!.id },
+            ]);
+          for (const meeting of meetings) {
+            const id = MeetingId.make(meeting.id);
+            expect(yield* getMeeting(device, id)).toMatchObject({ visibility: 'restricted' });
+            expect(yield* Effect.flip(getMeeting(owner, id))).toMatchObject({ _tag: 'NotFound' });
+            expect(yield* sql`SELECT principal_id, access FROM meeting_access WHERE meeting_id = ${id}`)
+              .toEqual([{ principal_id: device.principal.id, access: 'owner' }]);
+          }
+          const next = yield* speak(listener, epoch, 603, 604, 'still here');
+          yield* onFinalSegments({ ...listener, segments: [next] });
+          expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 601 * RATE, sample_end: 604 * RATE }]);
+          expect(yield* listenerFeed(device, ListenerId.make(listener.listener_id))).toEqual({ meeting_id: current!.id, actions: [] });
+        }),
+        { migrated: true },
+      ),
+    );
+  }
+
   it.effect('schedules live context refresh after the quiet period, and at once after four new turns', () =>
     withDatabase(
       Effect.gen(function* () {

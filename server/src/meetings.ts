@@ -262,13 +262,13 @@ const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: Transcri
         WHERE n.meeting_id = ${open.row.id}
           AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}
           AND (e.end_fence_sample IS NULL OR e.end_fence_sample <= ${source.sample_start} OR e.end_fence_from_sample >= n.sample_start)`;
-      if (adjacent === undefined) return open;
+      if (adjacent === undefined) return null;
       const started_at = dbTime(sampleMs(epoch, source.sample_start));
       yield* sql`UPDATE meetings SET started_at = ${started_at}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${open.row.id}`;
       open = { ...open, row: { ...open.row, started_at: Schema.decodeSync(DbUtc)(started_at) } };
     }
     const advanced = advance(open, epoch, segment, yield* claimSource(open.row, segment.source));
-    return yield* promoteIfEstablished(advanced, decision, sampleMs(epoch, segment.source.sample_end));
+    return yield* promoteIfEstablished(advanced, decision, sampleMs(advanced.last!.epoch, advanced.last!.sample_end));
   });
 
 /** Allowance for the page's first sample predating the server's record of the epoch's start when the End fence is clamped to real time. */
@@ -356,12 +356,20 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
 
 const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
   Effect.gen(function* () {
-    const gap = open === null ? null : gapMs(open, epoch, segment.source.sample_start);
-    const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: open?.tail ?? [], gap_ms: gap });
-    if (open !== null && decision.decision === 'continue') return yield* continueMeeting(open, epoch, segment, decision);
+    const earlier = open !== null && sampleMs(epoch, segment.source.sample_start) < Date.parse(open.row.started_at);
+    const gap = open === null || earlier ? null : gapMs(open, epoch, segment.source.sample_start);
+    const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: earlier ? [] : open?.tail ?? [], gap_ms: gap });
+    if (open !== null && (earlier || decision.decision === 'continue')) {
+      const continued = yield* continueMeeting(open, epoch, segment, decision);
+      if (continued !== null) return continued;
+    }
     if (decision.decision !== 'start') return open;
-    if (open !== null) yield* sealMeeting(open.row, { watermark: null, state: 'closing', cue: decision, actor: null });
+    if (open !== null && !earlier) yield* sealMeeting(open.row, { watermark: null, state: 'closing', cue: decision, actor: null });
     const created = yield* createMeeting(key, epoch, segment, decision);
+    if (earlier) {
+      yield* sealMeeting(created.row, { watermark: null, state: 'closing', cue: decision, actor: null });
+      return open;
+    }
     return yield* promoteIfEstablished({ ...created, tail: [utteranceOf(segment)] }, decision, sampleMs(epoch, segment.source.sample_end));
   });
 
@@ -398,7 +406,6 @@ export const onFinalSegments = (event: {
         let claimed = false;
         for (const segment of known.sort((a, b) => at(a) - at(b))) {
           const placed = yield* placeSegment(event, epochs.get(segment.source.epoch_id)!, segment, open);
-          // Placement returns a new open meeting exactly when it claimed the segment.
           claimed ||= placed !== open;
           open = placed;
         }
