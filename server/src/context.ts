@@ -372,7 +372,8 @@ export const getContextSnapshot = (access: AccessScope, meeting_id: MeetingId) =
   );
  });
 
-const SearchCursor = Schema.parseJson(Schema.Tuple(Schema.NonNegativeInt, UtcTimestamp, ContextItemId));
+/** Resume position: score, event time and id of the last item, and whether the question's answer-kind fallback selected the items. */
+const SearchCursor = Schema.parseJson(Schema.Tuple(Schema.NonNegativeInt, UtcTimestamp, ContextItemId, Schema.Boolean));
 
 const utc = Schema.encodeSync(DbUtc);
 
@@ -444,77 +445,126 @@ const wordRole = (token: string, first: boolean) => {
 
 interface Clause { readonly clause: number; readonly kind: boolean; readonly subject: number }
 
-/** Clause state after `word`: a question word may start a clause, mark an answer kind, or open a "what is"/"who is" subject. */
+/** "who is attending": a verb right after "is" means the clause asks about an action, not a subject's value. */
+const progressive = (word: string, before: string) => BE.has(before) && word.endsWith('ing');
+
+/**
+ * Clause state after `word`: a question word may start a clause, mark an answer kind, or open a "what is"/"who is" subject;
+ * a progressive verb closes that subject.
+ */
 const nextClause = (word: string, before: string, state: Clause): Clause => {
- if (!QUESTION_WORDS.has(word)) return state;
+ if (!QUESTION_WORDS.has(word)) return progressive(word, before) ? { ...state, subject: -1 } : state;
  const clause = CLAUSE_ENDS.has(word) || (word === 'of' && state.subject >= 0) ? state.clause + 1 : state.clause;
  const subject = BE.has(word) && ASKS.has(before) ? clause : clause === state.clause ? state.subject : -1;
  return { clause, kind: DETERMINERS.has(word), subject };
 };
 
+interface Scan { readonly state: Clause; readonly named: number; readonly object: boolean }
+
+/** A content word is the question's verb, a word of the answer's kind, or a word of the subject. */
+const termRole = (word: string, before: string, { state, named, object }: Scan) => {
+ if (progressive(word, before) || SUBJECT_LEADS.has(before) || (AUXILIARIES.has(before) && named === state.clause)) return 'verb';
+ return state.kind || object ? 'kind' : 'required';
+};
+
+type Term = { term: string; role: 'verb' | 'kind' | 'required'; subject: number };
+
+/** Scan state after `word`: its clause, and whether a yes/no question has passed its subject's helper verb. */
+const nextScan = (scan: Scan, word: string, before: string, yesNo: boolean): Scan => {
+ const state = nextClause(word, before, scan.state);
+ return { ...scan, state, object: scan.object || (yesNo && scan.named === state.clause && AUXILIARIES.has(word)) };
+};
+
+/** The terms by role; the head of a "what is"/"who is" subject, its last required word, names the answer's kind. */
+const byRole = (terms: ReadonlyArray<Term>) => {
+ const heads = new Map(terms.filter(t => t.role === 'required' && t.subject >= 0).map(t => [t.subject, t]));
+ const role = (t: Term) => (heads.get(t.subject) === t ? 'kind' : t.role);
+ const of = (wanted: Term['role']) => terms.filter(t => role(t) === wanted).map(t => t.term);
+ return { required: of('required'), verbs: of('verb'), kinds: of('kind') };
+};
+
 /**
  * The words of a question, without question, helper and time words. Names (a capital letter after the first word, or a digit)
- * are kept as written; other words of three or more letters lose one inflection ending. A word is soft when it is the
- * question's verb ("who owns", "was chosen"), names the answer's kind ("which vendor"), heads the subject of "what is"/"who is"
- * ("the launch date", "the owner of onboarding"), or is the object of a helper verb after the subject of a yes/no question
- * ("Does onboarding have an owner?"). Every other word is required.
+ * are kept as written; other words of three or more letters lose one inflection ending. A verb is the question's verb ("who
+ * owns", "was chosen", "is attending"). An answer-kind word names what is asked ("which vendor"), heads the subject of
+ * "what is"/"who is" ("the launch date", "the owner of onboarding"), or is the object of a helper verb after the subject of a
+ * yes/no question ("Does onboarding have an owner?"). Every other word is required: with the names it is the subject.
+ * "is not attending" reads like "is attending": `not` changes the answer, not which words find it.
  */
 const questionTerms = (q: string) => {
  const words = { name: [] as string[], none: [] as string[] };
- const terms: Array<{ term: string; soft: boolean; subject: number }> = [];
- const tokens = q.replace(CLOCK, ' ').match(TOKEN) ?? [];
+ const terms: Array<Term> = [];
+ const tokens = (q.replace(CLOCK, ' ').match(TOKEN) ?? []).filter(token => token.toLowerCase() !== 'not');
  const yesNo = AUXILIARIES.has(tokens[0]?.toLowerCase() ?? '');
- let previous = '', named = -1, object = false, state: Clause = { clause: 0, kind: false, subject: -1 };
+ let previous = '', scan: Scan = { state: { clause: 0, kind: false, subject: -1 }, named: -1, object: false };
  for (const [index, token] of tokens.entries()) {
   const word = token.toLowerCase();
   const before = previous;
   previous = word;
-  state = nextClause(word, before, state);
-  object ||= yesNo && named === state.clause && AUXILIARIES.has(word);
-  if (QUESTION_WORDS.has(word)) continue;
-  const role = wordRole(token, index === 0);
-  const verb = SUBJECT_LEADS.has(before) || (AUXILIARIES.has(before) && named === state.clause);
-  if (role !== 'none') named = state.clause;
-  if (role === 'term') terms.push({ term: stem(word), soft: state.kind || verb || object, subject: state.subject });
+  scan = nextScan(scan, word, before, yesNo);
+  const role = QUESTION_WORDS.has(word) ? 'none' : wordRole(token, index === 0);
+  if (role === 'term') terms.push({ term: stem(word), role: termRole(word, before, scan), subject: scan.state.subject });
   else words[role].push(word);
+  if (role !== 'none') scan = { ...scan, named: scan.state.clause };
  }
- // The head of a "what is"/"who is" subject is its last required word.
- const heads = new Map(terms.filter(t => !t.soft && t.subject >= 0).map(t => [t.subject, t]));
- for (const head of heads.values()) head.soft = true;
- return { names: words.name, required: terms.filter(t => !t.soft).map(t => t.term), soft: terms.filter(t => t.soft).map(t => t.term) };
+ return { names: words.name, ...byRole(terms) };
 };
 
+interface Selection { readonly must: Statement.Fragment; readonly score: Statement.Fragment; readonly fallback?: Selection }
+
 /**
- * `must` selects the items and `score` counts the ranked words an item contains; results list the highest score first and
- * the newest first within a score. A query without question or helper words is a keyword query: every word is required.
- * A question requires its names and required words, and ranks by its required words, so every listed item has the same
- * score and the newest comes first. A question without required words ranks by its soft words: it lists the items that
- * contain one of them, or, when it names something ("What is the Falcon mascot?"), the named items. `null` matches nothing.
+ * Which items a question lists (`must`) and their rank (`score`, highest first, then newest first). A question with required
+ * words lists the items that contain its whole subject; those items are versions of one topic, so the newest comes first and
+ * no optional word reorders them. A subject of names only ("What is the Falcon mascot?") lists the named items, ranked by the
+ * optional words they contain. A question without a subject lists the items with one of its verbs, or, when no item in scope
+ * has one (`fallback`), the items with one of its answer-kind words, ranked by the optional words. `null` matches nothing.
  */
-const searchFilter = (sql: SqlClient.SqlClient, q: string) => {
+const questionFilter = (sql: SqlClient.SqlClient, q: string): Selection | null => {
+ const count = (rank: ReadonlyArray<string>) => sql.join(' + ', true, '0')(rank.map(word => sql`(CASE WHEN ${termFilter(sql, [word])} THEN 1 ELSE 0 END)`));
+ const oneOf = (any: ReadonlyArray<string>) => sql.or(any.map(word => termFilter(sql, [word])));
+ const { names, required, verbs, kinds } = questionTerms(q);
+ const optional = [...verbs, ...kinds];
+ if (required.length > 0) return { must: termFilter(sql, [...names, ...required]), score: sql`0` };
+ if (names.length > 0) return { must: termFilter(sql, names), score: count(optional) };
+ if (optional.length === 0) return null;
+ const byKind = { must: oneOf(kinds), score: count(kinds) };
+ if (verbs.length === 0) return byKind;
+ return { must: oneOf(verbs), score: count(optional), ...(kinds.length === 0 ? {} : { fallback: byKind }) };
+};
+
+/** A query without question or helper words is a keyword query: every word is required and the newest item comes first. */
+const searchFilter = (sql: SqlClient.SqlClient, q: string): Selection | null => {
  const words = q.toLowerCase().match(TOKEN) ?? [];
- const { names, required, soft } = words.some(word => QUESTION_WORDS.has(word)) ? questionTerms(q) : { names: [], required: words, soft: [] };
- const ranked = required.length > 0 ? required : soft;
- if (names.length === 0 && ranked.length === 0) return null;
- const matches = ranked.map(word => termFilter(sql, [word]));
- return {
-  must: names.length > 0 || required.length > 0 ? termFilter(sql, [...names, ...required]) : sql.or(matches),
-  score: sql.join(' + ', true, '0')(matches.map(match => sql`(CASE WHEN ${match} THEN 1 ELSE 0 END)`)),
- };
+ if (words.some(word => QUESTION_WORDS.has(word))) return questionFilter(sql, q);
+ return words.length === 0 ? null : { must: termFilter(sql, words), score: sql`0` };
 };
 
 const RankedRow = Schema.extend(ItemRow, Schema.Struct({ score: DbSafeInt }));
 
+/**
+ * A question's rows: the items its verbs select, or its answer-kind fallback when the first page found none of those or the
+ * cursor was made on the fallback, so every page continues the first page's selection.
+ */
+const selectRows = <E, R>(page: (selection: Selection) => Effect.Effect<ReadonlyArray<typeof RankedRow.Type>, E, R>, filter: Selection,
+ after: typeof SearchCursor.Type | null) =>
+ Effect.gen(function*() {
+  const resumeFallback = after?.[3] === true;
+  const rows = resumeFallback ? [] : yield* page(filter);
+  const fallback = filter.fallback !== undefined && (resumeFallback || (after === null && rows.length === 0));
+  return { rows: fallback ? yield* page(filter.fallback!) : rows, fallback };
+ });
+
 /** The first `limit` of `limit + 1` ranked rows, with a cursor after the last one when a further row exists. */
-const searchPage = (rows: ReadonlyArray<typeof RankedRow.Type>, limit: number) => {
+const searchPage = (rows: ReadonlyArray<typeof RankedRow.Type>, limit: number, fallback: boolean) => {
  const last = rows.length > limit ? rows[limit - 1] : undefined;
- const next_cursor = last === undefined ? null : Buffer.from(Schema.encodeSync(SearchCursor)([last.score, last.event_at ?? last.created_at, last.id])).toString('base64url');
+ const next_cursor = last === undefined ? null : Buffer.from(Schema.encodeSync(SearchCursor)([last.score, last.event_at ?? last.created_at, last.id, fallback])).toString('base64url');
  return { items: rows.slice(0, limit).map(toItem), next_cursor } satisfies ContextSearchPage;
 };
 
 /**
  * Authorized lexical retrieval over current items, highest score first, then newest event first. Without `q` it lists by the
- * other filters. `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
+ * other filters. `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the
+ * last item and keeps the first page's choice between a question's verbs and its answer-kind fallback.
  */
 export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
@@ -522,20 +572,22 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   if (input.meeting_id) yield* authorizeMeeting(access, input.meeting_id, 'read');
   const scope: VisibleScope = input.meeting_id ? { meetings: [input.meeting_id], workspaceLevel: false } : yield* visibleScope(access);
   const sql = yield* SqlClient.SqlClient;
-  const filter = input.q === undefined ? { must: sql`1=1`, score: sql`0` } : searchFilter(sql, input.q);
-  if (filter === null) return searchPage([], 1);
+  const filter: Selection | null = input.q === undefined ? { must: sql`1=1`, score: sql`0` } : searchFilter(sql, input.q);
+  if (filter === null) return searchPage([], 1, false);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
-  const where = sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, filter.score, after), filter.must]);
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
-  const rows = yield* decodeRows(
-   RankedRow,
-   sql`SELECT ci.*, ${filter.score} AS score FROM context_items ci
-        WHERE ci.workspace_id = ${access.workspace_id} AND ${where}
-          AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
-        ORDER BY score DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id
-        LIMIT ${limit + 1}`,
-  );
-  return searchPage(rows, limit);
+  const page = ({ must, score }: Selection) =>
+   decodeRows(
+    RankedRow,
+    sql`SELECT ci.*, ${score} AS score FROM context_items ci
+         WHERE ci.workspace_id = ${access.workspace_id}
+           AND ${sql.and([sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, score, after), must])}
+           AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
+         ORDER BY score DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id
+         LIMIT ${limit + 1}`,
+   );
+  const { rows, fallback } = yield* selectRows(page, filter, after);
+  return searchPage(rows, limit, fallback);
  });
 
 /** HTTP handlers for `ContextApi`; SDK and MCP adapters call the same domain functions. */

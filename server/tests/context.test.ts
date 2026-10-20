@@ -306,10 +306,13 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         'We chose Northwind Freight for shipping.', 'Falcon budget approved at 40k.', 'Marcus takes over onboarding.',
         'We decided the launch date is November 3.', 'The launch has moved to November 17.', 'The launch is now December 1.',
         'Dana is not attending the offsite.', 'Omar placed the laptop order.', 'Omar placed the catering booking.', 'The vendor invoice is due Friday.',
-        'Billing starts Monday.', 'The sprint starts Tuesday.', 'The budget review is Thursday.'];
+        'Billing starts Monday.', 'The sprint starts Tuesday.', 'The budget review is Thursday.', 'Anna is attending the board meeting.'];
       // Later facts cite later segments, so their event time is newer.
       const later = new Map([['We chose Northwind Freight for shipping.', 500], ['Marcus takes over onboarding.', 900], ['The launch has moved to November 17.', 600],
-        ['The launch is now December 1.', 1200], ['The vendor invoice is due Friday.', 1500], ['The sprint starts Tuesday.', 1600]]);
+        ['The launch is now December 1.', 1200], ['The vendor invoice is due Friday.', 1500], ['The sprint starts Tuesday.', 1600], ['Anna is attending the board meeting.', 1700],
+        ['Dana is not attending the offsite.', 1100]]);
+      // Facts about the asked subject, newest first; Anna's board meeting shares only the verb and stays out.
+      const offsite = ['Dana is not attending the offsite.', 'The Falcon offsite is in Lisbon.'];
       for (const [revision, text] of facts.entries()) {
         const at = later.get(text);
         const cited = at === undefined ? segment : yield* Effect.provide(seedSegment(meeting, at, at + 5, `For the record, ${text}`), db);
@@ -329,15 +332,16 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         ['Where do the Falcon tickets live?', ['The Falcon tickets live in Trello.']],
         ['When does Dana send the contract?', ['Dana sends the signed contract by Friday.']],
         ['When is it coming?', ['The release is coming in May.']],
-        ['Which vendor was chosen?', ['The vendor invoice is due Friday.', 'We chose Northwind Freight for shipping.']],
-        ['Which shipping vendor was chosen?', ['We chose Northwind Freight for shipping.', 'The vendor invoice is due Friday.', 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']],
+        ['Which vendor was chosen?', ['We chose Northwind Freight for shipping.']],
+        ['Which shipping vendor was chosen?', ['We chose Northwind Freight for shipping.']],
         ['Who owns onboarding now?', onboarding],
         ['Who is in charge of onboarding now?', onboarding],
         ['Who is the owner of onboarding?', onboarding],
         ['Who is the onboarding owner?', onboarding],
         ['Which shipping company did we pick?', ['We chose Northwind Freight for shipping.', 'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']],
         ["What's the launch date now?", launches],
-        ['Who is not attending the offsite?', ['Dana is not attending the offsite.']],
+        ['Who is not attending the offsite?', offsite],
+        ['Who is attending the offsite?', offsite],
         ['Who placed the order?', ['Omar placed the laptop order.']],
         ['Was budget approved?', ['Falcon budget approved at 40k.']],
         ['Has the launch moved?', ['The launch has moved to November 17.']],
@@ -352,21 +356,28 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         ['Does it?', []],
         ['?!', []],
       ] as const) {
-        expect(yield* search(q), q).toEqual({ status: 200, texts });
+        expect.soft(yield* search(q), q).toEqual({ status: 200, texts });
       }
       expect(yield* search('What was the launch date as of T0+04:00?', 'owner', { to: '2026-09-26T17:09:00Z' })).toEqual({ status: 200, texts: ['We decided the launch date is November 3.'] });
       const mascot = (yield* search('What is the Falcon mascot?')).texts;
       expect(mascot[0]).toBe('The Falcon mascot is the otter.');
       expect([...mascot.slice(1)].sort()).toEqual(['Falcon budget approved at 40k.', 'The Falcon offsite is in Lisbon.', 'The Falcon project owner is Peter.',
         'The Falcon team has five engineers.', 'The Falcon tickets live in Trello.']);
-      const pages: Array<string> = [];
-      for (let cursor: string | null | undefined; cursor !== null;) {
-        const next = yield* page('Which shipping vendor was chosen?', 'owner', { limit: '1', ...(cursor === undefined ? {} : { cursor }) });
-        pages.push(...next.texts);
-        cursor = next.next;
-      }
-      expect(pages).toEqual(['We chose Northwind Freight for shipping.', 'The vendor invoice is due Friday.',
+      // Every page of a ranked or fallback question continues the first page's order, one item at a time.
+      const paged = (q: string) =>
+        Effect.gen(function*() {
+          const seen: Array<string> = [];
+          for (let cursor: string | null | undefined; cursor !== null;) {
+            const next = yield* page(q, 'owner', { limit: '1', ...(cursor === undefined ? {} : { cursor }) });
+            seen.push(...next.texts);
+            cursor = next.next;
+          }
+          return seen;
+        });
+      expect(yield* paged('What is the Falcon mascot?')).toEqual(mascot);
+      expect(yield* paged('Which shipping company did we pick?')).toEqual(['We chose Northwind Freight for shipping.',
         'Northwood Freight quoted nine thousand dollars for shipping, and we rejected that quote.']);
+      expect(yield* paged("What's the launch date now?")).toEqual(launches);
       expect(yield* search('Who owns the Falcon project?', 'stranger')).toEqual({ status: 200, texts: [] });
     }));
 });
