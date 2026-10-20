@@ -46,6 +46,7 @@ export interface WorkersAiOptions {
 }
 
 export const workersAi = (options: WorkersAiOptions): ModelProvider => ({
+  reasoningEfforts: ['none', 'low', 'medium', null],
   complete: async (request, signal) => {
     const completion = (await (await postJson('Workers AI', `${options.baseUrl}/v1/chat/completions`, options.apiToken, body(request, false), signal)).json()) as Completion;
     const choice = completion.choices?.[0];

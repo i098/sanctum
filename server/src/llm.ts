@@ -29,7 +29,7 @@ export interface Llm {
   /**
    * Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements); `timeoutMs` replaces the per-attempt default.
    * `patient` (background jobs only) makes each retry wait for the provider's retry delay, or `PATIENT_BACKOFF_MS` without one, so a loaded provider can drain.
-   * `temperature` is sent by providers that support it and ignored by the rest; `reasoning` overrides the role's reasoning effort for this request.
+   * `temperature` is sent by providers that support it and ignored by the rest; an unsupported `reasoning` override keeps the role's effort.
    */
   readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number; readonly patient?: boolean; readonly temperature?: number; readonly reasoning?: ProviderRequest['reasoning'] }) => Effect.Effect<Generated<A>, Unavailable>;
   /** Text deltas; interruption aborts the request, and a stalled stream fails. Never retried, so no text repeats. */
@@ -101,11 +101,15 @@ export function makeLlm(
     );
 
   return {
-    generate: (role, { name, output, timeoutMs, patient: patientRetries, ...prompt }) => {
+    generate: (role, { name, output, timeoutMs, patient: patientRetries, reasoning, ...prompt }) => {
       const { $schema: _, ...schema }: Record<string, unknown> = { ...JSONSchema.make(output) };
       return call(role, timeoutMs ?? budget.timeoutMs, patientRetries === true, (provider, base, signal) => {
         if (!provider.complete) throw new ProviderError('provider has no text generation', false);
-        return provider.complete({ ...base, ...prompt, json: { name, schema } }, signal);
+        return provider.complete({
+          ...base, ...prompt,
+          reasoning: reasoning !== undefined && (provider.reasoningEfforts?.includes(reasoning) ?? true) ? reasoning : base.reasoning,
+          json: { name, schema },
+        }, signal);
       }).pipe(
         Effect.flatMap(({ value, model }) =>
           Schema.decodeUnknown(Schema.parseJson(output))(value).pipe(

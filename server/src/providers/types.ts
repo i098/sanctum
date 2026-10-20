@@ -38,6 +38,8 @@ export interface ModelProvider {
   readonly stream?: (request: ProviderRequest, signal: AbortSignal) => AsyncIterable<string>;
   /** Hosted web search with continuation handling; only providers that host search implement it. */
   readonly research?: (request: ProviderRequest, budget: { maxSearches: number; maxContinuations: number }, signal: AbortSignal) => Promise<ResearchResult>;
+  /** Accepted request overrides; an unlisted effort keeps the role default. Absent means no restriction. */
+  readonly reasoningEfforts?: ReadonlyArray<ProviderRequest['reasoning']>;
 }
 
 /** Transport, HTTP or response-shape failure; `retryable` only when repeating the request can help, `usage` when a failed research call was still billed. */

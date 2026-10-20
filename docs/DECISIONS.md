@@ -27,7 +27,10 @@ The server sends the model at most 40 current items that the caller may read, in
 When no item shares a content word and the request has `from` or `to`, the candidates are the items inside that window, newest first; an empty window returns no items.
 When the request has `from` or `to`, the prompt states that window; the server does not rewrite the question.
 Each candidate line gives the item's ref, time, stored kind and text, so a stored decision reads as a decision without a change verb.
-The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it. The classifier call uses reasoning effort `high` and temperature 0 where the provider supports it; the planner fallback keeps its role defaults.
+The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it.
+The classifier requests reasoning effort `high` and temperature 0 where the provider supports them.
+Workers AI Qwen accepts `low`, `medium` and `xhigh`, so an unsupported override keeps the classifier's role effort.
+The planner fallback keeps its role defaults.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
 Each page makes at most one model call over the next 40 candidates. The chosen items list newest first.
 The search cursor stays within the shared 512-character bound and needs no stored state: it names the candidate page (source, offset and a fingerprint of its items and revisions) and a bitmask of chosen items not yet returned, bound to the caller, the query and the permission revision.
