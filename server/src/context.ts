@@ -535,7 +535,7 @@ const questionCursor = (access: AccessScope, input: SearchContextParams, scope: 
 
 /**
  * The candidate page a question works on and the ids chosen on it: the page and picks a cursor still holds, else the next
- * candidate page (the first page: word matches, or the request window when nothing matches) grounded with one model call.
+ * candidate page (the first page: word matches, or the request window when nothing matches), selected by `groundedIds`.
  */
 const questionChoice = (access: AccessScope, input: SearchContextParams, scoped: ReadonlyArray<Statement.Fragment>) =>
  Effect.gen(function*() {
