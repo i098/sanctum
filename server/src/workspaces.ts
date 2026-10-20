@@ -29,6 +29,7 @@ export const PURGED_TABLES = [
   'context_items',
   'artifacts',
   'paid_model_calls',
+  'question_snapshots',
   'actions',
   'action_grants',
   'integration_accounts',
