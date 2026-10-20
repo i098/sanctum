@@ -324,6 +324,7 @@ export type ContextItemSupersedes = {
 
 export type SearchContextInput = {
   readonly q?: string;
+  readonly mode?: "keyword";
   readonly meeting_id?: string;
   readonly kind?: "decision" | "commitment" | "constraint" | "project_fact" | "preference" | "open_question" | "research_observation";
   readonly from?: string;
@@ -694,7 +695,7 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'meetings.exportMeeting': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/export","pathParams":["meeting_id"],"queryParams":[],"body":false},
   'meetings.mapSpeaker': {"method":"POST","path":"/api/v1/meetings/{meeting_id}/speakers/map","pathParams":["meeting_id"],"queryParams":[],"body":true},
   'context.getContext': {"method":"GET","path":"/api/v1/meetings/{meeting_id}/context","pathParams":["meeting_id"],"queryParams":[],"body":false},
-  'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","meeting_id","kind","from","to","cursor","limit"],"body":false},
+  'context.searchContext': {"method":"GET","path":"/api/v1/context/search","pathParams":[],"queryParams":["q","mode","meeting_id","kind","from","to","cursor","limit"],"body":false},
   'context.addContextItem': {"method":"POST","path":"/api/v1/context/items","pathParams":[],"queryParams":[],"body":true},
   'context.reviseContextItem': {"method":"PATCH","path":"/api/v1/context/items/{item_id}","pathParams":["item_id"],"queryParams":[],"body":true},
   'context.getContextChanges': {"method":"GET","path":"/api/v1/context/changes","pathParams":[],"queryParams":["cursor","meeting_id","limit"],"body":false},

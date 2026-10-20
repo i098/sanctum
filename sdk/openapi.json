@@ -4306,6 +4306,17 @@
             "description": "a string at most 500 character(s) long"
           },
           {
+            "name": "mode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "keyword"
+              ]
+            },
+            "required": false
+          },
+          {
             "name": "meeting_id",
             "in": "query",
             "schema": {

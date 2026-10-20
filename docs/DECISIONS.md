@@ -19,6 +19,23 @@
 - Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
 - Relicense from MIT to FSL-1.1-ALv2 (Functional Source License, Apache 2.0 future license; same as i098/Crewship) by the owner on 2026-10-14; earlier commits stay under MIT.
 
+## Question search decision - 2026-10-20
+
+The owner chose bounded meaning-based grounding on the existing stack ("A"), after word rules failed ordinary questions.
+Accepted: a context-search query that contains a question or helper word is a question.
+The server sends the model at most 40 current items that the caller may read, inside the request's meeting, kind and time filters, that share a content word with the question, best word match first.
+When no item shares a content word and the request has `from` or `to`, the candidates are the items inside that window, newest first; an empty window returns no items.
+When the request has `from` or `to`, the prompt states that window; the server does not rewrite the question.
+Each candidate line gives the item's ref, time, stored kind and text, so a stored decision reads as a decision without a change verb.
+The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it. The classifier call uses reasoning effort `high` and temperature 0 where the provider supports it; the planner fallback keeps its role defaults.
+A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
+Each page makes at most one model call over the next 40 candidates. The chosen items list newest first.
+The search cursor stays within the shared 512-character bound and needs no stored state: it names the candidate page (source, offset and a fingerprint of its items and revisions) and a bitmask of chosen items not yet returned, bound to the caller, the query and the permission revision.
+If that page changed between requests (an item added, revised, retracted or no longer visible), the cursor is unknown and the caller searches again; a held position never applies to a shifted page.
+A page whose candidates answer nothing returns no items and a cursor while candidates remain.
+Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
+A fixture judge proves the integration in `server/tests/context.test.ts`; it is not evidence of the real model's answer quality.
+
 ## Spoken work decision - 2026-10-10
 
 The captain chose model judgment: "The model should be start enough to decide whether or not to do something (recommended)".
