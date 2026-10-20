@@ -32,7 +32,7 @@ async function api(page: Page, searched: string[], search: (limit: number) => re
     const url = new URL(route.request().url());
     if (url.pathname === '/api/v1/meetings') return route.fulfill({ json: { meetings: MEETINGS, next_cursor: null } });
     if (url.pathname === '/api/v1/context/search') {
-      searched.push(url.searchParams.get('mode') === 'keyword' ? url.searchParams.get('q')! : `grounded:${url.searchParams.get('q')}`);
+      searched.push(url.searchParams.get('q')!);
       const [status, json] = search(Number(url.searchParams.get('limit')));
       return route.fulfill({ status, json });
     }
