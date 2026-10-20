@@ -296,11 +296,13 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       // This proves the integration (candidates, ref validation, order, pages, failures), not real-model meaning quality.
       const judged: Record<string, ReadonlyArray<string>> = {};
       const prompts: Array<string> = [];
-      let mode: 'judge' | 'down' | 'stray' = 'judge';
+      let mode: 'judge' | 'down' | 'stray' | 'fallback' = 'judge';
       const judge: ModelProvider = {
         complete: async request => {
           prompts.push(request.prompt);
           if (mode === 'down') throw new ProviderError('fixture provider down', false);
+          if (mode === 'fallback' && request.model === engineeringDefaults.modelRoles.classifier.model) throw new ProviderError('fixture classifier down', false);
+          if (mode === 'fallback' && (request.reasoning !== engineeringDefaults.modelRoles.planner.reasoning || request.temperature !== undefined)) throw new ProviderError('fixture planner rejects overrides', false);
           const question = request.prompt.match(/^Question: (.*)$/m)![1]!;
           const refs = [...request.prompt.matchAll(/^(c\d+) \[[^\]]*\] \w+ (.*)$/gm)].filter(([, , text]) => judged[question]?.includes(JSON.parse(text!))).map(([, ref]) => ref!);
           return JSON.stringify({ relevant: mode === 'stray' ? ['c99'] : refs });
@@ -406,6 +408,9 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect((yield* search('Who owns the Falcon project?')).status).toBe(503);
       mode = 'stray';
       expect((yield* search('Who owns the Falcon project?')).status).toBe(503);
+      // A classifier failure falls back to the planner with its own role settings, not the classifier's overrides.
+      mode = 'fallback';
+      expect(yield* search('Who owns the Falcon project?')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
 
       // Keyword queries, including those with short stopwords, never reach the model: they answer while it is down.
       mode = 'down';

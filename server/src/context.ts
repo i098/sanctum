@@ -492,8 +492,8 @@ const groundedIds = (input: SearchContextParams, candidates: ReadonlyArray<Conte
  Effect.gen(function*() {
   if (candidates.length === 0) return new Set<string>();
   const llm = yield* LlmClient;
-  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(input, candidates), temperature: 0, reasoning: 'high' as const };
-  const { value } = yield* llm.generate('classifier', request).pipe(Effect.catchAll(() => llm.generate('planner', request)));
+  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(input, candidates) };
+  const { value } = yield* llm.generate('classifier', { ...request, temperature: 0, reasoning: 'high' as const }).pipe(Effect.catchAll(() => llm.generate('planner', request)));
   const byRef = new Map(candidates.map((item, i) => [`c${i + 1}`, item.id]));
   if (value.relevant.some(ref => !byRef.has(ref))) return yield* new Unavailable({ message: 'Grounding chose an item outside its candidates', retryable: false });
   return new Set<string>(value.relevant.map(ref => byRef.get(ref)!));
