@@ -510,7 +510,7 @@ const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
 /**
  * A question's continuation, small enough for the shared 512-character cursor: the caller, permission revision and query it was
  * issued for, the candidate page it came from (source, offset and content fingerprint), and a hex bitmask of that page's chosen
- * items not yet returned. Returning those held items needs no model call or stored state.
+ * items not yet returned. No model call and no stored state is needed to continue.
  */
 const QuestionCursor = Schema.parseJson(Schema.Tuple(Schema.String, Schema.String, Schema.Number, Schema.String, CandidateSource, Schema.NonNegativeInt, Schema.String, Schema.String));
 
@@ -535,7 +535,7 @@ const questionCursor = (access: AccessScope, input: SearchContextParams, scope: 
 
 /**
  * The candidate page a question works on and the ids chosen on it: the page and picks a cursor still holds, else the next
- * candidate page (the first page: word matches, or the request window when nothing matches) passed to `groundedIds`.
+ * candidate page (the first page: word matches, or the request window when nothing matches) grounded with one model call.
  */
 const questionChoice = (access: AccessScope, input: SearchContextParams, scoped: ReadonlyArray<Statement.Fragment>) =>
  Effect.gen(function*() {
