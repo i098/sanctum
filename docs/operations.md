@@ -176,8 +176,10 @@ The soak streams 24 hours of meeting audio with synthetic planted facts into the
 It asks planted questions at 1, 5, 12 and 24 hours.
 It is the named gate in [release-evidence.md](release-evidence.md); the accelerated replay above is not a soak.
 Run it in a dedicated soak workspace, never the real one.
-The completed run on 2026-10-16 recorded an estimated USD 11.6989 from measured units and assumed prices, not an invoice.
-That result does not guarantee the cost of a future run.
+The drive completed on 2026-10-16 and recorded an estimated USD 11.6989 from measured units and assumed prices, not an invoice.
+Retrieval failed; the completed drive and cost estimate do not establish passing soak acceptance or production acceptance.
+The soak gate remains open in [release-evidence.md](release-evidence.md#unrun-gates).
+The estimate does not guarantee the cost of a future run.
 Keep the driver's default USD 15 cumulative estimated-cost stop (`--max-usd`; [cost stop](../scripts/soak/README.md)).
 Obtain explicit owner approval before any new paid run, live recording, or higher cap.
 
