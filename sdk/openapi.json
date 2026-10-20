@@ -4372,13 +4372,13 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "description": "a string at most 4096 character(s) long",
-              "title": "maxLength(4096)",
+              "description": "a string at most 512 character(s) long",
+              "title": "maxLength(512)",
               "minLength": 1,
-              "maxLength": 4096
+              "maxLength": 512
             },
             "required": false,
-            "description": "a string at most 4096 character(s) long"
+            "description": "a string at most 512 character(s) long"
           },
           {
             "name": "limit",
@@ -4680,10 +4680,10 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "description": "a string at most 4096 character(s) long",
-                          "title": "maxLength(4096)",
+                          "description": "a string at most 512 character(s) long",
+                          "title": "maxLength(512)",
                           "minLength": 1,
-                          "maxLength": 4096
+                          "maxLength": 512
                         },
                         {
                           "type": "null"

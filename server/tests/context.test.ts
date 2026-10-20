@@ -423,7 +423,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       yield* plant('venue', venueMeeting, Array.from({ length: 45 }, (_, i) => [`Venue note ${i}`, 300 + i] as const), 2);
       yield* search('Which venue notes exist?', 'venue');
       expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(40);
-      // A page that selects more than its limit carries the rest in a cursor longer than 512 characters, and pages them in order.
+      // A page that selects more than its limit holds the rest by position in a cursor within the shared 512-character bound.
       const notes = Array.from({ length: 45 }, (_, i) => `Venue note ${i}`);
       judged['Which venue notes exist?'] = notes;
       const notesStart = prompts.length;
@@ -431,7 +431,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       for (let cursor: string | null | undefined; cursor !== null;) {
         const next = yield* page('Which venue notes exist?', 'venue', cursor === undefined ? {} : { cursor });
         expect(next.status).toBe(200);
-        if (cursor === undefined) expect(next.next!.length).toBeGreaterThan(512);
+        if (next.next !== null) expect(next.next.length).toBeLessThanOrEqual(512);
         noted.push(...next.texts!);
         cursor = next.next;
       }
@@ -453,5 +453,38 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* page('What happened first?', 'venue', { ...window, cursor: empty.next! })).toEqual({ status: 200, texts: ['Anna chose the venue.'], next: null });
       expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(11);
       expect(prompts).toHaveLength(windowStart + 2);
+
+      // Later pages ground the first page's candidate snapshot. Offsets into a re-run match would skip the first remaining
+      // candidate once a first-page item is retracted, and pull in an item added after the first page; the changed item shows its current text.
+      const snapshotQ = 'Which venue notes are there?';
+      judged[snapshotQ] = [];
+      const firstPage = yield* page(snapshotQ, 'venue');
+      expect(firstPage).toMatchObject({ status: 200, texts: [] });
+      const candidateTexts = (prompt: string) => [...prompt.matchAll(/^c\d+ \[[^\]]*\] \w+ (.*)$/gm)].map(([, text]) => JSON.parse(text!) as string);
+      const firstCandidates = candidateTexts(prompts.at(-1)!);
+      expect(firstCandidates).toHaveLength(40);
+      const at = new Map<string, number>([['Anna chose the venue.', 100], ...notes.map((text, i) => [text, 300 + i] as const), ...[0, 1, 2, 3].map(i => [`Venue memo ${i}`, 400 + i] as const)]);
+      const remaining = [...at.keys()].filter(text => !firstCandidates.includes(text));
+      expect(remaining).toHaveLength(10);
+      const idOf = (text: string) => Effect.provide(Effect.map(Effect.flatMap(SqlClient.SqlClient, sql => sql<{ id: string }>`SELECT id FROM context_items WHERE text = ${text}`), rows => rows[0]!.id), db);
+      yield* Effect.provide(reviseContextItem(venueOwner!, (yield* idOf(firstCandidates[0]!)) as never, { expected_revision: 1, idempotency_key: 'retract-snapshot', state: 'superseded' }), db);
+      const changed = remaining[0]!;
+      yield* Effect.provide(reviseContextItem(venueOwner!, (yield* idOf(changed)) as never, { expected_revision: 1, idempotency_key: 'change-snapshot', text: `${changed} Revised.` }), db);
+      yield* plant('venue', venueMeeting, [['Venue memo late', 50]], 51);
+      const answers = remaining.map(text => (text === changed ? `${changed} Revised.` : text));
+      judged[snapshotQ] = [...answers, 'Venue memo late'];
+      const ordered = answers.toSorted((a, b) => at.get(b.replace(' Revised.', ''))! - at.get(a.replace(' Revised.', ''))!);
+      const secondPage = yield* page(snapshotQ, 'venue', { cursor: firstPage.next!, limit: '4' });
+      expect(secondPage).toMatchObject({ status: 200, texts: ordered.slice(0, 4) });
+      expect(secondPage.next!.length).toBeLessThanOrEqual(512);
+      expect(candidateTexts(prompts.at(-1)!).toSorted()).toEqual(answers.toSorted());
+      // Held picks survive a retracted pick and a newer matching item, with no further grounding call.
+      const heldAsked = prompts.length;
+      const dropped = ordered[5]!;
+      yield* Effect.provide(reviseContextItem(venueOwner!, (yield* idOf(dropped)) as never, { expected_revision: dropped.endsWith(' Revised.') ? 2 : 1, idempotency_key: 'retract-held', state: 'superseded' }), db);
+      yield* plant('venue', venueMeeting, [['Venue note newest', 600]], 52);
+      judged[snapshotQ] = [...judged[snapshotQ]!, 'Venue note newest'];
+      expect(yield* page(snapshotQ, 'venue', { cursor: secondPage.next! })).toEqual({ status: 200, texts: ordered.slice(4).filter(text => text !== dropped), next: null });
+      expect(prompts).toHaveLength(heldAsked);
     }));
 });
