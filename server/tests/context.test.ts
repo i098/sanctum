@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, ArtifactId, type MeetingId, TranscriptSegmentId, Unauthenticated } from '@sanctum/contracts';
-import { Context, Effect, Either, Layer } from 'effect';
+import { ConfigProvider, Context, Effect, Either, Layer } from 'effect';
 import { Authenticator } from '../src/auth.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem, searchContext, termFilter } from '../src/context.ts';
 import { getSource } from '../src/context-changes.ts';
 import { serverLayer } from '../src/main.ts';
-import { engineeringDefaults } from '../src/config.ts';
+import { engineeringDefaults, serverConfig } from '../src/config.ts';
 import { fixtureLlm, LlmClient, makeLlm } from '../src/llm.ts';
 import { type ModelProvider, ProviderError } from '../src/providers/types.ts';
+import { cerebras } from '../src/providers/cerebras.ts';
+import { workersAi } from '../src/providers/workers-ai.ts';
 import { type FixtureMeeting, migratedDatabase, grantMeeting, seedMeeting, seedSegment } from './support/context.ts';
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -274,6 +278,54 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* call('GET', `/sources/${segment}`)).toMatchObject({ status: 200, body: { kind: 'segment', text: 'Keep pilot access limited.' } });
       expect((yield* call('GET', `/sources/${randomUUID()}`)).status).toBe(404);
     }));
+
+  for (const [provider, effort] of [['cerebras', 'low'], ['workers-ai', 'low'], ['workers-ai', 'none']] as const) {
+    it.scoped(`answers questions with ${provider} and role effort ${effort} without a fallback`, () =>
+      Effect.gen(function*() {
+        const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
+        const db = dbLayer(database.mysql);
+        yield* Effect.provide(migrate(loadMigrations()), db);
+        const [owner, device] = yield* Effect.provide(seedWorkspace('Reasoning', ['owner', 'device']), db);
+        const meeting = yield* Effect.provide(seedMeeting(device!, { started_at: STARTED }), db);
+        const segment = yield* Effect.provide(seedSegment(meeting, 1, 3, 'Peter owns Falcon.'), db);
+        const item = yield* Effect.provide(addContextItem(owner!, { ...decision(meeting.meeting_id, segment, 'owner'), text: 'Peter owns Falcon.' }), db);
+        let calls = 0;
+        const endpoint = createServer(async (request, response) => {
+          let body = '';
+          for await (const chunk of request) body += chunk;
+          calls++;
+          const payload = JSON.parse(body);
+          const supported = provider === 'cerebras'
+            ? payload.reasoning_effort === 'high' && payload.temperature === 0
+            : effort === 'none'
+              ? payload.reasoning_effort === undefined && payload.chat_template_kwargs?.enable_thinking === false
+              : payload.reasoning_effort === effort;
+          response.writeHead(supported ? 200 : 400, { 'content-type': 'application/json' });
+          response.end(JSON.stringify(supported
+            ? { choices: [{ finish_reason: 'stop', message: { content: '{"relevant":["c1"]}' } }] }
+            : { error: 'Unsupported reasoning effort' }));
+        });
+        yield* Effect.acquireRelease(
+          Effect.promise(async () => { endpoint.listen(0, '127.0.0.1'); await once(endpoint, 'listening'); }),
+          () => Effect.promise(() => new Promise<void>((resolve, reject) => endpoint.close(error => error ? reject(error) : resolve()))),
+        );
+        const address = endpoint.address();
+        const baseUrl = `http://127.0.0.1:${address && typeof address !== 'string' ? address.port : 0}`;
+        const config = yield* serverConfig.pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['CLASSIFIER_MODEL_PROVIDER', provider]]))));
+        const roles = { ...config.modelRoles, classifier: { ...config.modelRoles.classifier, reasoning: effort } };
+        const llm = Layer.succeed(LlmClient, makeLlm(roles, {
+          cerebras: cerebras({ apiKey: 'fixture', baseUrl }),
+          'workers-ai': workersAi({ apiToken: 'fixture', baseUrl }),
+        }));
+        const auth = Layer.succeed(Authenticator, { authenticate: () => Effect.succeed(owner!) });
+        const server = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth, { llm }));
+        const api = Context.get(server, HttpServer.HttpServer).address;
+        const response = yield* Effect.promise(() => fetch(`http://127.0.0.1:${api._tag === 'TcpAddress' ? api.port : 0}/api/v1/context/search?q=Who%20owns%20Falcon%3F`));
+        expect(response.status).toBe(200);
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({ items: [{ id: item.id, text: 'Peter owns Falcon.' }], next_cursor: null });
+        expect(calls).toBe(1);
+      }));
+  }
 
   it.scoped('grounds full questions in authorized candidates, newest first, over stable pages', () =>
     Effect.gen(function*() {

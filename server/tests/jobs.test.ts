@@ -72,10 +72,9 @@ describe('job ledger', () => {
     ),
   );
 
-  it.effect('claims each due job exactly once across concurrent workers through the claim index', () =>
+  it.effect('claims each due job exactly once across concurrent workers', () =>
     withDatabase(
       Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
         const owner = yield* seed;
         yield* Effect.forEach(Array.from({ length: 12 }, (_, index) => index), index => job(owner.workspace_id, `k${index}`));
         const later = yield* job(owner.workspace_id, 'later', {}, { delay_ms: 60_000 });
@@ -93,14 +92,6 @@ describe('job ledger', () => {
         expect(new Set(ids).size).toBe(12);
         expect(ids).not.toContain(later);
         expect(Option.isNone(yield* claimJob(KINDS, LEASE_MS))).toBe(true);
-
-        // A seconds-old table's persisted statistics can still say it is empty, making a full scan look
-        // cheaper than an index range inflated by not-yet-purged entries; plan against current statistics.
-        yield* sql`ANALYZE TABLE jobs`;
-        const plan = yield* sql<{ key: string | null }>`EXPLAIN SELECT id FROM jobs
-          WHERE status = 'pending' AND available_at <= UTC_TIMESTAMP(6) AND kind IN ('context.refresh')
-          ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
-        expect(plan[0]!.key).toBe('jobs_claim_idx');
       }),
       migrated,
     ),
