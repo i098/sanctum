@@ -536,9 +536,9 @@ const searchScope = (access: AccessScope, meeting_id: MeetingId | undefined) =>
 
 /**
  * Authorized retrieval over current items, newest event first. Without `q` it lists by the other filters. A `q` without question
- * or helper words is a keyword query: every word must appear. A `q` with them is a question: the grounding model chooses the items
- * that answer it from the best word matches in scope. `from` (inclusive) and `to` (exclusive) bound `COALESCE(event_at,
- * created_at)`; `next_cursor` resumes after the last item.
+ * or helper words, or any `q` with `mode=keyword`, is a keyword query: every word must appear. Any other `q` is a question: the
+ * grounding model chooses the items that answer it from the best word matches in scope. `from` (inclusive) and `to` (exclusive)
+ * bound `COALESCE(event_at, created_at)`; `next_cursor` resumes after the last item.
  */
 export const searchContext = (access: AccessScope, input: SearchContextParams) =>
  Effect.gen(function*() {
@@ -548,7 +548,7 @@ export const searchContext = (access: AccessScope, input: SearchContextParams) =
   const sql = yield* SqlClient.SqlClient;
   const limit = Math.min(input.limit ?? 20, ITEM_LIMIT);
   const scoped = (after: typeof SearchCursor.Type | null) => [sql`ci.state <> 'superseded'`, visibleWhere(sql, scope, 'ci.meeting_id'), ...rangeFilters(sql, input, after)];
-  if (words.some(word => QUESTION_WORDS.has(word))) return yield* questionPage(access, input, scoped(null), limit);
+  if (input.mode === undefined && words.some(word => QUESTION_WORDS.has(word))) return yield* questionPage(access, input, scoped(null), limit);
   const after = input.cursor === undefined ? null : yield* decodeSearchCursor(input.cursor);
   return searchPage(yield* latestItems(access.workspace_id, sql.and([...scoped(after), termFilter(sql, words)]), limit + 1), limit);
  });

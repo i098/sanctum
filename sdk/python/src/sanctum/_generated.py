@@ -330,6 +330,7 @@ class ContextItemSupersedes(TypedDict):
 
 SearchContextInput = TypedDict("SearchContextInput", {
     "q": "NotRequired[str]",
+    "mode": "NotRequired[Literal[\"keyword\"]]",
     "meeting_id": "NotRequired[str]",
     "kind": "NotRequired[Literal[\"decision\", \"commitment\", \"constraint\", \"project_fact\", \"preference\", \"open_question\", \"research_observation\"]]",
     "from": "NotRequired[str]",
@@ -680,7 +681,7 @@ OPERATIONS: dict[str, Operation] = {
     # GetContextInput -> ContextSnapshot
     "context.getContext": Operation("GET", "/api/v1/meetings/{meeting_id}/context", ("meeting_id", ), (), False),
     # SearchContextInput -> ContextSearchPage
-    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "meeting_id", "kind", "from", "to", "cursor", "limit", ), False),
+    "context.searchContext": Operation("GET", "/api/v1/context/search", (), ("q", "mode", "meeting_id", "kind", "from", "to", "cursor", "limit", ), False),
     # AddContextItem -> ContextItem
     "context.addContextItem": Operation("POST", "/api/v1/context/items", (), (), True),
     # ReviseContextItemInput -> ContextItem

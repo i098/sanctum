@@ -27,7 +27,7 @@ The server collects at most 40 current items that the caller may read, inside th
 The `classifier` model (Cerebras `gpt-oss-120b`; the planner model on failure, as for spoken work) returns the refs of the items that answer it.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
 The chosen items list newest first, and the search cursor carries the rest of that choice, bound to the caller, the query and the permission revision.
-Keyword queries keep the word-match path and call no model.
+Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
 A fixture judge proves the integration in `server/tests/context.test.ts`; it is not evidence of the real model's answer quality.
 
 ## Spoken work decision - 2026-10-10
