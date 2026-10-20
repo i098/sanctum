@@ -29,9 +29,9 @@ export interface Llm {
   /**
    * Strict-schema JSON from the role's model, decoded with `output` (which must have no refinements); `timeoutMs` replaces the per-attempt default.
    * `patient` (background jobs only) makes each retry wait for the provider's retry delay, or `PATIENT_BACKOFF_MS` without one, so a loaded provider can drain.
-   * `temperature` is sent by providers that support it and ignored by the rest.
+   * `temperature` is sent by providers that support it and ignored by the rest; `reasoning` overrides the role's reasoning effort for this request.
    */
-  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number; readonly patient?: boolean; readonly temperature?: number }) => Effect.Effect<Generated<A>, Unavailable>;
+  readonly generate: <A, I>(role: ModelRoleName, request: Prompt & { readonly name: string; readonly output: Schema.Schema<A, I>; readonly timeoutMs?: number; readonly patient?: boolean; readonly temperature?: number; readonly reasoning?: ProviderRequest['reasoning'] }) => Effect.Effect<Generated<A>, Unavailable>;
   /** Text deltas; interruption aborts the request, and a stalled stream fails. Never retried, so no text repeats. */
   readonly stream: (role: ModelRoleName, request: Prompt) => Stream.Stream<string, Unavailable>;
   /**
