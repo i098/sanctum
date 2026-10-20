@@ -41,8 +41,8 @@ If that page changed between requests (an item added, revised, retracted or no l
 A page whose candidates answer nothing returns no items and a cursor while candidates remain.
 Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
 A fixture judge proves the integration in `server/tests/context.test.ts`; it is not evidence of the real model's answer quality.
-The owner's eight future spending-policy choices in [issue 198](https://github.com/i098/sanctum/issues/198) do not change active code.
-The selected zero allowance is not an active runtime control; issue 198 stays paused, with no implementation, deployment, or paid-call authorization.
+Question-search spending and rate controls are not implemented; [issue 198](https://github.com/i098/sanctum/issues/198) tracks this work.
+Existing web-research limits do not cap question search.
 
 ## Spoken work decision - 2026-10-10
 

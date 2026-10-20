@@ -209,8 +209,8 @@ A page can be empty while its `next_cursor` continues to later candidates.
 A question's `next_cursor` returns 404 once an item on its candidate page changes, so ask again.
 Without `CEREBRAS_API_KEY` and a planner key, or on a model failure, a question returns 503 `unavailable`.
 The agent decides which fact is latest.
-The owner's future choices in [issue 198](https://github.com/i098/sanctum/issues/198) remain paused and do not change active code.
-The selected zero allowance is not enforced; existing paid web-research allowances do not cap question search.
+Question-search spending and rate controls are not implemented; [issue 198](https://github.com/i098/sanctum/issues/198) tracks this work.
+Existing web-research limits do not cap question search.
 
 **Cleanup.** Delete the soak workspace in Settings; rows and R2 objects purge after the grace period.
 
