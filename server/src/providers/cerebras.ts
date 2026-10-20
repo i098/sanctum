@@ -5,7 +5,7 @@ interface Completion {
   readonly choices?: ReadonlyArray<{ readonly finish_reason?: string | null; readonly message?: { readonly content?: string | null } }>;
 }
 
-/** The spoken classifier and extraction select Cerebras; no streaming or research client is needed. */
+/** The classifier and extraction select Cerebras; no streaming or research client is needed. */
 export const cerebras = (options: { readonly apiKey: string; readonly baseUrl?: string }): ModelProvider => ({
   complete: async (request, signal) => {
     const response = await postJson('Cerebras', `${options.baseUrl ?? 'https://api.cerebras.ai'}/v1/chat/completions`, options.apiKey, {

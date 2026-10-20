@@ -3,7 +3,7 @@
  * provider and model, bounds every attempt with a timeout, retries only transient transport
  * failures a bounded number of times, and decodes structured output with Effect Schema.
  * This service reports a missing key or provider failure as `Unavailable`; it never substitutes output.
- * The callers own fallbacks between roles: spoken work (classifier to planner) and extraction (docs/DECISIONS.md).
+ * The callers own cross-role fallbacks; see docs/DECISIONS.md.
  */
 import { Context, Duration, Effect, JSONSchema, Layer, Option, Redacted, Schedule, Schema, Stream } from 'effect';
 import { Unavailable } from '@sanctum/contracts';
