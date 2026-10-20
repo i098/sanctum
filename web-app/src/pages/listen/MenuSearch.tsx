@@ -39,14 +39,14 @@ function useMeetings(client: SanctumClient, wanted: boolean): Loadable<ReadonlyA
   return meetings;
 }
 
-/** Decisions and commitments matching `query`, after a short pause in typing; `query` empty reads nothing. */
+/** Decisions and commitments containing every word of `query`, after a short pause in typing, with no model call; `query` empty reads nothing. */
 function useItems(client: SanctumClient, query: string): Loadable<ReadonlyArray<ContextItem>> {
   const [items, setItems] = useState<{ query: string; result: Loadable<ReadonlyArray<ContextItem>> }>({ query: '', result: LOADING });
   useEffect(() => {
     if (query === '') return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      const found = client.context.searchContext({ q: query, limit: SEARCH_LIMIT }, { signal: controller.signal }).then(({ items }) => items.filter(item => KINDS.includes(item.kind) && item.state !== 'superseded'));
+      const found = client.context.searchContext({ q: query, mode: 'keyword', limit: SEARCH_LIMIT }, { signal: controller.signal }).then(({ items }) => items.filter(item => KINDS.includes(item.kind) && item.state !== 'superseded'));
       void settle(found).then(result => controller.signal.aborted || setItems({ query, result }));
     }, DEBOUNCE_MS);
     return () => (clearTimeout(timer), controller.abort());

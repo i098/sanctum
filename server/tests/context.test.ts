@@ -401,7 +401,10 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       const keywordAsked = prompts.length;
       expect(yield* search('Banco de Chile')).toEqual({ status: 200, texts: ['Banco de Chile approved the loan.'] });
       expect(yield* search('de la Cruz')).toEqual({ status: 200, texts: ['Maria de la Cruz signs the contract.'] });
+      // `mode=keyword`, as the Menu search box sends it, keeps a query with question words off the model.
+      expect(yield* search("Priya's onboarding", 'owner', { mode: 'keyword' })).toEqual({ status: 200, texts: ['Priya owns onboarding.'] });
       expect(prompts).toHaveLength(keywordAsked);
+      expect((yield* search("Priya's onboarding")).status).toBe(503);
       mode = 'judge';
 
       // At most 40 candidates reach the model, however many items share a word.

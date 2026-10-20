@@ -40,7 +40,7 @@ Any agent with a bearer token can read the soak meetings; the run and its pass b
 
 | Need | Call | Notes |
 | --- | --- | --- |
-| Search by keyword or question | `GET /api/v1/context/search?q=launch+date` (TypeScript `client.context.searchContext({ q })`, Python `context.searchContext`) | Needs `context:read`. A keyword query needs every term of 3+ letters in one item. A question is answered by the configured model from at most 40 authorized word matches; it returns 503 when the model is unavailable. Newest first. |
+| Search by keyword or question | `GET /api/v1/context/search?q=launch+date` (TypeScript `client.context.searchContext({ q })`, Python `context.searchContext`) | Needs `context:read`. A keyword query needs every term of 3+ letters in one item. A question is answered by the configured model from at most 40 authorized word matches; it returns 503 when the model is unavailable. `mode=keyword` makes any `q` a keyword query, with no model call. Newest first. |
 | Time range or timeline | same route with `from`, `to`, `kind`; omit `q` to list the range | Page with `next_cursor` as `cursor`. Every item carries `event_at`; the latest fact wins by `event_at`, not by server supersession. |
 | Meetings in a range | `GET /api/v1/meetings?from=&to=` | A detected meeting is private to its capturing principal until it is shared with the workspace (`POST /api/v1/meetings/{id}/share`). |
 | Transcript and cited source | `GET /api/v1/meetings/{id}/transcript`, `GET /api/v1/sources/{id}` | Needs `recordings:read`. |
