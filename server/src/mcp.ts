@@ -32,7 +32,7 @@ import { workspaceForOrg } from './store.ts';
 const TOOLS = [
   ['list_meetings', 'meetings.listMeetings', 'List meetings the caller may read, with cursor paging.'],
   ['get_context', 'context.getContext', 'Bounded, source-linked context snapshot of one meeting and its revision.'],
-  ['search_context', 'context.searchContext', 'List or search authorized context items newest first; filter by q, meeting_id, kind, from/to time window; page with cursor.'],
+  ['search_context', 'context.searchContext', 'List or search authorized context items newest first; filter by q, meeting_id, kind, from/to time window; page with cursor. A natural-language question in q calls the configured grounding model and may return unavailable; mode=keyword matches every word of q with no model call.'],
   ['get_source', 'context.getSource', 'Read the exact cited transcript segment or artifact.'],
   ['get_context_changes', 'context.getContextChanges', 'Context changes after a cursor; keep next_cursor to resume.'],
   ['add_context', 'context.addContextItem', 'Add attributed evidence or an observation at expected_revision; retries reuse idempotency_key.'],
