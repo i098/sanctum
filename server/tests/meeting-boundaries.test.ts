@@ -40,7 +40,6 @@ describe('boundary decisions', () => {
     expect(evaluateBoundary({ source, tail, gap_ms: 6 * MIN * 1000, incoming: { ...said('hello there everyone', 'SPEAKER_03'), provider_connection_id: 'c2' } }).decision).toBe('continue');
     const backToBack = evaluateBoundary({ source, tail: [said('thanks everyone, see you next time')], gap_ms: 20_000, incoming: said('welcome everyone, let us look at hiring') });
     expect(backToBack).toMatchObject({ decision: 'start', evidence: ['explicit_end', 'explicit_start'], uncertainty: 0.2 });
-    expect(evaluateBoundary({ source, tail: [], gap_ms: null, incoming: said('uh') }).decision).toBe('continue');
   });
 });
 

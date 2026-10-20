@@ -34,9 +34,6 @@ const START_CUE = /\b(let'?s (get )?(started|begin)|welcome,? (everyone|everybod
 const WEIGHTS = { explicit_end: 0.4, explicit_start: 0.4, long_gap: 0.3, extended_silence: 0.3, speaker_change: 0.2 } as const;
 type Signal = keyof typeof WEIGHTS;
 
-/** At least three words: a cough or "uh" does not open a conversation. */
-const isCoherent = (text: string) => (text.match(/\p{L}+/gu) ?? []).length >= 3;
-
 const speakerChanged = ({ incoming, tail }: BoundaryEvidence) => {
   const comparable = tail.filter(utterance => utterance.provider_connection_id !== null && utterance.provider_connection_id === incoming.provider_connection_id);
   return incoming.speaker_label !== null && comparable.length > 0 && comparable.every(utterance => utterance.speaker_label !== incoming.speaker_label);
@@ -60,12 +57,12 @@ const round = (value: number) => Math.round(value * 100) / 100;
 /** `start` when enough independent evidence agrees; otherwise `continue`, carrying how likely a boundary was missed. */
 export function evaluateBoundary(evidence: BoundaryEvidence): BoundaryDecision {
   if (evidence.gap_ms === null) {
-    const coherent = isCoherent(evidence.incoming.text);
+    const hasSpeech = evidence.incoming.text.trim() !== '';
     return {
-      decision: coherent ? 'start' : 'continue',
+      decision: hasSpeech ? 'start' : 'continue',
       source: evidence.source,
-      evidence: coherent ? ['coherent_speech'] : [],
-      reason: coherent ? 'coherent speech with no open meeting' : 'speech too short to open a meeting',
+      evidence: hasSpeech ? ['captured_speech'] : [],
+      reason: hasSpeech ? 'captured speech with no open meeting' : 'empty speech does not open a meeting',
       uncertainty: 0.2,
     };
   }

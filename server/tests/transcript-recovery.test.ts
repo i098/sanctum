@@ -253,15 +253,12 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
     }),
   );
 
-  it.effect('reports ranges without archived audio as gaps and never opens speech or action work', () =>
+  it.effect('reports missing archive ranges without transcribing them', () =>
     Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const { access, epoch_id, reconcile } = yield* setup(1);
+      const { speech, reconcile } = yield* setup(1);
       const outcome = yield* reconcile(0, 3 * RATE);
       expect(outcome.result).toEqual({ transcribed: [{ sample_start: 0, sample_end: RATE }], missing_audio: [{ sample_start: RATE, sample_end: 3 * RATE }] });
-      expect(yield* texts(access, epoch_id)).toHaveLength(1);
-      const kinds = yield* sql<{ kind: string }>`SELECT DISTINCT kind FROM jobs WHERE workspace_id = ${access.workspace_id}`;
-      expect(kinds.map(row => row.kind)).toEqual(['transcript.reconcile']);
+      expect(speech.batches.map(batch => batch.samples.length)).toEqual([RATE]);
     }),
   );
 

@@ -247,10 +247,26 @@ const extendOwned = (open: OpenMeeting | null, owner: typeof OwnerRow.Type, epoc
     ? Effect.succeed(open)
     : Effect.map(claimSource(open.row, segment.source), end => advance(open, epoch, segment, end));
 
-/** Speech that belongs to the open meeting; audio from before it started (late ASR of a sealed meeting) is not taken. */
+/** Continue an open meeting; adjacent earlier speech can extend its start without crossing another owner or an End fence. */
 const continueMeeting = (open: OpenMeeting, epoch: EpochClock, segment: TranscriptSegment, decision: BoundaryDecision) =>
   Effect.gen(function* () {
-    if (sampleMs(epoch, segment.source.sample_start) < Date.parse(open.row.started_at)) return open;
+    if (sampleMs(epoch, segment.source.sample_start) < Date.parse(open.row.started_at)) {
+      const sql = yield* SqlClient.SqlClient;
+      const { source } = segment;
+      const [adjacent] = yield* sql`SELECT n.sample_start FROM (
+          SELECT r.meeting_id, r.sample_start FROM meeting_ranges r
+          JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+          WHERE r.workspace_id = ${open.row.workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track}
+            AND r.sample_start > ${source.sample_start} ORDER BY r.sample_start LIMIT 1
+        ) n JOIN capture_epochs e ON e.id = ${source.epoch_id} AND e.workspace_id = ${open.row.workspace_id}
+        WHERE n.meeting_id = ${open.row.id}
+          AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}
+          AND (e.end_fence_sample IS NULL OR e.end_fence_sample <= ${source.sample_start} OR e.end_fence_from_sample >= n.sample_start)`;
+      if (adjacent === undefined) return open;
+      const started_at = dbTime(sampleMs(epoch, source.sample_start));
+      yield* sql`UPDATE meetings SET started_at = ${started_at}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${open.row.id}`;
+      open = { ...open, row: { ...open.row, started_at: Schema.decodeSync(DbUtc)(started_at) } };
+    }
     const advanced = advance(open, epoch, segment, yield* claimSource(open.row, segment.source));
     return yield* promoteIfEstablished(advanced, decision, sampleMs(epoch, segment.source.sample_end));
   });
