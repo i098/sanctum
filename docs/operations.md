@@ -201,16 +201,13 @@ sudo -n tailscale serve --bg --https=8460 http://127.0.0.1:8460
 
 Metric names are the runner's (`scripts/soak/score.ts`); query latency is in milliseconds. Bars are the `BARS` table in `scripts/soak/serve.ts` (proposals from the plan board; calibrate them after the 1-hour dry run): `recall_at_5`, `recall_at_20`, `answer_accuracy`, `latest_accuracy` (not judged at 1 hour), `time_aware_accuracy`, `control_pass_rate`, latency `p50` and `p95`, and the `errors` count must be 0. `natural_recall_at_20` is shown without a bar. Driver measurements (ASR lag, database growth, cost) are not on this page.
 
-**Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`, as in [sdk/README.md](../sdk/README.md). A keyword query needs every 3-letter-or-longer term in one item. A question (a query with a question or helper word such as `who` or `the`) sends 40 authorized items at a time that share a content word with it (or, when none does and `from` or `to` is set, the items in that window) to the `classifier` model (planner on failure), which picks the items that answer it; they list newest first.
-Returning remaining selected items from a cursor's candidate page makes no new model call; an empty candidate page also makes none.
-Grounding a new nonempty candidate page can make up to three classifier attempts, then up to three planner attempts under existing retries and fallback.
-These provider attempts do not establish billed usage or a spending cap; see the [question search decision](DECISIONS.md#question-search-decision---2026-10-20).
-A page can be empty while its `next_cursor` continues to later candidates.
+**Agent queries.** Agents use `GET /api/v1/context/search` with `from`, `to`, `kind` and `cursor` and a bearer token with `context:read`.
+See [sdk/README.md](../sdk/README.md) for usage.
+A keyword query needs every 3-letter-or-longer term in one item.
+The [question search decision](DECISIONS.md#question-search-decision---2026-10-20) defines selection, pagination, provider attempts, and the absence of spending and rate controls.
 A question's `next_cursor` returns 404 once an item on its candidate page changes, so ask again.
 Without `CEREBRAS_API_KEY` and a planner key, or on a model failure, a question returns 503 `unavailable`.
 The agent decides which fact is latest.
-Question-search spending and rate controls are not implemented; [issue 198](https://github.com/i098/sanctum/issues/198) tracks this work.
-Existing web-research limits do not cap question search.
 
 **Cleanup.** Delete the soak workspace in Settings; rows and R2 objects purge after the grace period.
 
