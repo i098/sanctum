@@ -89,8 +89,8 @@ const toItem = (row: ItemRow): ContextItem => ({
  created_at: row.created_at,
 });
 
-/** Latest revision of each item matching `where` (over alias `ci`), newest event first unless `order` says otherwise, at most `limit`. */
-const latestItems = (workspace_id: string, where: Statement.Fragment, limit: number, order?: Statement.Fragment) =>
+/** Latest revision of each item matching `where` (over alias `ci`), newest event first unless `order` says otherwise, at most `limit` after skipping `offset`. */
+const latestItems = (workspace_id: string, where: Statement.Fragment, limit: number, order?: Statement.Fragment, offset = 0) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* decodeRows(
@@ -99,7 +99,7 @@ const latestItems = (workspace_id: string, where: Statement.Fragment, limit: num
         WHERE ci.workspace_id = ${workspace_id} AND ${where}
           AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
         ORDER BY ${order ?? sql`COALESCE(ci.event_at, ci.created_at) DESC, ci.id`}
-        LIMIT ${limit}`,
+        LIMIT ${limit} OFFSET ${offset}`,
   );
   return rows.map(toItem);
  });
@@ -449,35 +449,55 @@ const candidateMatch = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) 
 };
 
 /** Each stored text is one JSON string with `<`, `>` and every line break escaped, so it can neither close the data block nor start a line. */
-const groundingPrompt = (q: string, candidates: ReadonlyArray<ContextItem>) => {
+const groundingPrompt = (input: SearchContextParams, candidates: ReadonlyArray<ContextItem>) => {
+ const bounds = [...(input.from === undefined ? [] : [`at or after ${input.from}`]), ...(input.to === undefined ? [] : [`before ${input.to}`])];
+ const window = bounds.length === 0 ? '' : `The request is limited to items whose event time is ${bounds.join(' and ')}; every listed item is inside it.\n`;
  const lines = candidates.map((item, i) =>
   `c${i + 1} [${item.event_at ?? item.created_at}] ${JSON.stringify(item.text).replace(/[<>\u0085\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}`);
- return `Question: ${q}\n\n<${UNTRUSTED}>\n${lines.join('\n')}\n</${UNTRUSTED}>`;
+ return `Question: ${input.q}\n${window}\n<${UNTRUSTED}>\n${lines.join('\n')}\n</${UNTRUSTED}>`;
 };
 
+/** Where a question's next candidate page starts: its word matches, best relevance first, or its window's items, newest first. */
+const NextCandidates = Schema.NullOr(Schema.Tuple(Schema.Literal('match', 'window'), Schema.NonNegativeInt));
+
 /**
- * Meaning-based selection for a question: the configured classifier model (falling back to the planner model, as spoken work
- * does) picks, from at most `CANDIDATE_LIMIT` authorized candidates in `scope`, the ids of the items that answer `q`. A question
- * whose content words find no candidate but that has a time window grounds over the newest items in that window. A ref outside
- * the candidates fails the search; a model failure surfaces as `Unavailable`, never as a lexical guess.
+ * One page of at most `CANDIDATE_LIMIT` authorized candidates in `scope`, starting at `start`: the question's word matches,
+ * best relevance first, or, when no item matches and the request has a time window, that window's items, newest first.
+ * `next` is the following candidate page, or null when none remains.
  */
-const groundedIds = (workspace_id: string, input: SearchContextParams, scope: ReadonlyArray<Statement.Fragment>) =>
+const questionCandidates = (workspace_id: string, input: SearchContextParams, scope: ReadonlyArray<Statement.Fragment>, start: typeof NextCandidates.Type) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
-  const q = input.q!;
-  const words = questionWords(q);
+  const words = questionWords(input.q!);
   const match = words.length === 0 ? null : candidateMatch(sql, words);
-  const matched = match === null ? []
-   : yield* latestItems(workspace_id, sql.and([...scope, match.must]), CANDIDATE_LIMIT, sql`${match.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
   const windowed = input.from !== undefined || input.to !== undefined;
-  const candidates = matched.length === 0 && windowed ? yield* latestItems(workspace_id, sql.and(scope), CANDIDATE_LIMIT) : matched;
-  if (candidates.length === 0) return [];
+  const rowsAt = ([source, offset]: NonNullable<typeof NextCandidates.Type>) =>
+   source === 'match' && match !== null
+    ? latestItems(workspace_id, sql.and([...scope, match.must]), CANDIDATE_LIMIT + 1, sql`${match.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`, offset)
+    : source === 'window' && windowed ? latestItems(workspace_id, sql.and(scope), CANDIDATE_LIMIT + 1, undefined, offset)
+    : Effect.succeed<ReadonlyArray<ContextItem>>([]);
+  const requested = start ?? ['match', 0] as const;
+  const first = yield* rowsAt(requested);
+  const at = start === null && first.length === 0 && windowed ? ['window', 0] as const : requested;
+  const rows = at === requested ? first : yield* rowsAt(at);
+  return { candidates: rows.slice(0, CANDIDATE_LIMIT), next: rows.length > CANDIDATE_LIMIT ? [at[0], at[1] + CANDIDATE_LIMIT] as const : null };
+ });
+
+/**
+ * Meaning-based selection over one candidate page: the configured classifier model (falling back to the planner model, as
+ * spoken work does) picks the ids of the candidates that answer `q`, with the next candidate page. A ref outside the
+ * candidates fails the search; a model failure surfaces as `Unavailable`, never as a lexical guess.
+ */
+const groundedIds = (workspace_id: string, input: SearchContextParams, scope: ReadonlyArray<Statement.Fragment>, start: typeof NextCandidates.Type) =>
+ Effect.gen(function*() {
+  const { candidates, next } = yield* questionCandidates(workspace_id, input, scope, start);
+  if (candidates.length === 0) return { ids: [], next };
   const llm = yield* LlmClient;
-  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(q, candidates), temperature: 0 };
+  const request = { name: 'context_grounding', output: Grounding, system: GROUNDING_SYSTEM, prompt: groundingPrompt(input, candidates), temperature: 0 };
   const { value } = yield* llm.generate('classifier', request).pipe(Effect.catchAll(() => llm.generate('planner', request)));
   const byRef = new Map(candidates.map((item, i) => [`c${i + 1}`, item.id]));
   if (value.relevant.some(ref => !byRef.has(ref))) return yield* new Unavailable({ message: 'Grounding chose an item outside its candidates', retryable: false });
-  return [...new Set(value.relevant)].map(ref => byRef.get(ref)!);
+  return { ids: [...new Set(value.relevant)].map(ref => byRef.get(ref)!), next };
  });
 
 /** The first `limit` of `limit + 1` fetched rows, with a cursor after the last one when a further row exists. */
@@ -489,42 +509,44 @@ const searchPage = (rows: ReadonlyArray<ContextItem>, limit: number) => {
 };
 
 /**
- * A question's continuation: the caller, permission revision and query it was issued for, and the ids its first page selected
- * but did not return, in that page's order. Bounded by `CANDIDATE_LIMIT`, so later pages read the same selection without a store.
+ * A question's continuation: the caller, permission revision and query it was issued for, the ids a grounded candidate page
+ * selected but did not return, in that page's order, and the next candidate page. Bounded by `CANDIDATE_LIMIT`, so later pages
+ * continue without a store.
  */
-const QuestionCursor = Schema.parseJson(Schema.Tuple(Schema.String, Schema.String, Schema.Number, Schema.String, Schema.Array(ContextItemId)));
+const QuestionCursor = Schema.parseJson(Schema.Tuple(Schema.String, Schema.String, Schema.Number, Schema.String, Schema.Array(ContextItemId), NextCandidates));
 
 const questionKey = (input: SearchContextParams) =>
  createHash('sha256').update(JSON.stringify([input.q, input.meeting_id ?? null, input.kind ?? null, input.from ?? null, input.to ?? null])).digest('base64url');
 
-/** The ids a question cursor still holds; a cursor from another caller, query or permission revision is unknown. */
-const cursorIds = (access: AccessScope, input: SearchContextParams, cursor: string) =>
+/** The selection and candidate position a question cursor holds; a cursor from another caller, query or permission revision is unknown. */
+const questionCursor = (access: AccessScope, input: SearchContextParams, cursor: string) =>
  Schema.decode(QuestionCursor)(Buffer.from(cursor, 'base64url').toString()).pipe(
   Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })),
   Effect.filterOrFail(
    ([workspace, principal, permission, key]) => workspace === access.workspace_id && principal === access.principal.id && permission === access.permission_revision && key === questionKey(input),
    () => new NotFound({ message: 'Unknown cursor' }),
   ),
-  Effect.map(([, , , , ids]) => ids),
+  Effect.map(([, , , , ids, next]) => ({ ids, next })),
  );
 
 /**
- * One page of a question. The first page grounds the question once and lists the chosen items newest first; its cursor carries
- * the rest of that selection, so later pages continue the same list in the same order. Every page re-reads the items through
- * `scoped`, so a revoked meeting or a superseded item drops out.
+ * One page of a question. A page first returns the ids an earlier page selected but did not return, in that order; with none
+ * left it grounds the next candidate page once and lists the chosen items newest first. The cursor carries the unreturned
+ * selection and the next candidate page, so a candidate page that selects nothing still continues while candidates remain.
+ * Every page re-reads the items through `scoped`, so a revoked meeting or a superseded item drops out.
  */
 const questionPage = (access: AccessScope, input: SearchContextParams, scoped: ReadonlyArray<Statement.Fragment>, limit: number) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
-  const continued = input.cursor !== undefined;
-  const ids = continued ? yield* cursorIds(access, input, input.cursor!) : yield* groundedIds(access.workspace_id, input, scoped);
-  if (ids.length === 0) return searchPage([], 1);
-  const visible = yield* latestItems(access.workspace_id, sql.and([...scoped, sql`ci.id IN ${sql.in(ids)}`]), CANDIDATE_LIMIT);
+  const held = input.cursor === undefined ? { ids: [], next: null } : yield* questionCursor(access, input, input.cursor);
+  const pending = held.ids.length > 0;
+  const { ids, next } = pending ? held : yield* groundedIds(access.workspace_id, input, scoped, held.next);
+  const visible = ids.length === 0 ? [] : yield* latestItems(access.workspace_id, sql.and([...scoped, sql`ci.id IN ${sql.in(ids)}`]), CANDIDATE_LIMIT);
   const byId = new Map(visible.map(item => [item.id, item]));
-  const rows = continued ? ids.flatMap(id => byId.get(id) ?? []) : visible;
+  const rows = pending ? ids.flatMap(id => byId.get(id) ?? []) : visible;
   const rest = rows.slice(limit).map(item => item.id);
-  const next_cursor = rest.length === 0 ? null
-   : Buffer.from(Schema.encodeSync(QuestionCursor)([access.workspace_id, access.principal.id, access.permission_revision, questionKey(input), rest])).toString('base64url');
+  const next_cursor = rest.length === 0 && next === null ? null
+   : Buffer.from(Schema.encodeSync(QuestionCursor)([access.workspace_id, access.principal.id, access.permission_revision, questionKey(input), rest, next])).toString('base64url');
   return { items: rows.slice(0, limit), next_cursor } satisfies ContextSearchPage;
  });
 

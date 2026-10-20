@@ -376,6 +376,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* search('What happened before T0+04:00?', 'owner', { to: '2026-09-26T17:09:00Z' }))
        .toEqual({ status: 200, texts: ['We decided the launch date is November 3.', 'Priya owns onboarding.'] });
       expect(prompts.at(-1)).toContain('The Falcon project owner is Peter.');
+      expect(prompts.at(-1)).toContain('\nThe request is limited to items whose event time is before 2026-09-26T17:09:00Z; every listed item is inside it.\n');
       expect(prompts.at(-1)).not.toContain('November 17');
       const windowAsked = prompts.length;
       expect(yield* search('What happened before T0+04:00?', 'owner', { to: '2026-09-26T16:00:00Z' })).toEqual({ status: 200, texts: [] });
@@ -420,5 +421,21 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       yield* plant('venue', venueMeeting, Array.from({ length: 45 }, (_, i) => [`Venue note ${i}`, 300 + i] as const), 2);
       yield* search('Which venue notes exist?', 'venue');
       expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(40);
+
+      // A 51-item window pages its candidates 40 at a time, one grounding call per page: a page that selects nothing still
+      // continues, and the oldest item, the answer, is reached on the next page.
+      yield* plant('venue', venueMeeting, Array.from({ length: 4 }, (_, i) => [`Venue memo ${i}`, 400 + i] as const), 47);
+      judged['What happened first?'] = ['Anna chose the venue.'];
+      const window = { from: '2026-09-26T17:00:00Z', to: '2026-09-26T18:00:00Z' };
+      const windowStart = prompts.length;
+      const empty = yield* page('What happened first?', 'venue', window);
+      expect(empty).toMatchObject({ status: 200, texts: [] });
+      expect(empty.next).not.toBeNull();
+      expect(prompts.at(-1)).toContain('\nThe request is limited to items whose event time is at or after 2026-09-26T17:00:00Z and before 2026-09-26T18:00:00Z; every listed item is inside it.\n');
+      expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(40);
+      expect(prompts.at(-1)).not.toContain('Anna chose the venue.');
+      expect(yield* page('What happened first?', 'venue', { ...window, cursor: empty.next! })).toEqual({ status: 200, texts: ['Anna chose the venue.'], next: null });
+      expect([...prompts.at(-1)!.matchAll(/^c\d+ /gm)]).toHaveLength(11);
+      expect(prompts).toHaveLength(windowStart + 2);
     }));
 });
