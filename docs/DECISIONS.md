@@ -32,12 +32,17 @@ The classifier requests reasoning effort `high` and temperature 0 where the prov
 Workers AI Qwen accepts `low`, `medium` and `xhigh`, so an unsupported override keeps the classifier's role effort.
 The planner fallback keeps its role defaults.
 A ref outside those candidates, or a model failure, fails the search as `unavailable`; the server never substitutes a word-match result.
-Each page makes at most one model call over the next 40 candidates. The chosen items list newest first.
+Returning remaining selected items from a cursor's candidate page makes no new model call; an empty candidate page also makes none.
+Grounding a new nonempty candidate page can make up to three classifier attempts, then up to three planner attempts under existing retries and fallback.
+These are provider attempts, not a spending cap or a count of billed requests; see [context.ts](../server/src/context.ts) and [llm.ts](../server/src/llm.ts).
+The chosen items list newest first.
 The search cursor stays within the shared 512-character bound and needs no stored state: it names the candidate page (source, offset and a fingerprint of its items and revisions) and a bitmask of chosen items not yet returned, bound to the caller, the query and the permission revision.
 If that page changed between requests (an item added, revised, retracted or no longer visible), the cursor is unknown and the caller searches again; a held position never applies to a shifted page.
 A page whose candidates answer nothing returns no items and a cursor while candidates remain.
 Keyword queries, and any query sent with `mode=keyword`, keep the word-match path and call no model; the Menu search box always sends `mode=keyword`.
 A fixture judge proves the integration in `server/tests/context.test.ts`; it is not evidence of the real model's answer quality.
+The owner's eight future spending-policy choices in [issue 198](https://github.com/i098/sanctum/issues/198) do not change active code.
+The selected zero allowance is not an active runtime control; issue 198 stays paused, with no implementation, deployment, or paid-call authorization.
 
 ## Spoken work decision - 2026-10-10
 
