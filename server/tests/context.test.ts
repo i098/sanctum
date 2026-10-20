@@ -302,7 +302,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
           prompts.push(request.prompt);
           if (mode === 'down') throw new ProviderError('fixture provider down', false);
           const question = request.prompt.match(/^Question: (.*)$/m)![1]!;
-          const refs = [...request.prompt.matchAll(/^(c\d+) \[[^\]]*\] (.*)$/gm)].filter(([, , text]) => judged[question]?.includes(JSON.parse(text!))).map(([, ref]) => ref!);
+          const refs = [...request.prompt.matchAll(/^(c\d+) \[[^\]]*\] \w+ (.*)$/gm)].filter(([, , text]) => judged[question]?.includes(JSON.parse(text!))).map(([, ref]) => ref!);
           return JSON.stringify({ relevant: mode === 'stray' ? ['c99'] : refs });
         },
       };
@@ -376,6 +376,8 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* search('What happened before T0+04:00?', 'owner', { to: '2026-09-26T17:09:00Z' }))
        .toEqual({ status: 200, texts: ['We decided the launch date is November 3.', 'Priya owns onboarding.'] });
       expect(prompts.at(-1)).toContain('The Falcon project owner is Peter.');
+      // Each candidate carries its stored kind, so a decision without a change verb still reads as a decision.
+      expect(prompts.at(-1)).toMatch(/^c\d+ \[[^\]]*\] decision "Priya owns onboarding\."$/m);
       expect(prompts.at(-1)).toContain('\nThe request is limited to items whose event time is before 2026-09-26T17:09:00Z; every listed item is inside it.\n');
       expect(prompts.at(-1)).not.toContain('November 17');
       const windowAsked = prompts.length;
