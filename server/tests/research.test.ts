@@ -133,6 +133,7 @@ const prepareOverlap = (retryPlan: string) => {
     JSON.stringify({ web_research: !researched && !empty, actions: retryPlan === 'empty plan' ? [] : [email('c@example.com')] }),
     JSON.stringify({ web_research: researched, actions: empty ? [] : [email('a@example.com'), email('b@example.com')] }),
     ...(researched ? [JSON.stringify({ web_research: true, actions: [email('a@example.com', body), email('b@example.com', body)] })] : []),
+    ...(retryPlan === 'different recipients' ? [JSON.stringify({ web_research: true, actions: [email('c@example.com', body)] })] : []),
     ...(retryPlan === 'rejected synthesis' ? [JSON.stringify({ web_research: true, actions: [] })] : []),
   ];
   openai.replies = researched || retryPlan === 'rejected synthesis' ? [answered(body)] : [];
@@ -535,10 +536,11 @@ describe('research.run', () => {
           expect(rows.map(row => typeof row.args === 'string' ? JSON.parse(row.args) : row.args)).toEqual(
             (empty ? [] : ['a@example.com', 'b@example.com']).map(to => ({ to: [to], subject: 'Notes', ...(researched ? { body } : {}) })),
           );
+          const plannedCalls = planner.requests.length;
           expect(yield* runResearch(job)).toMatchObject({
             result: { actions: rows.map(row => ({ action_id: row.id, already_requested: true })) },
           });
-          expect(planner.requests).toHaveLength(2 + Number(researched) + Number(retryPlan === 'rejected synthesis'));
+          expect(planner.requests).toHaveLength(plannedCalls);
           expect(openai.bodies).toHaveLength(Number(researched || retryPlan === 'rejected synthesis'));
           expect(provider.sent).toEqual([]);
         }).pipe(Effect.provide(services)),
