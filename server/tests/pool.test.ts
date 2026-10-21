@@ -16,11 +16,11 @@ import { seedWorkspace } from './support/fixtures.ts';
 
 const POOL = 2;
 
-/** A pool of `POOL` connections and one queue place, over a database this test owns. */
-const withSmallPool = <A, E>(use: (database: TestDatabase) => Effect.Effect<A, E, SqlClient.SqlClient>) =>
+/** A pool of `POOL` connections and `queueLimit` queue places (0 is unbounded), over a database this test owns. */
+const withSmallPool = <A, E>(use: (database: TestDatabase) => Effect.Effect<A, E, SqlClient.SqlClient>, queueLimit = 1) =>
   Effect.acquireUseRelease(
     Effect.promise(createTestDatabase),
-    database => Effect.provide(use(database), dbLayer({ ...database.mysql, maxConnections: POOL, queueLimit: 1 })),
+    database => Effect.provide(use(database), dbLayer({ ...database.mysql, maxConnections: POOL, queueLimit })),
     database => Effect.promise(database.drop),
   );
 
@@ -113,6 +113,28 @@ describe('bounded connection pool', () => {
         expect(yield* connectionsOn(database)).toBeLessThanOrEqual(POOL);
       }),
     ),
+  );
+
+  it.effect('queues every waiter without refusal when the queue limit is 0', () =>
+    withSmallPool(database =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const holders = yield* holdAll;
+        const waiters = yield* Effect.all(Array.from({ length: 3 }, (_, n) => Effect.fork(Effect.map(sql<{ n: number }>`SELECT ${n} AS n`, ([row]) => Number(row!.n)))));
+        // A refused waiter is done at once; holders are released before any assertion so a failure cannot block teardown.
+        const queued = yield* Effect.repeat(Effect.yieldNow().pipe(Effect.zipRight(Effect.all(waiters.map(waiter => waiter.status)))), {
+          until: statuses => statuses.every(status => status._tag !== 'Running'),
+        });
+        const open = yield* connectionsOn(database);
+        yield* Effect.all(holders.map(holder => holder.release));
+        yield* Effect.all(holders.map(holder => holder.done));
+
+        expect(queued.map(status => status._tag)).toEqual(['Suspended', 'Suspended', 'Suspended']);
+        expect(open).toBe(POOL);
+        expect(yield* Effect.all(waiters.map(Fiber.join))).toEqual([0, 1, 2]);
+        yield* poolIsWhole;
+      }),
+    0),
   );
 });
 
