@@ -34,12 +34,15 @@ export interface Sample {
 }
 
 /**
- * Runs `op` for i = 0..count-1 sequentially and measures each call plus process resources.
+ * Runs `op(i, client)` for i = 0..count-1 sequentially within each of `clients` concurrent clients
+ * and measures each call plus process resources once for the whole phase: latencies are pooled and
+ * wall time, CPU, GC and memory describe the process, never one client. A rejected client is
+ * reported by index after every client has settled; it never yields a sample.
  * With `rate` > 0 (open loop), operation i is due at i/rate seconds: a late operation's latency
  * counts from its due time, so a stall cannot hide tail latency, and the loop sleeps only when
  * at least 1 ms ahead. benchmarks/rust/src/measure.rs implements the same schedule.
  */
-export async function sample(count: number, op: (i: number) => unknown, rate = 0): Promise<Sample> {
+export async function sample(count: number, op: (i: number, client: number) => unknown, rate = 0, clients = 1): Promise<Sample> {
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let gcMs = 0;
   const gc = new PerformanceObserver(list => list.getEntries().forEach(entry => (gcMs += entry.duration)));
@@ -51,29 +54,34 @@ export async function sample(count: number, op: (i: number) => unknown, rate = 0
   loop.enable();
   const cpu = process.cpuUsage();
   const started = performance.now();
-  for (let i = 0; i < count; i++) {
-    const due = rate > 0 ? started + (i * 1000) / rate : performance.now();
-    const ahead = due - performance.now();
-    if (ahead >= 1) await sleep(ahead);
-    const begin = Math.min(due, performance.now());
-    await op(i);
-    const end = performance.now();
-    latencies.push(end - begin);
-    if (i % 64 === 0) {
-      const memory = process.memoryUsage();
-      peak.rss = Math.max(peak.rss, memory.rss);
-      peak.heap = Math.max(peak.heap, memory.heapUsed);
-      peak.external = Math.max(peak.external, memory.external + memory.arrayBuffers);
+  const runClient = async (client: number) => {
+    for (let i = 0; i < count; i++) {
+      const due = rate > 0 ? started + (i * 1000) / rate : performance.now();
+      const ahead = due - performance.now();
+      if (ahead >= 1) await sleep(ahead);
+      const begin = Math.min(due, performance.now());
+      await op(i, client);
+      const end = performance.now();
+      latencies.push(end - begin);
+      if (i % 64 === 0) {
+        const memory = process.memoryUsage();
+        peak.rss = Math.max(peak.rss, memory.rss);
+        peak.heap = Math.max(peak.heap, memory.heapUsed);
+        peak.external = Math.max(peak.external, memory.external + memory.arrayBuffers);
+      }
+      if (end - started >= nextSeries) {
+        rssSeries.push(process.memoryUsage.rss());
+        nextSeries = end - started + 1000;
+      }
     }
-    if (end - started >= nextSeries) {
-      rssSeries.push(process.memoryUsage.rss());
-      nextSeries = end - started + 1000;
-    }
-  }
+  };
+  const settled = await Promise.allSettled(Array.from({ length: clients }, (_, client) => runClient(client)));
   const wallMs = performance.now() - started;
   const used = process.cpuUsage(cpu);
   loop.disable();
   gc.disconnect();
+  const failed = settled.flatMap((result, client) => (result.status === 'rejected' ? [`client ${client}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []));
+  if (failed.length > 0) throw new Error(`benchmark client failed: ${failed.join('; ')}`);
   return { latencies, wallMs, cpuMs: (used.user + used.system) / 1000, gcMs, loopP99Ms: loop.percentile(99) / 1e6, peak, rssSeries };
 }
 
