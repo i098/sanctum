@@ -4,7 +4,8 @@
  * process: `node scripts/benchmark.ts --job` and the Rust release binary. It runs
  *
  * - closed-loop `pcm_ingest`, `cosine_ranking` and, with a MySQL URL, the three MySQL workloads
- *   against a fresh seeded database per implementation, compared by a database fingerprint;
+ *   with `--clients` concurrent database clients, each against its own fresh seeded database per
+ *   implementation, compared client by client through a database fingerprint;
  * - an open-loop `pcm_ingest` sweep over the manifest's offered frame rates, doubling past them
  *   until each implementation saturates (achieved < 95% of offered);
  * - a long-run `pcm_ingest` soak whose RSS growth after warm-up must stay within a declared bound.
@@ -12,7 +13,7 @@
  * Records stay `verified: false` and carry the host description, the source SHA-256 of each
  * implementation and the runtime. Timings from a shared host neither claim nor refute parity.
  *
- * Usage: node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--out file.jsonl] [--soak-seconds 300]
+ * Usage: node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--clients 1] [--out file.jsonl] [--soak-seconds 300]
  * (needs `cargo` on PATH; without a MySQL URL the MySQL workloads are reported as unrun)
  */
 import { execFileSync } from 'node:child_process';
@@ -25,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { createConnection } from 'mysql2/promise';
 import { type BenchmarkRecord, gitSha } from '../benchmarks/measure.ts';
 import { validateResult } from '../benchmarks/result-format.ts';
-import { createDatabase, type Job } from './benchmark.ts';
+import { createDatabase, type FixtureIds, type Job } from './benchmark.ts';
 import { childEnv } from './check-app.ts';
 
 type Implementation = 'typescript' | 'rust';
@@ -76,7 +77,7 @@ export function longRunVerdict(series: ReadonlyArray<number>, bound = SOAK_GROWT
   return { baseline_bytes: baseline, peak_bytes: Math.max(...series), end_bytes: end, growth_bytes: end - baseline, bound_bytes: bound, within_bound: end - baseline <= bound };
 }
 
-const matchKey = (record: Result) => `${record.workload_id} ${record.phase} ${record.offered_load.per_second} ${record.parameters['mode']}`;
+const matchKey = (record: Result) => `${record.workload_id} ${record.phase} ${record.offered_load.per_second} x${record.offered_load.concurrency} ${record.parameters['mode']}`;
 
 /** Invalid records, failed operations, and TypeScript/Rust pairs whose fixture hashes differ. */
 export function matchProblems(records: ReadonlyArray<Result>): string[] {
@@ -113,6 +114,35 @@ async function fingerprint(url: string): Promise<string> {
   }
 }
 
+interface DatabaseScale { readonly chunks: number; readonly chunk_seconds: number; readonly segments: number; readonly operations: number }
+/** The per-client operation count of each MySQL workload a `database` job runs. */
+const PER_CLIENT: Record<string, 'chunks' | 'segments' | 'operations'> = { archive_streaming: 'chunks', transcript_ingest: 'segments', context_read_write: 'operations' };
+
+/** A `database` job must yield one aggregate record per MySQL workload, at `clients` concurrency, pooling every client's operations. */
+export function aggregateProblems(records: ReadonlyArray<Result>, clients: number, scale: DatabaseScale): string[] {
+  const ids = records.map(record => record.workload_id).sort().join(', ');
+  return [
+    ...(ids === Object.keys(PER_CLIENT).sort().join(', ') ? [] : [`database job records ${ids}, expected one each of ${Object.keys(PER_CLIENT).join(', ')}`]),
+    ...records.flatMap(record => {
+      const count = PER_CLIENT[record.workload_id];
+      const expected = count === undefined ? 0 : clients * scale[count];
+      return [
+        ...(record.offered_load.concurrency === clients ? [] : [`${record.implementation} ${record.workload_id}: concurrency ${record.offered_load.concurrency}, ran ${clients} clients`]),
+        ...(record.repetitions === expected ? [] : [`${record.implementation} ${record.workload_id}: ${record.repetitions} operations, expected ${expected}`]),
+      ];
+    }),
+  ];
+}
+
+/** Pairs client i of each implementation; returns the evidence note or throws naming the first differing pair. */
+export function pairFingerprints(ts: ReadonlyArray<string>, rust: ReadonlyArray<string>): string {
+  ts.forEach((print, client) => {
+    if (print !== rust[client]) throw new Error(`MySQL end state differs for client pair ${client}: typescript ${print} rust ${rust[client]}`);
+  });
+  const hashes = ts.map((print, client) => `client ${client} ${createHash('sha256').update(print).digest('hex')}`);
+  return `MySQL end state: TypeScript and Rust fingerprints equal for every client pair (SHA-256 ${hashes.join(', ')})`;
+}
+
 const base = (git_sha: string) => ({ git_sha, started_at: new Date().toISOString() });
 /** Both drivers are one sequential stream, so `concurrency` is 1; the listener count a rate models is recorded separately. */
 const pcmJob = (git_sha: string, frames: number, rate: number): Job => {
@@ -125,7 +155,7 @@ export function sweepRates(offered: ReadonlyArray<number>, doublings: number): n
   return [...offered, ...Array.from({ length: doublings }, (_, i) => offered.at(-1)! * 2 ** (i + 1))];
 }
 
-interface Options { readonly smoke: boolean; readonly mysqlUrl: string | undefined; readonly soakSeconds: number }
+interface Options { readonly smoke: boolean; readonly mysqlUrl: string | undefined; readonly soakSeconds: number; readonly clients: number }
 
 class Run {
   readonly records: Result[] = [];
@@ -157,20 +187,21 @@ class Run {
   }
 
   async database(options: Options, url: string) {
-    const scale = options.smoke ? { chunks: 3, chunk_seconds: 2, segments: 40, operations: 100 } : { chunks: 24, chunk_seconds: 30, segments: 2_000, operations: 5_000 };
-    const prints = new Map<Implementation, string>();
+    const scale: DatabaseScale = options.smoke ? { chunks: 3, chunk_seconds: 2, segments: 40, operations: 100 } : { chunks: 24, chunk_seconds: 30, segments: 2_000, operations: 5_000 };
+    const prints = new Map<Implementation, string[]>();
     for (const implementation of IMPLEMENTATIONS) {
-      const created = await createDatabase(url);
+      const created: Array<{ url: string; ids: FixtureIds; drop: () => Promise<void> }> = [];
       try {
-        this.job(implementation, { ...base(this.git_sha), workload: 'database', database_url: created.url, ids: created.ids, archive_seed: workload('archive_streaming').fixture.seed, ...scale }, 'closed_loop');
-        prints.set(implementation, await fingerprint(created.url));
+        for (let client = 0; client < options.clients; client++) created.push(await createDatabase(url));
+        const clients = created.map(({ url: database_url, ids }) => ({ database_url, ids }));
+        const records = this.job(implementation, { ...base(this.git_sha), workload: 'database', clients, archive_seed: workload('archive_streaming').fixture.seed, ...scale }, 'closed_loop');
+        this.problems.push(...aggregateProblems(records, options.clients, scale));
+        prints.set(implementation, await Promise.all(created.map(db => fingerprint(db.url))));
       } finally {
-        await created.drop();
+        for (const db of created) await db.drop();
       }
     }
-    const [ts, rust] = IMPLEMENTATIONS.map(implementation => prints.get(implementation)!);
-    if (ts === rust) this.notes.push(`MySQL end state: TypeScript and Rust fingerprints equal (SHA-256 ${createHash('sha256').update(ts!).digest('hex')})`);
-    else this.problems.push(`MySQL end state differs: typescript ${ts} rust ${rust}`);
+    this.notes.push(pairFingerprints(prints.get('typescript')!, prints.get('rust')!));
   }
 
   sweep(options: Options) {
@@ -213,13 +244,13 @@ const HOST = {
 const ms = (value: number) => (value < 1 ? value.toFixed(3) : value.toFixed(1));
 const ratio = (ts: number, rust: number) => (rust > 0 ? (ts / rust).toFixed(2) : 'n/a');
 
-/** Markdown rows pairing each TypeScript record with its Rust twin. */
+/** Markdown rows pairing each TypeScript record with its Rust twin at the same offered rate and concurrency. */
 export function summaryRows(records: ReadonlyArray<Result>): string[] {
   const rust = new Map(records.filter(record => record.implementation === 'rust').map(record => [matchKey(record), record]));
   return records.filter(record => record.implementation === 'typescript' && rust.has(matchKey(record))).map(ts => {
     const [a, b] = [ts.metrics, rust.get(matchKey(ts))!.metrics] as const;
     const latency = (m: typeof a) => `${ms(m['latency_p50']!)} / ${ms(m['latency_p95']!)} / ${ms(m['latency_p99']!)}`;
-    return `| \`${ts.workload_id}\` | ${ts.parameters['mode']} ${ts.phase} | ${ts.offered_load.per_second || '-'} | ${a['throughput']!.toFixed(1)} | ${b['throughput']!.toFixed(1)} | ${ratio(a['throughput']!, b['throughput']!)} | ${latency(a)} | ${latency(b)} | ${ratio(a['latency_p99']!, b['latency_p99']!)} | ${a['cpu']!.toFixed(0)} / ${b['cpu']!.toFixed(0)} | ${(a['rss']! / 2 ** 20).toFixed(0)} / ${(b['rss']! / 2 ** 20).toFixed(0)} |`;
+    return `| \`${ts.workload_id}\` | ${ts.parameters['mode']} ${ts.phase} | ${ts.offered_load.concurrency} | ${ts.offered_load.per_second || '-'} | ${a['throughput']!.toFixed(1)} | ${b['throughput']!.toFixed(1)} | ${ratio(a['throughput']!, b['throughput']!)} | ${latency(a)} | ${latency(b)} | ${ratio(a['latency_p99']!, b['latency_p99']!)} | ${a['cpu']!.toFixed(0)} / ${b['cpu']!.toFixed(0)} | ${(a['rss']! / 2 ** 20).toFixed(0)} / ${(b['rss']! / 2 ** 20).toFixed(0)} |`;
   });
 }
 
@@ -236,8 +267,8 @@ async function main(options: Options & { readonly out: string | undefined }) {
   // The Rust binary does not read the manifest: every record names the manifest reference host, as `validateResult` requires.
   const records = run.records.map(record => ({ ...record, host: manifest.reference_hardware.name, parameters: { ...record.parameters, harness: { ...HOST, runtime: runtime[record.implementation], source_sha256: sources[record.implementation] } } }));
   if (options.out) writeFileSync(options.out, records.map(record => `${JSON.stringify(record)}\n`).join(''));
-  console.log('| Workload | Mode | Offered/s | TS ops/s | Rust ops/s | TS/Rust ops | TS p50 / p95 / p99 ms | Rust p50 / p95 / p99 ms | TS/Rust p99 | CPU % TS / Rust | RSS MiB TS / Rust |');
-  console.log('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  console.log('| Workload | Mode | Concurrency | Offered/s | TS ops/s | Rust ops/s | TS/Rust ops | TS p50 / p95 / p99 ms | Rust p50 / p95 / p99 ms | TS/Rust p99 | CPU % TS / Rust | RSS MiB TS / Rust |');
+  console.log('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   summaryRows(records).forEach(row => console.log(row));
   console.log();
   run.notes.forEach(note => console.log(`- ${note}`));
@@ -247,7 +278,9 @@ async function main(options: Options & { readonly out: string | undefined }) {
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { smoke: { type: 'boolean', default: false }, 'mysql-url': { type: 'string' }, out: { type: 'string' }, 'soak-seconds': { type: 'string' } } });
+  const { values } = parseArgs({ options: { smoke: { type: 'boolean', default: false }, 'mysql-url': { type: 'string' }, clients: { type: 'string', default: '1' }, out: { type: 'string' }, 'soak-seconds': { type: 'string' } } });
   const soakSeconds = Number(values['soak-seconds'] ?? (values.smoke ? 5 : 300));
-  await main({ smoke: values.smoke, mysqlUrl: values['mysql-url'] ?? process.env['SANCTUM_TEST_MYSQL_URL'], out: values.out, soakSeconds });
+  const clients = Number(values.clients);
+  if (!Number.isInteger(clients) || clients < 1) throw new Error(`--clients must be a positive integer, got ${values.clients}`);
+  await main({ smoke: values.smoke, mysqlUrl: values['mysql-url'] ?? process.env['SANCTUM_TEST_MYSQL_URL'], out: values.out, soakSeconds, clients });
 }

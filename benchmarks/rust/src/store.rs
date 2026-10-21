@@ -21,11 +21,11 @@ pub fn fail<T>(message: &str) -> Outcome<T> {
     Err(Fail(message.to_string()))
 }
 
-/// Counts a failed operation and reports why on stderr (stdout carries only records).
-pub fn count_failure<T>(errors: &mut usize, outcome: Outcome<T>) {
+/// Counts a failed operation and reports which client and why on stderr (stdout carries only records).
+pub fn count_failure<T>(errors: &mut usize, client: usize, outcome: Outcome<T>) {
     if let Err(Fail(message)) = outcome {
         *errors += 1;
-        eprintln!("operation failed: {message}");
+        eprintln!("client {client}: operation failed: {message}");
     }
 }
 
@@ -40,6 +40,8 @@ pub struct Access {
 pub const PERMISSION_REVISION: u64 = 1;
 
 pub struct Fixture {
+    /// Position in the job's `clients` array.
+    pub index: usize,
     pub pool: Pool,
     pub owner: Access,
     pub device: Access,
@@ -47,15 +49,25 @@ pub struct Fixture {
     pub epoch: String,
 }
 
-/// Attaches to the database the runner created with `createDatabase`, with the same pool bound
-/// (8 connections) as `attachDatabase`.
-pub fn fixture(job: &Value) -> Fixture {
-    let ids = &job["ids"];
+/// Attaches to every database in the job's nonempty `clients` array, each created by the runner
+/// with `createDatabase`; an unreachable or malformed client aborts the run.
+pub fn fixtures(job: &Value) -> Vec<Fixture> {
+    let clients = job["clients"]
+        .as_array()
+        .filter(|clients| !clients.is_empty())
+        .expect("database job needs a nonempty clients array");
+    clients.iter().enumerate().map(|(index, client)| fixture(index, client)).collect()
+}
+
+/// One client's database, with the same pool bound (8 connections) as `attachDatabase`.
+fn fixture(index: usize, client: &Value) -> Fixture {
+    let ids = &client["ids"];
     let id = |key: &str| ids[key].as_str().unwrap().to_string();
-    let opts = OptsBuilder::from_opts(Opts::from_url(job["database_url"].as_str().unwrap()).unwrap())
+    let opts = OptsBuilder::from_opts(Opts::from_url(client["database_url"].as_str().unwrap()).unwrap())
         .pool_opts(PoolOpts::default().with_constraints(PoolConstraints::new(1, 8).unwrap()));
     Fixture {
-        pool: Pool::new(opts).expect("benchmark database"),
+        index,
+        pool: Pool::new(opts).unwrap_or_else(|error| panic!("client {index}: benchmark database: {error}")),
         owner: Access {
             workspace: id("workspace"),
             principal: id("owner"),

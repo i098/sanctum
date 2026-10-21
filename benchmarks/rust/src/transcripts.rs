@@ -2,7 +2,7 @@
 //! final window: epoch lock, coverage, revisioned segments, coverage upsert) followed by the
 //! meeting hook, over the `transcript-segments-v1` fixture.
 
-use crate::measure::{RecordInput, sample, sha256_hex, to_record};
+use crate::measure::{RecordInput, sample_clients, sha256_hex, to_record};
 use crate::meetings::{Segment, on_final_segments};
 use crate::store::{Fixture, Outcome, count_failure, uuid};
 use mysql::prelude::Queryable;
@@ -126,12 +126,13 @@ fn publish(fx: &Fixture, window: (u64, u64), text: &str) -> Outcome<()> {
     Ok(())
 }
 
-pub fn run(job: &Value, fx: &Fixture) -> Value {
+/// Every client publishes the same segments into its own database, concurrently.
+pub fn run(job: &Value, fixtures: &[Fixture]) -> Value {
     let segments = job["segments"].as_u64().unwrap() as usize;
-    let mut errors = 0;
-    let run = sample(segments, 0.0, |i| {
+    let mut clients: Vec<(&Fixture, usize)> = fixtures.iter().map(|fx| (fx, 0)).collect();
+    let run = sample_clients(&mut clients, segments, |(fx, errors), i| {
         let window = (i as u64 * SPAN, (i as u64 + 1) * SPAN);
-        count_failure(&mut errors, publish(fx, window, &text(i)));
+        count_failure(errors, fx.index, publish(fx, window, &text(i)));
     });
     let texts: Vec<String> = (0..segments).map(text).collect();
     let parameters = json!({ "segments": segments, "segment_seconds": 5, "segment_text_bytes": 240, "scope": "publishFinalWindow including meeting hooks" });
@@ -143,9 +144,9 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
             workload_id: "transcript_ingest",
             phase: "steady",
             fixture_sha256,
-            concurrency: 1.0,
-            errors,
-            checked: segments,
+            concurrency: clients.len() as f64,
+            errors: clients.iter().map(|(_, errors)| errors).sum(),
+            checked: segments * clients.len(),
             dropped_samples: 0,
             parameters,
         },

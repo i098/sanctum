@@ -2,7 +2,7 @@
 //! and SHA-256 validation, manifest claim, object write, commit plus reconcile job) against MySQL
 //! and an in-memory object store, over the `wav-chunks-v1` fixture.
 
-use crate::measure::{RecordInput, js_round, sample, seeded_random, sha256_hex, to_record};
+use crate::measure::{RecordInput, js_round, sample_clients, seeded_random, sha256_hex, to_record};
 use crate::store::{Access, Fixture, Outcome, count_failure, enqueue_job, fail, uuid};
 use mysql::prelude::Queryable;
 use mysql::{Row, TxOpts, Value as Sql};
@@ -203,7 +203,15 @@ fn put_chunk<'a>(fx: &Fixture, store: &mut ObjectStore<'a>, chunk_id: &str, mani
     )
 }
 
-pub fn run(job: &Value, fx: &Fixture) -> Value {
+/// One client's state: its database, its in-memory object store and its failure count.
+struct Client<'a> {
+    fx: &'a Fixture,
+    store: ObjectStore<'a>,
+    errors: usize,
+}
+
+/// Every client archives the same chunks into its own database, concurrently.
+pub fn run(job: &Value, fixtures: &[Fixture]) -> Value {
     let chunks = job["chunks"].as_u64().unwrap() as usize;
     let seconds = job["chunk_seconds"].as_u64().unwrap();
     let samples = 48_000 * seconds;
@@ -211,9 +219,16 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
     let pcm: Vec<i16> = (0..samples).map(|_| js_round(next() * 32_000.0) as i16).collect();
     let body = wav(&pcm, 48_000);
     let body_sha = sha256_hex(&[&body]);
-    let mut store = ObjectStore::new();
-    let mut errors = 0;
-    let run = sample(chunks, 0.0, |i| {
+    let mut clients: Vec<Client> = fixtures
+        .iter()
+        .map(|fx| Client {
+            fx,
+            store: ObjectStore::new(),
+            errors: 0,
+        })
+        .collect();
+    let run = sample_clients(&mut clients, chunks, |client, i| {
+        let fx = client.fx;
         let chunk_id = uuid();
         let manifest = Manifest {
             chunk_id: chunk_id.clone(),
@@ -228,7 +243,11 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
             byte_length: body.len(),
             sha256: &body_sha,
         };
-        count_failure(&mut errors, put_chunk(fx, &mut store, &chunk_id, &manifest, &body).map(std::hint::black_box));
+        count_failure(
+            &mut client.errors,
+            fx.index,
+            put_chunk(fx, &mut client.store, &chunk_id, &manifest, &body).map(std::hint::black_box),
+        );
     });
     let parameters = json!({ "chunks": chunks, "chunk_seconds": seconds, "object_store": "in-memory stub", "scope": "putChunk end to end against MySQL" });
     to_record(
@@ -238,9 +257,9 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
             workload_id: "archive_streaming",
             phase: "steady",
             fixture_sha256: body_sha.clone(),
-            concurrency: 1.0,
-            errors,
-            checked: chunks,
+            concurrency: clients.len() as f64,
+            errors: clients.iter().map(|client| client.errors).sum(),
+            checked: chunks * clients.len(),
             dropped_samples: 0,
             parameters,
         },

@@ -40,26 +40,35 @@ It uses the `mysql` crate with server-side prepared statements, as `@effect/sql-
 | `transcript_ingest` | `recordFinalWindow` and `onFinalSegments`: the same SQL, boundary evaluation, claim, promotion, seal logic and live `context.refresh` request | Only the listener capture key and a seal without a capture watermark; the fixture uses neither a capture group nor a capture end. The refresh job keeps its work key, payload and delay, but not the TypeScript expedite flag and 24 attempts, which the benchmark never reads. |
 | `context_read_write` | `getContextSnapshot` and `addContextItem`: authorization, the 500-entry FIFO snapshot cache, revision and idempotency checks, source resolution and the committed-order event | None in behavior. |
 
-Both implementations run one operation at a time on one thread, as the Node.js event loop does.
+Outside the MySQL clients, both implementations run one operation at a time on one thread, as the Node.js event loop does.
+With several database clients, the TypeScript clients interleave on the one event loop, and each Rust client has its own thread; a barrier releases them together.
 Rust `heap` is the live byte count of a counting global allocator; `external`, `gc_ms` and `event_loop_delay_p99` do not apply and are reported as 0 and listed in `not_applicable_metrics`.
-`cargo test --release --manifest-path benchmarks/rust/Cargo.toml` checks the fixture generator against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation and date arithmetic.
+`cargo test --release --manifest-path benchmarks/rust/Cargo.toml` checks the fixture generator against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation, date arithmetic, client overlap, failed clients and pooled percentiles.
 
 ## Matched runner
 
-`node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
+`node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--clients 1] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
 It builds `rust/` with `cargo build --release --locked` and passes one job JSON to `node scripts/benchmark.ts --job` and to the Rust binary, each in its own process.
 It runs three modes:
 
-- `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets a fresh seeded database.
+- `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets `--clients` fresh seeded databases (default 1).
 - `open_loop_sweep`: `pcm_ingest` at the manifest's offered frame rates, then doubling, for 2 s per rate until achieved throughput falls below 95% of the offered rate.
 - `long_run`: `pcm_ingest` at 3,200 frames/s for `--soak-seconds`; RSS growth from the end of a 10% warm-up to the end must stay within 16 MiB.
 
 Every open-loop run is one sequential stream of frames, so its records carry `offered_load.concurrency: 1`.
 The listener count a rate models at 50 frames/s per listener (64 at 3,200 frames/s) is `parameters.equivalent_listeners_at_50fps`; no run drives concurrent listeners.
 
+The MySQL workloads run as one `database` job whose `clients` array gives each concurrent client its own seeded database on the same server.
+The workload counts apply per client.
+All clients run `archive_streaming` together, then `transcript_ingest`, then `context_read_write`; within a client, operations stay in order.
+Each implementation emits one aggregate record per MySQL workload: `offered_load.concurrency` is the client count, throughput is all completed operations over the phase's wall time, and latency percentiles come from the pooled operation latencies.
+CPU and memory are process-wide, measured once per phase.
+A failed client counts as failed operations or fails the job; it never yields a successful record.
+
 Open-loop latency counts from each frame's scheduled arrival, so a stall cannot hide tail latency; the driver sleeps only when at least 1 ms ahead.
-The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, their MySQL end states differ, or a long run exceeds its bound.
-The MySQL end state is compared through row counts and content sums of every written table, excluding IDs and wall-clock times.
+The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, a database record does not pool every client's operations at the client count, their MySQL end states differ, or a long run exceeds its bound.
+The MySQL end state is compared client by client (client i of TypeScript against client i of Rust) through row counts and content sums of every written table, excluding IDs and wall-clock times; the first differing pair stops the run and is named.
+Records pair only at the same workload, phase, mode, offered rate and concurrency.
 Every record carries the host description, the runtime and the SHA-256 of its implementation's tracked source files in `parameters.harness`.
 Comparative timing stays out of ordinary CI: `npm run check` covers the runner's decision logic and open-loop pacing, not the Rust build or any timing gate.
 
@@ -116,21 +125,21 @@ A controlled-host run must:
 2. Run nothing else on it; pin both implementations to the same declared cores and memory limit, fix the CPU frequency, and give MySQL 8.4 its own cores and a fixed buffer pool with no other databases.
 3. Run `node scripts/benchmark-compare.ts --mysql-url ... --out ...` at least five times from a cold start and report the median and spread of every record.
 4. Compare each workload's TypeScript/Rust throughput and p95/p99 ratios at matched offered load with its manifest `parity_gate`; the runner prints the ratios but evaluates no gate.
-5. Add concurrent drivers to both implementations before sweeping the manifest's `concurrency` and `concurrent_uploads` lists; both harnesses run one operation at a time today.
+5. Sweep the manifest's `concurrency` and `concurrent_uploads` lists with `--clients`; the MySQL workloads run concurrent clients, while `pcm_ingest` stays one stream.
 6. Keep the 24-hour soak (T26) separate: this long run bounds memory for 300 s of one workload only.
 
 Also unrun: MySQL workload saturation (sweeping load on the shared test server would disturb other runs), slow consumers and reconnect storms (they need the socket layer, which the workloads exclude), and live-provider latency.
 
 ## Current matched evidence
 
-The current matched evidence is one small `--smoke` run of `scripts/benchmark-compare.ts` against a shared disposable MySQL server.
-Its 22 records are not in this repository; the smoke output and records are kept outside it (`smoke.out` SHA-256 `48f52d578523fe17bda4255606e238741b82e982a44978631f3bb108ebb24a79`, `smoke.jsonl` SHA-256 `dc710e3b37d594b917b2416ae3a5aea93a918b333906e28e5444d92e532d1007`).
+The current matched evidence is two small `--smoke` runs of `scripts/benchmark-compare.ts` at commit `80c1f26`, with `--clients 1` and `--clients 2`, against a shared disposable MySQL server.
+Each run has 22 records; the outputs and records are kept outside this repository (`--clients 1`: `smoke-1.out` SHA-256 `0e7dd51707cc83e7c502509bba119c55202054c4e7f2a977b727ac69ae8e1521`, `smoke-1.jsonl` SHA-256 `efc0e42076e07b1485e6a33c1ef4e3fd2126405bcb364d0c74dfe63211a7aef6`; `--clients 2`: `smoke-2.out` SHA-256 `9294e5e8922284e4e7a4dde10668e3a6104ff6632bdc1e5f27dbc76bf50c1e82`, `smoke-2.jsonl` SHA-256 `e683acc9525d631c92b49403bc40bed64cc75d22aca34fd42cf4ccbc347826fc`).
 No database URL or credential is published.
 
-- In that run the TypeScript and Rust MySQL end-state fingerprints were equal (SHA-256 `02e906d057e9dba61a48deedcda706a5c9417c86fd6910d91cef6c26544a1632`). This holds for that recorded run only; it is neither parity nor general equivalence.
-- Source SHA-256: TypeScript `5f308b0b8f41a3c51e3e919af1fed0707023a698ac1ebdff11ec9a62d3750bc3`, Rust `af888167ac4acb128b2a5175e1956fb042bc6f66d15aa0158785e3a87152a23b`.
-- Fixture SHA-256, identical for both implementations: `pcm_ingest` `63faf10dc2fc8929cb35adf244481f4a428da9c57c9620ce23e30de5bd3482c0`, `cosine_ranking` `9b1ccc94a072dbe7a63aed149d63d2831fdbda7e31b0b0b6305b22bdf3a376e8`, `archive_streaming` `f066f329cb45588f16c88da009f0368acb2cbb62d2b3405d589ad7f2d27b8529`, `transcript_ingest` `0205a8f9363d5f1878704cbd6f233b485d426610f0acc14811dfcea35f8962b5`, `context_read_write` `5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9`.
-- The records carry `git_sha` `f451927` because the smoke ran on that base with the Rust source changes uncommitted; the Rust sources were then committed unchanged as `6a4eef5`.
-- Host: uncontrolled shared VPS (96 cores, 247 GiB RAM, load average 73.27 at start); Node.js v26.10.0, rustc 1.99.0. All records are `verified: false`.
+- Each MySQL record pooled every client: concurrency 1 gave 3, 40 and 100 operations, and concurrency 2 gave 6, 80 and 200, with no failed operation.
+- Every client pair had equal TypeScript and Rust end-state fingerprints (SHA-256 `02e906d057e9dba61a48deedcda706a5c9417c86fd6910d91cef6c26544a1632` for each client). This holds for these runs only; it is neither parity nor general equivalence.
+- Source SHA-256: TypeScript `ddbdea57690871d6783c52d5075b55124dcd1ec038128fc924e7d4a4c9c8a2d3`, Rust `3c169933c5efdb2a5372b502cca21527de9ea4c5a40743b7527bafb7ee7611dc`.
+- Fixture SHA-256, identical for both implementations and both client counts: `pcm_ingest` `63faf10dc2fc8929cb35adf244481f4a428da9c57c9620ce23e30de5bd3482c0`, `cosine_ranking` `9b1ccc94a072dbe7a63aed149d63d2831fdbda7e31b0b0b6305b22bdf3a376e8`, `archive_streaming` `f066f329cb45588f16c88da009f0368acb2cbb62d2b3405d589ad7f2d27b8529`, `transcript_ingest` `0205a8f9363d5f1878704cbd6f233b485d426610f0acc14811dfcea35f8962b5`, `context_read_write` `5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9`.
+- Host: uncontrolled shared VPS (Xeon Platinum 8160, 96 cores, 247 GiB RAM, load average 25 to 26 at start); Node.js v26.10.0, rustc 1.99.0. All records are `verified: false`.
 
 The full-scale controlled-host comparison is unrun: the T26 and T01 parity gates stay unchecked, the records stay `verified: false`, and the host is unverified and uncontrolled.

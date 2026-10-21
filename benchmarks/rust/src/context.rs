@@ -3,13 +3,13 @@
 //! source resolution, item insert and committed-order event), on the meetings
 //! `transcript_ingest` created.
 
-use crate::measure::{RecordInput, sample, sha256_hex, to_record};
+use crate::measure::{RecordInput, sample_clients, sha256_hex, to_record};
 use crate::store::{Access, Fail, Fixture, Outcome, PERMISSION_REVISION, count_failure, datetime_text, fail, uuid};
 use mysql::prelude::Queryable;
 use mysql::{Row, Transaction, TxOpts, Value as Sql};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 const ITEM_LIMIT: usize = 200;
 const CACHE_ENTRIES: usize = 500;
@@ -55,11 +55,24 @@ struct Items {
     truncated: bool,
 }
 
-/// Per-process FIFO cache keyed by access and revisions, like `snapshotCache`.
+/// Per-process FIFO cache keyed by access and revisions, like `snapshotCache`; every client shares it.
 #[derive(Default)]
 struct SnapshotCache {
-    entries: HashMap<String, Rc<Items>>,
+    entries: HashMap<String, Arc<Items>>,
     order: VecDeque<String>,
+}
+
+impl SnapshotCache {
+    /// `snapshotCache.set` then evicting the oldest key past `CACHE_ENTRIES`.
+    fn put(&mut self, key: String, items: Arc<Items>) {
+        if self.entries.insert(key.clone(), items).is_none() {
+            self.order.push_back(key);
+        }
+        if self.entries.len() > CACHE_ENTRIES {
+            let oldest = self.order.pop_front().unwrap();
+            self.entries.remove(&oldest);
+        }
+    }
 }
 
 fn base64url(bytes: &[u8]) -> String {
@@ -123,7 +136,7 @@ fn meeting_items(q: &mut impl Queryable, workspace: &str, meeting: &str) -> Outc
 }
 
 /// `getContextSnapshot`: bounded, source-linked snapshot at one consistent point; returns the revision.
-fn snapshot(fx: &Fixture, cache: &mut SnapshotCache, meeting: &str) -> Outcome<(u64, Value)> {
+fn snapshot(fx: &Fixture, cache: &Mutex<SnapshotCache>, meeting: &str) -> Outcome<(u64, Value)> {
     let access = &fx.owner;
     require_scope(access, "context:read")?;
     let mut conn = fx.pool.get_conn()?;
@@ -136,17 +149,12 @@ fn snapshot(fx: &Fixture, cache: &mut SnapshotCache, meeting: &str) -> Outcome<(
     )?;
     let (now, revision, boundary, timezone, seq) = head.expect("authorized meeting exists");
     let key = scope_key(access, json!(["context", meeting, revision, boundary]));
-    let current = match cache.entries.get(&key) {
-        Some(items) => items.clone(),
-        None => Rc::new(meeting_items(&mut tx, &access.workspace, meeting)?),
+    let cached = cache.lock().unwrap().entries.get(&key).cloned();
+    let current = match cached {
+        Some(items) => items,
+        None => Arc::new(meeting_items(&mut tx, &access.workspace, meeting)?),
     };
-    if cache.entries.insert(key.clone(), current.clone()).is_none() {
-        cache.order.push_back(key);
-    }
-    if cache.entries.len() > CACHE_ENTRIES {
-        let oldest = cache.order.pop_front().unwrap();
-        cache.entries.remove(&oldest);
-    }
+    cache.lock().unwrap().put(key, current.clone());
     let watermark: Option<(String, u64)> = tx.exec_first(
         "SELECT s.epoch_id, s.sample_end FROM context_processed_segments p
             JOIN transcript_segments s ON s.workspace_id = p.workspace_id AND s.id = p.segment_id
@@ -320,15 +328,40 @@ fn cited_segments(fx: &Fixture) -> Outcome<Vec<(String, String, u64)>> {
     Ok(cited)
 }
 
-pub fn run(job: &Value, fx: &Fixture) -> Value {
+/// One client's state: its database, cited meeting segments and failure count.
+struct Client<'a> {
+    fx: &'a Fixture,
+    cited: Vec<(String, String, u64)>,
+    errors: usize,
+}
+
+/// Every client reads and writes context over its own meetings, concurrently.
+pub fn run(job: &Value, fixtures: &[Fixture]) -> Value {
     let operations = job["operations"].as_u64().unwrap() as usize;
-    let cited = cited_segments(fx).expect("cited segments");
-    assert!(!cited.is_empty(), "context_read_write needs transcript_ingest to create meetings first");
-    let mut cache = SnapshotCache::default();
-    let mut errors = 0;
-    let run = sample(operations, 0.0, |i| {
-        let (meeting, segment, _) = &cited[i % cited.len()];
-        let outcome = snapshot(fx, &mut cache, meeting).and_then(|(revision, view)| {
+    let mut clients: Vec<Client> = fixtures
+        .iter()
+        .map(|fx| {
+            let cited = cited_segments(fx).unwrap_or_else(|Fail(message)| panic!("client {}: cited segments: {message}", fx.index));
+            assert!(
+                !cited.is_empty(),
+                "client {}: context_read_write needs transcript_ingest to create meetings first",
+                fx.index
+            );
+            Client { fx, cited, errors: 0 }
+        })
+        .collect();
+    let starts: Vec<String> = clients[0].cited.iter().map(|(_, _, start)| start.to_string()).collect();
+    assert!(
+        clients
+            .iter()
+            .all(|client| client.cited.iter().map(|(_, _, start)| start.to_string()).eq(starts.iter().cloned())),
+        "clients must cite identical logical segments"
+    );
+    let cache = Mutex::new(SnapshotCache::default());
+    let run = sample_clients(&mut clients, operations, |client, i| {
+        let fx = client.fx;
+        let (meeting, segment, _) = &client.cited[i % client.cited.len()];
+        let outcome = snapshot(fx, &cache, meeting).and_then(|(revision, view)| {
             std::hint::black_box(view);
             if i % 10 != 9 {
                 Ok(())
@@ -336,10 +369,9 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
                 add_item(fx, meeting, revision, &format!("Decision {i}"), segment, &format!("bench-{i}")).map(|written| drop(std::hint::black_box(written)))
             }
         });
-        count_failure(&mut errors, outcome);
+        count_failure(&mut client.errors, fx.index, outcome);
     });
-    let starts: Vec<String> = cited.iter().map(|(_, _, start)| start.to_string()).collect();
-    let parameters = json!({ "operations": operations, "meetings": cited.len(), "read_write_ratio": 9 });
+    let parameters = json!({ "operations": operations, "meetings": clients[0].cited.len(), "read_write_ratio": 9 });
     let fixture_sha256 = sha256_hex(&[starts.join("\n").as_bytes()]);
     to_record(
         job,
@@ -348,9 +380,9 @@ pub fn run(job: &Value, fx: &Fixture) -> Value {
             workload_id: "context_read_write",
             phase: "steady",
             fixture_sha256,
-            concurrency: 1.0,
-            errors,
-            checked: operations,
+            concurrency: clients.len() as f64,
+            errors: clients.iter().map(|client| client.errors).sum(),
+            checked: operations * clients.len(),
             dropped_samples: 0,
             parameters,
         },
@@ -366,5 +398,39 @@ mod tests {
         assert_eq!(base64url(b"[\"w\",1]"), "WyJ3IiwxXQ");
         assert_eq!(base64url(b"ab"), "YWI");
         assert_eq!(base64url(b"abc"), "YWJj");
+    }
+
+    #[test]
+    fn clients_share_one_bounded_cache_with_scoped_keys() {
+        let cache = Mutex::new(SnapshotCache::default());
+        let accesses = ["w1", "w2"].map(|workspace| Access {
+            workspace: workspace.into(),
+            principal: "p".into(),
+            scopes: &["context:read"],
+        });
+        assert_ne!(
+            scope_key(&accesses[0], json!(["context", "m", 1, 1])),
+            scope_key(&accesses[1], json!(["context", "m", 1, 1]))
+        );
+        std::thread::scope(|scope| {
+            for access in &accesses {
+                let cache = &cache;
+                scope.spawn(move || {
+                    for revision in 0..400 {
+                        let items = Arc::new(Items {
+                            items: Vec::new(),
+                            truncated: false,
+                        });
+                        cache.lock().unwrap().put(scope_key(access, json!(["context", "m", revision, 1])), items);
+                    }
+                });
+            }
+        });
+        let cache = cache.into_inner().unwrap();
+        assert_eq!(cache.entries.len(), CACHE_ENTRIES);
+        assert_eq!(cache.order.len(), CACHE_ENTRIES);
+        for access in &accesses {
+            assert!(cache.entries.contains_key(&scope_key(access, json!(["context", "m", 399, 1]))));
+        }
     }
 }

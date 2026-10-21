@@ -20,10 +20,10 @@ fn main() {
     let records = match job["workload"].as_str() {
         Some("pcm_ingest") => pcm::run(&job),
         Some("cosine_ranking") => cosine::run(&job),
-        // The MySQL workloads share one database in this order: context cites transcript meetings.
+        // The MySQL workloads share each client's database in this order: context cites transcript meetings.
         Some("database") => {
-            let fixture = store::fixture(&job);
-            vec![archive::run(&job, &fixture), transcripts::run(&job, &fixture), context::run(&job, &fixture)]
+            let fixtures = store::fixtures(&job);
+            vec![archive::run(&job, &fixtures), transcripts::run(&job, &fixtures), context::run(&job, &fixtures)]
         }
         other => panic!("unknown workload {other:?}"),
     };
