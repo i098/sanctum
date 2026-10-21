@@ -121,7 +121,7 @@ const ltsPlan = (...emails: ReadonlyArray<readonly [string, ReadonlyArray<string
   });
 
 const prepareOverlap = (retryPlan: string) => {
-  const researched = retryPlan === 'different recipients' || retryPlan === 'empty plan';
+  const researched = ['different recipients', 'empty plan'].includes(retryPlan);
   const empty = retryPlan === 'saved empty plan';
   const email = (to: string, body: string | null = null) => ({
     action_key: SEND, title: 'Email the notes',
