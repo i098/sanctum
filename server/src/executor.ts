@@ -254,17 +254,7 @@ const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }, acces
     return { research: yield* storedResearch(job), actions: requested.map(action => ({ ...action, already_requested: true })) };
   });
 
-/**
- * `research.run`: find and inspect the requester's granted actions that match the request, let the
- * planner decide on web research and fill in actions, then research first; actions planned with
- * research are planned again from the cited research, which may change only their content fields,
- * and none is requested when research is refused or that pass changes anything else. Each planned
- * action is submitted through the same grant gateway as any agent and records the job. A job that
- * stored its research does not pay for it again, and each further paid attempt counts against the
- * allowance. Before requesting actions, it stores the complete plan on the job. A retry requests
- * each missing action with its saved idempotency key and reports every planned action without
- * planning again. Dropped proposals and nothing to do are reported with their reasons.
- */
+/** Run research under the requester's grants; see docs/ARCHITECTURE.md for recovery and receipt rules. */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
     const { meeting_id, request } = yield* Schema.decodeUnknown(ResearchPayload)(job.payload);
