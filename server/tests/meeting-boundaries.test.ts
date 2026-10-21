@@ -109,8 +109,8 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
-  for (const [earlierText, laterText] of [['the earlier sentence', 'yes'], ['welcome everyone', 'goodbye']]) {
-    it.effect(`attaches earlier "${earlierText}" before "${laterText}" and promotes the full span`, () =>
+  for (const [earlierText, laterText] of [['the earlier sentence', 'yes'], ['welcome everyone', 'goodbye'], ['neutral speech', 'goodbye']]) {
+    it.effect(`attaches repeated earlier finals before "${laterText}" after "${earlierText}" and preserves the full span`, () =>
       withDatabase(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
@@ -121,15 +121,20 @@ describe('automatic meeting lifecycle', () => {
           expect(meeting!.state).toBe('provisional');
           const earlier = yield* speak(listener, epoch, 0, 1, earlierText!);
           yield* onFinalSegments({ ...listener, segments: [earlier] });
-          expect(yield* meetingsOf(listener.workspace_id)).toEqual([{
+          const promoted = yield* meetingsOf(listener.workspace_id);
+          expect(promoted).toEqual([{
             ...meeting!, state: 'active', started_at: '2026-09-28 16:00:00.000000',
           }]);
+          const middle = yield* speak(listener, epoch, 30, 31, 'welcome everyone');
+          yield* onFinalSegments({ ...listener, segments: [middle] });
+          expect(yield* meetingsOf(listener.workspace_id)).toEqual(promoted);
           expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s LEFT JOIN meeting_ranges r
             ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
               AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
               AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
             WHERE s.workspace_id = ${listener.workspace_id} ORDER BY s.sample_start`).toEqual([
               { text: earlierText, meeting_id: meeting!.id },
+              { text: 'welcome everyone', meeting_id: meeting!.id },
               { text: laterText, meeting_id: meeting!.id },
             ]);
         }),
@@ -137,6 +142,33 @@ describe('automatic meeting lifecycle', () => {
       ),
     );
   }
+
+  it.effect('keeps interleaved capture-group epochs in one conversation and preserves the latest boundary cues', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const [device] = yield* seedWorkspace('Interleaved group', ['device']);
+        const group = yield* seedGroup(device!.workspace_id);
+        const room = yield* seedListener(device!, { group });
+        const laptop = yield* seedListener(device!, { group });
+        const roomEpoch = yield* seedEpoch(room);
+        const laptopEpoch = yield* seedEpoch(laptop);
+        yield* onFinalSegments({ ...room, segments: [yield* speak(room, roomEpoch, 0, 20, 'goodbye')] });
+        const [meeting] = yield* meetingsOf(device!.workspace_id);
+        yield* onFinalSegments({ ...laptop, segments: [
+          yield* speak(laptop, laptopEpoch, 15, 16, 'welcome everyone'),
+          yield* speak(laptop, laptopEpoch, 17, 18, 'welcome everyone'),
+        ] });
+        expect(yield* meetingsOf(device!.workspace_id)).toEqual([meeting]);
+        expect((yield* rangesOf(meeting!.id)).sort((a, b) => a.sample_start - b.sample_start)).toEqual([
+          { epoch_id: roomEpoch, sample_start: 0, sample_end: 20 * RATE },
+          { epoch_id: laptopEpoch, sample_start: 15 * RATE, sample_end: 18 * RATE },
+        ]);
+        yield* onFinalSegments({ ...room, segments: [yield* speak(room, roomEpoch, 21, 22, 'welcome everyone')] });
+        expect((yield* meetingsOf(device!.workspace_id)).map(row => row.state)).toEqual(['closing', 'active']);
+      }),
+      { migrated: true },
+    ),
+  );
 
   for (const separateEpoch of [false, true]) {
     it.effect(`gives earlier speech separate restricted ownership ${separateEpoch ? 'across epochs' : 'outside the adjacency gap'}`, () =>

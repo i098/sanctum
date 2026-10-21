@@ -237,8 +237,8 @@ const gapMs = (open: OpenMeeting, epoch: EpochClock, sample: number) => {
 
 /** The open meeting after it claimed `segment` up to `end`: latest speech position and recent utterances. */
 const advance = (open: OpenMeeting, epoch: EpochClock, segment: TranscriptSegment, end: number): OpenMeeting => {
-  const keep = open.last !== null && open.last.epoch.id === epoch.id && open.last.sample_end > end;
-  return { ...open, last: keep ? open.last : { epoch, track: segment.source.track, sample_end: end }, tail: [...open.tail, utteranceOf(segment)].slice(-2) };
+  const keep = open.last !== null && sampleMs(open.last.epoch, open.last.sample_end) > sampleMs(epoch, end);
+  return { ...open, last: keep ? open.last : { epoch, track: segment.source.track, sample_end: end }, tail: keep ? open.tail : [...open.tail, utteranceOf(segment)].slice(-2) };
 };
 
 /** A segment starting inside owned audio only extends the open meeting past its range; anyone else's audio is left alone. */
@@ -356,9 +356,9 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
 
 const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
   Effect.gen(function* () {
-    const earlier = open !== null && sampleMs(epoch, segment.source.sample_start) < Date.parse(open.row.started_at);
-    const gap = open === null || earlier ? null : gapMs(open, epoch, segment.source.sample_start);
-    const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: earlier ? [] : open?.tail ?? [], gap_ms: gap });
+    const gap = open === null ? null : gapMs(open, epoch, segment.source.sample_start);
+    const earlier = gap !== null && gap < 0;
+    const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: earlier ? [] : open?.tail ?? [], gap_ms: earlier ? null : gap });
     if (open !== null && (earlier || decision.decision === 'continue')) {
       const continued = yield* continueMeeting(open, epoch, segment, decision);
       if (continued !== null) return continued;
