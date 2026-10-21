@@ -16,9 +16,9 @@ export interface Utterance {
 export interface BoundaryEvidence {
   readonly source: SourceRange;
   readonly incoming: Utterance;
-  /** Most recent utterances of the open meeting, oldest first; empty when no meeting is open. */
+  /** Recent utterances, oldest first; empty when no meeting is open or placement precedes the latest owned position. */
   readonly tail: ReadonlyArray<Utterance>;
-  /** Silence since the open meeting's last speech; null when no meeting is open. */
+  /** Silence since the latest owned speech; null when opening a conversation or placing earlier speech without forward boundary scoring. */
   readonly gap_ms: number | null;
 }
 

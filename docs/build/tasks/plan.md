@@ -345,8 +345,8 @@ Listener states: stopped, starting, listening, reconnecting, paused, degraded.
 Meeting states: provisional, active, closing, closed, interrupted.
 Processing state tracks transcript coverage, notes readiness, memory commit, and recording completeness independently.
 
-Start a provisional conversation after coherent speech appears.
-Promote it to an active meeting when continued speech or explicit context establishes a conversation.
+Apply the recording policy in `docs/DECISIONS.md` when opening conversations; see `docs/ARCHITECTURE.md` for meeting placement details.
+Promote a provisional conversation to an active meeting when continued speech or explicit context establishes a conversation.
 Use a small boundary decision schema: continue, start, close, or split; include source ranges, evidence, reason, and uncertainty.
 Available signals include conversation gaps, explicit starts/ends, speaker changes, calendar hints when authorized, and topic continuity.
 A topic change or a silence timeout alone does not justify a hard boundary.
