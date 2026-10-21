@@ -193,6 +193,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
   Retries and overlapping attempts use the first saved plan and its result metadata, request each missing action, and report every planned action.
   Retries call the shared `requestAction` gateway to check request identity before reporting an existing action as `already_requested`, without submitting it again.
   A reused key with a different request returns `HashConflict`, not the earlier action.
+  Recovery reads action records before checking for a saved plan, so a concurrent plan takes precedence over the action-only fallback.
   If an older job has action records but no saved plan, the retry reports those records without planning again.
   Unstored requests cannot be recovered.
   A retried job with stored research but no requested actions uses that research without another paid call, even when its new plan declines web research.

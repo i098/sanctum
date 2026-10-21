@@ -471,6 +471,66 @@ describe('research.run', () => {
       { migrated: true },
     ));
 
+  it.effect('prefers a plan saved while an overlapping attempt reads action history', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { member, meeting_id } = yield* setup;
+        const job = yield* researchJob(member, meeting_id, 'history-race', 'Email the notes to a@example.com and b@example.com');
+        planner.answers = [JSON.stringify({
+          web_research: false,
+          actions: ['a@example.com', 'b@example.com'].map(to => ({
+            action_key: SEND, title: 'Email the notes',
+            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' }],
+          })),
+        })];
+        const reading = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const researchJobActions = Actions.researchJobActions;
+        const history = vi.spyOn(Actions, 'researchJobActions').mockImplementationOnce((...args) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(reading, undefined);
+            yield* Deferred.await(resume);
+            return yield* researchJobActions(...args);
+          }));
+        const requestAction = Actions.requestAction;
+        const request = vi.spyOn(Actions, 'requestAction')
+          .mockImplementationOnce(requestAction)
+          .mockImplementationOnce(() => Effect.die('Attempt stopped before the second request'));
+        const result = yield* Effect.gen(function* () {
+          const retry = yield* Effect.fork(runResearch(job));
+          yield* Deferred.await(reading);
+          expect((yield* Effect.exit(runResearch(job)))._tag).toBe('Failure');
+          request.mockRestore();
+          const before = yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`;
+          expect(before).toHaveLength(1);
+          yield* Deferred.succeed(resume, undefined);
+          return { completed: yield* Fiber.join(retry), firstId: before[0]!.id };
+        }).pipe(Effect.ensuring(Effect.zipRight(
+          Deferred.succeed(resume, undefined),
+          Effect.sync(() => {
+            request.mockRestore();
+            history.mockRestore();
+          }),
+        )));
+
+        expect(result.completed).toEqual({
+          status: 'succeeded',
+          result: { offered: [SEND], research: null, actions: [
+            { action_key: SEND, action_id: result.firstId, state: 'queued', already_requested: true },
+            { action_key: SEND, action_id: expect.any(String), state: 'queued' },
+          ] },
+        });
+        const rows = yield* sql<{ args: unknown }>`SELECT args FROM actions WHERE workspace_id = ${member.workspace_id} ORDER BY created_at, id`;
+        expect(rows.map(row => typeof row.args === 'string' ? JSON.parse(row.args) : row.args))
+          .toEqual([{ to: ['a@example.com'], subject: 'Notes' }, { to: ['b@example.com'], subject: 'Notes' }]);
+        expect(planner.requests).toHaveLength(1);
+        expect(openai.bodies).toEqual([]);
+        expect(provider.sent).toEqual([]);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
   for (const retryPlan of ['different recipients', 'empty plan', 'refused research', 'rejected synthesis', 'saved empty plan'] as const) {
     it.effect(`resumes the saved requests when an overlapping attempt returns ${retryPlan}`, () =>
       withDatabase(

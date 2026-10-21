@@ -244,12 +244,12 @@ const savePlannedRequests = (job: Job, planned: typeof PlannedResearch.Type) =>
 /** Resume the saved plan without calling the planner, preserving receipts for actions already requested. */
 const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }, access: AccessScope) =>
   Effect.gen(function* () {
+    const requested = yield* researchJobActions(job.workspace_id, job.id);
     const planned = yield* plannedRequests(job);
     if (planned !== null) {
       const actions = yield* Effect.forEach(planned.planned_requests, input => requestPlanned(access, input, job.id));
       return { ...planned.research_result, actions };
     }
-    const requested = yield* researchJobActions(job.workspace_id, job.id);
     if (requested.length === 0) return null;
     return { research: yield* storedResearch(job), actions: requested.map(action => ({ ...action, already_requested: true })) };
   });
