@@ -115,6 +115,29 @@ describe('bounded connection pool', () => {
     ),
   );
 
+  it.effect('interrupting a statement while the pool hands it a connection leaks no permit or connection', () =>
+    withSmallPool(database =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        // With one connection held, the statement's checkout opens a new one, so the interrupt arrives while that is in flight.
+        const holder = yield* hold;
+        const asked = yield* Deferred.make<void>();
+        const onAsk = (message: { database?: string }) => {
+          if (message.database === database.name) Deferred.unsafeDone(asked, Exit.void);
+        };
+        const poolConnect = tracingChannel('mysql2:pool:connect');
+        poolConnect.start.subscribe(onAsk as never);
+        const statement = yield* Effect.fork(sql`SELECT 1`);
+        yield* Effect.ensuring(Deferred.await(asked), Effect.sync(() => poolConnect.start.unsubscribe(onAsk as never)));
+        expect(Exit.isInterrupted(yield* Fiber.interrupt(statement))).toBe(true);
+
+        yield* holder.release;
+        yield* holder.done;
+        yield* poolIsWhole;
+      }),
+    ),
+  );
+
   it.effect('queues every waiter without refusal when the queue limit is 0', () =>
     withSmallPool(database =>
       Effect.gen(function* () {

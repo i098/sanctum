@@ -101,6 +101,7 @@ const gatedClient = (mysql: MysqlOptions) =>
         Effect.uninterruptibleMask(restore =>
           Effect.flatMap(Scope.make(), scope =>
             restore(Scope.extend(reserve, scope)).pipe(
+              Effect.onError(cause => Scope.close(scope, Exit.failCause(cause))),
               Effect.flatMap(connection => Effect.forkDaemon(Effect.onExit(use(connection), exit => Scope.close(scope, exit)))),
               Effect.flatMap(statement => restore(Fiber.join(statement))),
             ),
