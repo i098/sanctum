@@ -166,60 +166,67 @@ function wav(samples: Int16Array, rate: number): Uint8Array {
   return body;
 }
 
-/** `wav-chunks-v1`: seeded PCM16 WAV bodies of `seconds` each, sent through `putChunk`. */
-async function archiveStreaming(db: Attached, chunks: number, seconds: number, git_sha: string): Promise<BenchmarkRecord[]> {
+const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
+
+/** `wav-chunks-v1`: seeded PCM16 WAV bodies of `seconds` each, sent through `putChunk` by every client concurrently. */
+async function archiveStreaming(dbs: Attached[], chunks: number, seconds: number, git_sha: string): Promise<BenchmarkRecord[]> {
   const { fixture } = workload('archive_streaming');
   const next = seededRandom(fixture.seed);
   const samples = 48_000 * seconds;
   const body = wav(Int16Array.from({ length: samples }, () => Math.round(next() * 32_000)), 48_000);
   const bodySha = sha(body);
-  let errors = 0;
-  const run = await sample(chunks, async i => {
+  const errors = dbs.map(() => 0);
+  const run = await sample(chunks, async (i, client) => {
+    const db = dbs[client]!;
     const chunk_id = RecordingChunkId.make(randomUUID());
     const manifest = decodeManifest({ chunk_id, listener_id: db.listener, epoch_id: db.epoch, track: 0, sequence: i, sample_start: i * samples, sample_count: samples, sample_rate: 48_000, captured_at: '2026-09-29T09:00:00Z', byte_length: body.byteLength, sha256: bodySha });
-    if (await failures(db.runtime, putChunk(db.device, db.listener, chunk_id, manifest, body))) errors++;
-  });
-  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: 1, errors, checked: chunks, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against MySQL' } })];
+    if (await failures(db.runtime, putChunk(db.device, db.listener, chunk_id, manifest, body))) errors[client]!++;
+  }, 0, dbs.length);
+  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: dbs.length, errors: sum(errors), checked: chunks * dbs.length, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against MySQL', client_errors: errors } })];
 }
 
-/** `transcript-segments-v1`: 5-second final segments on one epoch through `publishFinalWindow`. */
-async function transcriptIngest(db: Attached, segments: number, git_sha: string): Promise<BenchmarkRecord[]> {
+/** `transcript-segments-v1`: 5-second final segments on each client's epoch through `publishFinalWindow`. */
+async function transcriptIngest(dbs: Attached[], segments: number, git_sha: string): Promise<BenchmarkRecord[]> {
   const span = 48_000 * 5;
   const text = (i: number) => `Segment ${i}: ${'discussion of the pilot rollout '.repeat(8)}`.slice(0, 240);
-  let errors = 0;
-  const run = await sample(segments, async i => {
+  const errors = dbs.map(() => 0);
+  const run = await sample(segments, async (i, client) => {
+    const db = dbs[client]!;
     const window = { sample_start: i * span, sample_end: (i + 1) * span };
     const effect = publishFinalWindow({
       workspace_id: db.owner.workspace_id, epoch_id: db.epoch, track: 0, window, segments: [{ ...window, text: text(i), confidence: 0.9, speaker_label: null }],
       origin: 'live', provider: 'bench', model: 'bench', provider_connection_id: null, listener_id: db.listener, capture_group_id: null
     });
-    if (await failures(db.runtime, effect)) errors++;
-  });
+    if (await failures(db.runtime, effect)) errors[client]!++;
+  }, 0, dbs.length);
   return [toRecord({
     workload_id: 'transcript_ingest', phase: 'steady', sample: run, fixture_sha256: sha(new TextEncoder().encode(Array.from({ length: segments }, (_, i) => text(i)).join('\n'))), git_sha, started_at,
-    concurrency: 1, errors, checked: segments, dropped_samples: 0, parameters: { segments, segment_seconds: 5, segment_text_bytes: 240, scope: 'publishFinalWindow including meeting hooks' }
+    concurrency: dbs.length, errors: sum(errors), checked: segments * dbs.length, dropped_samples: 0, parameters: { segments, segment_seconds: 5, segment_text_bytes: 240, scope: 'publishFinalWindow including meeting hooks', client_errors: errors }
   })];
 }
 
-/** `context-items-v1`: 9 snapshot reads per write on the meetings transcript ingest created. */
-async function contextReadWrite(db: Attached, operations: number, git_sha: string): Promise<BenchmarkRecord[]> {
-  const cited = await db.runtime.runPromise(citedSegments(db.owner));
-  if (cited.length === 0) throw new Error('context_read_write needs transcript_ingest to create meetings first');
-  let errors = 0;
-  const run = await sample(operations, async i => {
-    const target = cited[i % cited.length]!;
+/** `context-items-v1`: 9 snapshot reads per write on each client's meetings transcript ingest created. */
+async function contextReadWrite(dbs: Attached[], operations: number, git_sha: string): Promise<BenchmarkRecord[]> {
+  const cited = await Promise.all(dbs.map(db => db.runtime.runPromise(citedSegments(db.owner))));
+  if (cited.some(rows => rows.length === 0)) throw new Error('context_read_write needs transcript_ingest to create meetings first');
+  const fixture = cited.map(rows => sha(new TextEncoder().encode(rows.map(row => row.sample_start).join('\n'))));
+  if (new Set(fixture).size !== 1) throw new Error('context_read_write clients cite different fixtures');
+  const errors = dbs.map(() => 0);
+  const run = await sample(operations, async (i, client) => {
+    const db = dbs[client]!;
+    const target = cited[client]![i % cited[client]!.length]!;
     const read = getContextSnapshot(db.owner, target.meeting_id);
     if (i % 10 !== 9) {
-      if (await failures(db.runtime, read)) errors++;
+      if (await failures(db.runtime, read)) errors[client]!++;
       return;
     }
     const write = Effect.flatMap(read, snapshot =>
       addContextItem(db.owner, { meeting_id: target.meeting_id, expected_revision: snapshot.revision, kind: 'decision', text: `Decision ${i}`, sources: [{ segment_id: target.segment_id, start_ms: 0, end_ms: 1_000 }], idempotency_key: `bench-${i}` }));
-    if (await failures(db.runtime, write)) errors++;
-  });
+    if (await failures(db.runtime, write)) errors[client]!++;
+  }, 0, dbs.length);
   return [toRecord({
-    workload_id: 'context_read_write', phase: 'steady', sample: run, fixture_sha256: sha(new TextEncoder().encode(cited.map(row => row.sample_start).join('\n'))), git_sha, started_at,
-    concurrency: 1, errors, checked: operations, dropped_samples: 0, parameters: { operations, meetings: new Set(cited.map(row => row.meeting_id)).size, read_write_ratio: 9 }
+    workload_id: 'context_read_write', phase: 'steady', sample: run, fixture_sha256: fixture[0]!, git_sha, started_at,
+    concurrency: dbs.length, errors: sum(errors), checked: operations * dbs.length, dropped_samples: 0, parameters: { operations, meetings: new Set(cited[0]!.map(row => row.meeting_id)).size, read_write_ratio: 9, client_errors: errors }
   })];
 }
 
@@ -241,6 +248,13 @@ const citedSegments = (owner: AccessScope) =>
       .map(row => ({ meeting_id: MeetingId.make(row.meeting_id), segment_id: TranscriptSegmentId.make(row.segment_id), sample_start: String(row.sample_start) }));
   });
 
+/** The three MySQL workloads in fixed order (context_read_write cites the meetings transcript_ingest creates); each phase runs all clients concurrently. */
+const databaseWorkloads = async (dbs: Attached[], chunks: number, seconds: number, segments: number, operations: number, git_sha: string) => [
+  ...(await archiveStreaming(dbs, chunks, seconds, git_sha)),
+  ...(await transcriptIngest(dbs, segments, git_sha)),
+  ...(await contextReadWrite(dbs, operations, git_sha)),
+];
+
 /** Runs every workload at `smoke` or manifest-derived scale; returns validated records and whether all were correct. */
 export async function runBenchmarks(options: { readonly smoke: boolean; readonly mysqlUrl: string | undefined }, git_sha = gitSha()) {
   const scale = options.smoke ? { frames: 2_000, chunks: 3, seconds: 2, segments: 40, operations: 100 } : { frames: 50_000, chunks: 24, seconds: 30, segments: 2_000, operations: 5_000 };
@@ -252,9 +266,7 @@ export async function runBenchmarks(options: { readonly smoke: boolean; readonly
   else {
     const db = await database(options.mysqlUrl);
     try {
-      records.push(...(await archiveStreaming(db, scale.chunks, scale.seconds, git_sha)));
-      records.push(...(await transcriptIngest(db, scale.segments, git_sha)));
-      records.push(...(await contextReadWrite(db, scale.operations, git_sha)));
+      records.push(...(await databaseWorkloads([db], scale.chunks, scale.seconds, scale.segments, scale.operations, git_sha)));
     } finally {
       await db.drop();
     }
@@ -270,18 +282,18 @@ export async function runBenchmarks(options: { readonly smoke: boolean; readonly
 export type Job = { readonly git_sha: string; readonly started_at: string } & (
   | { readonly workload: 'pcm_ingest'; readonly frames: number; readonly rate: number; readonly concurrency: number; readonly seed: number; readonly samples_per_frame: number }
   | { readonly workload: 'cosine_ranking'; readonly size: number; readonly dimension: number; readonly queries: number; readonly verify: number; readonly top_k: number; readonly seed: number }
-  | { readonly workload: 'database'; readonly database_url: string; readonly ids: FixtureIds; readonly archive_seed: number; readonly chunks: number; readonly chunk_seconds: number; readonly segments: number; readonly operations: number }
+  | { readonly workload: 'database'; readonly clients: ReadonlyArray<{ readonly database_url: string; readonly ids: FixtureIds }>; readonly archive_seed: number; readonly chunks: number; readonly chunk_seconds: number; readonly segments: number; readonly operations: number }
 );
 
 export async function runJob(job: Job): Promise<BenchmarkRecord[]> {
   if (job.workload === 'pcm_ingest') return pcmIngest(job.frames, job.git_sha, job.rate, job.concurrency);
   if (job.workload === 'cosine_ranking') return runCosineBenchmark({ size: job.size, dimension: job.dimension, queries: job.queries, verify: job.verify, topK: job.top_k, seed: job.seed }, job.git_sha);
-  const db = attachDatabase(job.database_url, job.ids);
+  if (job.clients.length === 0) throw new Error('database job needs at least one client');
+  const dbs = job.clients.map(client => attachDatabase(client.database_url, client.ids));
   try {
-    // context_read_write cites the meetings transcript_ingest creates, so the order is fixed.
-    return [...(await archiveStreaming(db, job.chunks, job.chunk_seconds, job.git_sha)), ...(await transcriptIngest(db, job.segments, job.git_sha)), ...(await contextReadWrite(db, job.operations, job.git_sha))];
+    return await databaseWorkloads(dbs, job.chunks, job.chunk_seconds, job.segments, job.operations, job.git_sha);
   } finally {
-    await db.runtime.dispose();
+    await Promise.all(dbs.map(db => db.runtime.dispose()));
   }
 }
 
