@@ -130,6 +130,7 @@ The change does not deploy the application, and the Worker already holds `CEREBR
 The captain approved the Cloudflare-first plan ("This is good") and asked not to overuse the paid OpenAI key.
 Accepted: the research role uses OpenAI `gpt-4.1-mini-2025-04-14` with the Responses API `web_search` tool through the server-only `OPENAI_API_KEY`; no other role can select OpenAI.
 The planner decides whether a request needs web research, so a request that needs no web search makes no paid call.
+Stored research follows the [actions recovery contract](ARCHITECTURE.md#actions-t18-t19-recovery-t20).
 Each workspace may start `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` paid calls per UTC day (default 2), and all workspaces together `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` (default 4), with at most 3 web searches per call; each call is reserved before it is sent, a spent allowance refuses the next call with a truthful result, and every call records its token usage.
 The caps bound the worst case at about 120 calls, about USD 5.50 a month ([operations.md](operations.md#configuration)).
 When a request needs both web research and actions, the first pass proposes the actions with their recipients and other targets from the request and may leave content fields for the research; the planner then fills the actions a second time from the cited research. When research is refused, no action is requested and the result says so.
