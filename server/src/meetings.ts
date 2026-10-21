@@ -283,7 +283,7 @@ const END_FENCE_CLOCK_SLACK_SECONDS = 5;
 const joinSealed = (row: MeetingRow, source: SourceRange) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    if (OPEN_STATES.includes(row.state)) return yield* Effect.asVoid(claimSource(row, source));
+    if (OPEN_STATES.includes(row.state)) return yield* claimSource(row, source);
     const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1`;
     const bump = built !== undefined;
     const revision = row.boundary_revision + Number(bump);
@@ -307,6 +307,7 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
       yield* Effect.forEach(owners, owner => boundaryChanged(row, revision, owner.principal_id), { discard: true });
     }
     yield* scheduleFinalize(row, null);
+    return end;
   });
 
 /**
@@ -346,11 +347,40 @@ const adjacentToClosed = (workspace_id: WorkspaceId, epoch: EpochClock, segment:
         FROM meeting_ranges r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
         WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track} AND r.sample_start > ${source.sample_start}
         ORDER BY r.sample_start LIMIT 1) n
-      WHERE n.state IN ('closing', 'closed') AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}`;
+      WHERE n.state IN ('closing', 'closed') AND n.sample_start * 1000 <= ${source.sample_end * 1000 + engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}
+        AND NOT EXISTS (SELECT 1 FROM capture_epochs e JOIN boundary_events b ON b.meeting_id = n.meeting_id AND b.operation = 'close'
+          WHERE e.workspace_id = ${workspace_id} AND e.id = ${source.epoch_id}
+            AND e.end_fence_sample > ${source.sample_start} AND e.end_fence_from_sample < n.sample_start
+            AND b.decision->'$.evidence' = JSON_ARRAY('captured_speech'))`;
     const closed = next === undefined ? null : yield* selectMeeting(workspace_id, next.meeting_id, true);
     if (closed?._tag !== 'Some') return false;
     yield* joinSealed(closed.value, source);
     yield* sql`UPDATE meetings SET started_at = LEAST(started_at, ${dbTime(sampleMs(epoch, source.sample_start))}), updated_at = UTC_TIMESTAMP(6) WHERE id = ${closed.value.id}`;
+    return true;
+  });
+
+const joinPreviousRecovered = (workspace_id: WorkspaceId, epoch: EpochClock, segment: TranscriptSegment) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const { source } = segment;
+    const [previous] = yield* sql<{ meeting_id: MeetingId }>`SELECT n.meeting_id FROM (
+        SELECT r.meeting_id, r.sample_start, r.sample_end, m.state FROM meeting_ranges r
+        JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+        WHERE r.workspace_id = ${workspace_id} AND r.epoch_id = ${source.epoch_id} AND r.track = ${source.track}
+          AND r.sample_start < ${source.sample_start} ORDER BY r.sample_start DESC LIMIT 1
+      ) n JOIN capture_epochs e ON e.id = ${source.epoch_id} AND e.workspace_id = ${workspace_id}
+      WHERE n.state IN ('closing', 'closed') AND n.sample_end <= ${source.sample_start}
+        AND ${source.sample_start * 1000} <= n.sample_end * 1000 + ${engineeringDefaults.boundaryEvaluationGapMs * epoch.sample_rate}
+        AND (e.end_fence_sample IS NULL OR e.end_fence_sample <= n.sample_start OR e.end_fence_from_sample >= ${source.sample_end})
+        AND EXISTS (SELECT 1 FROM boundary_events b WHERE b.meeting_id = n.meeting_id AND b.operation = 'close'
+          AND b.decision->'$.evidence' = JSON_ARRAY('captured_speech'))
+        AND NOT EXISTS (SELECT 1 FROM boundary_events b WHERE b.meeting_id = n.meeting_id AND b.operation IN ('split', 'merge'))`;
+    if (previous === undefined) return false;
+    const recovered = yield* selectMeeting(workspace_id, previous.meeting_id, true);
+    if (recovered._tag === 'None') return false;
+    const end = yield* joinSealed(recovered.value, source);
+    yield* sql`UPDATE meetings SET ended_at = GREATEST(ended_at, ${dbTime(sampleMs(epoch, end))}), updated_at = UTC_TIMESTAMP(6)
+      WHERE id = ${recovered.value.id}`;
     return true;
   });
 
@@ -365,6 +395,7 @@ const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSeg
     }
     if (decision.decision !== 'start') return open;
     if (open !== null && !earlier) yield* sealMeeting(open.row, { watermark: null, state: 'closing', cue: decision, actor: null });
+    if (earlier && (yield* joinPreviousRecovered(key.workspace_id, epoch, segment))) return open;
     const created = yield* createMeeting(key, epoch, segment, decision);
     if (earlier) {
       yield* sealMeeting(created.row, { watermark: null, state: 'closing', cue: decision, actor: null });

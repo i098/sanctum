@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 import { listenerFeed } from '../src/actions.ts';
 import { evaluateBoundary, LOW_CONFIDENCE } from '../src/boundaries.ts';
 import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges, onCaptureEnded, onFinalSegments, sweepIdleMeetings } from '../src/meetings.ts';
+import { splitMeeting } from '../src/meeting-corrections.ts';
 import { claimed, commitChunk, hear, jobsOf, type Listener, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -170,8 +171,10 @@ describe('automatic meeting lifecycle', () => {
     ),
   );
 
-  for (const separateEpoch of [false, true]) {
-    it.effect(`gives earlier speech separate restricted ownership ${separateEpoch ? 'across epochs' : 'outside the adjacency gap'}`, () =>
+  for (const [separateEpoch, delivery] of [
+    [false, 'batch'], [false, 'forward'], [false, 'reverse'], [false, 'finalized'], [true, 'batch'],
+  ] as const) {
+    it.effect(`keeps adjacent recovered finals together ${separateEpoch ? 'across epochs' : 'outside the adjacency gap'} (${delivery})`, () =>
       withDatabase(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
@@ -180,20 +183,40 @@ describe('automatic meeting lifecycle', () => {
           const later = yield* speak(listener, epoch, 601, 602, 'yes');
           yield* onFinalSegments({ ...listener, segments: [later] });
           const [current] = yield* meetingsOf(listener.workspace_id);
-          const earlier = yield* speak(listener, earlierEpoch, 0, 1, 'the earlier sentence');
-          yield* onFinalSegments({ ...listener, segments: [earlier] });
+          const segments = [
+            yield* speak(listener, earlierEpoch, 0, 1, 'the earlier sentence'),
+            yield* speak(listener, earlierEpoch, 2, 3, 'the next sentence'),
+          ];
+          if (delivery === 'finalized') segments.push(yield* speak(listener, earlierEpoch, 4, 5, 'the final sentence'));
+          if (delivery === 'batch') {
+            yield* onFinalSegments({ ...listener, segments });
+          } else {
+            const first = delivery === 'reverse' ? segments[1]! : segments[0]!;
+            yield* onFinalSegments({ ...listener, segments: [first] });
+            if (delivery === 'finalized') {
+              const [recovered] = yield* meetingsOf(listener.workspace_id);
+              yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: recovered!.id }));
+              yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
+                VALUES (UUID(), ${listener.workspace_id}, ${recovered!.id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+              yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
+            }
+            yield* onFinalSegments({ ...listener, segments: delivery === 'reverse' ? [segments[0]!] : segments.slice(1) });
+          }
           const meetings = yield* meetingsOf(listener.workspace_id);
-          expect(meetings.map(row => row.state)).toEqual(['closing', 'provisional']);
+          expect(meetings.map(row => row.state)).toEqual([delivery === 'finalized' ? 'closed' : 'closing', 'provisional']);
           const recovered = meetings[0]!;
           expect(meetings[1]!.id).toBe(current!.id);
-          expect(yield* rangesOf(recovered.id)).toEqual([{ epoch_id: earlierEpoch, sample_start: 0, sample_end: RATE }]);
+          expect(recovered).toMatchObject({
+            boundary_revision: delivery === 'finalized' ? 2 : 1,
+            ended_at: `2026-09-28 ${separateEpoch ? '15:59' : '16:00'}:0${delivery === 'finalized' ? 5 : 3}.000000`,
+          });
           expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 601 * RATE, sample_end: 602 * RATE }]);
-          expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s JOIN meeting_ranges r
+          expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s LEFT JOIN meeting_ranges r
             ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
               AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
               AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
-            WHERE s.workspace_id = ${listener.workspace_id} ORDER BY s.text`).toEqual([
-              { text: 'the earlier sentence', meeting_id: recovered.id },
+            WHERE s.workspace_id = ${listener.workspace_id} ORDER BY s.sample_start`).toEqual([
+              ...segments.map(segment => ({ text: segment.text, meeting_id: recovered.id })),
               { text: 'yes', meeting_id: current!.id },
             ]);
           for (const meeting of meetings) {
@@ -207,6 +230,47 @@ describe('automatic meeting lifecycle', () => {
           yield* onFinalSegments({ ...listener, segments: [next] });
           expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id: epoch, sample_start: 601 * RATE, sample_end: 604 * RATE }]);
           expect(yield* listenerFeed(device, ListenerId.make(listener.listener_id))).toEqual({ meeting_id: current!.id, actions: [] });
+        }),
+        { migrated: true },
+      ),
+    );
+  }
+
+  for (const boundary of ['closed', 'fence', 'reverse fence', 'gap', 'split'] as const) {
+    it.effect(`does not extend recovered ownership across a ${boundary} boundary`, () =>
+      withDatabase(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const { device, listener, epoch } = yield* setup;
+          const first = boundary === 'reverse fence' ? 2 : 0;
+          const earlier = yield* speak(listener, epoch, first, first + 1, 'earlier speech');
+          if (boundary === 'closed') {
+            yield* onFinalSegments({ ...listener, segments: [earlier] });
+            const [old] = yield* meetingsOf(listener.workspace_id);
+            yield* closeMeeting(device, MeetingId.make(old!.id));
+          }
+          yield* onFinalSegments({ ...listener, segments: [yield* speak(listener, epoch, 1000, 1001, 'yes')] });
+          if (boundary !== 'closed') yield* onFinalSegments({ ...listener, segments: [earlier] });
+          if (boundary === 'fence' || boundary === 'reverse fence') {
+            yield* sql`UPDATE capture_epochs SET end_fence_from_sample = ${RATE}, end_fence_sample = ${2 * RATE} WHERE id = ${epoch}`;
+          }
+          if (boundary === 'split') {
+            const [old] = yield* meetingsOf(listener.workspace_id);
+            yield* splitMeeting(device, MeetingId.make(old!.id), { expected_revision: 1, at: { epoch_id: epoch, sample: RATE / 2 } });
+          }
+          const before = yield* meetingsOf(listener.workspace_id);
+          const ranges = yield* Effect.forEach(before, meeting => rangesOf(meeting.id));
+          const from = boundary === 'gap' ? 302 : boundary === 'reverse fence' ? 0 : 2;
+          yield* onFinalSegments({ ...listener, segments: [yield* speak(listener, epoch, from, from + 1, 'separate speech')] });
+          const after = yield* meetingsOf(listener.workspace_id);
+          expect(after).toHaveLength(before.length + 1);
+          for (const [index, meeting] of before.entries()) {
+            expect(after.find(row => row.id === meeting.id)).toEqual(meeting);
+            expect(yield* rangesOf(meeting.id)).toEqual(ranges[index]);
+          }
+          const separate = after.find(meeting => !before.some(row => row.id === meeting.id))!;
+          expect(separate.state).toBe('closing');
+          expect(yield* rangesOf(separate.id)).toEqual([{ epoch_id: epoch, sample_start: from * RATE, sample_end: (from + 1) * RATE }]);
         }),
         { migrated: true },
       ),
