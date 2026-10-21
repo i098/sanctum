@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, RequestActionInput, type WorkspaceId } from '@sanctum/contracts';
+import { type AccessScope, ActionId, ArtifactId, ContextItemId, JobFailure, type JobId, MeetingId, type PrincipalId, RequestActionInput, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Either, Fiber, Option, Schedule, Schema } from 'effect';
 import { type ActionRow, findByIdempotencyKey, loadAction, requestAction, researchJobActions } from './actions.ts';
 import { authorizeMeeting, requireScope, resolveAccess } from './auth.ts';
@@ -163,22 +163,15 @@ export const executeAction = (job: Job) =>
 
 const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), request: Schema.String.pipe(Schema.minLength(1)) });
 
-/**
- * Requests one planned action for the job; with `researched`, a key conflict means an earlier attempt of the
- * job requested it with other research-written content, so that action is reported.
- */
-const requestPlanned = (access: AccessScope, input: typeof RequestActionInput.Type, researched: boolean, job_id: JobId) =>
-  requestAction(access, input, job_id).pipe(
-    Effect.map(output => ({ action_key: input.action_key, ...output })),
-    Effect.catchAll(error =>
-      Effect.gen(function* () {
-        const earlier = error._tag === 'HashConflict' && researched ? yield* findByIdempotencyKey(access, input.idempotency_key) : Option.none();
-        return Option.isSome(earlier)
-          ? { action_key: input.action_key, action_id: earlier.value.id, state: earlier.value.state, already_requested: true }
-          : { action_key: input.action_key, refused: error._tag };
-      }),
-    ),
-  );
+const requestPlanned = (access: AccessScope, input: typeof RequestActionInput.Type, job_id: JobId) =>
+  Effect.gen(function* () {
+    const existing = yield* findByIdempotencyKey(access, input.idempotency_key);
+    if (Option.isSome(existing)) return { action_key: input.action_key, action_id: existing.value.id, state: existing.value.state, already_requested: true };
+    return yield* requestAction(access, input, job_id).pipe(
+      Effect.map(output => ({ action_key: input.action_key, ...output })),
+      Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
+    );
+  });
 
 type ResearchPass = {
   readonly found: WebResearch | { readonly refused: string } | null;
@@ -214,19 +207,38 @@ const researchOutcome = (plan: Plan, pass: ResearchPass, requested: number) => {
 const researchSummary = (found: ResearchPass['found']) =>
   found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
 
+const PlannedResearch = Schema.Struct({
+  planned_requests: Schema.Array(RequestActionInput),
+  research_result: Schema.Struct({
+    offered: Schema.Array(Schema.String),
+    research: Schema.NullOr(Schema.Union(
+      Schema.Struct({ refused: Schema.String }),
+      Schema.Struct({
+        artifact_id: ArtifactId,
+        context_item_id: ContextItemId,
+        sources: Schema.Array(Schema.Struct({ url: Schema.String, title: Schema.NullOr(Schema.String) })),
+      }),
+    )),
+    dropped: Schema.optional(Schema.String),
+    outcome: Schema.optional(Schema.String),
+  }),
+});
+
 const plannedRequests = (job: Job) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [row] = yield* sql<{ requests: unknown }>`SELECT JSON_EXTRACT(payload, '$.planned_requests') AS requests
-      FROM jobs WHERE workspace_id = ${job.workspace_id} AND id = ${job.id}`;
-    return yield* Schema.decodeUnknown(Schema.NullOr(DbJson(Schema.Array(RequestActionInput))))(row?.requests ?? null);
+    const [row] = yield* sql<{ payload: unknown }>`SELECT payload FROM jobs
+      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND JSON_EXTRACT(payload, '$.planned_requests') IS NOT NULL`;
+    return row ? yield* Schema.decodeUnknown(DbJson(PlannedResearch))(row.payload) : null;
   });
 
 /** Save the whole request list before any action commits; an overlapping attempt keeps the first plan. */
-const savePlannedRequests = (job: Job, requests: ReadonlyArray<typeof RequestActionInput.Type>) =>
+const savePlannedRequests = (job: Job, planned: typeof PlannedResearch.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* sql`UPDATE jobs SET payload = JSON_SET(payload, '$.planned_requests', JSON_EXTRACT(${JSON.stringify(requests)}, '$'))
+    yield* sql`UPDATE jobs SET payload = JSON_SET(payload,
+        '$.planned_requests', JSON_EXTRACT(${JSON.stringify(planned.planned_requests)}, '$'),
+        '$.research_result', JSON_EXTRACT(${JSON.stringify(planned.research_result)}, '$'))
       WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND JSON_EXTRACT(payload, '$.planned_requests') IS NULL`;
     return (yield* plannedRequests(job))!;
   });
@@ -235,13 +247,8 @@ const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }, acces
   Effect.gen(function* () {
     const planned = yield* plannedRequests(job);
     if (planned !== null) {
-      const actions = yield* Effect.forEach(planned, input => Effect.gen(function* () {
-        const existing = yield* findByIdempotencyKey(access, input.idempotency_key);
-        return Option.isSome(existing)
-          ? { action_key: input.action_key, action_id: existing.value.id, state: existing.value.state, already_requested: true }
-          : yield* requestPlanned(access, input, false, job.id);
-      }));
-      return { research: yield* storedResearch(job), actions };
+      const actions = yield* Effect.forEach(planned.planned_requests, input => requestPlanned(access, input, job.id));
+      return { ...planned.research_result, actions };
     }
     const requested = yield* researchJobActions(job.workspace_id, job.id);
     if (requested.length === 0) return null;
@@ -273,12 +280,15 @@ export const runResearch = (job: Job) =>
     const offered = yield* offeredActions(access, meeting_id, request);
     const plan = yield* planWork(access, { meeting_id, request, actions: offered });
     const pass = yield* researchPass(requester, access, { meeting_id, request, offered, plan });
-    const planned = pass.planned.length === 0 ? [] : yield* savePlannedRequests(job, pass.planned.map(input => ({ ...input, meeting_id })));
-    const actions = yield* Effect.forEach(planned, input => requestPlanned(access, input, pass.second !== null, job.id));
-    const outcome = researchOutcome(plan, pass, actions.length);
-    if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
+    const outcome = researchOutcome(plan, pass, pass.planned.length);
     const extra = { ...(plan.rejected ? { dropped: plan.rejected } : {}), ...(outcome ? { outcome } : {}) };
-    return { status: 'succeeded', result: { offered: offered.map(action => action.action_key), research: researchSummary(pass.found), actions, ...extra } } as const;
+    const planned = yield* savePlannedRequests(job, {
+      planned_requests: pass.planned.map(input => ({ ...input, meeting_id })),
+      research_result: { offered: offered.map(action => action.action_key), research: researchSummary(pass.found), ...extra },
+    });
+    if (planned.research_result.outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome: planned.research_result.outcome });
+    const actions = yield* Effect.forEach(planned.planned_requests, input => requestPlanned(access, input, job.id));
+    return { status: 'succeeded', result: { ...planned.research_result, actions } } as const;
   }).pipe(
     Effect.catchTags({
       // A rate-limited model pauses the job until it may resume; any other model failure fails the attempt truthfully.

@@ -6,7 +6,7 @@
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, type MeetingId, RequestActionInput } from '@sanctum/contracts';
-import { ConfigProvider, Effect, Layer, Schema } from 'effect';
+import { ConfigProvider, Effect, Fiber, Layer, Schema } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import * as Actions from '../src/actions.ts';
 import { createActionGrant } from '../src/actions.ts';
@@ -206,6 +206,7 @@ describe('research.run', () => {
         expect(retried).toEqual({
           status: 'succeeded',
           result: {
+            offered: [SEND],
             research: { artifact_id: expect.any(String), context_item_id: expect.any(String), sources: [{ url: 'https://dev.mysql.com/doc/', title: 'MySQL docs' }] },
             actions: [{ action_key: SEND, action_id: id, state: (yield* actionRow(member.workspace_id, id)).state, already_requested: true }],
           },
@@ -356,7 +357,7 @@ describe('research.run', () => {
         ];
         for (const answer of retries) {
           planner.answers = [JSON.stringify(answer)];
-          expect(yield* runResearch(job)).toEqual({ status: 'succeeded', result: { research: null, actions: [{ action_key: SEND, action_id: id, state: 'queued', already_requested: true }] } });
+          expect(yield* runResearch(job)).toEqual({ status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, action_id: id, state: 'queued', already_requested: true }] } });
         }
         expect(planner.requests).toHaveLength(1);
         expect(openai.bodies).toHaveLength(0);
@@ -411,46 +412,93 @@ describe('research.run', () => {
       { migrated: true },
     ));
 
-  it.effect('uses the first saved plan when overlapping attempts propose different recipients', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const { member, meeting_id } = yield* setup;
-        const job = yield* researchJob(member, meeting_id, 'overlap', 'Email the notes');
-        planner.answers = ['a@example.com', 'b@example.com'].map(to => JSON.stringify({
-          web_research: false,
-          actions: [{ action_key: SEND, title: 'Email the notes',
-            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' }] }],
-        }));
-        let release!: () => void;
-        const planned = new Promise<void>(resolve => { release = resolve; });
-        const complete = plannerModel.complete;
-        let attempts = 0;
-        const model = vi.spyOn(plannerModel, 'complete').mockImplementation(async (...args) => {
-          const answer = await complete(...args);
-          if (++attempts === 2) release();
-          await planned;
-          return answer;
-        });
-        const results = yield* Effect.all([runResearch(job), runResearch(job)], { concurrency: 2 })
-          .pipe(Effect.ensuring(Effect.sync(() => model.mockRestore())));
+  for (const retryPlan of ['different recipients', 'empty plan', 'refused research', 'rejected synthesis', 'saved empty plan'] as const) {
+    it.effect(`resumes the saved requests when an overlapping attempt returns ${retryPlan}`, () =>
+      withDatabase(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const { member, meeting_id } = yield* setup;
+          const job = yield* researchJob(member, meeting_id, 'overlap', 'Look up MySQL and email the notes to a@example.com and b@example.com');
+          const researched = retryPlan === 'different recipients' || retryPlan === 'empty plan';
+          const empty = retryPlan === 'saved empty plan';
+          const email = (to: string, body: string | null = null) => ({
+            action_key: SEND, title: 'Email the notes',
+            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' },
+              ...(body === null ? [] : [{ name: 'body', value_json: JSON.stringify(body) }])],
+          });
+          const body = 'MySQL 8.4 is the current LTS release.';
+          planner.answers = [
+            JSON.stringify({ web_research: !researched && !empty, actions: retryPlan === 'empty plan' ? [] : [email('c@example.com')] }),
+            JSON.stringify({ web_research: researched, actions: empty ? [] : [email('a@example.com'), email('b@example.com')] }),
+            ...(researched ? [JSON.stringify({ web_research: true, actions: [email('a@example.com', body), email('b@example.com', body)] })] : []),
+            ...(retryPlan === 'rejected synthesis' ? [JSON.stringify({ web_research: true, actions: [] })] : []),
+          ];
+          openai.replies = researched || retryPlan === 'rejected synthesis' ? [answered(body)] : [];
+          const started = Promise.withResolvers<void>();
+          const resume = Promise.withResolvers<void>();
+          const complete = plannerModel.complete;
+          const model = vi.spyOn(plannerModel, 'complete').mockImplementation(async request => {
+            const pending = planner.requests.length === 0;
+            const answer = await complete(request);
+            if (pending) {
+              started.resolve();
+              await resume.promise;
+            }
+            return answer;
+          });
+          const requestAction = Actions.requestAction;
+          const request = vi.spyOn(Actions, 'requestAction')
+            .mockImplementationOnce(requestAction)
+            .mockImplementationOnce(() => Effect.die('Attempt stopped before the second request'));
+          const result = yield* Effect.gen(function* () {
+            const retry = yield* Effect.fork(runResearch(job).pipe(allowance(retryPlan === 'refused research' ? 0 : 2)));
+            yield* Effect.promise(() => started.promise);
+            const stopped = yield* Effect.exit(runResearch(job));
+            request.mockRestore();
+            expect(stopped._tag).toBe(empty ? 'Success' : 'Failure');
+            const before = yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`;
+            expect(before).toHaveLength(empty ? 0 : 1);
+            resume.resolve();
+            return { completed: yield* Fiber.join(retry), firstId: before[0]?.id };
+          }).pipe(Effect.ensuring(Effect.sync(() => {
+            resume.resolve();
+            request.mockRestore();
+            model.mockRestore();
+          })));
 
-        expect(planner.requests).toHaveLength(2);
-        const rows = yield* sql<{ id: ActionId; args: unknown; idempotency_key: string }>`
-          SELECT id, args, idempotency_key FROM actions WHERE workspace_id = ${member.workspace_id}`;
-        expect(rows).toHaveLength(1);
-        const { planned_requests: saved } = yield* Schema.decodeUnknown(Schema.Struct({ planned_requests: Schema.Array(RequestActionInput) }))(
-          (yield* queuedJob(member.workspace_id, 'research.run', 'overlap')).payload,
-        );
-        expect(rows[0]!.idempotency_key).toBe(saved[0]!.idempotency_key);
-        expect(typeof rows[0]!.args === 'string' ? JSON.parse(rows[0]!.args) : rows[0]!.args).toEqual(saved[0]!.arguments);
-        expect(results).toEqual([
-          { status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, action_id: rows[0]!.id, state: 'queued' }] } },
-          { status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, action_id: rows[0]!.id, state: 'queued' }] } },
-        ]);
-      }).pipe(Effect.provide(services)),
-      { migrated: true },
-    ));
+          expect(result.completed).toEqual({
+            status: 'succeeded',
+            result: {
+              offered: [SEND],
+              research: researched
+                ? { artifact_id: expect.any(String), context_item_id: expect.any(String), sources: [{ url: 'https://dev.mysql.com/doc/', title: 'MySQL docs' }] }
+                : null,
+              ...(empty ? { outcome: 'Nothing to do: no offered action fits the request, and it asked for no web research' } : {}),
+              actions: empty ? [] : [
+                { action_key: SEND, action_id: result.firstId, state: 'queued', already_requested: true },
+                { action_key: SEND, action_id: expect.any(String), state: 'queued' },
+              ],
+            },
+          });
+          const rows = yield* sql<{ id: ActionId; args: unknown; idempotency_key: string }>`
+            SELECT id, args, idempotency_key FROM actions WHERE workspace_id = ${member.workspace_id} ORDER BY created_at, id`;
+          const { planned_requests: saved } = yield* Schema.decodeUnknown(Schema.Struct({ planned_requests: Schema.Array(RequestActionInput) }))(
+            (yield* queuedJob(member.workspace_id, 'research.run', 'overlap')).payload,
+          );
+          expect(rows.map(row => row.idempotency_key)).toEqual(saved.map(input => input.idempotency_key));
+          expect(rows.map(row => typeof row.args === 'string' ? JSON.parse(row.args) : row.args)).toEqual(
+            (empty ? [] : ['a@example.com', 'b@example.com']).map(to => ({ to: [to], subject: 'Notes', ...(researched ? { body } : {}) })),
+          );
+          expect(yield* runResearch(job)).toMatchObject({
+            result: { actions: rows.map(row => ({ action_id: row.id, already_requested: true })) },
+          });
+          expect(planner.requests).toHaveLength(2 + Number(researched) + Number(retryPlan === 'rejected synthesis'));
+          expect(openai.bodies).toHaveLength(Number(researched || retryPlan === 'rejected synthesis'));
+          expect(provider.sent).toEqual([]);
+        }).pipe(Effect.provide(services)),
+        { migrated: true },
+      ));
+  }
 
   it.effect('offers a granted action that the usable accounts of five other apps would crowd out of one ranked search', () =>
     withDatabase(
@@ -478,19 +526,25 @@ describe('research.run', () => {
       Effect.gen(function* () {
         const { member, meeting_id } = yield* setup;
         planner.answers = [JSON.stringify({ web_research: false })];
-        expect(yield* runResearch(yield* researchJob(member, meeting_id, 'nothing', 'Thanks everyone'))).toEqual({
+        const job = yield* researchJob(member, meeting_id, 'nothing', 'Thanks everyone');
+        const nothing = yield* runResearch(job);
+        expect(nothing).toEqual({
           status: 'succeeded',
           result: { offered: [], research: null, actions: [], outcome: 'Nothing to do: no offered action fits the request, and it asked for no web research' },
         });
         expect(planner.requests[0]!.prompt).toContain('Offered actions:\n(none)');
         expect(openai.bodies).toHaveLength(0);
+        expect(yield* runResearch(job)).toEqual(nothing);
 
         // A proposal dropped for a missing recipient is reported with its reason, never as nothing to do.
         planner.answers = [JSON.stringify({ web_research: false, actions: [{ action_key: SEND, title: 'Email the notes', arguments: [{ name: 'subject', value_json: '"Notes"' }] }] })];
-        expect(yield* runResearch(yield* researchJob(member, meeting_id, 'no-recipient', 'Email the rollout notes to Maria'))).toEqual({
+        const droppedJob = yield* researchJob(member, meeting_id, 'no-recipient', 'Email the rollout notes to Maria');
+        const dropped = yield* runResearch(droppedJob);
+        expect(dropped).toEqual({
           status: 'succeeded',
           result: { offered: [SEND], research: null, actions: [], dropped: `${SEND} missing required to` },
         });
+        expect(yield* runResearch(droppedJob)).toEqual(dropped);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));
