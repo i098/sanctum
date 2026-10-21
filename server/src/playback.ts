@@ -78,7 +78,7 @@ const cutRanges = (workspace_id: string, ranges: ReadonlyArray<TimedRange>, rate
   });
 
 /**
- * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>.wav` for a sealed
+ * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>-<sha256>.wav` for a sealed
  * meeting's current boundary revision, then queues speaker refinement over that cut.
  */
 export const assembleRecording = (job: MeetingJob) =>
@@ -100,7 +100,7 @@ export const assembleRecording = (job: MeetingJob) =>
       if (parts.length === 0) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
       const wav = wavFile(rate, parts);
       const sha256 = createHash('sha256').update(wav).digest('hex');
-      const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}.wav`;
+      const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}-${sha256}.wav`;
       if (!(yield* workspaceIsLive(job.workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
       yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
       yield* sql.withTransaction(

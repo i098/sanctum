@@ -153,6 +153,11 @@ Forward extension of recovered ownership excludes explicit closes, split/merge c
 Promotion uses the latest owned end, not the arrival order.
 The regression cases live in `server/tests/ingest.test.ts` and `server/tests/meeting-boundaries.test.ts`.
 
+Recording assembly stores each WAV at `meetings/<workspace>/<meeting>/r<revision>-<sha256>.wav`, with the WAV hash in the key.
+Overlapping attempts cannot overwrite different audio at the same key.
+Before publishing, assembly locks the meeting row and checks the revision and current ranges against the cut.
+A changed revision or range causes a retryable failure; playback and speaker refinement use the published `meeting_recordings.object_key`.
+
 ### context (T16)
 
 Owns `server/src/context.ts`, `server/src/context-events.ts`, `server/src/context-changes.ts`, `server/src/context-jobs.ts`, `server/src/context-schedule.ts`, migrations `007_context` and `023_context_text_joined`, `ContextApi` in contracts context.ts.

@@ -46,24 +46,26 @@ describe('meeting recording playback', () => {
         expect(yield* Effect.flip(issueRecordingAccess(owner, meeting))).toMatchObject({ _tag: 'Unavailable', retryable: true });
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
         const outcome = yield* assemble(listener.workspace_id, meeting);
-        expect(outcome).toMatchObject({ status: 'succeeded', result: { object_key: `meetings/${listener.workspace_id}/${meeting}/r1.wav`, status: 'partial' } });
-        const cut = store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r1.wav`)!;
+        expect(outcome).toMatchObject({ status: 'succeeded', result: { status: 'partial' } });
+        const access = yield* issueRecordingAccess(owner, meeting);
+        const object_key = store.verifySignedUrl(access.url)!;
+        expect(outcome).toMatchObject({ result: { object_key } });
+        const cut = store.objects.get(object_key)!;
         expect(contents(cut.body)).toEqual({ 1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 5: 10 * RATE, 6: 5 * RATE });
         expect(new TextDecoder().decode(cut.body.slice(0, 4))).toBe('RIFF');
         expect(cut.sha256).toBe(createHash('sha256').update(cut.body).digest('hex'));
-        const access = yield* issueRecordingAccess(owner, meeting);
         expect(access).toMatchObject({ meeting_id: meeting, boundary_revision: 1 });
         expect(access.gaps.map(gap => [gap.sample_start / RATE, gap.sample_end / RATE])).toEqual([[30, 40]]);
         // Saved audio in play order: the file's second 30 is source second 40.
         expect(access.pieces.map(piece => [piece.sample_start / RATE, piece.sample_end / RATE])).toEqual([[0, 30], [40, 55]]);
         expect(access.sample_rate).toBe(RATE);
         expect(Date.parse(access.expires_at) - Date.now()).toBeLessThanOrEqual(5 * 60_000);
-        expect(store.verifySignedUrl(access.url)).toBe(`meetings/${listener.workspace_id}/${meeting}/r1.wav`);
+        expect(store.verifySignedUrl(access.url)).toBe(object_key);
         store.now = () => Date.now() + 5 * 60_000 + 1;
         expect(store.verifySignedUrl(access.url)).toBeNull();
         expect((yield* jobsOf(listener.workspace_id)).map(job => job.kind)).toContain('speakers.refine');
         const again = yield* assemble(listener.workspace_id, meeting);
-        expect(again).toMatchObject({ result: { object_key: `meetings/${listener.workspace_id}/${meeting}/r1.wav` } });
+        expect(again).toMatchObject({ result: { object_key } });
         // Finalizing the same revision again keeps its cut's status instead of resetting it to pending.
         const refinalized = yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
         expect(refinalized).toMatchObject({ result: { processing: { recording: 'partial' } } });
@@ -105,10 +107,65 @@ describe('meeting recording playback', () => {
         const access = yield* issueRecordingAccess(device!, meeting);
         expect(access.pieces).toEqual([{ epoch_id: epoch, track: 0, sample_start: 0, sample_end: 46 * RATE }]);
         expect(access.gaps).toEqual([]);
-        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r1.wav`)!.body)).toEqual({
+        expect(contents(store.objects.get(store.verifySignedUrl(access.url)!)!.body)).toEqual({
           1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 4: 10 * RATE, 5: 6 * RATE,
         });
         expect((yield* jobsOf(listener.workspace_id)).map(job => job.kind)).toContain('speakers.refine');
+      }).pipe(Effect.provide(store.layer)),
+      { migrated: true },
+    );
+  });
+
+  it.effect('a stale overlapping assembly cannot overwrite the published recording', () => {
+    const store = memoryObjectStore();
+    return withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [device] = yield* seedWorkspace('Overlapping assembly', ['device']);
+        const listener = yield* seedListener(device!);
+        const epoch = yield* seedEpoch(listener);
+        for (let sequence = 0; sequence < 5; sequence++) yield* commitChunk(listener, epoch, sequence, store);
+        yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
+        const meeting = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting(device!, meeting, { epoch_id: epoch, fence_sample: 50 * RATE });
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        const uploading = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const objectStore = yield* ObjectStore;
+        const stale = yield* assemble(listener.workspace_id, meeting).pipe(
+          Effect.provideService(ObjectStore, {
+            ...objectStore,
+            put: (...args) => Deferred.succeed(uploading, undefined).pipe(
+              Effect.zipRight(Deferred.await(resume)),
+              Effect.zipRight(objectStore.put(...args)),
+            ),
+          }),
+          Effect.either,
+          Effect.fork,
+        );
+        yield* Deferred.await(uploading);
+        yield* hear(listener, epoch, 41, 46, 'and include the revised deadline');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.boundary_revision)).toEqual([1]);
+        expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { status: 'complete', boundary_revision: 1 } });
+        const published = yield* issueRecordingAccess(device!, meeting);
+        const object_key = store.verifySignedUrl(published.url)!;
+        const recording = store.objects.get(object_key)!;
+        yield* Deferred.succeed(resume, undefined);
+        expect(yield* Fiber.join(stale)).toMatchObject({ _tag: 'Left', left: { _tag: 'JobFailure', retryable: true } });
+        expect(store.objects.get(object_key)).toEqual(recording);
+        expect(contents(store.objects.get(object_key)!.body)).toEqual({
+          1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 4: 10 * RATE, 5: 6 * RATE,
+        });
+        expect(yield* sql`SELECT object_key, LOWER(HEX(sha256)) AS sha256 FROM meeting_recordings WHERE meeting_id = ${meeting}`)
+          .toEqual([{ object_key, sha256: recording.sha256 }]);
+        expect(yield* sql`SELECT processing->>'$.recording' AS recording FROM meetings WHERE id = ${meeting}`)
+          .toEqual([{ recording: 'complete' }]);
+        const access = yield* issueRecordingAccess(device!, meeting);
+        expect(store.verifySignedUrl(access.url)).toBe(object_key);
+        expect(access.pieces).toEqual([{ epoch_id: epoch, track: 0, sample_start: 0, sample_end: 46 * RATE }]);
+        expect(access.gaps).toEqual([]);
+        expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { object_key, boundary_revision: 1 } });
       }).pipe(Effect.provide(store.layer)),
       { migrated: true },
     );
@@ -139,7 +196,7 @@ describe('meeting recording playback', () => {
         expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { boundary_revision: 2, status: 'partial' } });
         const access = yield* issueRecordingAccess(device, meeting);
         expect(access.pieces.map(piece => [piece.sample_start / RATE, piece.sample_end / RATE])).toEqual([[0, 30], [40, 59]]);
-        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r2.wav`)!.body)).toEqual({
+        expect(contents(store.objects.get(store.verifySignedUrl(access.url)!)!.body)).toEqual({
           1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 5: 10 * RATE, 6: 9 * RATE,
         });
       }).pipe(Effect.provide(store.layer)),
@@ -155,19 +212,20 @@ describe('meeting recording playback', () => {
         yield* closeMeeting(owner, meeting);
         yield* assemble(listener.workspace_id, meeting);
         const old = yield* issueRecordingAccess(owner, meeting);
+        const oldKey = store.verifySignedUrl(old.url);
         const { later } = yield* splitMeeting(owner, meeting, { expected_revision: 1, at: { epoch_id: epoch, sample: 20 * RATE } });
         expect(yield* Effect.flip(issueRecordingAccess(owner, meeting))).toMatchObject({ _tag: 'Unavailable', message: 'The recording for boundary revision 2 is not assembled yet' });
         yield* assemble(listener.workspace_id, meeting);
         yield* assemble(listener.workspace_id, later.id);
         const earlier = yield* issueRecordingAccess(owner, meeting);
         const laterAccess = yield* issueRecordingAccess(owner, later.id);
-        expect(store.verifySignedUrl(earlier.url)).toBe(`meetings/${listener.workspace_id}/${meeting}/r2.wav`);
-        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r2.wav`)!.body)).toEqual({ 1: 10 * RATE, 2: 10 * RATE });
-        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${later.id}/r1.wav`)!.body)).toEqual({ 3: 10 * RATE, 5: 10 * RATE, 6: 5 * RATE });
+        expect(store.verifySignedUrl(earlier.url)).not.toBe(oldKey);
+        expect(contents(store.objects.get(store.verifySignedUrl(earlier.url)!)!.body)).toEqual({ 1: 10 * RATE, 2: 10 * RATE });
+        expect(contents(store.objects.get(store.verifySignedUrl(laterAccess.url)!)!.body)).toEqual({ 3: 10 * RATE, 5: 10 * RATE, 6: 5 * RATE });
         expect(laterAccess.gaps.map(gap => [gap.sample_start / RATE, gap.sample_end / RATE])).toEqual([[30, 40]]);
         expect(earlier.gaps).toEqual([]);
         // The earlier-issued URL still works until it expires, which is why its lifetime is short.
-        expect(store.verifySignedUrl(old.url)).toBe(`meetings/${listener.workspace_id}/${meeting}/r1.wav`);
+        expect(store.verifySignedUrl(old.url)).toBe(oldKey);
       }).pipe(Effect.provide(store.layer)),
       { migrated: true },
     );
