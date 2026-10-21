@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Internal: the matched TypeScript/Rust benchmark runs concurrent MySQL clients and compares each client's end state ([#216](https://github.com/i098/sanctum/issues/216)).
-
 ### Fixed
 
 - Internal: base images come from the `mirror.gcr.io` mirror, because ECR Public refused anonymous CI pulls ([#194](https://github.com/i098/sanctum/issues/194)).
