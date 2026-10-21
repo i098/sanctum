@@ -171,6 +171,103 @@ describe('meeting recording playback', () => {
     );
   });
 
+  it.effect('keeps the first published cut and its status when a late chunk completes an overlapping assembly', () => {
+    const store = memoryObjectStore();
+    return withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, listener, epoch, meeting } = yield* setup(store);
+        yield* closeMeeting(owner, meeting);
+        const objectStore = yield* ObjectStore;
+        const partialUpload = yield* Deferred.make<void>();
+        const publishPartial = yield* Deferred.make<void>();
+        const partial = yield* assemble(listener.workspace_id, meeting).pipe(
+          Effect.provideService(ObjectStore, {
+            ...objectStore,
+            put: (...args) => Deferred.succeed(partialUpload, undefined).pipe(
+              Effect.zipRight(Deferred.await(publishPartial)),
+              Effect.zipRight(objectStore.put(...args)),
+            ),
+          }),
+          Effect.fork,
+        );
+        yield* Deferred.await(partialUpload);
+        yield* commitChunk(listener, epoch, 3, store);
+        const completeUpload = yield* Deferred.make<void>();
+        const publishComplete = yield* Deferred.make<void>();
+        const complete = yield* assemble(listener.workspace_id, meeting).pipe(
+          Effect.provideService(ObjectStore, {
+            ...objectStore,
+            put: (...args) => Deferred.succeed(completeUpload, undefined).pipe(
+              Effect.zipRight(Deferred.await(publishComplete)),
+              Effect.zipRight(objectStore.put(...args)),
+            ),
+          }),
+          Effect.fork,
+        );
+        yield* Deferred.await(completeUpload);
+        yield* Deferred.succeed(publishPartial, undefined);
+        expect(yield* Fiber.join(partial)).toMatchObject({ result: { status: 'partial', boundary_revision: 1 } });
+        const published = yield* issueRecordingAccess(owner, meeting);
+        const object_key = store.verifySignedUrl(published.url)!;
+        yield* Deferred.succeed(publishComplete, undefined);
+        const result = yield* Fiber.join(complete);
+        expect(result).toEqual(yield* assemble(listener.workspace_id, meeting));
+        expect(result).toMatchObject({ result: { object_key, boundary_revision: 1 } });
+        expect(yield* sql`SELECT object_key FROM meeting_recordings WHERE meeting_id = ${meeting}`).toEqual([{ object_key }]);
+        expect(yield* sql`SELECT processing->>'$.recording' AS recording FROM meetings WHERE id = ${meeting}`).toEqual([{ recording: 'partial' }]);
+        const access = yield* issueRecordingAccess(owner, meeting);
+        expect(store.verifySignedUrl(access.url)).toBe(object_key);
+        expect(access.gaps.map(gap => [gap.sample_start / RATE, gap.sample_end / RATE])).toEqual([[30, 40]]);
+        expect(contents(store.objects.get(object_key)!.body)).toEqual({
+          1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 5: 10 * RATE, 6: 5 * RATE,
+        });
+      }).pipe(Effect.provide(store.layer)),
+      { migrated: true },
+    );
+  });
+
+  it.effect('an overlapping empty cut cannot replace a published recording status', () => {
+    const store = memoryObjectStore();
+    return withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [owner] = yield* seedWorkspace('Empty overlapping cut', ['owner']);
+        const listener = yield* seedListener(owner!);
+        const epoch = yield* seedEpoch(listener);
+        yield* commitChunk(listener, epoch, 0, store);
+        yield* hear(listener, epoch, 0, 20, 'please send the summary to the whole team');
+        const meeting = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        yield* closeMeeting(owner!, meeting);
+        const reading = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const objectStore = yield* ObjectStore;
+        const empty = yield* assemble(listener.workspace_id, meeting).pipe(
+          Effect.provideService(ObjectStore, {
+            ...objectStore,
+            get: key => objectStore.get(key).pipe(
+              Effect.as(new Uint8Array()),
+              Effect.tap(() => Deferred.succeed(reading, undefined).pipe(Effect.zipRight(Deferred.await(resume)))),
+            ),
+          }),
+          Effect.fork,
+        );
+        yield* Deferred.await(reading);
+        yield* commitChunk(listener, epoch, 1, store);
+        expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { status: 'complete' } });
+        const published = yield* issueRecordingAccess(owner!, meeting);
+        const object_key = store.verifySignedUrl(published.url)!;
+        yield* Deferred.succeed(resume, undefined);
+        expect(yield* Fiber.join(empty)).toMatchObject({ result: { object_key, boundary_revision: 1 } });
+        expect(yield* sql`SELECT object_key FROM meeting_recordings WHERE meeting_id = ${meeting}`).toEqual([{ object_key }]);
+        expect(yield* sql`SELECT processing->>'$.recording' AS recording FROM meetings WHERE id = ${meeting}`).toEqual([{ recording: 'complete' }]);
+        expect(contents(store.objects.get(object_key)!.body)).toEqual({ 1: 10 * RATE, 2: 10 * RATE });
+        expect((yield* issueRecordingAccess(owner!, meeting)).gaps).toEqual([]);
+      }).pipe(Effect.provide(store.layer)),
+      { migrated: true },
+    );
+  });
+
   it.effect('a late-final transaction sees a cut published after its first read', () => {
     const store = memoryObjectStore();
     return withDatabase(
