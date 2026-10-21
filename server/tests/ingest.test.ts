@@ -67,6 +67,20 @@ const finals = (access: AccessScope, epoch_id: CaptureEpochId) =>
     segments.map(segment => [segment.source.sample_start, segment.source.sample_end, segment.text, segment.origin]),
   );
 
+const firstSpeechCases = [['yes'], ['yes please'], ['yes please continue'], ['yes', 'please', 'continue', 'we start now'], ['we discuss the release plan', 'yes', 'yes please', 'yes please continue']].map(texts => {
+  const active = texts[0] === 'we discuss the release plan';
+  return {
+    texts,
+    seconds: active ? 62 : 1,
+    state: active ? 'active' : 'provisional',
+    name: `owns every final utterance ${active ? 'inside an active conversation' : `starting with "${texts[0]}"`} (${texts.length} turns)`,
+    turns: texts.map((text, index) => {
+      const start_s = active && index > 0 ? 61 + (index - 1) * 0.2 : index * 0.2;
+      return { text, start_s, end_s: active && index === 0 ? 61 : start_s + 0.1 };
+    }),
+  };
+});
+
 layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
   it.scoped('persists live finals at epoch sample positions and keeps partials provisional', () =>
     Effect.gen(function* () {
@@ -93,6 +107,115 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       expect(socket.messages.filter(message => message._tag === 'transcript')).toEqual([]);
     }),
   );
+
+  for (const { texts, seconds, state, name, turns } of firstSpeechCases) {
+    it.scoped(name, () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { host, tokens, access, speech, listener_id, epoch_id, socket } = yield* setup;
+        tokens.set('reader', { ...access, scopes: ['context:read'] });
+        for (let sequence = 0; sequence < seconds * 10; sequence++) {
+          socket.send(pcmFrame(sequence, sequence * 1_600));
+          yield* socket.take('ack');
+        }
+        const stream = (yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === seconds * RATE))!;
+        const archived = chunk({ listener_id, epoch_id, sequence: 0, sample_start: 0, samples: syntheticPcm({ sampleRate: RATE, seconds, toneHz: 440 }) });
+        expect((yield* uploadChunk(host, 'device', archived)).status).toBe(200);
+        let meeting_id: string | undefined;
+        for (const [index, turn] of turns.entries()) {
+          stream.emit({ ...turn, is_final: true, confidence: 0.9, speaker: '0' });
+          expect((yield* socket.take('transcript')).segment.text).toBe(turn.text);
+          const segments = yield* sql<{ text: string; meeting_id: string | null }>`
+            SELECT s.text, r.meeting_id FROM transcript_segments s LEFT JOIN meeting_ranges r
+              ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+                AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
+                AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
+            WHERE s.workspace_id = ${access.workspace_id} AND s.status = 'final' ORDER BY s.sample_start`;
+          const meetings = yield* api(host, 'reader', 'GET', '/meetings');
+          expect(meetings.status).toBe(200);
+          expect(meetings.body.meetings).toHaveLength(1);
+          const meeting = meetings.body.meetings[0];
+          meeting_id ??= meeting.id;
+          expect(meeting).toMatchObject({ id: meeting_id, state, visibility: 'restricted' });
+          expect(segments).toEqual(texts.slice(0, index + 1).map(text => ({ text, meeting_id })));
+          const transcript = yield* api(host, 'reader', 'GET', `/meetings/${meeting_id}/transcript`);
+          expect(transcript.status).toBe(200);
+          expect(transcript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(texts.slice(0, index + 1));
+        }
+        const grants = yield* sql<{ principal_id: string; access: string }>`
+          SELECT principal_id, access FROM meeting_access WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id}`;
+        expect(grants).toEqual([{ principal_id: access.principal.id, access: 'owner' }]);
+      }),
+    );
+  }
+
+  it.scoped('assigns an adjacent earlier final to the conversation opened by a later short reply', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { host, tokens, access, speech, socket } = yield* setup;
+      tokens.set('reader', { ...access, scopes: ['context:read'] });
+      for (let sequence = 0; sequence < 30; sequence++) {
+        socket.send(pcmFrame(sequence, sequence * 1_600));
+        yield* socket.take('ack');
+      }
+      const stream = (yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === 3 * RATE))!;
+      stream.emit({ start_s: 2, end_s: 3, is_final: true, text: 'yes', confidence: 0.9, speaker: '0' });
+      yield* socket.take('transcript');
+      const [meeting] = yield* meetingsOf(access.workspace_id);
+      stream.emit({ start_s: 0, end_s: 1, is_final: true, text: 'the earlier sentence', confidence: 0.9, speaker: '0' });
+      yield* socket.take('transcript');
+      const transcript = yield* api(host, 'reader', 'GET', `/meetings/${meeting!.id}/transcript`);
+      expect(transcript.status).toBe(200);
+      expect(transcript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(['the earlier sentence', 'yes']);
+      expect(yield* sql`SELECT s.text, r.meeting_id FROM transcript_segments s LEFT JOIN meeting_ranges r
+        ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+          AND r.sample_start <= s.sample_start AND r.sample_end > s.sample_start
+          AND r.boundary_revision = (SELECT m.boundary_revision FROM meetings m WHERE m.id = r.meeting_id)
+        WHERE s.workspace_id = ${access.workspace_id} ORDER BY s.sample_start`).toEqual([
+          { text: 'the earlier sentence', meeting_id: meeting!.id },
+          { text: 'yes', meeting_id: meeting!.id },
+        ]);
+      expect((yield* meetingsOf(access.workspace_id)).map(row => [row.id, row.started_at])).toEqual([[meeting!.id, '2026-09-26 17:00:00.000000']]);
+    }),
+  );
+
+  for (const fenced of [false, true]) {
+    const initialFrames = fenced ? 5 : 20;
+    const earlier = fenced ? { start_s: 1, end_s: 1.5 } : { start_s: 0, end_s: 0.5 };
+    const expectedOld = fenced ? ['previous conversation', 'earlier sentence'] : ['earlier sentence', 'previous conversation'];
+    it.scoped(`keeps late speech with the ${fenced ? 'fenced' : 'closed'} conversation before a new short reply`, () =>
+      Effect.gen(function* () {
+        const { host, tokens, access, speech, epoch_id, socket } = yield* setup;
+        tokens.set('writer', { ...access, scopes: ['context:read', 'context:write'] });
+        for (let sequence = 0; sequence < initialFrames; sequence++) {
+          socket.send(pcmFrame(sequence, sequence * 1_600));
+          yield* socket.take('ack');
+        }
+        const stream = (yield* eventually(Effect.sync(() => speech.streams[0]), stream => stream?.received === initialFrames * 1_600))!;
+        stream.emit({ start_s: fenced ? 0 : 1, end_s: initialFrames / 10, is_final: true, text: 'previous conversation', confidence: 0.9, speaker: '0' });
+        yield* socket.take('transcript');
+        const [old] = yield* meetingsOf(access.workspace_id);
+        const closed = yield* api(host, 'writer', 'POST', `/meetings/${old!.id}/${fenced ? 'end' : 'close'}`, fenced ? { epoch_id, fence_sample: 2 * RATE } : undefined);
+        expect(closed.status).toBe(200);
+        for (let sequence = initialFrames; sequence < 40; sequence++) {
+          socket.send(pcmFrame(sequence, sequence * 1_600));
+          yield* socket.take('ack');
+        }
+        stream.emit({ start_s: 3, end_s: 4, is_final: true, text: 'yes', confidence: 0.9, speaker: '0' });
+        yield* socket.take('transcript');
+        const [, current] = yield* meetingsOf(access.workspace_id);
+        expect(current).toBeDefined();
+        stream.emit({ ...earlier, is_final: true, text: 'earlier sentence', confidence: 0.9, speaker: '0' });
+        yield* socket.take('transcript');
+        expect((yield* meetingsOf(access.workspace_id)).map(row => row.state)).toEqual(['closing', 'provisional']);
+        expect(yield* rangesOf(current!.id)).toEqual([{ epoch_id, sample_start: 3 * RATE, sample_end: 4 * RATE }]);
+        const oldTranscript = yield* api(host, 'writer', 'GET', `/meetings/${old!.id}/transcript`);
+        const currentTranscript = yield* api(host, 'writer', 'GET', `/meetings/${current!.id}/transcript`);
+        expect(oldTranscript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(expectedOld);
+        expect(currentTranscript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(['yes']);
+      }),
+    );
+  }
 
   it.scoped('End meeting before the stop arrives: finals the stop flushes join the closed meeting, never a new one', () =>
     Effect.gen(function* () {
