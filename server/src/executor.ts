@@ -166,9 +166,8 @@ const ResearchPayload = Schema.Struct({ meeting_id: Schema.NullOr(MeetingId), re
 const requestPlanned = (access: AccessScope, input: typeof RequestActionInput.Type, job_id: JobId) =>
   Effect.gen(function* () {
     const existing = yield* findByIdempotencyKey(access, input.idempotency_key);
-    if (Option.isSome(existing)) return { action_key: input.action_key, action_id: existing.value.id, state: existing.value.state, already_requested: true };
     return yield* requestAction(access, input, job_id).pipe(
-      Effect.map(output => ({ action_key: input.action_key, ...output })),
+      Effect.map(output => ({ action_key: input.action_key, ...output, ...(Option.isSome(existing) ? { already_requested: true } : {}) })),
       Effect.catchAll(error => Effect.succeed({ action_key: input.action_key, refused: error._tag })),
     );
   });

@@ -338,6 +338,45 @@ describe('research.run', () => {
       { migrated: true },
     ));
 
+  it.effect('refuses an existing key with a different account on both a new run and its saved retry', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { owner, member, account, meeting_id } = yield* setup;
+        const request = 'Email the rollout notes to a@example.com';
+        const plan = JSON.stringify({
+          web_research: false,
+          actions: [{ action_key: SEND, title: 'Email the rollout notes', arguments: [{ name: 'to', value_json: '["a@example.com"]' }, { name: 'subject', value_json: '"Rollout notes"' }] }],
+        });
+        planner.answers = [plan, plan];
+        const first = yield* researchJob(member, meeting_id, 'first-account', request);
+        expect(yield* runResearch(first)).toMatchObject({ result: { actions: [{ action_key: SEND, state: 'queued' }] } });
+        const before = yield* sql<{ id: ActionId; account_id: string; idempotency_key: string; configuration_ref: string }>`
+          SELECT id, account_id, idempotency_key, configuration_ref FROM actions WHERE workspace_id = ${member.workspace_id}`;
+        expect(before).toEqual([expect.objectContaining({ account_id: account })]);
+
+        yield* sql`UPDATE integration_accounts SET status = 'disconnected' WHERE workspace_id = ${member.workspace_id} AND id = ${account}`;
+        const replacement = yield* seedAccount(owner);
+        yield* createActionGrant(owner, { grantee: member.principal.id, action_key: SEND, account_id: replacement, meeting_id: null, restrictions: {}, expires_at: null });
+        const second = yield* researchJob(member, meeting_id, 'second-account', request);
+        const refused = { status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, refused: 'HashConflict' }] } };
+        expect(yield* runResearch(second)).toEqual(refused);
+        const saved = yield* queuedJob(member.workspace_id, 'research.run', 'second-account');
+        const { planned_requests: planned } = yield* Schema.decodeUnknown(Schema.Struct({ planned_requests: Schema.Array(RequestActionInput) }))(saved.payload);
+        expect(planned[0]!.idempotency_key).toBe(before[0]!.idempotency_key);
+        expect(planned[0]!.configuration_ref).not.toBe(before[0]!.configuration_ref);
+        expect(yield* runResearch(saved)).toEqual(refused);
+        expect(yield* runResearch(first)).toMatchObject({
+          result: { actions: [{ action_id: before[0]!.id, state: 'queued', already_requested: true }] },
+        });
+        expect(yield* sql`SELECT id, account_id, idempotency_key, configuration_ref FROM actions WHERE workspace_id = ${member.workspace_id}`).toEqual(before);
+        expect(planner.requests).toHaveLength(2);
+        expect(openai.bodies).toEqual([]);
+        expect(provider.sent).toEqual([]);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
   it.effect('reports what an earlier attempt requested, whatever the planner answers on the retry', () =>
     withDatabase(
       Effect.gen(function* () {

@@ -191,7 +191,8 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
   Before requesting the first action, it saves every planned request, including its idempotency key, in `jobs.payload.planned_requests`.
   It saves the offered actions, research references, and reasons for no actions in `jobs.payload.research_result` in the same update, including empty plans.
   Retries and overlapping attempts use the first saved plan and its result metadata, request each missing action, and report every planned action.
-  It reports existing actions as `already_requested` and does not submit them again.
+  The shared `requestAction` gateway checks the full request identity before reporting an existing action as `already_requested`, without submitting it again.
+  A reused key with a different request returns `HashConflict`, not the earlier action.
   A retried job with stored research but no requested actions uses that research without another paid call, even when its new plan declines web research.
   When research is available and actions are planned, `planWork` runs again over only those actions, with cited research in a delimited untrusted block.
   Research may fill only content fields (subject, body, notes and the like).
