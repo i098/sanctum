@@ -403,14 +403,24 @@ mod tests {
     #[test]
     fn clients_share_one_bounded_cache_with_scoped_keys() {
         let cache = Mutex::new(SnapshotCache::default());
-        let accesses = ["w1", "w2"].map(|workspace| Access { workspace: workspace.into(), principal: "p".into(), scopes: &["context:read"] });
-        assert_ne!(scope_key(&accesses[0], json!(["context", "m", 1, 1])), scope_key(&accesses[1], json!(["context", "m", 1, 1])));
+        let accesses = ["w1", "w2"].map(|workspace| Access {
+            workspace: workspace.into(),
+            principal: "p".into(),
+            scopes: &["context:read"],
+        });
+        assert_ne!(
+            scope_key(&accesses[0], json!(["context", "m", 1, 1])),
+            scope_key(&accesses[1], json!(["context", "m", 1, 1]))
+        );
         std::thread::scope(|scope| {
             for access in &accesses {
                 let cache = &cache;
                 scope.spawn(move || {
                     for revision in 0..400 {
-                        let items = Arc::new(Items { items: Vec::new(), truncated: false });
+                        let items = Arc::new(Items {
+                            items: Vec::new(),
+                            truncated: false,
+                        });
                         cache.lock().unwrap().put(scope_key(access, json!(["context", "m", revision, 1])), items);
                     }
                 });
