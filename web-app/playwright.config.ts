@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Workers re-evaluate this file with their own pid, so pin the port in the env they inherit.
-process.env['WEB_E2E_PORT'] ??= String(3200 + (process.pid % 800));
+process.env['WEB_E2E_PORT'] ??= String(4000 + (process.pid % 800));
 const port = Number(process.env['WEB_E2E_PORT']);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Invalid WEB_E2E_PORT: ${port}`);
 const baseURL = `http://localhost:${port}`;
