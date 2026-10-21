@@ -186,11 +186,12 @@ type ResearchPass = {
   readonly planned: Plan['actions'];
 };
 
-/** Web research when the plan asks for it, then the research pass over the actions planned with it; a spent allowance is a refusal. */
+/** Reuse stored research or fetch it when requested, then plan actions from it; a spent allowance is a refusal. */
 const researchPass = (job: Job & { readonly requested_by: PrincipalId }, access: AccessScope, input: { meeting_id: MeetingId; request: string; offered: PlanInput['actions']; plan: Plan }) =>
   Effect.gen(function* () {
     const { meeting_id, request, offered, plan } = input;
-    if (!plan.web_research) return { found: null, second: null, planned: plan.actions };
+    const stored = yield* storedResearch(job);
+    if (!plan.web_research && stored === null) return { found: null, second: null, planned: plan.actions };
     const found = yield* webResearch(job, meeting_id, request).pipe(Effect.catchTag('AllowanceSpent', error => Effect.succeed({ refused: error.message })));
     if ('refused' in found || plan.actions.length === 0) return { found, second: null, planned: [] };
     const second = yield* planWork(access, { meeting_id, request, actions: offered, research: { text: found.text, sources: found.sources, planned: plan.actions, job_id: job.id } });

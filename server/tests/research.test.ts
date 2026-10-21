@@ -42,12 +42,13 @@ const pipedream = fixturePipedream([
 ]);
 
 /** Scripted planner answers, in order; every planner request is kept. */
-const planner = { answers: [] as string[], requests: [] as ProviderRequest[] };
+const planner = { answers: [] as Array<string | ProviderError>, requests: [] as ProviderRequest[] };
 const plannerModel: ModelProvider = {
   complete: async request => {
     planner.requests.push(request);
     const answer = planner.answers.shift();
     if (answer === undefined) throw new ProviderError('no scripted planner answer left', false);
+    if (answer instanceof ProviderError) throw answer;
     return answer;
   },
 };
@@ -225,6 +226,49 @@ describe('research.run', () => {
         expect(planner.requests).toHaveLength(3);
         expect(openai.bodies).toHaveLength(1);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.live('reuses stored research after the research planner pauses even when the resumed plan declines web research', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { member, meeting_id } = yield* setup;
+        const job = yield* researchJob(member, meeting_id, 'resume-research', LTS_REQUEST);
+        const fact = 'MySQL 8.4 is the current LTS release.';
+        const cited = `${fact} https://dev.mysql.com/doc/`;
+        planner.answers = [
+          ltsPlan([SEND, ['a@example.com'], null]),
+          ...Array.from({ length: engineeringDefaults.modelRequest.maxAttempts }, () => new ProviderError('HTTP 429: rate limited', true, 7_000)),
+        ];
+        openai.replies = [answered(fact)];
+
+        expect(yield* runResearch(job)).toEqual({ status: 'paused', resume_after_ms: 7_000, reason: expect.stringContaining('HTTP 429') });
+        const [artifact] = yield* sql<{ id: string }>`SELECT id FROM artifacts WHERE workspace_id = ${member.workspace_id} AND kind = 'research'`;
+        const [item] = yield* sql<{ id: string }>`SELECT id FROM context_items WHERE workspace_id = ${member.workspace_id} AND kind = 'research_observation'`;
+        expect(artifact).toBeDefined();
+        expect(item).toBeDefined();
+        expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toEqual([]);
+
+        planner.answers = [
+          JSON.stringify({ ...JSON.parse(ltsPlan([SEND, ['a@example.com'], 'Unverified planner answer.'])), web_research: false }),
+          ltsPlan([SEND, ['a@example.com'], cited]),
+        ];
+        expect(yield* runResearch(job)).toMatchObject({
+          status: 'succeeded',
+          result: {
+            research: { artifact_id: artifact!.id, context_item_id: item!.id, sources: [{ url: 'https://dev.mysql.com/doc/', title: 'MySQL docs' }] },
+            actions: [{ action_key: SEND, state: 'queued' }],
+          },
+        });
+        const [action] = yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`;
+        yield* Effect.flatMap(queuedJob(member.workspace_id, 'action.execute', action!.id), executeAction);
+        expect(provider.sent).toEqual([expect.objectContaining({ action_key: SEND, arguments: expect.objectContaining({ to: ['a@example.com'], body: cited }) })]);
+        expect(planner.requests.at(-1)!.prompt).toContain(fact);
+        expect(planner.requests.at(-1)!.prompt).toContain('https://dev.mysql.com/doc/');
+        expect(openai.bodies).toHaveLength(1);
+        expect(yield* sql<{ job_id: string }>`SELECT job_id FROM paid_model_calls WHERE workspace_id = ${member.workspace_id}`).toEqual([{ job_id: job.id }]);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));
