@@ -3,9 +3,10 @@
  * that turn mysql2 row values into wire-ready values. Domain code decodes rows with
  * `SqlSchema` from `@effect/sql` using these column schemas; nothing else touches raw rows.
  */
+import * as Reactivity from '@effect/experimental/Reactivity';
 import { MysqlClient } from '@effect/sql-mysql2';
-import { SqlClient, type SqlError } from '@effect/sql';
-import { Effect, Layer, ParseResult, type Redacted, Schema } from 'effect';
+import { SqlClient, type SqlConnection, SqlError } from '@effect/sql';
+import { Context, Effect, Exit, Fiber, Layer, ParseResult, type Redacted, Schema, Scope, Stream } from 'effect';
 import { Sha256Hex, UtcTimestamp, Unavailable, type WorkspaceId } from '@sanctum/contracts';
 
 /** Connection settings; config.ts reads them from the environment. */
@@ -26,7 +27,7 @@ export interface MysqlOptions {
  * rounded Number), connection waits are bounded by `queueLimit`; without `caCert` the
  * connection is unencrypted (local and test servers).
  */
-const mysqlLayer = (mysql: MysqlOptions) =>
+const pooledClient = (mysql: MysqlOptions) =>
   MysqlClient.layer({
     host: mysql.host,
     port: mysql.port,
@@ -62,8 +63,69 @@ export const verifyUtcSession = Effect.gen(function*() {
   }
 });
 
+/**
+ * The pool cannot drop a waiter: mysql2 keeps the queued callback of a cancelled request, and
+ * @effect/sql-mysql2 then still dispatches that request's statement once a connection frees.
+ * Waiting therefore happens here, in a FIFO semaphore whose waiters leave when interrupted;
+ * a statement or transaction asks the pool for a connection only while holding one of its
+ * `maxConnections` permits, so the pool's own queue never forms. A statement already dispatched
+ * is not cancelled: MySQL runs it to completion and keeps its permit and connection until then.
+ * As in mysql2, more than `queueLimit` waiters are refused (0 is unbounded).
+ */
+const gatedClient = (mysql: MysqlOptions) =>
+  Layer.scopedContext(
+    Effect.gen(function* () {
+      const pooled = yield* MysqlClient.MysqlClient;
+      const permits = yield* Effect.makeSemaphore(mysql.maxConnections);
+      let busy = 0;
+      let waiting = 0;
+      const giveBack = Effect.suspend(() => {
+        busy--;
+        return permits.release(1);
+      });
+      // Waiting is interruptible only where the caller is: a cleanup write of an interrupted fiber still waits its turn.
+      const reserve = Effect.uninterruptibleMask(restore =>
+        Effect.suspend(() => {
+          if (busy >= mysql.maxConnections && mysql.queueLimit > 0 && waiting >= mysql.queueLimit) return Effect.fail(new SqlError.SqlError({ cause: new Error('Queue limit reached.'), message: 'Failed to acquire connection' }));
+          waiting++;
+          return restore(permits.take(1)).pipe(Effect.onExit(exit => Effect.sync(() => { waiting--; if (Exit.isSuccess(exit)) busy++; })));
+        }).pipe(
+          // A failed acquisition leaves no finalizer behind and its scope may never close, so the permit goes back here.
+          Effect.zipRight(Effect.onError(pooled.reserve, () => giveBack)),
+          Effect.tap(() => Effect.addFinalizer(() => giveBack)),
+        ),
+      );
+      // An interrupted statement is not aborted: MySQL still runs it on its connection, which must not be handed out before it
+      // answers. A daemon therefore owns the permit and connection until then, while the caller may leave at once.
+      const held = <A>(use: (connection: SqlConnection.Connection) => Effect.Effect<A, SqlError.SqlError>) =>
+        Effect.uninterruptibleMask(restore =>
+          Effect.flatMap(Scope.make(), scope =>
+            restore(Scope.extend(reserve, scope)).pipe(
+              Effect.flatMap(connection => Effect.forkDaemon(Effect.onExit(use(connection), exit => Scope.close(scope, exit)))),
+              Effect.flatMap(statement => restore(Fiber.join(statement))),
+            ),
+          ),
+        );
+      const statements: SqlConnection.Connection = {
+        execute: (sql, params, transform) => held(c => c.execute(sql, params, transform)),
+        executeRaw: (sql, params) => held(c => c.executeRaw(sql, params)),
+        executeValues: (sql, params) => held(c => c.executeValues(sql, params)),
+        executeUnprepared: (sql, params, transform) => held(c => c.executeUnprepared(sql, params, transform)),
+        executeStream: (sql, params, transform) => Stream.unwrapScoped(Effect.map(reserve, c => c.executeStream(sql, params, transform))),
+      };
+      const client = yield* SqlClient.make({
+        acquirer: Effect.succeed(statements),
+        transactionAcquirer: reserve,
+        compiler: MysqlClient.makeCompiler(),
+        spanAttributes: [['db.system.name', 'mysql']],
+      });
+      return Context.make(SqlClient.SqlClient, client);
+    }),
+  ).pipe(Layer.provide(Reactivity.layer), Layer.provide(pooledClient(mysql)));
+
 /** Pool plus the UTC precondition; API and worker each build their own process-scoped layer. */
-export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(mysqlLayer(mysql)));
+export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(gatedClient(mysql)));
+
 
 const MYSQL_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
 

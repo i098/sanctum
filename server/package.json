@@ -19,6 +19,7 @@
     "@anthropic-ai/sdk": "0.129.0",
     "@better-auth/cimd": "1.7.7",
     "@better-auth/oauth-provider": "1.7.7",
+    "@effect/experimental": "0.61.1",
     "@effect/platform": "0.97.2",
     "@effect/platform-node": "0.108.2",
     "@effect/sql": "0.52.1",
