@@ -384,15 +384,15 @@ const joinPreviousRecovered = (workspace_id: WorkspaceId, epoch: EpochClock, seg
     return true;
   });
 
-const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
+const evaluatePlacement = (open: OpenMeeting | null, epoch: EpochClock, segment: TranscriptSegment) => {
+  const gap = open === null ? null : gapMs(open, epoch, segment.source.sample_start);
+  const earlier = gap !== null && gap < 0;
+  const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: earlier ? [] : open?.tail ?? [], gap_ms: earlier ? null : gap });
+  return { earlier, decision };
+};
+
+const startUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null, decision: BoundaryDecision, earlier: boolean) =>
   Effect.gen(function* () {
-    const gap = open === null ? null : gapMs(open, epoch, segment.source.sample_start);
-    const earlier = gap !== null && gap < 0;
-    const decision = evaluateBoundary({ source: segment.source, incoming: utteranceOf(segment), tail: earlier ? [] : open?.tail ?? [], gap_ms: earlier ? null : gap });
-    if (open !== null && (earlier || decision.decision === 'continue')) {
-      const continued = yield* continueMeeting(open, epoch, segment, decision);
-      if (continued !== null) return continued;
-    }
     if (decision.decision !== 'start') return open;
     if (open !== null && !earlier) yield* sealMeeting(open.row, { watermark: null, state: 'closing', cue: decision, actor: null });
     if (earlier && (yield* joinPreviousRecovered(key.workspace_id, epoch, segment))) return open;
@@ -402,6 +402,16 @@ const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSeg
       return open;
     }
     return yield* promoteIfEstablished({ ...created, tail: [utteranceOf(segment)] }, decision, sampleMs(epoch, segment.source.sample_end));
+  });
+
+const placeUnowned = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
+  Effect.gen(function* () {
+    const { earlier, decision } = evaluatePlacement(open, epoch, segment);
+    if (open !== null && (earlier || decision.decision === 'continue')) {
+      const continued = yield* continueMeeting(open, epoch, segment, decision);
+      if (continued !== null) return continued;
+    }
+    return yield* startUnowned(key, epoch, segment, open, decision, earlier);
   });
 
 const placeSegment = (key: CaptureKey, epoch: EpochClock, segment: TranscriptSegment, open: OpenMeeting | null) =>
