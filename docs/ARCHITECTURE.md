@@ -185,10 +185,14 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
   A retried job that finds actions with its ID does not plan again; it reports them as `already_requested` with the research it stored.
   When the plan has both, `planWork` runs again over only the planned actions, with the cited research in a delimited untrusted block; research may fill only content fields (subject, body, notes and the like), and a pass that changes any other argument, adds an action or drops one is rejected, so no action is requested. A refused research requests no action either; both are reported as the `outcome` of a succeeded job.
   Web research reserves one of the workspace's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` and the install's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` paid calls in `paid_model_calls` before sending, records the provider's token usage (also for a billed call that ends incomplete), stores a `research` artifact once per job, and adds an `external` `research_observation` citing it; a spent allowance is a `refused` result, a rate limit pauses the job, a dropped proposal is reported in `dropped` with its reason, and nothing to do is a reported `outcome`.
-- Pending live finals are deduplicated by ID and ordered before source-gap boundaries split requests.
+- Pending live finals are deduplicated by ID and ordered by source samples before source-gap boundaries split requests.
+  A gap of at least `engineeringDefaults.speech.endOfTurnMs` separates turns.
+  Coverage completes each turn once it extends that far past its end, even while later speech remains pending.
   A newer lane's coverage waits until older lanes finish flushing.
-  During a reply, consumed final IDs stay ignored; unseen earlier finals can interrupt and start a request.
-  The existing idle wait still bounds collection; finals that arrive after a request completes are not merged into it.
+  Without sufficient coverage, `engineeringDefaults.speech.turnWaitMs` without new finals completes pending turns.
+  Later finals never merge into a completed request.
+  Seen final IDs remain ignored for the socket's lifetime; unseen earlier speech can interrupt a reply and start a request.
+  Regression cases: `server/tests/asr-lane-order.test.ts` and `server/tests/silence.test.ts`.
 
 ### interfaces (T22, T23)
 
