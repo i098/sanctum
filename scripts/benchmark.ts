@@ -182,7 +182,7 @@ async function archiveStreaming(dbs: Attached[], chunks: number, seconds: number
     const manifest = decodeManifest({ chunk_id, listener_id: db.listener, epoch_id: db.epoch, track: 0, sequence: i, sample_start: i * samples, sample_count: samples, sample_rate: 48_000, captured_at: '2026-09-29T09:00:00Z', byte_length: body.byteLength, sha256: bodySha });
     if (await failures(db.runtime, putChunk(db.device, db.listener, chunk_id, manifest, body))) errors[client]!++;
   }, 0, dbs.length);
-  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: dbs.length, errors: sum(errors), checked: chunks * dbs.length, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against MySQL', client_errors: errors } })];
+  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: dbs.length, errors: sum(errors), checked: chunks * dbs.length, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against MySQL' } })];
 }
 
 /** `transcript-segments-v1`: 5-second final segments on each client's epoch through `publishFinalWindow`. */
@@ -201,7 +201,7 @@ async function transcriptIngest(dbs: Attached[], segments: number, git_sha: stri
   }, 0, dbs.length);
   return [toRecord({
     workload_id: 'transcript_ingest', phase: 'steady', sample: run, fixture_sha256: sha(new TextEncoder().encode(Array.from({ length: segments }, (_, i) => text(i)).join('\n'))), git_sha, started_at,
-    concurrency: dbs.length, errors: sum(errors), checked: segments * dbs.length, dropped_samples: 0, parameters: { segments, segment_seconds: 5, segment_text_bytes: 240, scope: 'publishFinalWindow including meeting hooks', client_errors: errors }
+    concurrency: dbs.length, errors: sum(errors), checked: segments * dbs.length, dropped_samples: 0, parameters: { segments, segment_seconds: 5, segment_text_bytes: 240, scope: 'publishFinalWindow including meeting hooks' }
   })];
 }
 
@@ -226,7 +226,7 @@ async function contextReadWrite(dbs: Attached[], operations: number, git_sha: st
   }, 0, dbs.length);
   return [toRecord({
     workload_id: 'context_read_write', phase: 'steady', sample: run, fixture_sha256: fixture[0]!, git_sha, started_at,
-    concurrency: dbs.length, errors: sum(errors), checked: operations * dbs.length, dropped_samples: 0, parameters: { operations, meetings: new Set(cited[0]!.map(row => row.meeting_id)).size, read_write_ratio: 9, client_errors: errors }
+    concurrency: dbs.length, errors: sum(errors), checked: operations * dbs.length, dropped_samples: 0, parameters: { operations, meetings: new Set(cited[0]!.map(row => row.meeting_id)).size, read_write_ratio: 9 }
   })];
 }
 

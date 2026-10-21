@@ -72,7 +72,6 @@ test('database job aggregates one and two disposable-database clients', { skip: 
       assert.equal(record.offered_load.concurrency, 2);
       assert.equal(record.repetitions, per[i]! * 2);
       assert.equal(record.correctness.errors, 0);
-      assert.deepEqual(record.parameters['client_errors'], [0, 0]);
       assert.equal(record.fixture_sha256, one[i]!.fixture_sha256);
     });
     one.forEach((record, i) => {
