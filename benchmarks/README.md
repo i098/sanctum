@@ -132,14 +132,14 @@ Also unrun: MySQL workload saturation (sweeping load on the shared test server w
 
 ## Current matched evidence
 
-The current matched evidence is two small `--smoke` runs of `scripts/benchmark-compare.ts` at commit `0363b21`, with `--clients 1` and `--clients 2`, against a shared disposable MySQL server.
-Each run has 22 records; the outputs and records are kept outside this repository (`--clients 1`: `smoke-1.out` SHA-256 `27d2c8b8a27bc94a74a7de1ba7fc51399cb967761c5edd8ad530e1ab7e172302`, `smoke-1.jsonl` SHA-256 `97b4e43f091585ca24d6c2cf1e1703e56682dc433e6adfbfd6ce0892b327fa7e`; `--clients 2`: `smoke-2.out` SHA-256 `99b9e451badbd00aaa1e836c9692ac498839d4d7f280cd5216fed98c73ad73a9`, `smoke-2.jsonl` SHA-256 `2849d01331e06e064fd70dc01e7c00657e0afa79cb6d44865864c4b997edf918`).
+The current matched evidence is two small `--smoke` runs of `scripts/benchmark-compare.ts` at commit `80c1f26`, with `--clients 1` and `--clients 2`, against a shared disposable MySQL server.
+Each run has 22 records; the outputs and records are kept outside this repository (`--clients 1`: `smoke-1.out` SHA-256 `0e7dd51707cc83e7c502509bba119c55202054c4e7f2a977b727ac69ae8e1521`, `smoke-1.jsonl` SHA-256 `efc0e42076e07b1485e6a33c1ef4e3fd2126405bcb364d0c74dfe63211a7aef6`; `--clients 2`: `smoke-2.out` SHA-256 `9294e5e8922284e4e7a4dde10668e3a6104ff6632bdc1e5f27dbc76bf50c1e82`, `smoke-2.jsonl` SHA-256 `e683acc9525d631c92b49403bc40bed64cc75d22aca34fd42cf4ccbc347826fc`).
 No database URL or credential is published.
 
 - Each MySQL record pooled every client: concurrency 1 gave 3, 40 and 100 operations, and concurrency 2 gave 6, 80 and 200, with no failed operation.
 - Every client pair had equal TypeScript and Rust end-state fingerprints (SHA-256 `02e906d057e9dba61a48deedcda706a5c9417c86fd6910d91cef6c26544a1632` for each client). This holds for these runs only; it is neither parity nor general equivalence.
-- Source SHA-256: TypeScript `43292dee7a4ecbee6f8134350f81f088d575f3c666add1ba1992b9ac868aebd0`, Rust `f98abe2732194e7e0057f065da67a2252ab3e165ab2e179b38743bab218fa889`.
+- Source SHA-256: TypeScript `ddbdea57690871d6783c52d5075b55124dcd1ec038128fc924e7d4a4c9c8a2d3`, Rust `3c169933c5efdb2a5372b502cca21527de9ea4c5a40743b7527bafb7ee7611dc`.
 - Fixture SHA-256, identical for both implementations and both client counts: `pcm_ingest` `63faf10dc2fc8929cb35adf244481f4a428da9c57c9620ce23e30de5bd3482c0`, `cosine_ranking` `9b1ccc94a072dbe7a63aed149d63d2831fdbda7e31b0b0b6305b22bdf3a376e8`, `archive_streaming` `f066f329cb45588f16c88da009f0368acb2cbb62d2b3405d589ad7f2d27b8529`, `transcript_ingest` `0205a8f9363d5f1878704cbd6f233b485d426610f0acc14811dfcea35f8962b5`, `context_read_write` `5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9`.
-- Host: uncontrolled shared VPS (Xeon Platinum 8160, 96 cores, 247 GiB RAM, load average 43 to 46 at start); Node.js v26.10.0, rustc 1.99.0. All records are `verified: false`.
+- Host: uncontrolled shared VPS (Xeon Platinum 8160, 96 cores, 247 GiB RAM, load average 25 to 26 at start); Node.js v26.10.0, rustc 1.99.0. All records are `verified: false`.
 
 The full-scale controlled-host comparison is unrun: the T26 and T01 parity gates stay unchecked, the records stay `verified: false`, and the host is unverified and uncontrolled.
