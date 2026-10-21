@@ -69,8 +69,8 @@ Both result files come from uncontrolled hosts: they are not reference-hardware 
 
 [results/typescript-52866cd-local.jsonl](results/typescript-52866cd-local.jsonl) holds one full-scale TypeScript-only run at commit `52866cd` (SHA-256 `a3c9a570f5cc641f09d23aeebaf6108c23f6efeccf3be91df461352ba54111e1`).
 
-[results/rust-vs-typescript-c24a695-uncontrolled.jsonl](results/rust-vs-typescript-c24a695-uncontrolled.jsonl) holds one matched run of both implementations at commit `c24a695` (file SHA-256 `01add9d9e34fa688ded47ad95f471b71208a25aa8d0e6c70b75356cab632b782`): 38 records, zero failed operations.
-Commits after `c24a695` change only documentation.
+[results/rust-vs-typescript-c24a695-uncontrolled.jsonl](results/rust-vs-typescript-c24a695-uncontrolled.jsonl) holds one historical matched run of both implementations at commit `c24a695` (file SHA-256 `01add9d9e34fa688ded47ad95f471b71208a25aa8d0e6c70b75356cab632b782`): 38 records, zero failed operations.
+It predates the Rust reference changes of this branch (captured-speech meeting boundary and `context.refresh` job), so the Rust source SHA-256 and the end-state fingerprint below describe that run only.
 An earlier run at `bf12035` was withdrawn because its open-loop records gave the modelled listener count as `offered_load.concurrency`.
 
 - Source SHA-256: TypeScript `d5c2a283720bf7e65cc884c41afe533d4fb7ee6b4f3ad898f1078798d340144d`, Rust `a3c84cd16b59ce5b0d385428bb7bf8af0560873e86b6158f9699662e15d33061`.
@@ -120,3 +120,17 @@ A controlled-host run must:
 6. Keep the 24-hour soak (T26) separate: this long run bounds memory for 300 s of one workload only.
 
 Also unrun: MySQL workload saturation (sweeping load on the shared test server would disturb other runs), slow consumers and reconnect storms (they need the socket layer, which the workloads exclude), and live-provider latency.
+
+## Current matched evidence
+
+The current matched evidence is one small `--smoke` run of `scripts/benchmark-compare.ts` against a shared disposable MySQL server.
+Its 22 records are not in this repository; the smoke output and records are kept outside it (`smoke.out` SHA-256 `48f52d578523fe17bda4255606e238741b82e982a44978631f3bb108ebb24a79`, `smoke.jsonl` SHA-256 `dc710e3b37d594b917b2416ae3a5aea93a918b333906e28e5444d92e532d1007`).
+No database URL or credential is published.
+
+- In that run the TypeScript and Rust MySQL end-state fingerprints were equal (SHA-256 `02e906d057e9dba61a48deedcda706a5c9417c86fd6910d91cef6c26544a1632`). This holds for that recorded run only; it is neither parity nor general equivalence.
+- Source SHA-256: TypeScript `5f308b0b8f41a3c51e3e919af1fed0707023a698ac1ebdff11ec9a62d3750bc3`, Rust `af888167ac4acb128b2a5175e1956fb042bc6f66d15aa0158785e3a87152a23b`.
+- Fixture SHA-256, identical for both implementations: `pcm_ingest` `63faf10dc2fc8929cb35adf244481f4a428da9c57c9620ce23e30de5bd3482c0`, `cosine_ranking` `9b1ccc94a072dbe7a63aed149d63d2831fdbda7e31b0b0b6305b22bdf3a376e8`, `archive_streaming` `f066f329cb45588f16c88da009f0368acb2cbb62d2b3405d589ad7f2d27b8529`, `transcript_ingest` `0205a8f9363d5f1878704cbd6f233b485d426610f0acc14811dfcea35f8962b5`, `context_read_write` `5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9`.
+- The records carry `git_sha` `f451927` because the smoke ran on that base with the Rust source changes uncommitted; the Rust sources were then committed unchanged as `6a4eef5`.
+- Host: uncontrolled shared VPS (96 cores, 247 GiB RAM, load average 73.27 at start); Node.js v26.10.0, rustc 1.99.0. All records are `verified: false`.
+
+The full-scale controlled-host comparison is unrun: the T26 and T01 parity gates stay unchecked, the records stay `verified: false`, and the host is unverified and uncontrolled.
