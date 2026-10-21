@@ -40,9 +40,10 @@ It uses the `mysql` crate with server-side prepared statements, as `@effect/sql-
 | `transcript_ingest` | `recordFinalWindow` and `onFinalSegments`: the same SQL, boundary evaluation, claim, promotion and seal logic | Only the listener capture key and a seal without a capture watermark; the fixture uses neither a capture group nor a capture end. |
 | `context_read_write` | `getContextSnapshot` and `addContextItem`: authorization, the 500-entry FIFO snapshot cache, revision and idempotency checks, source resolution and the committed-order event | None in behavior. |
 
-Both implementations run one operation at a time on one thread, as the Node.js event loop does.
+Outside the MySQL clients, both implementations run one operation at a time on one thread, as the Node.js event loop does.
+With several database clients, the TypeScript clients interleave on the one event loop, and each Rust client has its own thread; a barrier releases them together.
 Rust `heap` is the live byte count of a counting global allocator; `external`, `gc_ms` and `event_loop_delay_p99` do not apply and are reported as 0 and listed in `not_applicable_metrics`.
-`cargo test --release --manifest-path benchmarks/rust/Cargo.toml` checks the fixture generator against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation and date arithmetic.
+`cargo test --release --manifest-path benchmarks/rust/Cargo.toml` checks the fixture generator against the TypeScript values, frame validation, top-k tie order, boundary cues, WAV validation, date arithmetic, client overlap, failed clients and pooled percentiles.
 
 ## Matched runner
 
