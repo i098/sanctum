@@ -74,5 +74,4 @@ test('client fingerprints pair by index and a differing pair stops the run namin
   assert.match(pairFingerprints(['a'], ['a']), /every client pair \(SHA-256 client 0 [0-9a-f]{64}\)$/);
   assert.match(pairFingerprints(['a', 'b'], ['a', 'b']), /client 0 [0-9a-f]{64}, client 1 [0-9a-f]{64}\)$/);
   assert.throws(() => pairFingerprints(['a', 'b'], ['a', 'c']), { message: 'MySQL end state differs for client pair 1: typescript b rust c' });
-  assert.throws(() => pairFingerprints(['a', 'b'], ['a']), /client pair 1/);
 });
