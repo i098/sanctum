@@ -46,20 +46,28 @@ Rust `heap` is the live byte count of a counting global allocator; `external`, `
 
 ## Matched runner
 
-`node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
+`node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--clients 1] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
 It builds `rust/` with `cargo build --release --locked` and passes one job JSON to `node scripts/benchmark.ts --job` and to the Rust binary, each in its own process.
 It runs three modes:
 
-- `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets a fresh seeded database.
+- `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets `--clients` fresh seeded databases (default 1).
 - `open_loop_sweep`: `pcm_ingest` at the manifest's offered frame rates, then doubling, for 2 s per rate until achieved throughput falls below 95% of the offered rate.
 - `long_run`: `pcm_ingest` at 3,200 frames/s for `--soak-seconds`; RSS growth from the end of a 10% warm-up to the end must stay within 16 MiB.
 
 Every open-loop run is one sequential stream of frames, so its records carry `offered_load.concurrency: 1`.
 The listener count a rate models at 50 frames/s per listener (64 at 3,200 frames/s) is `parameters.equivalent_listeners_at_50fps`; no run drives concurrent listeners.
 
+The MySQL workloads run as one `database` job whose `clients` array gives each concurrent client its own seeded database on the same server.
+The workload counts apply per client.
+All clients run `archive_streaming` together, then `transcript_ingest`, then `context_read_write`; within a client, operations stay in order.
+Each implementation emits one aggregate record per MySQL workload: `offered_load.concurrency` is the client count, throughput is all completed operations over the phase's wall time, and latency percentiles come from the pooled operation latencies.
+CPU and memory are process-wide, measured once per phase.
+A failed client counts as failed operations or fails the job; it never yields a successful record.
+
 Open-loop latency counts from each frame's scheduled arrival, so a stall cannot hide tail latency; the driver sleeps only when at least 1 ms ahead.
-The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, their MySQL end states differ, or a long run exceeds its bound.
-The MySQL end state is compared through row counts and content sums of every written table, excluding IDs and wall-clock times.
+The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, a database record does not pool every client's operations at the client count, their MySQL end states differ, or a long run exceeds its bound.
+The MySQL end state is compared client by client (client i of TypeScript against client i of Rust) through row counts and content sums of every written table, excluding IDs and wall-clock times; the first differing pair stops the run and is named.
+Records pair only at the same workload, phase, mode, offered rate and concurrency.
 Every record carries the host description, the runtime and the SHA-256 of its implementation's tracked source files in `parameters.harness`.
 Comparative timing stays out of ordinary CI: `npm run check` covers the runner's decision logic and open-loop pacing, not the Rust build or any timing gate.
 
@@ -116,7 +124,7 @@ A controlled-host run must:
 2. Run nothing else on it; pin both implementations to the same declared cores and memory limit, fix the CPU frequency, and give MySQL 8.4 its own cores and a fixed buffer pool with no other databases.
 3. Run `node scripts/benchmark-compare.ts --mysql-url ... --out ...` at least five times from a cold start and report the median and spread of every record.
 4. Compare each workload's TypeScript/Rust throughput and p95/p99 ratios at matched offered load with its manifest `parity_gate`; the runner prints the ratios but evaluates no gate.
-5. Add concurrent drivers to both implementations before sweeping the manifest's `concurrency` and `concurrent_uploads` lists; both harnesses run one operation at a time today.
+5. Sweep the manifest's `concurrency` and `concurrent_uploads` lists with `--clients`; the MySQL workloads run concurrent clients, while `pcm_ingest` stays one stream.
 6. Keep the 24-hour soak (T26) separate: this long run bounds memory for 300 s of one workload only.
 
 Also unrun: MySQL workload saturation (sweeping load on the shared test server would disturb other runs), slow consumers and reconnect storms (they need the socket layer, which the workloads exclude), and live-provider latency.
