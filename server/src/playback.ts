@@ -4,6 +4,7 @@
  * every URL is issued after a fresh access check for the current revision's cut.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { SqlClient, SqlSchema } from '@effect/sql';
 import { type AccessScope, JobFailure, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
@@ -77,7 +78,7 @@ const cutRanges = (workspace_id: string, ranges: ReadonlyArray<TimedRange>, rate
   });
 
 /**
- * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>.wav` for a sealed
+ * `recording.assemble`: writes `meetings/<workspace>/<meeting>/r<revision>-<sha256>.wav` for a sealed
  * meeting's current boundary revision, then queues speaker refinement over that cut.
  */
 export const assembleRecording = (job: MeetingJob) =>
@@ -96,23 +97,34 @@ export const assembleRecording = (job: MeetingJob) =>
       const { pieces, parts, status } = yield* cutRanges(job.workspace_id, ranges, rate);
       const setStatus = sql`UPDATE meetings SET processing = JSON_SET(processing, '$.recording', ${status}), updated_at = UTC_TIMESTAMP(6)
         WHERE id = ${meeting_id} AND boundary_revision = ${revision}`;
-      if (parts.length === 0) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
-      const wav = wavFile(rate, parts);
-      const sha256 = createHash('sha256').update(wav).digest('hex');
-      const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}.wav`;
-      if (!(yield* workspaceIsLive(job.workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
-      yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
-      yield* sql.withTransaction(
+      const cut = parts.length === 0 ? null : yield* Effect.gen(function* () {
+        const wav = wavFile(rate, parts);
+        const sha256 = createHash('sha256').update(wav).digest('hex');
+        const object_key = `meetings/${job.workspace_id}/${meeting_id}/r${revision}-${sha256}.wav`;
+        if (!(yield* workspaceIsLive(job.workspace_id))) return yield* new JobFailure({ message: REQUESTER_REFUSED, retryable: false });
+        yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
+        return { object_key, sha256, wav };
+      });
+      return yield* sql.withTransaction(
         Effect.gen(function* () {
+          const current = yield* selectMeeting(job.workspace_id, meeting_id, true);
+          const latestRanges = yield* currentRanges(job.workspace_id, meeting_id);
+          if (current._tag === 'None' || current.value.boundary_revision !== revision || !isDeepStrictEqual(ranges, latestRanges)) {
+            return yield* new JobFailure({ message: 'Meeting ranges changed during recording assembly', retryable: true });
+          }
+          const [published] = yield* sql<{ object_key: string }>`SELECT object_key FROM meeting_recordings
+            WHERE meeting_id = ${meeting_id} AND boundary_revision = ${revision} FOR SHARE`;
+          if (published !== undefined) return { object_key: published.object_key, boundary_revision: revision };
+          if (cut === null) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
+          const { object_key, sha256, wav } = cut;
           yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
             VALUES (${randomUUID()}, ${job.workspace_id}, ${meeting_id}, ${revision}, ${object_key}, ${Buffer.from(sha256, 'hex')}, ${wav.byteLength}, ${rate},
-              ${(wav.byteLength - 44) / 2}, ${JSON.stringify(pieces)}, UTC_TIMESTAMP(6))
-            ON DUPLICATE KEY UPDATE id = id`;
+              ${(wav.byteLength - 44) / 2}, ${JSON.stringify(pieces)}, UTC_TIMESTAMP(6))`;
           yield* setStatus;
           yield* enqueueJob({ workspace_id: job.workspace_id, kind: 'speakers.refine', work_key: `meeting:${meeting_id}`, payload: { meeting_id }, requested_by: job.requested_by, source_revision: revision });
+          return { object_key, boundary_revision: revision, status };
         }),
       );
-      return { object_key, boundary_revision: revision, status };
     }),
   );
 
