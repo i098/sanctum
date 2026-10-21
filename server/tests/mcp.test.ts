@@ -10,7 +10,7 @@ import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcont
 import type { AccessScope } from '@sanctum/contracts';
 import { createClient } from '@sanctum/sdk';
 import { ConfigProvider, Effect, Option, TestClock } from 'effect';
-import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { createLocalJWKSet, type CryptoKey, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.ts';
 import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, McpAuthorizationFromEnv, McpAuthorizationServer, mcpTools } from '../src/mcp.ts';
 import { addMember, linkWorkspaceOrg } from '../src/store.ts';
