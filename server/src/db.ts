@@ -24,8 +24,8 @@ export interface MysqlOptions {
 
 /**
  * Pool options: DATETIME(6) and BIGINT/DECIMAL arrive as strings (no millisecond Date or
- * rounded Number), connection waits are bounded by `queueLimit`; without `caCert` the
- * connection is unencrypted (local and test servers).
+ * rounded Number), connection waits are gated and bounded in `gatedClient`; without `caCert`
+ * the connection is unencrypted (local and test servers).
  */
 const pooledClient = (mysql: MysqlOptions) =>
   MysqlClient.layer({
