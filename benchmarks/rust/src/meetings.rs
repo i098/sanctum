@@ -67,6 +67,8 @@ struct Open {
     last: Option<Last>,
     tail: Vec<Utterance>,
     opening_uncertainty: f64,
+    /// Claimed audio since `load_open` (TypeScript: the open meeting is a new object): the batch then requests a live context refresh.
+    claimed: bool,
 }
 
 struct TimedRange {
@@ -244,6 +246,7 @@ fn create_meeting(q: &mut impl Queryable, workspace: &str, listener: &str, epoch
         }),
         tail: vec![],
         opening_uncertainty: decision.uncertainty,
+        claimed: true,
     })
 }
 
@@ -263,6 +266,7 @@ fn advance(mut open: Open, epoch: &Epoch, segment: &Segment, end: u64) -> Open {
             sample_end: end,
         });
     }
+    open.claimed = true;
     open.tail.push(segment.utterance());
     if open.tail.len() > 2 {
         open.tail.remove(0);
@@ -359,6 +363,7 @@ fn load_open(q: &mut impl Queryable, workspace: &str, listener: &str) -> Outcome
         last,
         tail,
         opening_uncertainty,
+        claimed: false,
     }))
 }
 
@@ -384,6 +389,38 @@ fn load_epochs(q: &mut impl Queryable, workspace: &str, ids: &[&str]) -> Outcome
         .collect())
 }
 
+/// `engineeringDefaults.contextJob`: quiet period before a refresh, and the new-turn count that runs it at once.
+const QUIET_PERIOD_MS: f64 = 25_000.0;
+const TURN_THRESHOLD: u64 = 4;
+
+fn refresh_delay_ms(new_turns: u64) -> f64 {
+    if new_turns >= TURN_THRESHOLD { 0.0 } else { QUIET_PERIOD_MS }
+}
+
+/// `requestLiveContextRefresh`: one `context.refresh` job per meeting, delayed by the quiet period unless enough new turns arrived.
+// ponytail: enqueue_job has no expedite flag or per-kind attempts (TypeScript: expedite at the threshold, 24 attempts); neither is read by the benchmark, which never runs the job.
+fn request_live_context_refresh(q: &mut impl Queryable, workspace: &str, meeting: &str) -> Outcome<()> {
+    let turns: Option<u64> = q.exec_first(
+        "SELECT COUNT(*) AS turns FROM transcript_segments s
+   JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
+    AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
+   JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
+   WHERE s.workspace_id = ? AND m.id = ? AND s.status = 'final'
+    AND NOT EXISTS (SELECT 1 FROM context_processed_segments p WHERE p.workspace_id = s.workspace_id AND p.meeting_id = m.id AND p.segment_id = s.id)",
+        (workspace, meeting),
+    )?;
+    enqueue_job(
+        q,
+        workspace,
+        "context.refresh",
+        meeting,
+        &json!({ "meeting_id": meeting }),
+        None,
+        refresh_delay_ms(turns.unwrap_or(0)),
+    )?;
+    Ok(())
+}
+
 /// Media hook: final segments for one listener, placed in wall-clock order in one transaction.
 pub fn on_final_segments(conn: &mut mysql::PooledConn, workspace: &str, listener: &str, segments: &[Segment]) -> Outcome<()> {
     let finals: Vec<&Segment> = segments.iter().filter(|segment| segment.status == "final").collect();
@@ -402,6 +439,20 @@ pub fn on_final_segments(conn: &mut mysql::PooledConn, workspace: &str, listener
     for segment in known {
         open = place_segment(&mut tx, (workspace, listener), &epochs[&segment.epoch_id], segment, open)?;
     }
+    if let Some(open) = open.filter(|open| open.claimed) {
+        request_live_context_refresh(&mut tx, workspace, &open.row.id)?;
+    }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_refresh_runs_at_once_from_four_new_turns_and_after_the_quiet_period_before() {
+        assert_eq!((refresh_delay_ms(0), refresh_delay_ms(3)), (QUIET_PERIOD_MS, QUIET_PERIOD_MS));
+        assert_eq!((refresh_delay_ms(4), refresh_delay_ms(9)), (0.0, 0.0));
+    }
 }

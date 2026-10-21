@@ -37,7 +37,7 @@ It uses the `mysql` crate with server-side prepared statements, as `@effect/sql-
 | `pcm_ingest` | Same header checks and error names, borrowed payload, 256-frame queue drained every 32 frames | No event loop, so no yield every 32 frames. |
 | `cosine_ranking` | Same f64 accumulation over f32 values, sorted-insertion top-k, 1,000-row batches and full-sort check | No yield between batches. |
 | `archive_streaming` | `putChunk`: the same SQL statements, WAV and hash checks, idempotent claim, commit and reconcile job | The in-memory object store holds the body by reference, like the TypeScript stub. |
-| `transcript_ingest` | `recordFinalWindow` and `onFinalSegments`: the same SQL, boundary evaluation, claim, promotion and seal logic | Only the listener capture key and a seal without a capture watermark; the fixture uses neither a capture group nor a capture end. |
+| `transcript_ingest` | `recordFinalWindow` and `onFinalSegments`: the same SQL, boundary evaluation, claim, promotion, seal logic and live `context.refresh` request | Only the listener capture key and a seal without a capture watermark; the fixture uses neither a capture group nor a capture end. The refresh job keeps its work key, payload and delay, but not the TypeScript expedite flag and 24 attempts, which the benchmark never reads. |
 | `context_read_write` | `getContextSnapshot` and `addContextItem`: authorization, the 500-entry FIFO snapshot cache, revision and idempotency checks, source resolution and the committed-order event | None in behavior. |
 
 Both implementations run one operation at a time on one thread, as the Node.js event loop does.
