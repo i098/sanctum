@@ -115,16 +115,12 @@ const sentences = <E>(text: Stream.Stream<string, E>) =>
   });
 
 /**
- * What one heard segment means: empty text, Sanctum's own echo and a late transcript of the
- * request that opened the window are ignored; anything else a person says over an open
- * response interrupts it.
+ * Empty text and Sanctum's own echo are ignored. Previously seen final IDs are filtered
+ * by the controller; unseen speech interrupts an open response, regardless of source order.
  */
 const segmentRole = (gate: ReturnType<typeof makeSpeechGate>, listener_id: ListenerId, segment: TranscriptSegment) => {
   if (segment.text.trim() === '' || gate.isEcho(listener_id, segment.text)) return 'ignore';
-  const active = gate.active(listener_id);
-  if (!active) return 'listen';
-  const partOfRequest = active.epoch_id === segment.source.epoch_id && segment.source.sample_start < active.sample_end;
-  return partOfRequest ? 'ignore' : 'interrupt';
+  return gate.active(listener_id) ? 'interrupt' : 'listen';
 };
 
 type SpeechMessage = SpeechChunkMessage | SpeechCancelMessage;
@@ -171,12 +167,26 @@ const speak = (
     if (expired && message) yield* io.send(message);
   }).pipe(Effect.catchAll(error => Effect.logWarning('Requested speech failed', error.message)));
 
-const startsSeparateTurn = (
-  turn: Pick<TranscriptSegment['source'], 'epoch_id' | 'sample_start' | 'sample_end'>,
-  source: TranscriptSegment['source'],
-  minimumGap: number,
-) => turn.epoch_id !== source.epoch_id || source.sample_start - turn.sample_end >= minimumGap
-  || turn.sample_start - source.sample_end >= minimumGap;
+interface Turn {
+  readonly epoch_id: CaptureEpochId;
+  readonly segments: TranscriptSegment[];
+  sample_end: number;
+}
+
+const orderedTurns = (segments: TranscriptSegment[], minimumGap: number) => {
+  segments.sort((a, b) => a.source.sample_start - b.source.sample_start);
+  const turns: Turn[] = [];
+  for (const segment of segments) {
+    const previous = turns.at(-1);
+    if (previous && previous.epoch_id === segment.source.epoch_id && segment.source.sample_start - previous.sample_end < minimumGap) {
+      previous.segments.push(segment);
+      previous.sample_end = Math.max(previous.sample_end, segment.source.sample_end);
+    } else {
+      turns.push({ epoch_id: segment.source.epoch_id, sample_end: segment.source.sample_end, segments: [segment] });
+    }
+  }
+  return turns;
+};
 
 /**
  * Per-socket speech ownership for media's session: feed every transcript segment and the
@@ -194,7 +204,7 @@ export const speechController = (options: {
     const synthesizer = yield* SpeechSynthesizer;
     const { listener_id, send, requestWork = () => Effect.succeed(false) } = options;
     const endOfTurnSamples = (engineeringDefaults.speech.endOfTurnMs * options.sample_rate) / 1000;
-    let turn: { epoch_id: CaptureEpochId; segments: TranscriptSegment[]; sample_start: number; sample_end: number } | null = null;
+    let turn: Turn | null = null;
     const seenFinals = new Set<TranscriptSegment['id']>();
     let turnTimer: Fiber.Fiber<void> = Fiber.void;
     let speaking: Fiber.Fiber<void> = Fiber.void;
@@ -206,13 +216,10 @@ export const speechController = (options: {
         if (message) yield* send(message);
       });
 
-    const completeTurn = Effect.gen(function* () {
-      const finished = turn;
-      turn = null;
-      if (!finished) return;
-      finished.segments.sort((a, b) => a.source.sample_start - b.source.sample_start);
+    const startReply = (finished: Turn) => Effect.gen(function* () {
       const request = directRequest(finished.segments.map(segment => segment.text).join(' '));
       if (request === null) return;
+      yield* cancel('barge_in');
       const window = gate.openRequest({ listener_id, epoch_id: finished.epoch_id, request_id: finished.segments[0]!.id, sample_end: finished.sample_end });
       // The work decision runs in its own daemon fiber so barge-in, which interrupts `speaking`, never aborts an enqueue.
       const work = yield* Effect.forkDaemon(requestWork(request, window));
@@ -221,20 +228,33 @@ export const speechController = (options: {
         started => speak({ gate, synthesizer, listener_id, send, reply: started ? Stream.make(WORK_ACKNOWLEDGEMENT) : options.respond(request) }, window)));
     });
 
-    /** Extends the open turn, or completes it first when this segment starts after a pause or in a new epoch. */
+    const completeTurn = (covered = Infinity) => Effect.gen(function* () {
+      const finished = turn;
+      if (!finished) return;
+      const pending = orderedTurns(finished.segments, endOfTurnSamples);
+      const lastReady = pending.findLastIndex(group => covered - group.sample_end >= endOfTurnSamples);
+      if (lastReady < 0) return;
+      const ready = pending.splice(0, lastReady + 1);
+      turn = pending.length === 0 ? null : {
+        epoch_id: finished.epoch_id, sample_end: pending.at(-1)!.sample_end,
+        segments: pending.flatMap(group => group.segments),
+      };
+      yield* Effect.forEach(ready, startReply, { discard: true });
+    });
+
+    /** Collects finals before source-gap boundaries; delayed lanes can fill apparent gaps. */
     const extendTurn = (segment: TranscriptSegment) =>
       Effect.gen(function* () {
-        const { epoch_id, sample_start, sample_end } = segment.source;
-        if (turn && startsSeparateTurn(turn, segment.source, endOfTurnSamples)) yield* completeTurn;
+        const { epoch_id, sample_end } = segment.source;
+        if (turn && turn.epoch_id !== epoch_id) yield* completeTurn();
         if (turn) {
           turn.segments.push(segment);
-          turn.sample_start = Math.min(turn.sample_start, sample_start);
           turn.sample_end = Math.max(turn.sample_end, sample_end);
         } else {
-          turn = { epoch_id, segments: [segment], sample_start, sample_end };
+          turn = { epoch_id, segments: [segment], sample_end };
         }
         yield* Fiber.interrupt(turnTimer);
-        turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn, engineeringDefaults.speech.turnWaitMs));
+        turnTimer = yield* Effect.forkDaemon(Effect.delay(completeTurn(), engineeringDefaults.speech.turnWaitMs));
       });
 
     return {
@@ -250,10 +270,10 @@ export const speechController = (options: {
           if (segment.status === 'final') yield* extendTurn(segment);
         }),
       /**
-       * Live speech-to-text answered the audio up to `sample_end`, and no later answer revisits it: a turn that ended `endOfTurnMs`
-       * before it is complete now, without the `turnWaitMs` wait. Its timer then finds no turn, and a newer turn's first segment replaces that timer.
+       * Complete each turn whose following pause is covered, retaining later unfinished speech.
+       * The idle timer remains the fallback when no provider coverage proves the pause.
        */
-      onCovered: (sample_end: number) => (turn && sample_end - turn.sample_end >= endOfTurnSamples ? completeTurn : Effect.void),
+      onCovered: (sample_end: number) => completeTurn(sample_end),
       /** A reply window is open, so a person speaking now interrupts it. */
       replying: () => gate.active(listener_id) !== undefined,
       /** Pause or disconnect: stop speech now; a reconnect never resumes it. */

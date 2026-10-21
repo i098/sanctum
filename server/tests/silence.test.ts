@@ -129,6 +129,21 @@ describe('speech gate', () => {
       expect(session.requests).toEqual(['what is next?']);
     }));
 
+  it.effect('completes a covered request while later conversation continues', () =>
+    Effect.gen(function* () {
+      const session = yield* listen(() => Stream.empty);
+      yield* session.onSegment(heard('Sanctum, send the notes', 0, 1_000));
+      for (let i = 1; i <= 3; i++) {
+        const end = i * 6_100 + 2_000;
+        yield* session.onSegment(heard('We continue the meeting.', i * 6_100, end));
+        yield* session.onCovered((end * RATE) / 1000);
+        yield* settle(100);
+        expect(session.work.map(work => work.request)).toEqual(['send the notes']);
+      }
+      yield* session.onEnd('pause');
+      expect(session.requests).toEqual(['send the notes']);
+    }));
+
   for (const order of [[0, 2, 1], [2, 1, 0]] as const) {
     it.effect(`preserves the ordered request for speech and work when finals arrive ${order.join(',')}`, () =>
       Effect.gen(function* () {
@@ -186,7 +201,7 @@ describe('speech gate', () => {
 
   it.effect('accepts unseen finals with earlier or equal sample ends', () =>
     Effect.gen(function* () {
-      const session = yield* listen(() => Stream.empty);
+      const session = yield* listen(() => Stream.never);
       const segments = [
         heard('Sanctum, prepare the notes', 10_000, 11_000),
         heard('Sanctum, send the notes', 8_000, 9_000),
@@ -203,12 +218,11 @@ describe('speech gate', () => {
 
   it.effect('keeps requests separate across a backward source gap', () =>
     Effect.gen(function* () {
-      const session = yield* listen(() => Stream.empty);
+      const session = yield* listen(() => Stream.never);
       yield* session.onSegment(heard('Sanctum, send the notes', endOfTurnMs + 1_000, endOfTurnMs + 1_500));
       yield* session.onSegment(heard('Sanctum, prepare the notes', 0, 1_000));
       yield* settle(turnWaitMs);
-      expect(session.requests).toEqual(['send the notes', 'prepare the notes']);
-      expect(session.work.map(work => work.request)).toEqual(session.requests);
+      expect(session.work.map(work => work.request)).toEqual(['prepare the notes', 'send the notes']);
       yield* session.onEnd('disconnect');
     }));
 
@@ -265,11 +279,12 @@ describe('speech gate', () => {
   it.effect('treats a late transcript of the request itself as neither a request nor a barge-in', () =>
     Effect.gen(function* () {
       const session = yield* listen(slowly('First point.', 'Second point.', 'Third point.'));
-      yield* session.onSegment(heard('Sanctum, summarize the meeting', 35_000, 36_000));
+      const segment = heard('Sanctum, summarize the meeting', 35_000, 36_000);
+      yield* session.onSegment(segment);
       yield* settle(turnWaitMs + 1_500);
       const before = session.chunks().length;
-      // A slow provider re-sends the request range as a final.
-      yield* session.onSegment(heard('Sanctum, summarize the meeting please', 35_000, 36_000));
+      // A slow provider re-sends the same final.
+      yield* session.onSegment(segment);
       yield* settle(2_000);
       expect(session.sent.filter(message => message._tag === 'speech_cancel')).toEqual([]);
       expect(session.chunks().length).toBeGreaterThan(before);

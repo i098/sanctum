@@ -215,6 +215,13 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     let lane: Lane | null = null;
     let retryAt = 0;
     let providerDown = false;
+    // A newer lane cannot settle source time while an older lane still flushes.
+    let draining = 0;
+    let covered = 0;
+    const cover = (end: number) => Effect.suspend(() => {
+      covered = Math.max(covered, end);
+      return draining === 0 ? speech.onCovered(covered) : Effect.void;
+    });
     const { degrade, answered } = asrHealth(send);
     const prompt = yield* itemPrompt(access);
 
@@ -234,7 +241,11 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         if (lane === null) return;
         const current = lane;
         lane = null;
-        yield* Effect.forkDaemon(closeLane(current, reason));
+        draining++;
+        yield* Effect.forkDaemon(closeLane(current, reason).pipe(
+          Effect.ensuring(Effect.sync(() => { draining--; })),
+          Effect.zipRight(Effect.suspend(() => cover(covered))),
+        ));
       });
 
     const providerUnavailable = (from_sample: number, message: string) =>
@@ -268,7 +279,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         current.consumer = yield* opened.right.results.pipe(
           Stream.runForEach(batch =>
             Effect.zipRight(answered(current.anchor + Math.round(batch.start_s * rate)), relayBatch({ access, listener, start, send }, stt, current, batch)).pipe(
-              Effect.flatMap(end => (end === null ? Effect.void : speech.onCovered(end))),
+              Effect.flatMap(end => (end === null ? Effect.void : cover(end))),
             ),
           ),
           Effect.catchAll(error =>

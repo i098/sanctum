@@ -185,8 +185,10 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
   A retried job that finds actions with its ID does not plan again; it reports them as `already_requested` with the research it stored.
   When the plan has both, `planWork` runs again over only the planned actions, with the cited research in a delimited untrusted block; research may fill only content fields (subject, body, notes and the like), and a pass that changes any other argument, adds an action or drops one is rejected, so no action is requested. A refused research requests no action either; both are reported as the `outcome` of a succeeded job.
   Web research reserves one of the workspace's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` and the install's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` paid calls in `paid_model_calls` before sending, records the provider's token usage (also for a billed call that ends incomplete), stores a `research` artifact once per job, and adds an `external` `research_observation` citing it; a spent allowance is a `refused` result, a rate limit pauses the job, a dropped proposal is reported in `dropped` with its reason, and nothing to do is a reported `outcome`.
-- Known ASR timing limit: delayed finals across lane rotation can split a request prematurely or be ignored during an active reply.
-  Sorting only restores segments collected before turn completion; the authorized follow-up is [#96](https://github.com/i098/sanctum/issues/96).
+- Pending live finals are deduplicated by ID and ordered before source-gap boundaries split requests.
+  A newer lane's coverage waits until older lanes finish flushing.
+  During a reply, consumed final IDs stay ignored; unseen earlier finals can interrupt and start a request.
+  The existing idle wait still bounds collection; finals that arrive after a request completes are not merged into it.
 
 ### interfaces (T22, T23)
 
