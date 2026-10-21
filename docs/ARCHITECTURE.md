@@ -157,7 +157,7 @@ Recording assembly stores each WAV at `meetings/<workspace>/<meeting>/r<revision
 Overlapping attempts cannot overwrite different audio at the same key.
 Before publishing, assembly locks the meeting row and checks the revision and current ranges against the cut.
 A changed revision or range causes a retryable failure; playback and speaker refinement use the published `meeting_recordings.object_key`.
-Under that lock, every assembly attempt preserves an existing cut and its status, even when the attempt found no valid audio.
+Under that lock, assembly preserves the first published cut and its status, even if another attempt finds more audio or no valid audio.
 
 ### context (T16)
 
