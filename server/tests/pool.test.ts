@@ -3,6 +3,7 @@ import { tracingChannel } from 'node:diagnostics_channel';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
+import type { AccessScope } from '@sanctum/contracts';
 import { Context, Deferred, Effect, Exit, Fiber, FiberId, Layer, Redacted, Ref, Tracer } from 'effect';
 import type { RowDataPacket } from 'mysql2';
 import { createConnection } from 'mysql2/promise';
@@ -135,7 +136,7 @@ const serveRenames = Effect.gen(function* () {
   const fibers = new Map<string, Fiber.RuntimeFiber<unknown, unknown>>();
   const authenticator = Layer.succeed(Authenticator, {
     authenticate: request =>
-      Effect.withFiberRuntime<typeof owner, never>(fiber => {
+      Effect.withFiberRuntime<AccessScope, never>(fiber => {
         const label = request.headers['x-label'] ?? '';
         fibers.set(label, fiber);
         return Effect.as(Effect.forkDaemon(Effect.flatMap(Fiber.await(fiber), exit => Deferred.succeed(endOf(label), exit))), owner!);
@@ -210,7 +211,7 @@ const serveRenames = Effect.gen(function* () {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-label': label },
       body: JSON.stringify({ name }),
-      signal,
+      signal: signal ?? null,
     });
   /** The request's fiber has begun its statement and is suspended again: the next thing it waits for is a connection. */
   const waitingForConnection = (label: string, statementNumber: number) =>

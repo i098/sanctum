@@ -75,8 +75,8 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       // "tomorrow" resolves from the client-clock utterance time in the meeting timezone: Saturday 15 March, local midnight.
       const utterance = Date.parse('2031-03-14T08:30:01.123Z');
       expect(items[0]).toMatchObject({ time: { phrase: 'tomorrow', normalized: '2031-03-15T07:00:00.000Z', timezone: 'America/Los_Angeles', ambiguous: true } });
-      expect(Date.parse(items[0]!.event_at)).toBe(utterance);
-      expect(Date.parse(items[0]!.time!.anchor)).toBe(utterance);
+      expect(Date.parse(items[0]!.event_at!)).toBe(utterance);
+      expect(Date.parse(items[0]!.time!.anchor!)).toBe(utterance);
     }),
   );
 });
