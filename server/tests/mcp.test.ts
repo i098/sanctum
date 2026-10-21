@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -7,10 +9,10 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import type { AccessScope } from '@sanctum/contracts';
 import { createClient } from '@sanctum/sdk';
-import { Effect, Option, TestClock } from 'effect';
-import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { ConfigProvider, Effect, Option, TestClock } from 'effect';
+import { createLocalJWKSet, type CryptoKey, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.ts';
-import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, mcpTools } from '../src/mcp.ts';
+import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, McpAuthorizationFromEnv, McpAuthorizationServer, mcpTools } from '../src/mcp.ts';
 import { addMember, linkWorkspaceOrg } from '../src/store.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -21,21 +23,21 @@ const RESOURCE = 'https://sanctum.fixture.test/mcp';
 const { publicKey, privateKey } = await generateKeyPair('ES256');
 const keys = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: 'ES256' }] });
 
-const sign = (subject: string, scope: string, claims: { aud?: string; exp?: number; workspace_id?: string; org_id?: string } = {}) =>
+const sign = (subject: string, scope: string, claims: { aud?: string; exp?: number; iss?: string; key?: CryptoKey; workspace_id?: string; org_id?: string } = {}) =>
   new SignJWT({ scope, ...(claims.workspace_id ? { workspace_id: claims.workspace_id } : {}), ...(claims.org_id ? { org_id: claims.org_id } : {}) })
     .setProtectedHeader({ alg: 'ES256' })
-    .setIssuer(ISSUER)
+    .setIssuer(claims.iss ?? ISSUER)
     .setSubject(subject)
     .setAudience(claims.aud ?? RESOURCE)
     .setExpirationTime(claims.exp ?? Math.floor(Date.now() / 1000) + 600)
-    .sign(privateKey);
+    .sign(claims.key ?? privateKey);
 
 /** Links a fixture issuer subject to a seeded principal, as sign-in would after verification. */
-const identify = (access: AccessScope) =>
+const identify = (access: AccessScope, issuer = ISSUER) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const subject = `sub-${access.principal.id}`;
-    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${subject}, ${access.principal.id}, UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${issuer}, ${subject}, ${access.principal.id}, UTC_TIMESTAMP(6))`;
     return subject;
   });
 
@@ -160,6 +162,43 @@ describe('MCP over Streamable HTTP', () => {
         if (response.status === 401) expect(header).toContain('scope="context:read context:write recordings:read"');
       }
       expect(statuses).toEqual([401, 401, 401, 403]);
+    }),
+  );
+
+  it.scoped('accepts a token signed by the configured loopback issuer and refuses a wrong issuer, audience or key', () =>
+    Effect.gen(function* () {
+      // The issuer publishes only its JWKS; Sanctum reads the same three settings production does.
+      const jwks = JSON.stringify({ keys: [{ ...(yield* Effect.promise(() => exportJWK(publicKey))), alg: 'ES256' }] });
+      const fixture = yield* Effect.acquireRelease(
+        Effect.async<Server>(resume => {
+          const server = createServer((request, response) =>
+            request.url === '/jwks' ? response.writeHead(200, { 'content-type': 'application/json' }).end(jwks) : response.writeHead(404).end(),
+          ).listen(0, '127.0.0.1', () => resume(Effect.succeed(server)));
+        }),
+        server => Effect.async<void>(resume => void server.close(() => resume(Effect.void))),
+      );
+      const issuer = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}`;
+      const env = ConfigProvider.fromJson({ SANCTUM_MCP_RESOURCE: RESOURCE, SANCTUM_MCP_ISSUER: issuer, SANCTUM_MCP_JWKS_URL: `${issuer}/jwks` });
+      const auth = yield* McpAuthorizationServer.pipe(Effect.provide(McpAuthorizationFromEnv), Effect.withConfigProvider(env));
+      const { url, db, domain } = yield* serveFake(auth);
+      const [member] = yield* Effect.provide(seedWorkspace('Loopback', ['member']), db);
+      const subject = yield* Effect.provide(identify(member!, issuer), db);
+      const meeting = domain.addMeeting(member!, 'Loopback sync');
+
+      const metadata = yield* Effect.promise(() => fetch(`${url}/.well-known/oauth-protected-resource/mcp`).then(r => r.json()));
+      expect(metadata).toMatchObject({ resource: RESOURCE, authorization_servers: [issuer] });
+      const { client } = yield* connect(url, yield* Effect.promise(() => sign(subject, 'context:read', { iss: issuer })));
+      expect(yield* Effect.promise(() => client.callTool({ name: 'list_meetings', arguments: {} }))).toMatchObject({ structuredContent: { meetings: [{ id: meeting.id }] } });
+
+      const { privateKey: unpublished } = yield* Effect.promise(() => generateKeyPair('ES256'));
+      const refused = [
+        yield* Effect.promise(() => sign(subject, 'context:read')),
+        yield* Effect.promise(() => sign(subject, 'context:read', { iss: issuer, aud: 'https://other.test/mcp' })),
+        yield* Effect.promise(() => sign(subject, 'context:read', { iss: issuer, key: unpublished })),
+      ];
+      const statuses: number[] = [];
+      for (const token of refused) statuses.push((yield* Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION)))).status);
+      expect(statuses).toEqual([401, 401, 401]);
     }),
   );
 
