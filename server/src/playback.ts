@@ -4,6 +4,7 @@
  * every URL is issued after a fresh access check for the current revision's cut.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { SqlClient, SqlSchema } from '@effect/sql';
 import { type AccessScope, JobFailure, type MeetingId, type RecordingAccess, SampleRate, SourceRange, Unavailable, UtcTimestamp } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
@@ -104,6 +105,11 @@ export const assembleRecording = (job: MeetingJob) =>
       yield* store.put(object_key, wav, { sha256, contentType: 'audio/wav' });
       yield* sql.withTransaction(
         Effect.gen(function* () {
+          const current = yield* selectMeeting(job.workspace_id, meeting_id, true);
+          const latestRanges = yield* currentRanges(job.workspace_id, meeting_id);
+          if (current._tag === 'None' || current.value.boundary_revision !== revision || !isDeepStrictEqual(ranges, latestRanges)) {
+            return yield* new JobFailure({ message: 'Meeting ranges changed during recording assembly', retryable: true });
+          }
           yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
             VALUES (${randomUUID()}, ${job.workspace_id}, ${meeting_id}, ${revision}, ${object_key}, ${Buffer.from(sha256, 'hex')}, ${wav.byteLength}, ${rate},
               ${(wav.byteLength - 44) / 2}, ${JSON.stringify(pieces)}, UTC_TIMESTAMP(6))

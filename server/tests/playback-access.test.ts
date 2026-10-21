@@ -2,10 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type CaptureEpochId, MeetingId, type WorkspaceId } from '@sanctum/contracts';
-import { Effect } from 'effect';
+import { Deferred, Effect, Fiber } from 'effect';
 import { splitMeeting } from '../src/meeting-corrections.ts';
 import { closeMeeting, finalizeMeeting } from '../src/meetings.ts';
 import { assembleRecording, issueRecordingAccess } from '../src/playback.ts';
+import { ObjectStore } from '../src/providers/object-store.ts';
 import { claimed, commitChunk, hear, jobsOf, meetingsOf, RATE, seedEpoch, seedListener } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -31,7 +32,7 @@ const setup = (store: ReturnType<typeof memoryObjectStore>) =>
     yield* hear(listener, epoch, 0, 55, 'we are reviewing the launch checklist today');
     const [row] = yield* meetingsOf(listener.workspace_id);
     const meeting = MeetingId.make(row!.id);
-    return { owner: owner!, member: member!, listener, epoch, meeting };
+    return { owner: owner!, device: device!, member: member!, listener, epoch, meeting };
   });
 
 describe('meeting recording playback', () => {
@@ -66,6 +67,81 @@ describe('meeting recording playback', () => {
         // Finalizing the same revision again keeps its cut's status instead of resetting it to pending.
         const refinalized = yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
         expect(refinalized).toMatchObject({ result: { processing: { recording: 'partial' } } });
+      }).pipe(Effect.provide(store.layer)),
+      { migrated: true },
+    );
+  });
+
+  it.effect('retries the full cut when a late final joins after assembly reads the ranges', () => {
+    const store = memoryObjectStore();
+    return withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [device] = yield* seedWorkspace('Late final', ['device']);
+        const listener = yield* seedListener(device!);
+        const epoch = yield* seedEpoch(listener);
+        for (let sequence = 0; sequence < 5; sequence++) yield* commitChunk(listener, epoch, sequence, store);
+        yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
+        const meeting = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
+        yield* closeMeeting(device!, meeting, { epoch_id: epoch, fence_sample: 50 * RATE });
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        const objectStore = yield* ObjectStore;
+        const first = yield* Effect.either(assemble(listener.workspace_id, meeting).pipe(
+          Effect.provideService(ObjectStore, {
+            ...objectStore,
+            put: (...args) => objectStore.put(...args).pipe(Effect.tap(() =>
+              hear(listener, epoch, 41, 46, 'and include the revised deadline').pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie))),
+          }),
+        ));
+        expect(first).toMatchObject({ _tag: 'Left', left: { _tag: 'JobFailure', retryable: true } });
+        expect(yield* sql`SELECT id FROM meeting_recordings WHERE meeting_id = ${meeting}`).toEqual([]);
+        expect(yield* sql`SELECT processing->>'$.recording' AS recording FROM meetings WHERE id = ${meeting}`).toEqual([{ recording: 'pending' }]);
+        expect((yield* jobsOf(listener.workspace_id)).map(job => job.kind)).not.toContain('speakers.refine');
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.boundary_revision)).toEqual([1]);
+        const refinalized = yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        expect(refinalized).toMatchObject({ result: { processing: { recording: 'pending' } } });
+        expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ status: 'succeeded', result: { status: 'complete', boundary_revision: 1 } });
+        const access = yield* issueRecordingAccess(device!, meeting);
+        expect(access.pieces).toEqual([{ epoch_id: epoch, track: 0, sample_start: 0, sample_end: 46 * RATE }]);
+        expect(access.gaps).toEqual([]);
+        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r1.wav`)!.body)).toEqual({
+          1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 4: 10 * RATE, 5: 6 * RATE,
+        });
+        expect((yield* jobsOf(listener.workspace_id)).map(job => job.kind)).toContain('speakers.refine');
+      }).pipe(Effect.provide(store.layer)),
+      { migrated: true },
+    );
+  });
+
+  it.effect('a late-final transaction sees a cut published after its first read', () => {
+    const store = memoryObjectStore();
+    return withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { device, listener, epoch, meeting } = yield* setup(store);
+        yield* closeMeeting(device, meeting, { epoch_id: epoch, fence_sample: 60 * RATE });
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        const snapshot = yield* Deferred.make<void>();
+        const published = yield* Deferred.make<void>();
+        const lateFinal = yield* sql.withTransaction(Effect.gen(function* () {
+          yield* sql`SELECT id FROM meeting_recordings WHERE meeting_id = ${meeting}`;
+          yield* Deferred.succeed(snapshot, undefined);
+          yield* Deferred.await(published);
+          yield* hear(listener, epoch, 56, 59, 'and include the revised deadline');
+        })).pipe(Effect.fork);
+        yield* Deferred.await(snapshot);
+        yield* assemble(listener.workspace_id, meeting);
+        yield* Deferred.succeed(published, undefined);
+        yield* Fiber.join(lateFinal);
+        expect((yield* meetingsOf(listener.workspace_id)).map(row => row.boundary_revision)).toEqual([2]);
+        yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
+        expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { boundary_revision: 2, status: 'partial' } });
+        const access = yield* issueRecordingAccess(device, meeting);
+        expect(access.pieces.map(piece => [piece.sample_start / RATE, piece.sample_end / RATE])).toEqual([[0, 30], [40, 59]]);
+        expect(contents(store.objects.get(`meetings/${listener.workspace_id}/${meeting}/r2.wav`)!.body)).toEqual({
+          1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 5: 10 * RATE, 6: 9 * RATE,
+        });
       }).pipe(Effect.provide(store.layer)),
       { migrated: true },
     );
