@@ -203,8 +203,14 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
   Rejected passes and refused research produce empty candidate plans, with reasons in `research` or `outcome`.
   These candidates cannot replace an earlier saved plan.
   Web research reserves one of the workspace's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` and the install's `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` paid calls in `paid_model_calls` before sending, records the provider's token usage (also for a billed call that ends incomplete), stores a `research` artifact once per job, and adds an `external` `research_observation` citing it; a spent allowance is a `refused` result, a rate limit pauses the job, a dropped proposal is reported in `dropped` with its reason, and nothing to do is a reported `outcome`.
-- Known ASR timing limit: delayed finals across lane rotation can split a request prematurely or be ignored during an active reply.
-  Sorting only restores segments collected before turn completion; the authorized follow-up is [#96](https://github.com/i098/sanctum/issues/96).
+- Pending live finals are deduplicated by ID and ordered by source samples before source-gap boundaries split requests.
+  A gap of at least `engineeringDefaults.speech.endOfTurnMs` separates turns.
+  Coverage completes each turn once it extends that far past its end, even while later speech remains pending.
+  A newer lane's coverage waits until older lanes finish flushing.
+  Without sufficient coverage, `engineeringDefaults.speech.turnWaitMs` without new finals completes pending turns.
+  Later finals never merge into a completed request.
+  Seen final IDs remain ignored for the socket's lifetime; unseen earlier speech can interrupt a reply and start a request.
+  Regression cases: `server/tests/asr-lane-order.test.ts` and `server/tests/silence.test.ts`.
 
 ### interfaces (T22, T23)
 
