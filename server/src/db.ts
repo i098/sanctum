@@ -126,7 +126,6 @@ const gatedClient = (mysql: MysqlOptions) =>
 /** Pool plus the UTC precondition; API and worker each build their own process-scoped layer. */
 export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(gatedClient(mysql)));
 
-
 const MYSQL_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
 
 /** DATETIME(6) string `2026-09-26 17:08:16.123456` <-> UTC wire timestamp, preserving microseconds. */
