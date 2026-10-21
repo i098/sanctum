@@ -6,7 +6,7 @@
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, type MeetingId, RequestActionInput } from '@sanctum/contracts';
-import { ConfigProvider, Effect, Fiber, Layer, Schema } from 'effect';
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Schema } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import * as Actions from '../src/actions.ts';
 import { createActionGrant } from '../src/actions.ts';
@@ -119,6 +119,25 @@ const ltsPlan = (...emails: ReadonlyArray<readonly [string, ReadonlyArray<string
       ],
     })),
   });
+
+const prepareOverlap = (retryPlan: string) => {
+  const researched = retryPlan === 'different recipients' || retryPlan === 'empty plan';
+  const empty = retryPlan === 'saved empty plan';
+  const email = (to: string, body: string | null = null) => ({
+    action_key: SEND, title: 'Email the notes',
+    arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' },
+      ...(body === null ? [] : [{ name: 'body', value_json: JSON.stringify(body) }])],
+  });
+  const body = 'MySQL 8.4 is the current LTS release.';
+  planner.answers = [
+    JSON.stringify({ web_research: !researched && !empty, actions: retryPlan === 'empty plan' ? [] : [email('c@example.com')] }),
+    JSON.stringify({ web_research: researched, actions: empty ? [] : [email('a@example.com'), email('b@example.com')] }),
+    ...(researched ? [JSON.stringify({ web_research: true, actions: [email('a@example.com', body), email('b@example.com', body)] })] : []),
+    ...(retryPlan === 'rejected synthesis' ? [JSON.stringify({ web_research: true, actions: [] })] : []),
+  ];
+  openai.replies = researched || retryPlan === 'rejected synthesis' ? [answered(body)] : [];
+  return { researched, empty, body };
+};
 
 describe('research.run', () => {
   it.effect('researches a lookup with cited sources, records the paid usage, and does not pay again once the research is stored', () =>
@@ -458,30 +477,16 @@ describe('research.run', () => {
           const sql = yield* SqlClient.SqlClient;
           const { member, meeting_id } = yield* setup;
           const job = yield* researchJob(member, meeting_id, 'overlap', 'Look up MySQL and email the notes to a@example.com and b@example.com');
-          const researched = retryPlan === 'different recipients' || retryPlan === 'empty plan';
-          const empty = retryPlan === 'saved empty plan';
-          const email = (to: string, body: string | null = null) => ({
-            action_key: SEND, title: 'Email the notes',
-            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' },
-              ...(body === null ? [] : [{ name: 'body', value_json: JSON.stringify(body) }])],
-          });
-          const body = 'MySQL 8.4 is the current LTS release.';
-          planner.answers = [
-            JSON.stringify({ web_research: !researched && !empty, actions: retryPlan === 'empty plan' ? [] : [email('c@example.com')] }),
-            JSON.stringify({ web_research: researched, actions: empty ? [] : [email('a@example.com'), email('b@example.com')] }),
-            ...(researched ? [JSON.stringify({ web_research: true, actions: [email('a@example.com', body), email('b@example.com', body)] })] : []),
-            ...(retryPlan === 'rejected synthesis' ? [JSON.stringify({ web_research: true, actions: [] })] : []),
-          ];
-          openai.replies = researched || retryPlan === 'rejected synthesis' ? [answered(body)] : [];
-          const started = Promise.withResolvers<void>();
-          const resume = Promise.withResolvers<void>();
+          const { researched, empty, body } = prepareOverlap(retryPlan);
+          const started = yield* Deferred.make<void>();
+          const resume = yield* Deferred.make<void>();
           const complete = plannerModel.complete;
           const model = vi.spyOn(plannerModel, 'complete').mockImplementation(async request => {
             const pending = planner.requests.length === 0;
             const answer = await complete(request);
             if (pending) {
-              started.resolve();
-              await resume.promise;
+              Effect.runSync(Deferred.succeed(started, undefined));
+              await Effect.runPromise(Deferred.await(resume));
             }
             return answer;
           });
@@ -491,19 +496,21 @@ describe('research.run', () => {
             .mockImplementationOnce(() => Effect.die('Attempt stopped before the second request'));
           const result = yield* Effect.gen(function* () {
             const retry = yield* Effect.fork(runResearch(job).pipe(allowance(retryPlan === 'refused research' ? 0 : 2)));
-            yield* Effect.promise(() => started.promise);
+            yield* Deferred.await(started);
             const stopped = yield* Effect.exit(runResearch(job));
             request.mockRestore();
             expect(stopped._tag).toBe(empty ? 'Success' : 'Failure');
             const before = yield* sql<{ id: ActionId }>`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`;
             expect(before).toHaveLength(empty ? 0 : 1);
-            resume.resolve();
+            yield* Deferred.succeed(resume, undefined);
             return { completed: yield* Fiber.join(retry), firstId: before[0]?.id };
-          }).pipe(Effect.ensuring(Effect.sync(() => {
-            resume.resolve();
-            request.mockRestore();
-            model.mockRestore();
-          })));
+          }).pipe(Effect.ensuring(Effect.zipRight(
+            Deferred.succeed(resume, undefined),
+            Effect.sync(() => {
+              request.mockRestore();
+              model.mockRestore();
+            }),
+          )));
 
           expect(result.completed).toEqual({
             status: 'succeeded',
