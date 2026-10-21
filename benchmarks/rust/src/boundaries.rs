@@ -16,7 +16,6 @@ static END_CUE: LazyLock<Regex> = LazyLock::new(|| {
 static START_CUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(let'?s (get )?(started|begin)|welcome,? (everyone|everybody|all)|kick (things |it )?off|good (morning|afternoon),? (everyone|everybody|all)|shall we (start|begin))\b").unwrap()
 });
-static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\p{L}+").unwrap());
 
 #[derive(Clone)]
 pub struct Utterance {
@@ -70,16 +69,16 @@ fn round(value: f64) -> f64 {
 /// `start` when enough independent evidence agrees; otherwise `continue`.
 pub fn evaluate(source: Value, incoming: &Utterance, tail: &[Utterance], gap_ms: Option<f64>) -> Decision {
     let Some(gap) = gap_ms else {
-        let coherent = WORD.find_iter(&incoming.text).count() >= 3;
-        let reason = if coherent {
-            "coherent speech with no open meeting"
+        let speech = !incoming.text.trim().is_empty();
+        let reason = if speech {
+            "captured speech with no open meeting"
         } else {
-            "speech too short to open a meeting"
+            "empty speech does not open a meeting"
         };
         return Decision {
-            start: coherent,
+            start: speech,
             source,
-            evidence: if coherent { vec!["coherent_speech"] } else { vec![] },
+            evidence: if speech { vec!["captured_speech"] } else { vec![] },
             reason: reason.into(),
             uncertainty: 0.2,
         };
@@ -120,9 +119,17 @@ mod tests {
     }
 
     #[test]
-    fn coherent_speech_opens_and_cues_with_a_gap_start_a_new_meeting() {
-        assert!(evaluate(json!({}), &said("the pilot rollout plan"), &[], None).start);
-        assert!(!evaluate(json!({}), &said("uh hm"), &[], None).start);
+    fn captured_speech_opens_and_cues_with_a_gap_start_a_new_meeting() {
+        let short = evaluate(json!({}), &said("uh hm"), &[], None);
+        assert_eq!(
+            (short.start, short.evidence, short.reason.as_str(), short.uncertainty),
+            (true, vec!["captured_speech"], "captured speech with no open meeting", 0.2)
+        );
+        let empty = evaluate(json!({}), &said(" \n"), &[], None);
+        assert_eq!(
+            (empty.start, empty.evidence, empty.reason.as_str()),
+            (false, vec![], "empty speech does not open a meeting")
+        );
         let continuing = evaluate(json!({}), &said("more on the rollout"), &[said("so the plan")], Some(0.0));
         assert_eq!(
             (continuing.start, continuing.reason.as_str(), continuing.uncertainty),
