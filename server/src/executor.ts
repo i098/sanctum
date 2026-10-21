@@ -5,11 +5,12 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { type AccessScope, ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, type RequestActionInput, type WorkspaceId } from '@sanctum/contracts';
+import { type AccessScope, ActionId, JobFailure, type JobId, MeetingId, type PrincipalId, RequestActionInput, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Either, Fiber, Option, Schedule, Schema } from 'effect';
 import { type ActionRow, findByIdempotencyKey, loadAction, requestAction, researchJobActions } from './actions.ts';
 import { authorizeMeeting, requireScope, resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
+import { DbJson } from './db.ts';
 import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
 import { type Plan, type PlanInput, planWork } from './planner.ts';
 import { offeredActions, storedResearch, type WebResearch, webResearch } from './research.ts';
@@ -213,9 +214,35 @@ const researchOutcome = (plan: Plan, pass: ResearchPass, requested: number) => {
 const researchSummary = (found: ResearchPass['found']) =>
   found === null || 'refused' in found ? found : { artifact_id: found.artifact_id, context_item_id: found.context_item_id, sources: found.sources };
 
-/** What earlier attempts of the job requested, with the research it stored; null when they requested nothing, so the job plans. */
-const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }) =>
+const plannedRequests = (job: Job) =>
   Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{ requests: unknown }>`SELECT JSON_EXTRACT(payload, '$.planned_requests') AS requests
+      FROM jobs WHERE workspace_id = ${job.workspace_id} AND id = ${job.id}`;
+    return yield* Schema.decodeUnknown(Schema.NullOr(DbJson(Schema.Array(RequestActionInput))))(row?.requests ?? null);
+  });
+
+/** Save the whole request list before any action commits; an overlapping attempt keeps the first plan. */
+const savePlannedRequests = (job: Job, requests: ReadonlyArray<typeof RequestActionInput.Type>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE jobs SET payload = JSON_SET(payload, '$.planned_requests', JSON_EXTRACT(${JSON.stringify(requests)}, '$'))
+      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND JSON_EXTRACT(payload, '$.planned_requests') IS NULL`;
+    return (yield* plannedRequests(job))!;
+  });
+/** Resume the saved plan without calling the planner, preserving receipts for actions already requested. */
+const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }, access: AccessScope) =>
+  Effect.gen(function* () {
+    const planned = yield* plannedRequests(job);
+    if (planned !== null) {
+      const actions = yield* Effect.forEach(planned, input => Effect.gen(function* () {
+        const existing = yield* findByIdempotencyKey(access, input.idempotency_key);
+        return Option.isSome(existing)
+          ? { action_key: input.action_key, action_id: existing.value.id, state: existing.value.state, already_requested: true }
+          : yield* requestPlanned(access, input, false, job.id);
+      }));
+      return { research: yield* storedResearch(job), actions };
+    }
     const requested = yield* researchJobActions(job.workspace_id, job.id);
     if (requested.length === 0) return null;
     return { research: yield* storedResearch(job), actions: requested.map(action => ({ ...action, already_requested: true })) };
@@ -228,9 +255,9 @@ const earlierAttempt = (job: Job & { readonly requested_by: PrincipalId }) =>
  * and none is requested when research is refused or that pass changes anything else. Each planned
  * action is submitted through the same grant gateway as any agent and records the job. A job that
  * stored its research does not pay for it again, and each further paid attempt counts against the
- * allowance. A retried job whose earlier attempt requested actions does not plan again: it reports
- * those actions and the stored research. Dropped proposals are reported with their reasons, and
- * nothing to do is reported as the outcome, never an empty success.
+ * allowance. Before requesting actions, it stores the complete plan on the job. A retry requests
+ * each missing action with its saved idempotency key and reports every planned action without
+ * planning again. Dropped proposals and nothing to do are reported with their reasons.
  */
 export const runResearch = (job: Job) =>
   Effect.gen(function* () {
@@ -241,12 +268,13 @@ export const runResearch = (job: Job) =>
     if (meeting_id === null) return yield* new JobFailure({ message: 'Research planning needs a meeting', retryable: false });
     yield* authorizeMeeting(access, meeting_id, 'write');
     const requester = { ...job, requested_by: job.requested_by };
-    const earlier = yield* earlierAttempt(requester);
+    const earlier = yield* earlierAttempt(requester, access);
     if (earlier) return { status: 'succeeded', result: earlier } as const;
     const offered = yield* offeredActions(access, meeting_id, request);
     const plan = yield* planWork(access, { meeting_id, request, actions: offered });
     const pass = yield* researchPass(requester, access, { meeting_id, request, offered, plan });
-    const actions = yield* Effect.forEach(pass.planned, input => requestPlanned(access, { ...input, meeting_id }, pass.second !== null, job.id));
+    const planned = pass.planned.length === 0 ? [] : yield* savePlannedRequests(job, pass.planned.map(input => ({ ...input, meeting_id })));
+    const actions = yield* Effect.forEach(planned, input => requestPlanned(access, input, pass.second !== null, job.id));
     const outcome = researchOutcome(plan, pass, actions.length);
     if (outcome) yield* Effect.logInfo('research.run did nothing', { job_id: job.id, outcome });
     const extra = { ...(plan.rejected ? { dropped: plan.rejected } : {}), ...(outcome ? { outcome } : {}) };

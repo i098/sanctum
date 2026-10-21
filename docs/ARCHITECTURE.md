@@ -188,7 +188,9 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 - Replies read the requester's context for the listener's open meeting; a device credential without `context:read` gets no reply, never a guess.
 - Results over the Pipedream output budget are stored as `action_output` artifacts and referenced by `provider_receipt.artifact_id`.
 - `research.run` (`executor.ts` with `research.ts`): finds the requester's granted actions among the `searchIntegrationActions` matches for the request in each granted app (one search per app, so other usable apps cannot crowd them out), inspects each with its grant's account, lets `planWork` decide on web research and fill in actions, researches first, then requests each planned action through `requestAction`, which writes the job ID to `actions.research_job_id` with the action.
-  A retried job that finds actions with its ID does not plan again; it reports them as `already_requested` with the research it stored.
+  Before requesting the first action, it saves every planned request, including its idempotency key, in `jobs.payload.planned_requests`.
+  A retry uses that saved list without planning again, requests each missing action, and reports every planned action with the stored research.
+  It reports existing actions as `already_requested` and does not submit them again.
   A retried job with stored research but no requested actions uses that research without another paid call, even when its new plan declines web research.
   When research is available and actions are planned, `planWork` runs again over only those actions, with cited research in a delimited untrusted block.
   Research may fill only content fields (subject, body, notes and the like).

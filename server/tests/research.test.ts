@@ -5,9 +5,10 @@
  */
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import type { AccessScope, ActionId, MeetingId } from '@sanctum/contracts';
-import { ConfigProvider, Effect, Layer } from 'effect';
+import { type AccessScope, type ActionId, type MeetingId, RequestActionInput } from '@sanctum/contracts';
+import { ConfigProvider, Effect, Layer, Schema } from 'effect';
 import { beforeEach, vi } from 'vitest';
+import * as Actions from '../src/actions.ts';
 import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction, runResearch } from '../src/executor.ts';
@@ -43,15 +44,15 @@ const pipedream = fixturePipedream([
 
 /** Scripted planner answers, in order; every planner request is kept. */
 const planner = { answers: [] as Array<string | ProviderError>, requests: [] as ProviderRequest[] };
-const plannerModel: ModelProvider = {
-  complete: async request => {
+const plannerModel = {
+  complete: async (request: ProviderRequest) => {
     planner.requests.push(request);
     const answer = planner.answers.shift();
     if (answer === undefined) throw new ProviderError('no scripted planner answer left', false);
     if (answer instanceof ProviderError) throw answer;
     return answer;
   },
-};
+} satisfies ModelProvider;
 
 /** OpenAI Responses answers by `fetch`; every request body is kept. */
 const openai = { replies: [] as Array<() => Response>, bodies: [] as Array<Record<string, unknown>> };
@@ -360,6 +361,93 @@ describe('research.run', () => {
         expect(planner.requests).toHaveLength(1);
         expect(openai.bodies).toHaveLength(0);
         expect(yield* sql`SELECT id FROM actions WHERE workspace_id = ${member.workspace_id}`).toHaveLength(1);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.effect('resumes every saved request after an attempt stops between two action commits', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { member, meeting_id } = yield* setup;
+        const job = yield* researchJob(member, meeting_id, 'partial', 'Email the notes to a@example.com and b@example.com');
+        planner.answers = [JSON.stringify({
+          web_research: false,
+          actions: ['a@example.com', 'b@example.com'].map(to => ({
+            action_key: SEND, title: 'Email the notes',
+            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' }],
+          })),
+        })];
+        const requestAction = Actions.requestAction;
+        const request = vi.spyOn(Actions, 'requestAction')
+          .mockImplementationOnce(requestAction)
+          .mockImplementationOnce(() => Effect.die('Attempt stopped before the second request'));
+        const stopped = yield* Effect.exit(runResearch(job));
+        request.mockRestore();
+        expect(stopped._tag).toBe('Failure');
+        const before = yield* sql<{ id: ActionId; idempotency_key: string }>`
+          SELECT id, idempotency_key FROM actions WHERE workspace_id = ${member.workspace_id}`;
+        expect(before).toHaveLength(1);
+        const saved = yield* queuedJob(member.workspace_id, 'research.run', 'partial');
+        const { planned_requests: planned } = yield* Schema.decodeUnknown(Schema.Struct({ planned_requests: Schema.Array(RequestActionInput) }))(saved.payload);
+
+        const retry = yield* runResearch(saved);
+        expect(retry).toMatchObject({
+          status: 'succeeded',
+          result: { actions: [
+            { action_key: SEND, action_id: before[0]!.id, state: 'queued', already_requested: true },
+            { action_key: SEND, action_id: expect.any(String), state: 'queued' },
+          ] },
+        });
+        const after = yield* sql<{ args: unknown; idempotency_key: string }>`
+          SELECT args, idempotency_key FROM actions WHERE workspace_id = ${member.workspace_id} ORDER BY created_at, id`;
+        expect(after.map(row => typeof row.args === 'string' ? JSON.parse(row.args) : row.args))
+          .toEqual([{ to: ['a@example.com'], subject: 'Notes' }, { to: ['b@example.com'], subject: 'Notes' }]);
+        expect(after.map(row => row.idempotency_key)).toEqual(planned.map(input => input.idempotency_key));
+        expect(after[0]!.idempotency_key).toBe(before[0]!.idempotency_key);
+        expect(planner.requests).toHaveLength(1);
+        expect(openai.bodies).toHaveLength(0);
+      }).pipe(Effect.provide(services)),
+      { migrated: true },
+    ));
+
+  it.effect('uses the first saved plan when overlapping attempts propose different recipients', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { member, meeting_id } = yield* setup;
+        const job = yield* researchJob(member, meeting_id, 'overlap', 'Email the notes');
+        planner.answers = ['a@example.com', 'b@example.com'].map(to => JSON.stringify({
+          web_research: false,
+          actions: [{ action_key: SEND, title: 'Email the notes',
+            arguments: [{ name: 'to', value_json: JSON.stringify([to]) }, { name: 'subject', value_json: '"Notes"' }] }],
+        }));
+        let release!: () => void;
+        const planned = new Promise<void>(resolve => { release = resolve; });
+        const complete = plannerModel.complete;
+        let attempts = 0;
+        const model = vi.spyOn(plannerModel, 'complete').mockImplementation(async (...args) => {
+          const answer = await complete(...args);
+          if (++attempts === 2) release();
+          await planned;
+          return answer;
+        });
+        const results = yield* Effect.all([runResearch(job), runResearch(job)], { concurrency: 2 })
+          .pipe(Effect.ensuring(Effect.sync(() => model.mockRestore())));
+
+        expect(planner.requests).toHaveLength(2);
+        const rows = yield* sql<{ id: ActionId; args: unknown; idempotency_key: string }>`
+          SELECT id, args, idempotency_key FROM actions WHERE workspace_id = ${member.workspace_id}`;
+        expect(rows).toHaveLength(1);
+        const { planned_requests: saved } = yield* Schema.decodeUnknown(Schema.Struct({ planned_requests: Schema.Array(RequestActionInput) }))(
+          (yield* queuedJob(member.workspace_id, 'research.run', 'overlap')).payload,
+        );
+        expect(rows[0]!.idempotency_key).toBe(saved[0]!.idempotency_key);
+        expect(typeof rows[0]!.args === 'string' ? JSON.parse(rows[0]!.args) : rows[0]!.args).toEqual(saved[0]!.arguments);
+        expect(results).toEqual([
+          { status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, action_id: rows[0]!.id, state: 'queued' }] } },
+          { status: 'succeeded', result: { offered: [SEND], research: null, actions: [{ action_key: SEND, action_id: rows[0]!.id, state: 'queued' }] } },
+        ]);
       }).pipe(Effect.provide(services)),
       { migrated: true },
     ));
