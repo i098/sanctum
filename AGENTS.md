@@ -37,8 +37,8 @@ Do not copy private recordings, contacts, seed data, tokens, or environment file
 The repository CI validates the handoff and deploys documentation.
 Extend it with real application checks as corresponding implementation is added; avoid placeholder tests.
 Use read-only permissions for pull-request checks and keep production secrets out of documentation CI.
-Fallow, Sentrux and Conventional Commit gates are required in CI.
-Stage new source files, run npm run quality:fallow -- --base HEAD and npm run quality:sentrux, and preserve the committed baseline.
+Sentrux and Conventional Commit gates are required in CI.
+Stage new source files, run npm run quality:sentrux, and preserve the committed baseline.
 Keep commit headers and PR titles in Conventional Commit format with a 72-character header limit.
 Do not weaken thresholds, exclusions or baselines to make a failing gate pass.
 Do not add AI/agent co-author attribution to commits.

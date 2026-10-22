@@ -25,6 +25,6 @@ Closes #
 - [ ] Handoff check passes (`npm run check`), and the generated files are current (`npm run docs:render`) if their sources changed.
 - [ ] Documentation builds (`npm run docs:build`) if docs or handoff sources changed.
 - [ ] Application checks pass (`npm run check:app`) if application code changed.
-- [ ] Quality gates pass (`npm run quality:fallow -- --base HEAD` and `npm run quality:sentrux`) for new source files; the Sentrux baseline is unchanged.
+- [ ] Quality gate passes (`npm run quality:sentrux`) for new source files; the Sentrux baseline is unchanged.
 - [ ] Commit messages pass commitlint (`npm run commitlint -- --from HEAD^ --to HEAD`).
 - [ ] No secrets, private recordings, transcripts, or production data are included.
