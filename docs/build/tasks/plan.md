@@ -817,8 +817,8 @@ node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accele
 
 Use a disposable test database for automatic migrations during tests.
 Production migration execution remains a separate explicit action.
-Run `npm run quality:fallow -- --base HEAD` and `npm run quality:sentrux` after staging new files.
-Fallow, Sentrux and Conventional Commit checks are configured in CI; preserve their baselines and rules.
+Run `npm run quality:sentrux` after staging new files.
+Sentrux and Conventional Commit checks are configured in CI; preserve their baselines and rules.
 Use Conventional Commit headers and PR titles with a 72-character limit.
 CI/CD is authorized and already publishes documentation.
 Extend CI with real TypeScript application checks as each slice exists; run Python only in the dedicated Python SDK check once that client exists.

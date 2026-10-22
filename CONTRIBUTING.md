@@ -29,7 +29,7 @@ The current checks validate documentation and handoff integrity; application tes
 ## Quality and commit checks
 
 Stage new files before running Sentrux so its tracked-file scan includes them.
-Run npm run quality:fallow -- --base HEAD and npm run quality:sentrux before submitting code.
+Run npm run quality:sentrux before submitting code.
 Keep the committed Sentrux baseline intact; fix regressions rather than weakening gates.
 Use Conventional Commits, for example ci: enforce quality gates or fix(capture): recover interrupted uploads.
 Use a matching PR title; keep each header at most 72 characters.

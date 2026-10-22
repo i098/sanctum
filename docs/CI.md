@@ -18,13 +18,10 @@ The check job has read-only repository permissions and a ten-minute timeout.
 
 ## Quality regression gates
 
-Every pull request and push to main runs Fallow, Sentrux and commit-standard checks in addition to handoff validation.
+Every pull request and push to main runs Sentrux and commit-standard checks in addition to handoff validation.
 Missing binaries, invalid results, missing Sentrux baselines and scanner failures fail the job; no continue-on-error bypass is configured.
-The scanners check code structure and static findings; they do not prove runtime performance or Rust parity.
+The scanner checks code structure; it does not prove runtime performance or Rust parity.
 
-- Fallow 3.30.0 is locked through npm and runs audit in new-only mode against the PR base or push-before commit; manual dispatch compares HEAD^.
-- Fallow rejects new dead-code, duplication and complexity findings and source parse failures; existing findings remain visible through full scans.
-- Fallow excludes only generated site output, generated snippets and generated blueprint.html; application and tooling source stay in scope.
 - Sentrux 0.5.7 and its Linux grammars are version-pinned and SHA-256-verified before execution.
 - The committed Sentrux floor is 6491, with zero cycles and zero god files; its original JSON is preserved.
 - CI also measures base and candidate in temporary tracked-file snapshots using the same scanner and grammars.
@@ -37,7 +34,6 @@ The scanners check code structure and static findings; they do not prove runtime
 Local checks after staging new source files (Sentrux uses Git's tracked-file inventory):
 
 ```bash
-npm run quality:fallow -- --base HEAD
 npm run quality:sentrux
 npm run commitlint -- --from HEAD^ --to HEAD
 ```
