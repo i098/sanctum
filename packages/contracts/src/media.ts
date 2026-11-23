@@ -21,6 +21,7 @@ import { Schema } from 'effect';
 import { ActionState } from './actions.ts';
 import { EpochEndReason, EpochStartReason, SourceClock, LeaseGeneration } from './capture.ts';
 import { ActionId, CaptureEpochId, ListenerId, MeetingId, SampleIndex, SampleRate } from './common.ts';
+import { DeviceCapabilities } from './devices.ts';
 import { TranscriptSegment } from './transcripts.ts';
 
 export const MEDIA_PROTOCOL_VERSION = 1;
@@ -126,6 +127,7 @@ export const StartMessage = Schema.TaggedStruct('start', {
   track: Schema.Number.pipe(Schema.int(), Schema.between(0, 65_535)),
   clock: SourceClock,
   lease_generation: LeaseGeneration,
+  capabilities: Schema.optional(DeviceCapabilities),
   /** Why a new epoch begins; ignored when `epoch_id` already exists (reconnect keeps the epoch). */
   start_reason: Schema.optionalWith(EpochStartReason, { default: () => 'start' as const }),
   /**

@@ -2,6 +2,7 @@ export * from './common.ts';
 export * from './errors.ts';
 export * from './auth.ts';
 export * from './capture.ts';
+export * from './devices.ts';
 export * from './media.ts';
 export * from './transcripts.ts';
 export * from './meetings.ts';
