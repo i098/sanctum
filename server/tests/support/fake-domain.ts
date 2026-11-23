@@ -152,7 +152,7 @@ const meetingsGroup = (store: Store) => {
           yield* need(access, 'context:read');
           const all = space(access).meetings.filter(m => urlParams.state === undefined || m.state === urlParams.state);
           const { items, next_cursor } = offsetPage(all, urlParams.cursor, urlParams.limit);
-          return { meetings: items, next_cursor };
+          return { meetings: items.map(meeting => ({ ...meeting, device_name: null })), next_cursor };
         }),
       )
       .handle('getMeeting', ({ path }) => Effect.flatMap(CurrentAccess, access => meetingOf(access, path.meeting_id)))

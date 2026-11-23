@@ -108,7 +108,11 @@ export const ListMeetingsParams = Schema.Struct({
 });
 export type ListMeetingsParams = typeof ListMeetingsParams.Type;
 
-export const MeetingPage = Schema.Struct({ meetings: Schema.Array(Meeting), next_cursor: Schema.NullOr(Cursor) });
+/** A listed meeting; `device_name` is the capturing paired device's listener name, null for browser tabs and capture groups. */
+export const MeetingListItem = Schema.Struct({ ...Meeting.fields, device_name: Schema.NullOr(Schema.String) });
+export type MeetingListItem = typeof MeetingListItem.Type;
+
+export const MeetingPage = Schema.Struct({ meetings: Schema.Array(MeetingListItem), next_cursor: Schema.NullOr(Cursor) });
 export type MeetingPage = typeof MeetingPage.Type;
 
 /** Source position where the later meeting starts; the sample at `sample` belongs to the new meeting. */

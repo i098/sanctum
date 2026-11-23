@@ -90,11 +90,11 @@ ListMeetingsInput = TypedDict("ListMeetingsInput", {
 
 
 class MeetingPage(TypedDict):
-    meetings: list[Meeting]
+    meetings: list[MeetingListItem]
     next_cursor: str | None
 
 
-class Meeting(TypedDict):
+class MeetingListItem(TypedDict):
     id: str
     workspace_id: str
     state: Literal["provisional", "active", "closing", "closed", "interrupted"]
@@ -105,6 +105,7 @@ class Meeting(TypedDict):
     boundary_revision: int
     visibility: Literal["restricted", "workspace"]
     processing: MeetingProcessing
+    device_name: str | None
 
 
 class MeetingProcessing(TypedDict):
@@ -127,6 +128,19 @@ class MergeMeetingsTarget(TypedDict):
 class MergeMeetingsSource(TypedDict):
     meeting_id: str
     expected_revision: int
+
+
+class Meeting(TypedDict):
+    id: str
+    workspace_id: str
+    state: Literal["provisional", "active", "closing", "closed", "interrupted"]
+    title: str | None
+    started_at: str
+    ended_at: str | None
+    timezone: str
+    boundary_revision: int
+    visibility: Literal["restricted", "workspace"]
+    processing: MeetingProcessing
 
 
 class GetMeetingInput(TypedDict):

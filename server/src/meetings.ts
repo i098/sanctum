@@ -740,9 +740,10 @@ export const listMeetings = (access: AccessScope, params: ListMeetingsParams) =>
     if (visible.length === 0) return { meetings: [], next_cursor: null } satisfies MeetingPage;
     const rows = yield* SqlSchema.findAll({
       Request: Schema.Void,
-      Result: MeetingRow,
-      execute: () => sql`SELECT ${sql.literal(meetingColumns('m.'))}
-        FROM meetings m WHERE m.workspace_id = ${access.workspace_id} AND m.id IN ${sql.in(visible)}
+      Result: Schema.Struct({ ...MeetingRow.fields, device_name: Schema.NullOr(Schema.String) }),
+      execute: () => sql`SELECT ${sql.literal(meetingColumns('m.'))}, l.name AS device_name
+        FROM meetings m LEFT JOIN listeners l ON l.workspace_id = m.workspace_id AND l.id = m.listener_id AND l.device_id IS NOT NULL AND m.capture_group_id IS NULL
+        WHERE m.workspace_id = ${access.workspace_id} AND m.id IN ${sql.in(visible)}
           AND EXISTS (SELECT 1 FROM meeting_ranges r WHERE r.meeting_id = m.id AND r.boundary_revision = m.boundary_revision)
           ${params.state === undefined ? sql`` : sql`AND m.state = ${params.state}`}
           ${params.from === undefined ? sql`` : sql`AND m.started_at >= ${Schema.encodeSync(DbUtc)(params.from)}`}
@@ -757,7 +758,7 @@ export const listMeetings = (access: AccessScope, params: ListMeetingsParams) =>
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     const next_cursor = rows.length > limit && last !== undefined ? Buffer.from(Schema.encodeSync(CursorKey)([last.started_at, last.id])).toString('base64url') : null;
-    return { meetings: page.map(toMeeting), next_cursor } satisfies MeetingPage;
+    return { meetings: page.map(({ device_name, ...row }) => ({ ...toMeeting(row), device_name })), next_cursor } satisfies MeetingPage;
   }).pipe(dbFailures);
 
 /** Share of the meeting's current ranges with final transcript coverage. */
