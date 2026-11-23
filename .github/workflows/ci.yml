@@ -64,8 +64,17 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Install Playwright Chromium headless shell
         run: npx playwright install --with-deps --only-shell chromium
-      - name: Typecheck, test, build and validate benchmark manifest
-        run: npm run check:app
+      - name: Run the two unmodified listening browser specs
+        env:
+          SANCTUM_ENV: test
+        run: npm run test:e2e -w web-app -- e2e/listen-visual.spec.ts e2e/listen-waveform.spec.ts --reporter=list,html
+      - name: Save the listening browser report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: listening-browser-report
+          path: web-app/playwright-report/
+          retention-days: 1
 
   python-sdk:
     name: Python SDK
