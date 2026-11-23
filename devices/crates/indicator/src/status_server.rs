@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Component, Path};
@@ -312,6 +312,7 @@ mod tests {
     use crate::{Indicator, test_support::*};
     use sanctum_device_contract::{DeviceState::*, Indicate, Owner};
     use serde_json::{Value, json};
+    use std::fs;
     use std::io::{BufRead, BufReader, Read};
     use std::net::{Shutdown, TcpStream};
 

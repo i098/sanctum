@@ -39,14 +39,11 @@ impl Shared {
     }
 }
 
-enum Command {
-    Change(Status, Sender<io::Result<()>>),
-    Stop,
-}
+type Change = (Status, Sender<io::Result<()>>);
 
 pub struct Indicator {
     capabilities: Capabilities,
-    commands: Sender<Command>,
+    changes: Option<Sender<Change>>,
     last_state: Mutex<Option<DeviceState>>,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -63,7 +60,7 @@ impl Indicator {
             light: light.as_ref().map_or(LightKind::None, |(_, kind)| *kind),
         };
         let shared = Arc::new(Shared::default());
-        let (commands, receiver) = mpsc::channel();
+        let (changes, receiver) = mpsc::channel();
         let worker_shared = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("sanctum-indicator".into())
@@ -93,7 +90,7 @@ impl Indicator {
         };
         Self {
             capabilities,
-            commands,
+            changes: Some(changes),
             last_state: Mutex::new(None),
             shared,
             thread,
@@ -118,8 +115,10 @@ impl Indicate for Indicator {
             self.fault()
                 .unwrap_or_else(|| io::Error::other("The indicator worker stopped"))
         };
-        self.commands
-            .send(Command::Change(status, reply))
+        self.changes
+            .as_ref()
+            .expect("The sender stays open until drop")
+            .send((status, reply))
             .map_err(|_| stopped())?;
         let result = result.recv().map_err(|_| stopped())?;
         if result.is_ok() {
@@ -150,7 +149,7 @@ impl Indicate for Indicator {
 
 impl Drop for Indicator {
     fn drop(&mut self) {
-        let _ = self.commands.send(Command::Stop);
+        drop(self.changes.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -169,7 +168,7 @@ fn until_boundary(elapsed: Duration, period: Duration) -> Duration {
     period - Duration::from_nanos((elapsed.as_nanos() % period.as_nanos()) as u64)
 }
 
-fn run(receiver: Receiver<Command>, shared: &Shared, mut outputs: Outputs) {
+fn run(receiver: Receiver<Change>, shared: &Shared, mut outputs: Outputs) {
     let mut current: Option<Frame> = None;
     let mut pending = None;
     loop {
@@ -183,8 +182,8 @@ fn run(receiver: Receiver<Command>, shared: &Shared, mut outputs: Outputs) {
         };
         let now = Instant::now();
         match command {
-            Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-            Ok(Command::Change(status, reply)) => {
+            Err(RecvTimeoutError::Disconnected) => break,
+            Ok((status, reply)) => {
                 let delay = current.as_ref().map_or(Duration::ZERO, |frame| {
                     change_delay(
                         frame.status.state,
