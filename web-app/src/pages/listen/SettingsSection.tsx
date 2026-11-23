@@ -12,6 +12,7 @@ const TeamWidgets = lazy(() => import('./WorkosTeam.tsx').then(module => ({ defa
 const SetUpTeam = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.SetUpTeam })));
 const TeamPanel = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.TeamPanel })));
 const ProfilePanel = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.ProfilePanel })));
+const DevicesSection = lazy(() => import('./DevicesSection.tsx').then(module => ({ default: module.DevicesSection })));
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -254,7 +255,14 @@ function deviceRows(permission: PermissionState, engine: CaptureView, fullscreen
   ];
 }
 
-/** Settings section in four groups: Account, Device, Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
+/** The hardware listeners paired to this person; they need a session to list. */
+const devicesGroup = (signIn: SignInState) => signIn.status === 'signed_in' && (
+  <Group title="Devices">
+    <Suspense fallback={<p>Loading…</p>}><DevicesSection /></Suspense>
+  </Group>
+);
+
+/** Settings section in five groups: Account, Device, Devices (signed in), Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
   return (
     <>
@@ -265,6 +273,7 @@ export function SettingsSection({ permission, engine, client, signIn, notice, on
       <Group title="Device">
         <Rows rows={deviceRows(permission, engine, fullscreen)} />
       </Group>
+      {devicesGroup(signIn)}
       <Group title="Data">
         <Rows rows={[['Retention', 'Not selected: nothing is deleted automatically']]} />
         <LocalRecordings engine={engine} />
