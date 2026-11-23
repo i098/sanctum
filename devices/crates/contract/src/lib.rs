@@ -57,6 +57,8 @@ pub trait Screen: Send {
 pub trait Indicate: Send + Sync {
     /// Return only after the first frame of the new state is written.
     fn show(&self, status: Status) -> io::Result<()>;
+    /// Update live levels without blocking capture.
+    fn level(&self, level: f32, bands: [f32; 8]);
     fn fault(&self) -> Option<io::Error>;
     fn capabilities(&self) -> Capabilities;
 }

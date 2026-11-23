@@ -3,7 +3,7 @@ name: changelog
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fm/sanctum-any-device]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:

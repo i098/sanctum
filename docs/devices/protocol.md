@@ -7,8 +7,8 @@ The server cannot confirm that a physical indicator works. Implement the [record
 ## Pairing and credentials
 
 The endpoints below start with `/api/v1` and use JSON.
-Session endpoints require a browser session with `capture:ingest` and `context:write`.
-Send the session's CSRF header on approval and revocation.
+Protected endpoints require an authenticated principal with `capture:ingest` and `context:write`.
+When you use a browser session, send its CSRF header on approval and revocation.
 
 | Method and path | Auth | Request | Success |
 | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ Wait five seconds between token polls. A token failure returns HTTP `400` with `
 | `invalid_grant` | Stop polling. The code is unknown or the server already gave the token. |
 
 Pending lookup returns `404` for an unknown, expired, or used code.
-After five wrong codes from one principal in ten minutes, pending lookup and approval return `403`.
+The sixth wrong code from one principal in ten minutes returns `403`.
 Authorization removes expired rows and returns `503` when 1,000 pending rows fill the limit.
 Sanctum stores hashes of both codes and the token, not their plain values.
 Approval creates a non-expiring token for the approver with only `capture:ingest`. The device uses no seat.
@@ -62,7 +62,7 @@ Device credentials do not appear in the agent list. The pairing API is not in MC
 
 A heartbeat has `lease_generation`, `state`, `epoch_id`, `buffered_chunks`, and `storage_bytes_free`.
 Use `null` for the epoch before capture and for unknown free storage.
-Report `stopped` for `unpaired` and `error`; other states use their names.
+Do not send heartbeats in `unpaired`. Report `stopped` in `error`; other states use their names.
 A receipt contains `lease_generation`, `lease_expires_at`, and `owner`.
 
 The `start` object has `_tag: "start"`, `protocol_version: 1`, `listener_id`, `epoch_id`, `track`, `lease_generation`, and `capabilities`.
@@ -100,7 +100,8 @@ If the socket drops, keep recording to disk and show `reconnecting`. Retry the s
 Use the `resume_from_sample` value in `accepted` to continue. Treat close code `1013` as a retry.
 On `stale_generation` or `owner: false`, close the microphone and show `stopped`. Claim the lease and start a new epoch.
 On heartbeat `401`, close the microphone, delete the token, and show `unpaired`.
-A revoked device sees `401` by its next heartbeat (at most 15 seconds). The server ends its open epoch after the lease lapses and the worker runs its sweep.
+A revoked device sees `401` by its next heartbeat plus the request time.
+The server ends its open epoch after the 45-second lease lapses and the worker runs its sweep.
 
 ## Durable audio
 
@@ -158,3 +159,5 @@ Each pattern starts with a lit interval. The durations alternate between lit and
 If possible, power the LED from the microphone supply rail so software cannot hide recording.
 Use the [fixture](../../packages/contracts/fixtures/device-wire.json) to check the pattern at one-millisecond intervals for 60 seconds.
 In its `segments_ms` arrays, even indexes are lit and odd indexes are dark. One lit segment represents a steady light.
+Measure each pattern from the time the device enters the state.
+The reference client supports mono and PWM lights. Other clients can also implement RGB.

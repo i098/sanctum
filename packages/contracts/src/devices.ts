@@ -61,7 +61,7 @@ export const DeviceTokenError = Schema.Struct({
 });
 export type DeviceTokenError = typeof DeviceTokenError.Type;
 
-export class DevicesApi extends HttpApiGroup.make('devices')
+export class DevicePairingApi extends HttpApiGroup.make('devicePairing')
   .add(HttpApiEndpoint.post('authorizeDevice', '/device/authorize')
     .setPayload(Schema.Struct(deviceDescription)).addSuccess(DeviceAuthorization).addError(Unavailable))
   .add(HttpApiEndpoint.post('deviceToken', '/device/token')
@@ -69,14 +69,18 @@ export class DevicesApi extends HttpApiGroup.make('devices')
       grant_type: Schema.Literal('urn:ietf:params:oauth:grant-type:device_code'),
       device_code: Schema.String.pipe(Schema.maxLength(200)),
     })).addSuccess(DeviceToken).addError(DeviceTokenError, { status: 400 }))
+  .prefix('/api/v1') {}
+
+export class DevicesApi extends HttpApiGroup.make('devices')
   .add(HttpApiEndpoint.get('pendingDevice', '/device/pending')
     .setUrlParams(Schema.Struct({ user_code: userCode }))
     .addSuccess(Schema.Struct({ ...deviceDescription, expires_at: UtcTimestamp }))
-    .addError(NotFound).middleware(Authenticated))
+    .addError(NotFound))
   .add(HttpApiEndpoint.post('approveDevice', '/device/approve')
     .setPayload(Schema.Struct({ user_code: userCode, approve: Schema.Boolean }))
-    .addSuccess(Device).addError(NotFound).middleware(Authenticated))
+    .addSuccess(Device).addError(NotFound))
   .add(HttpApiEndpoint.get('listDevices', '/devices')
-    .addSuccess(Schema.Struct({ items: Schema.Array(Device) })).middleware(Authenticated))
-  .add(HttpApiEndpoint.del('revokeDevice')`/devices/${deviceId}`.addError(NotFound).middleware(Authenticated))
+    .addSuccess(Schema.Struct({ items: Schema.Array(Device) })))
+  .add(HttpApiEndpoint.del('revokeDevice')`/devices/${deviceId}`.addError(NotFound))
+  .middleware(Authenticated)
   .prefix('/api/v1') {}

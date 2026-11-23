@@ -282,8 +282,8 @@ The [device protocol](devices/protocol.md) is the shared wire contract. Keep fix
 
 | Slice | Owns | Shared contract |
 | --- | --- | --- |
-| S0 | `packages/contracts/src/devices.ts`, the optional `StartMessage.capabilities`, `packages/contracts/fixtures/device-wire.json`, `devices/crates/contract` | `DevicesApi`, `DeviceCapabilities`, `DeviceState`, `Device`, the golden fixture and the Rust `Indicate` trait. |
-| S1 | Device enrollment, migration `024_devices`, registration and SDK generation | The six `DevicesApi` endpoints; device tokens have only `capture:ingest`. |
+| S0 | `packages/contracts/src/devices.ts`, the optional `StartMessage.capabilities`, `packages/contracts/fixtures/device-wire.json`, `devices/crates/contract` | `DevicePairingApi`, `DevicesApi`, `DeviceCapabilities`, `DeviceState`, `Device`, the golden fixture and the Rust `Indicate` trait. |
+| S1 | Device enrollment, migration `024_devices`, registration and SDK generation | Six endpoints across `DevicePairingApi` and `DevicesApi`; device tokens have only `capture:ingest`. |
 | S2 | Media ingest and listener capability persistence | The existing capture endpoints and WebSocket with device capabilities. |
 | S3 | `devices/crates/listener` | `Input`, `Config`, `input_from_arg` and `run`; consumes `Indicate`. |
 | S4 | `devices/crates/indicator` | `Indicator`, `pattern`, `light_from_arg` and `screen_from_arg`; implements `Indicate`. |
