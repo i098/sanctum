@@ -27,7 +27,8 @@ import {
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
-import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
+import type { CaptureAccess } from '../auth.ts';
+import { advanceLiveWatermark, credentialActive, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { asrPrompt, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
@@ -76,7 +77,7 @@ interface Lane {
 }
 
 export interface LiveSessionInput {
-  readonly access: AccessScope;
+  readonly access: CaptureAccess;
   readonly listener: { readonly id: ListenerId; readonly capture_group_id: string | null };
   readonly start: typeof StartMessage.Type;
   readonly resume_from_sample: number;
@@ -401,7 +402,12 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
         yield* speech.onEnd('disconnect');
       }),
     );
-    yield* Effect.forkScoped(Effect.repeat(flush, Schedule.spaced(liveLimits.watermarkFlushMs)));
+    // Another API process may have revoked the credential; its sockets there cannot be closed from here.
+    const stillAuthorized = credentialActive(access).pipe(
+      Effect.flatMap(active => active ? Effect.void : Deferred.fail(fenced, new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message: 'This credential was revoked' }) }))),
+      Effect.catchAll(error => Effect.logWarning('Live credential not checked', error)),
+    );
+    yield* Effect.forkScoped(Effect.repeat(Effect.zipRight(stillAuthorized, flush), Schedule.spaced(liveLimits.watermarkFlushMs)));
     if (start.capabilities === undefined) {
       yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
     }

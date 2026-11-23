@@ -255,6 +255,16 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
     );
   });
 
+/** Whether the bearer credential behind a live socket is still unrevoked and unexpired; browser sessions have none and always pass. */
+export const credentialActive = (access: CaptureAccess) =>
+  Effect.gen(function* () {
+    if (access.credential_id === undefined) return true;
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql`SELECT 1 FROM agent_credentials
+      WHERE workspace_id = ${access.workspace_id} AND id = ${access.credential_id} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))`;
+    return rows.length > 0;
+  });
+
 /**
  * Persists the live watermark while `lease_generation` still owns the listener and the epoch is still
  * its open one; `false` means a newer owner took over or the epoch ended, and the caller must stop live writes.

@@ -19,6 +19,7 @@ Model evidence includes the public speech baseline below and small synthetic com
 
 ## Hardware listeners
 
+- Older evidence: the build and replay below were recorded around commit `4b740ff`. The exact source commit of the binary is not proved. They predate later Rust and server changes on this branch, including the kiosk start confirmation and the capture-only device boundary. A new run has not been made.
 - Build: `cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p sanctum-listener` produced a static ARM64 Linux executable of 3,562,304 bytes. SHA-256: `ffaba8121cacea0666ede05949e930bfe725f8dee1e5f5d91e82d596a6beda7e`.
 - Fixture verification: [`npm run check:app -- --device-client`](../scripts/device-e2e.ts) passed V1 through V7 with the ARM64 executable under QEMU.
   The run used Chromium, a disposable MySQL database, synthetic audio, and a local speech-to-text fixture.

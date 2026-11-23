@@ -108,6 +108,7 @@ Treat close code `1013` as a retry. On `epoch_closed`, start a new epoch.
 On `stale_generation` or `owner: false`, close the microphone and show `stopped`. Claim the lease and start a new epoch.
 On heartbeat `401`, close the microphone, delete the token, and show `unpaired`.
 A revoked device sees `401` by its next heartbeat plus the request time.
+The API process that serves the revoke closes its live socket at once. A socket on another process closes at its next one-second watermark check, which reads the stored revocation.
 The server ends its open epoch after the 45-second lease lapses and the worker runs its sweep.
 
 ## Durable audio

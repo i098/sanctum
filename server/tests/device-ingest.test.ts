@@ -172,6 +172,20 @@ layer(MigratedDatabase, { timeout: 120_000 })('hardware listener ingest', it => 
     }),
   );
 
+  it.scoped('closes a live device socket when another process revoked its credential', () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { token, start, connect } = yield* setup;
+      const socket = yield* connect;
+      socket.send(JSON.stringify({ ...start, capabilities: lightOnly }));
+      yield* socket.take('accepted');
+      // The revoking process holds no socket of this one, so only the stored revocation can end it.
+      yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE token_hash = ${hashToken(token)}`;
+      expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
+      expect((yield* socket.closed).code).toBe(1008);
+    }),
+  );
+
   it.scoped('closes a newly opened socket if its authorization is no longer current', () =>
     Effect.gen(function* () {
       let admitted = false;
