@@ -124,7 +124,7 @@ fn read_frame(
             return Err(End::Fault);
         }
         match source.read(&mut pcm.bytes[pcm.len..]) {
-            Ok(0) if pcm.len % 2 == 0 => return Ok((pcm, true)),
+            Ok(0) if pcm.len.is_multiple_of(2) => return Ok((pcm, true)),
             Ok(0) => return Err(End::Input),
             Ok(n) => pcm.len += n,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -264,7 +264,7 @@ fn wav_input(file: &mut File) -> io::Result<(u64, u64)> {
                 }
                 format = true;
             }
-            b"data" if format && length % 2 == 0 => return Ok((start, length)),
+            b"data" if format && length.is_multiple_of(2) => return Ok((start, length)),
             _ => {}
         }
         file.seek(SeekFrom::Start(cursor))?;

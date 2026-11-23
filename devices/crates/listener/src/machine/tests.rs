@@ -500,6 +500,15 @@ fn refuses_capture_without_visible_indicator() {
     assert!(!dir.0.join("missing").exists());
 }
 
+fn signals_with_heartbeat(ms: u64) -> Signals {
+    Signals {
+        stop: Default::default(),
+        pause: Default::default(),
+        ids: Vec::new(),
+        heartbeat: Some(Duration::from_millis(ms)),
+    }
+}
+
 #[test]
 fn revocation_and_indicator_fault_close_the_process_before_display_changes() {
     for case in [Case::Revoke, Case::Normal] {
@@ -509,10 +518,7 @@ fn revocation_and_indicator_fault_close_the_process_before_display_changes() {
         let marker = dir.0.join("opened");
         let mut config = server.config(&dir.0);
         config.input = Input::Cmd(format!("echo $$ > '{}'; sleep 30", marker.display()));
-        let signals = Signals {
-            heartbeat: Some(Duration::from_millis(350)),
-            ..Signals::default()
-        };
+        let signals = signals_with_heartbeat(350);
         let stopped = signals.stop.clone();
         let target = if case == Case::Revoke {
             State::Unpaired
@@ -569,10 +575,7 @@ fn pause_resumes_and_lost_lease_stops_before_reclaim() {
     let dir = Scratch::new();
     server.credential(&dir.0);
     fixture(&dir.0, 16_000);
-    let signals = Signals {
-        heartbeat: Some(Duration::from_millis(300)),
-        ..Signals::default()
-    };
+    let signals = signals_with_heartbeat(300);
     let pause = signals.pause.clone();
     let seen = AtomicUsize::new(0);
     let indicator = Arc::new(Indicator {
