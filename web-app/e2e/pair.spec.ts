@@ -28,25 +28,27 @@ const device = (n: number, status: string, last_used_at: string | null) => ({
   revoked_at: null,
 });
 
-/**
- * Routed stand-in for `DevicesApi` (stand-in until the S1 server merges): one pending device under
- * CODE, and the server's lockout, where the sixth wrong code in a row answers 403.
- */
+/** Routes for one pending device and the server's five-miss lockout. */
 async function devicesApi(page: Page) {
   const state = { wrong: 0, answers: [] as unknown[], devices: [device(1, 'approved', '2026-11-23T10:15:00.000Z'), device(2, 'approved', null)] };
   await page.context().addCookies([{ name: 'sanctum_csrf', value: CSRF, url: test.info().project.use.baseURL! }]);
   const refuse = (tag: string, status: number) => ({ status, json: { _tag: tag, code: tag === 'NotFound' ? 'not_found' : 'forbidden', message: tag, retryable: false } });
   const lookUp = (code: string) => {
+    if (state.wrong >= 5) {
+      const refusal = refuse('Forbidden', 403);
+      refusal.json.message = 'Too many incorrect device codes. Try again in 10 minutes.';
+      return refusal;
+    }
     if (code.replace('-', '') === CODE) return null;
     state.wrong += 1;
-    return state.wrong > 5 ? refuse('Forbidden', 403) : refuse('NotFound', 404);
+    return refuse('NotFound', 404);
   };
   await page.route('**/api/v1/device/pending?*', route => {
     const refusal = lookUp(new URL(route.request().url()).searchParams.get('user_code')!);
     return route.fulfill(refusal ?? { json: { name: 'Kitchen Pi', capabilities: CAPABILITIES, expires_at: '2026-11-23T10:10:00.000Z' } });
   });
   await page.route('**/api/v1/device/approve', route => {
-    expect(route.request().headers()['x-csrf-token']).toBe(CSRF);
+    if (route.request().headers()['x-csrf-token'] !== CSRF) return route.fulfill(refuse('Forbidden', 403));
     const body = route.request().postDataJSON();
     state.answers.push(body);
     return route.fulfill(lookUp(body.user_code) ?? { json: device(1, body.approve ? 'approved' : 'denied', null) });
@@ -76,7 +78,10 @@ test('a signed-out visitor signs in and comes back with the code kept', async ({
     return route.fulfill({ status: 302, headers: { location: new URL(route.request().url()).searchParams.get('return_to')! } });
   });
   await page.goto(`/pair?code=${CODE}`);
-  await page.getByRole('link', { name: 'Sign in to pair' }).click();
+  await Promise.all([
+    page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame() }),
+    page.getByRole('link', { name: 'Sign in to pair' }).click(),
+  ]);
   await expect(page).toHaveURL(`/pair?code=${CODE}`);
   await expect(page.getByLabel('Code on the device')).toHaveValue('1234-5678');
 });
@@ -110,9 +115,19 @@ test('a wrong code shows one inline error, and the lockout shows the lock messag
     await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('alert')).toHaveText('No device is waiting for this code. Check the code on the device.');
   }
-  await input.fill('0000-0009');
+  await input.fill('1234-5678');
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('alert')).toHaveText('Too many wrong codes. Wait 10 minutes, then try again.');
+});
+
+test('a missing CSRF cookie does not show a code lockout', async ({ page }) => {
+  await signedIn(page, '?code=12345678');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  const approve = page.getByRole('button', { name: 'Approve' });
+  await expect(approve).toBeVisible();
+  await page.context().clearCookies({ name: 'sanctum_csrf' });
+  await approve.click();
+  await expect(page.getByRole('alert')).toHaveText('Sanctum did not answer. Try again.');
 });
 
 test('fits a phone with no horizontal scroll', async ({ page }) => {

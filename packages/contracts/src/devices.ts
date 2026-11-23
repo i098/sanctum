@@ -18,6 +18,9 @@ export type DeviceState = typeof DeviceState.Type;
 export const DeviceId = Schema.UUID.pipe(Schema.brand('DeviceId'));
 export type DeviceId = typeof DeviceId.Type;
 
+/** The existing Forbidden response message that identifies a code lockout. */
+export const DEVICE_PAIR_LOCKOUT = 'Too many incorrect device codes. Try again in 10 minutes.';
+
 const deviceDescription = {
   name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200)),
   capabilities: DeviceCapabilities,

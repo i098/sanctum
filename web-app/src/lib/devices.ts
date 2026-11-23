@@ -1,6 +1,6 @@
 /** Browser client of `DevicesApi`, derived from the shared contract so paths and schemas cannot drift. */
 import { FetchHttpClient, HttpApi, HttpApiClient, HttpClient, HttpClientRequest } from '@effect/platform';
-import { type Device, type DeviceCapabilities, type DeviceId, DevicesApi, Forbidden, NotFound, Unauthenticated, Unavailable, type UtcTimestamp } from '@sanctum/contracts';
+import { DEVICE_PAIR_LOCKOUT, type Device, type DeviceCapabilities, type DeviceId, DevicesApi, Forbidden, NotFound, Unauthenticated, Unavailable, type UtcTimestamp } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { csrfToken } from './session.ts';
 
@@ -10,7 +10,7 @@ class PairApi extends HttpApi.make('sanctum').add(DevicesApi).addError(Unauthent
 /** Why a call gave no answer: `locked` is the 403 after too many wrong codes (the server counts them, not the page). */
 export type Refusal = 'signed_out' | 'not_found' | 'locked' | 'failed';
 
-const REFUSALS: Partial<Record<string, Refusal>> = { Unauthenticated: 'signed_out', NotFound: 'not_found', Forbidden: 'locked' };
+const REFUSALS: Partial<Record<string, Refusal>> = { Unauthenticated: 'signed_out', NotFound: 'not_found' };
 
 /** A device waiting for approval, as `GET /device/pending` describes it. */
 export interface PendingDevice {
@@ -28,7 +28,9 @@ export interface DevicesClient {
 
 // Every failure, network and decode included, carries a `_tag`; it settles to a refusal the page can name.
 const settle = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>): Promise<A | Refusal> =>
-  Effect.runPromise(effect.pipe(Effect.catchAll(error => Effect.succeed(REFUSALS[error._tag] ?? 'failed'))));
+  Effect.runPromise(effect.pipe(Effect.catchAll(error => Effect.succeed(
+    error._tag === 'Forbidden' && 'message' in error && error.message === DEVICE_PAIR_LOCKOUT ? 'locked' : REFUSALS[error._tag] ?? 'failed',
+  ))));
 
 /** Same-origin by default: the session cookie authenticates every call, and mutations carry the CSRF header. */
 export function makeDevicesClient(baseUrl = globalThis.location?.origin ?? ''): DevicesClient {

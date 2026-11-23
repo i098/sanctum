@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { HttpApiBuilder, HttpServerRequest, HttpServerResponse } from '@effect/platform';
 import { SqlClient, SqlSchema, type Statement } from '@effect/sql';
 import {
-  type AccessScope, AgentCredentialId, CurrentAccess, Device, type DeviceAuthorization, DeviceCapabilities,
+  type AccessScope, AgentCredentialId, CurrentAccess, DEVICE_PAIR_LOCKOUT, Device, type DeviceAuthorization, DeviceCapabilities,
   DeviceId, type DeviceToken, type DeviceTokenError, Forbidden, NotFound, PrincipalId, Unavailable, WorkspaceId,
 } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
@@ -160,7 +160,7 @@ const withPending = <A>(access: AccessScope, code: string, use: (pending: typeof
       const now = clock!.now_ms;
       const [row] = yield* find(AttemptTimes, sql`SELECT attempts FROM device_pair_attempts WHERE principal_id = ${principal}`);
       const attempts = row?.attempts.filter(time => time > now - 600_000) ?? [];
-      if (attempts.length >= MAX_MISSES) return yield* new Forbidden({ message: 'Too many incorrect device codes. Try again in 10 minutes.' });
+      if (attempts.length >= MAX_MISSES) return yield* new Forbidden({ message: DEVICE_PAIR_LOCKOUT });
       const digits = code.replace(/[-\s]/g, '');
       if (/^\d{8}$/.test(digits)) {
         const [pending] = yield* find(Pending, sql`SELECT id, name, capabilities, expires_at FROM devices
