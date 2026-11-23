@@ -2,7 +2,6 @@ import type { SanctumClient } from '@sanctum/sdk';
 import { lazy, Suspense, useId, useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { accountLabel, connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
-import { DevicesSection } from './DevicesSection.tsx';
 import { Dialog } from './Dialog.tsx';
 import { InputPicker } from './InputPicker.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
@@ -13,6 +12,7 @@ const TeamWidgets = lazy(() => import('./WorkosTeam.tsx').then(module => ({ defa
 const SetUpTeam = lazy(() => import('./WorkosTeam.tsx').then(module => ({ default: module.SetUpTeam })));
 const TeamPanel = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.TeamPanel })));
 const ProfilePanel = lazy(() => import('../auth/team.tsx').then(module => ({ default: module.ProfilePanel })));
+const DevicesSection = lazy(() => import('./DevicesSection.tsx').then(module => ({ default: module.DevicesSection })));
 
 const MICROPHONE: Record<PermissionState, string> = {
   unknown: 'Not requested yet',
@@ -256,7 +256,11 @@ function deviceRows(permission: PermissionState, engine: CaptureView, fullscreen
 }
 
 /** The hardware listeners paired to this person; they need a session to list. */
-const devicesGroup = (signIn: SignInState) => signIn.status === 'signed_in' && <Group title="Devices"><DevicesSection /></Group>;
+const devicesGroup = (signIn: SignInState) => signIn.status === 'signed_in' && (
+  <Group title="Devices">
+    <Suspense fallback={<p>Loading…</p>}><DevicesSection /></Suspense>
+  </Group>
+);
 
 /** Settings section in five groups: Account, Device, Devices (signed in), Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
