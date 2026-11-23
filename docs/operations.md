@@ -16,6 +16,10 @@ Both refuse to start in `SANCTUM_ENV=production` until every decision is listed 
 In every environment, both refuse to start when a listed decision lacks its settings, and the error names each missing variable: `identity_issuer` needs `SANCTUM_OIDC_ISSUER`, `SANCTUM_OIDC_CLIENT_ID` and `SANCTUM_OIDC_REDIRECT_URI` (plus `BETTER_AUTH_SECRET` with the embedded issuer); `mcp_authorization_server` needs the three `SANCTUM_MCP_*` URLs.
 The worker also refuses to start while migrations are pending; `/readyz` reports pending migrations as not ready.
 
+The Rust hardware listener runs on the recording device, not in the server image.
+See [device setup](devices/README.md) for pairing, indicator access and the systemd unit.
+Revoke lost devices from Menu → Settings → Devices.
+
 ## Configuration
 
 Secrets come from the environment only; none are committed.
@@ -163,6 +167,7 @@ Sync revokes only a membership that WorkOS granted (`workspace_members.org_issue
 | --- | --- |
 | `npm run check` | Types, handoff structure, links, generated documentation. |
 | `npm run check:app` | Workspace typechecks, all Vitest suites against MySQL 8.4, the web build, Playwright in Chromium, the benchmark manifest, benchmark correctness smoke, and the accelerated 24-hour replay. Set `SANCTUM_TEST_MYSQL_URL` for the last two. |
+| `npm run check:app -- --device-client` | Pairing, recording indications, archive continuity and revocation with the Rust client. Use test MySQL, Playwright Chromium, Cargo and the Linux `script` utility. |
 | `node scripts/benchmark.ts --mysql-url ...` | Full-scale TypeScript benchmark records (see [benchmarks/README.md](../benchmarks/README.md)). |
 | `node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated` | A day of synthetic source time: meeting boundaries and one owner per segment (RSS growth reported, not gated). |
 | `npm run soak:checkpoint -- --manifest manifest.json --hours 1 --out cp-1h.json --url <app>` | Read-only retrieval checkpoint (1, 5, 12 or 24 hours) of a soak run: asks the planted questions through context search and source lookups, then scores recall, answer accuracy, time-aware accuracy and latency. Options are in the header of [scripts/soak/checkpoint.ts](../scripts/soak/checkpoint.ts); not part of `npm run check:app`. |

@@ -17,6 +17,7 @@
     "quality:sentrux": "sentrux gate .",
     "commitlint": "commitlint",
     "check:app": "node scripts/check-app.ts",
+    "check:device": "node scripts/device-e2e.ts",
     "sdk:generate": "node scripts/generate-sdks.ts",
     "benchmark": "node scripts/benchmark.ts",
     "replay:capture": "node scripts/replay-capture.ts",

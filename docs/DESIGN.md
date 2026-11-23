@@ -108,6 +108,24 @@ The steps are what Sanctum records and who sees it; a microphone check (permissi
 Skipping or finishing is stored for the person on the server, so the welcome does not open again on any device; Settings → Welcome → Show welcome again opens it.
 Keep controls keyboard-accessible, trap focus correctly in dialogs, and return focus on close.
 
+## Device indications
+
+The small-screen listener uses the same waveform as the fullscreen website.
+The device controls its microphone. The kiosk displays its state and does not request microphone access.
+
+| State | Microphone | Screen | Light |
+| --- | --- | --- | --- |
+| `unpaired` | Off | Name, code and pairing address | Blue; blinks the digits |
+| `stopped` | Off | Idle waveform; `Not listening.` | Blue; one short pulse |
+| `starting` | Off | Connecting waveform | Blue; fast blink |
+| `listening` | On | Microphone waveform; `Recording.`; saved-through time | Teal; steady |
+| `reconnecting` | On | Connecting waveform; `Recording on this device. Server not reachable.` | Amber; one short dark interval |
+| `degraded` | On | Microphone waveform; the cause | Amber; two short dark intervals |
+| `paused` | Off | Idle waveform; `Paused. The microphone is off.` | Blue; two short pulses |
+| `error` | Off | Cause; no waveform motion | Red; three short pulses |
+
+See the [device protocol](devices/protocol.md#recording-indication) for the exact colors, timing and recording indication rules.
+
 ## Acceptance
 
 Compare an implementation screenshot with `design/listener-reference.svg` at 1280 × 720.

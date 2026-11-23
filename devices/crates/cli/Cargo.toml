@@ -1,0 +1,9 @@
+[package]
+name = "sanctum-listener"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sanctum-indicator = { path = "../indicator" }
+sanctum-listener-core = { path = "../listener" }

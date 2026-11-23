@@ -25,14 +25,15 @@ It turns the meeting into time-aware agent memory that people and agents share t
 ## Features
 
 - **[Silent capture](docs/DESIGN.md):** browser microphone capture with a fullscreen waveform. Sanctum never speaks unless you address it directly.
+- **[Hardware listeners](docs/devices/README.md):** pair a microphone and a light or screen without using a browser for capture.
 - **[Spoken requests](docs/DECISIONS.md#spoken-work-decision---2026-10-10):** say "Sanctum, look up the train times". Sanctum answers "Looking that up." and files a cited answer in Review.
 - **[Full transcripts and recordings](docs/operations.md#configuration):** the complete transcript and the private audio stay in Cloudflare R2, separate from selective memory.
 - **[Shared agent memory](docs/ARCHITECTURE.md#interfaces-t22-t23):** decisions, commitments and facts linked to speakers, timestamps and source passages. One versioned API serves the website, the [SDKs](sdk/README.md) and remote MCP.
 - **[Integrations with per-action grants](docs/ARCHITECTURE.md#pipedream-t17):** Pipedream actions are found on demand. An action runs only with a stored grant, and each run leaves a truthful receipt.
 - **[Teams and workspaces](docs/operations.md#sign-in):** sign in with WorkOS, or self-host the embedded issuer. Access follows workspace membership everywhere.
 
-The capture tab must stay open and the device must stay awake.
-Sanctum does not record after the browser closes or the device sleeps.
+For browser capture, keep the tab open and the device awake.
+For hardware capture, keep the listener running and its recording indicator visible.
 Server-side work continues after the tab closes.
 
 ## Quick start
@@ -75,6 +76,7 @@ MySQL holds the durable job ledger, so a restart loses no work.
 ## Repository layout
 
 - [`web-app/`](web-app/): the React website and the Listen screen.
+- [`devices/`](devices/): the Linux listener and its light and screen drivers.
 - [`server/`](server/): the API, the MCP server, the workers, and the MySQL migrations.
 - [`packages/contracts/`](packages/contracts/): the shared Effect Schema contracts.
 - [`sdk/`](sdk/): the generated TypeScript and Python clients, with examples.

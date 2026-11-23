@@ -37,8 +37,12 @@ test('records the microphone into contiguous valid WAV chunks and streams live f
   expect(second!.manifest.sample_start).toBe(first!.manifest.sample_start + first!.manifest.sample_count);
   expect(server.starts[0]).toMatchObject({ _tag: 'start', listener_id: LISTENER, epoch_id: first!.manifest.epoch_id, clock: { sample_start: 0, encoding: 'pcm_s16le' } });
   expect(server.frames).toBeGreaterThan(20);
-  const level = await page.evaluate(() => window.capture.levels.read(new Float32Array(window.capture.levels.bandCount)));
-  expect(level).toBeGreaterThan(0);
+  // Chromium's fake microphone is silent between short beeps.
+  await page.waitForFunction(
+    () => window.capture.levels.read(new Float32Array(window.capture.levels.bandCount)) > 0,
+    undefined,
+    { timeout: 3_000 },
+  );
 
   const same = await page.evaluate(async () => {
     const { getCaptureEngine } = (await import('/src/pages/listen/engine.ts' as string)) as EngineModule;
