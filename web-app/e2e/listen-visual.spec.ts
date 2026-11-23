@@ -66,9 +66,7 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap, live 
   await openMeeting(page, MEETING, 'Product sync');
   await page.evaluate(() => window.__capture.setGain(0.8));
   await page.evaluate(() => { for (let n = 0; n < 12; n++) window.__capture.transcript(`line ${n}: what the room said, long enough to wrap across the rail`, '0'); });
-  // Loud needles must extend past the old stage's 150 px limit.
-  let wave!: Awaited<ReturnType<typeof waveProfile>>;
-  await expect.poll(async () => (wave = await waveProfile(page)).rise, { timeout: 5_000 }).toBeGreaterThan(150);
+  await page.waitForTimeout(400);
   await testInfo.attach('listening-1024x640', { body: await page.screenshot(), contentType: 'image/png' });
 
   const size = await page.evaluate(() => ({
@@ -76,8 +74,12 @@ test('narrow laptop keeps the same hierarchy without scrolling or overlap, live 
     scrollHeight: document.documentElement.scrollHeight,
   }));
   expect(size).toEqual({ scrollWidth: 1024, scrollHeight: 640 });
+  const wave = await waveProfile(page);
   expect(Math.abs(wave.baseline - 640 * (316 / 720))).toBeLessThanOrEqual(3);
   expect(Math.abs(wave.right - wave.left - 760)).toBeLessThanOrEqual(4);
+
+  // Loud needles keep their full height: the kiosk's 300 px stage cut them flat at 150 px.
+  expect(wave.rise).toBeGreaterThan(150);
   const status = (await page.locator('.listen-status').boundingBox())!;
   const footer = (await page.locator('.listen-footer').boundingBox())!;
   for (const item of [page.locator('.listen-brand'), page.locator('.listen-meeting')]) {
