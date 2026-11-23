@@ -858,6 +858,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The device name wraps under the time when the row is narrow, and a long one ends in an ellipsis. */
+.listen-meeting-row small span {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: inherit;
+  font-size: inherit;
+}
+
 .listen-meetings-back {
   display: none;
 }

@@ -1,4 +1,4 @@
-import type { Meeting, SanctumClient } from '@sanctum/sdk';
+import type { Meeting, MeetingListItem, SanctumClient } from '@sanctum/sdk';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { settle } from './review-data.ts';
 import { ReviewSection } from './ReviewSection.tsx';
@@ -18,7 +18,7 @@ const startedAt = ({ started_at, timezone }: Meeting): string =>
 
 /** Newest-first pages of meetings the caller may read, appended as asked for; a failed page keeps what is already shown. */
 function useMeetings(client: SanctumClient) {
-  const [meetings, setMeetings] = useState<ReadonlyArray<Meeting> | null>(null);
+  const [meetings, setMeetings] = useState<ReadonlyArray<MeetingListItem> | null>(null);
   const [next, setNext] = useState<Cursor | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,19 +45,25 @@ function useMeetings(client: SanctumClient) {
   return { meetings, error, busy, more: next ? () => void load(next) : null, retry: meetings === null && error ? () => void load(null) : null };
 }
 
-function Row({ meeting, current, onSelect }: { meeting: Meeting; current: boolean; onSelect: () => void }) {
+function Row({ meeting, current, onSelect }: { meeting: MeetingListItem; current: boolean; onSelect: () => void }) {
   return (
     <button type="button" className="listen-meeting-row" aria-current={current ? 'true' : undefined} onClick={onSelect}>
       <span>{meeting.title ?? 'Untitled meeting'}</span>
       <small>
         {isLive(meeting) ? 'live · ' : ''}
         {startedAt(meeting)}
+        {meeting.device_name !== null && (
+          <>
+            {' · '}
+            <span>{meeting.device_name}</span>
+          </>
+        )}
       </small>
     </button>
   );
 }
 
-function Group({ heading, rows, selected, onSelect }: { heading: string; rows: ReadonlyArray<Meeting>; selected: Meeting | null; onSelect: (meeting: Meeting) => void }) {
+function Group({ heading, rows, selected, onSelect }: { heading: string; rows: ReadonlyArray<MeetingListItem>; selected: Meeting | null; onSelect: (meeting: Meeting) => void }) {
   if (rows.length === 0) return null;
   return (
     <section aria-label={heading}>

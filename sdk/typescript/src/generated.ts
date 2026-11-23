@@ -84,11 +84,11 @@ export type ListMeetingsInput = {
 };
 
 export type MeetingPage = {
-  readonly meetings: ReadonlyArray<Meeting>;
+  readonly meetings: ReadonlyArray<MeetingListItem>;
   readonly next_cursor: string | null;
 };
 
-export type Meeting = {
+export type MeetingListItem = {
   readonly id: string;
   readonly workspace_id: string;
   readonly state: "provisional" | "active" | "closing" | "closed" | "interrupted";
@@ -99,6 +99,7 @@ export type Meeting = {
   readonly boundary_revision: number;
   readonly visibility: "restricted" | "workspace";
   readonly processing: MeetingProcessing;
+  readonly device_name: string | null;
 };
 
 export type MeetingProcessing = {
@@ -121,6 +122,19 @@ export type MergeMeetingsTarget = {
 export type MergeMeetingsSource = {
   readonly meeting_id: string;
   readonly expected_revision: number;
+};
+
+export type Meeting = {
+  readonly id: string;
+  readonly workspace_id: string;
+  readonly state: "provisional" | "active" | "closing" | "closed" | "interrupted";
+  readonly title: string | null;
+  readonly started_at: string;
+  readonly ended_at: string | null;
+  readonly timezone: string;
+  readonly boundary_revision: number;
+  readonly visibility: "restricted" | "workspace";
+  readonly processing: MeetingProcessing;
 };
 
 export type GetMeetingInput = {

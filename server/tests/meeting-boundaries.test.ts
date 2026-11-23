@@ -140,6 +140,12 @@ describe('automatic meeting lifecycle', () => {
         expect(second).toHaveLength(1);
         expect([...first, ...second].sort()).toEqual([...all].sort());
         expect(yield* idsFor(randomUUID())).toEqual([]);
+        // Only a paired device's listener names its meetings; a browser tab's listener does not.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE listeners SET device_id = ${randomUUID()}, name = 'Kitchen mic' WHERE id = ${other.listener_id}`;
+        const names = new Map((yield* listMeetings(device, {})).meetings.map(meeting => [meeting.id, meeting.device_name]));
+        expect(names.get(first[0]!)).toBeNull();
+        expect(names.get(second[0]!)).toBe('Kitchen mic');
       }),
       { migrated: true },
     ),

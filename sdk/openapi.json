@@ -1220,7 +1220,8 @@
                           "timezone",
                           "boundary_revision",
                           "visibility",
-                          "processing"
+                          "processing",
+                          "device_name"
                         ],
                         "properties": {
                           "id": {
@@ -1335,6 +1336,16 @@
                               }
                             },
                             "additionalProperties": false
+                          },
+                          "device_name": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "additionalProperties": false
