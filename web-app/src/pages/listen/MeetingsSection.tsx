@@ -52,7 +52,7 @@ function Row({ meeting, current, onSelect }: { meeting: MeetingListItem; current
       <small>
         {isLive(meeting) ? 'live · ' : ''}
         {startedAt(meeting)}
-        {meeting.device_name !== null && (
+        {meeting.device_name && (
           <>
             {' · '}
             <span>{meeting.device_name}</span>
