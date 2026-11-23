@@ -190,6 +190,10 @@ fn serve(tcp: TcpStream, pair: &str, log: &Log, case: Case) {
 }
 
 fn serve_socket(tcp: TcpStream, log: &Log, case: Case) {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Tungstenite fixes the handshake callback type"
+    )]
     let mut socket = accept_hdr(tcp, |request: &Request, response: Response| {
         assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
         assert!(!request.headers().contains_key("origin"));
