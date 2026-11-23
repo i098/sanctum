@@ -102,6 +102,9 @@ export const errorResponse = (error: Unauthenticated | Forbidden | NotFound | Un
   HttpServerResponse.unsafeJson(error, { status: { Unauthenticated: 401, Forbidden: 403, NotFound: 404, Unavailable: 503 }[error._tag] });
 
 /** Discovery runs once per process; a failed attempt is retried on the next request. */
+/** A local stack serves its issuer over plain http on loopback; every other issuer must use https. */
+const loopbackHttp = (issuer: URL) => issuer.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(issuer.hostname);
+
 const relyingParty = (settings: SignIn) => {
   let discovered: Promise<oidc.Configuration> | undefined;
   const configuration = () =>
@@ -111,7 +114,7 @@ const relyingParty = (settings: SignIn) => {
         settings.clientId,
         Option.getOrUndefined(Option.map(settings.clientSecret, Redacted.value)),
         Option.isNone(settings.clientSecret) ? oidc.None() : undefined,
-        settings.fetch ? { [oidc.customFetch]: settings.fetch } : undefined,
+        { ...(settings.fetch && { [oidc.customFetch]: settings.fetch }), ...(loopbackHttp(settings.issuer) && { execute: [oidc.allowInsecureRequests] }) },
       )
       .catch((error: unknown) => {
         discovered = undefined;

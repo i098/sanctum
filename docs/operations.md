@@ -99,6 +99,34 @@ It uses the existing MySQL through its own two-connection pool and the `auth_*` 
 - **MCP workspace**: an MCP access token carries `org_id`, the active organization of the browser session that authorized it (opening Team or accepting an invitation sets it), so `/mcp` selects that workspace.
 - **Upgrades**: Better Auth versions are pinned. At startup it logs any difference between its expected schema and the database; an upgrade that needs more than new tables, indexes or columns is its own reviewed task.
 
+### Sign in on a local stack
+
+This recipe runs the API from source on `http://localhost:7191` with the embedded issuer, so no WorkOS account is needed. Loopback `http` issuers (`localhost`, `127.0.0.1`, `[::1]`) are accepted; every other issuer must use `https`. It was run end to end with a fresh browser (recording in [#239](https://github.com/i098/sanctum/issues/239)).
+
+```bash
+npm ci
+npm run build -w web-app                                # the API serves web-app/dist
+export SANCTUM_ENV=development API_PORT=7191
+export MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_USER=root MYSQL_PASSWORD=... MYSQL_DATABASE=sanctum   # an empty database
+export SANCTUM_EMBEDDED_ISSUER=better-auth BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
+export SANCTUM_OIDC_ISSUER=http://localhost:7191/idp SANCTUM_MCP_ISSUER=http://localhost:7191/idp
+export SANCTUM_MCP_RESOURCE=http://localhost:7191/mcp SANCTUM_MCP_JWKS_URL=http://localhost:7191/idp/jwks
+export SANCTUM_OIDC_REDIRECT_URI=http://localhost:7191/auth/callback
+npm run migrate -w server
+npm run issuer:client -w server                         # prints the client id
+export SANCTUM_OIDC_CLIENT_ID=<the printed id>
+npm run start -w server                                 # keep it running
+```
+
+1. Open `http://localhost:7191/auth/login`. It shows the issuer's sign-in page; choose **Create an account** and register. The first sign-in ends at `/?signin=not_member`, and Settings shows the issuer and subject values.
+2. In another shell with the same variables, make that identity the first owner (see [Sign-in](#sign-in)):
+
+   ```bash
+   npm run owner -w server -- --issuer http://localhost:7191/idp --subject <subject> --display-name "<name>" --workspace "<name>" --timezone <IANA>
+   ```
+
+3. Open `http://localhost:7191/auth/login` again. It signs you in, and `http://localhost:7191/pair` shows the pairing form.
+
 ## Cloudflare
 
 The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL on Aiven over verified TLS (database `sanctum`), recordings in the private R2 bucket `sanctum-recordings`.

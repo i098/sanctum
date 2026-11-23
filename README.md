@@ -54,6 +54,7 @@ docker compose run --rm api node server/dist/migrate.js
 docker compose up -d api worker caddy
 ```
 
+To sign in on this stack without WorkOS, follow [Sign in on a local stack](docs/operations.md#sign-in-on-a-local-stack).
 [Operations](docs/operations.md) lists every setting, sign-in option, migration step, and recovery step.
 
 ## How it works
