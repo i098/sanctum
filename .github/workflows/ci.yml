@@ -38,10 +38,6 @@ jobs:
     name: Application checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [s6, without-devices-route, without-settings-mount]
     services:
       mysql:
         image: mirror.gcr.io/library/mysql:8.4
@@ -64,32 +60,24 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
-      - name: Apply the S6 probe variant
-        env:
-          VARIANT: ${{ matrix.variant }}
+      - name: Apply the S6 fix to the integration head
         run: |
           set -euo pipefail
-          git fetch --depth=4 origin 933849c434764dd4cb13321dfd2bb2ab8fdd787e
-          excludes=()
-          case "$VARIANT" in
-            without-devices-route) excludes+=(--exclude=web-app/e2e/listen-fake.ts) ;;
-            without-settings-mount) excludes+=(--exclude=web-app/src/pages/listen/SettingsSection.tsx) ;;
-          esac
-          git diff --binary 933849c434764dd4cb13321dfd2bb2ab8fdd787e~3 FETCH_HEAD |
-            git apply "${excludes[@]}"
+          git fetch --depth=5 origin ba3cb522be51dee0f0f880be9b87ed678064f4ac
+          git diff --binary ba3cb522be51dee0f0f880be9b87ed678064f4ac~4 FETCH_HEAD | git apply
       - name: Install locked workspace dependencies
         run: npm ci --ignore-scripts
       - name: Install Playwright Chromium headless shell
         run: npx playwright install --with-deps --only-shell chromium
-      - name: Run the two unmodified listening browser specs
+      - name: Run the original listening and pairing browser specs
         env:
           SANCTUM_ENV: test
-        run: npm run test:e2e -w web-app -- e2e/listen-visual.spec.ts e2e/listen-waveform.spec.ts --reporter=list,html
+        run: npm run test:e2e -w web-app -- e2e/listen-visual.spec.ts e2e/listen-waveform.spec.ts e2e/pair.spec.ts --reporter=list,html
       - name: Save the listening browser report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: listening-browser-report-${{ matrix.variant }}
+          name: listening-browser-report-fixed
           path: web-app/playwright-report/
           retention-days: 1
 
