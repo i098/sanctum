@@ -12,7 +12,8 @@ const envelope = (tag: string, code: string) => ({ _tag: tag, code, message: tag
 const ANSWERS: Record<string, [number, unknown]> = {
   '12345678': [200, PENDING],
   '00000000': [404, envelope('NotFound', 'not_found')],
-  '99999999': [403, envelope('Forbidden', 'forbidden')],
+  '99999999': [403, { ...envelope('Forbidden', 'forbidden'), message: 'Too many incorrect device codes. Try again in 10 minutes.' }],
+  '88888888': [403, envelope('Forbidden', 'forbidden')],
   '11111111': [401, envelope('Unauthenticated', 'unauthenticated')],
 };
 const requests: Array<{ method: string; url: string; headers: IncomingHttpHeaders; body: string }> = [];
@@ -58,6 +59,7 @@ describe('devices client', () => {
     expect(await client.pending('12345678')).toEqual(PENDING);
     expect(await client.pending('00000000')).toBe('not_found');
     expect(await client.pending('99999999')).toBe('locked');
+    expect(await client.pending('88888888')).toBe('failed');
     expect(await client.pending('11111111')).toBe('signed_out');
     expect(await makeDevicesClient('http://127.0.0.1:1').list()).toBe('failed');
   });
