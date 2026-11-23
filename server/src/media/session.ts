@@ -223,7 +223,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       return draining === 0 ? speech.onCovered(covered) : Effect.void;
     });
     const { degrade, answered } = asrHealth(send);
-    const prompt = yield* itemPrompt(access);
+    const prompt = start.capabilities === undefined ? yield* itemPrompt(access) : undefined;
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -321,12 +321,21 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     return { feed, close };
   });
 
+const quietSpeech = {
+  onSegment: (_segment: TranscriptSegment) => Effect.void,
+  onCovered: (_sample_end: number) => Effect.void,
+  replying: () => false,
+  onEnd: (_reason: 'pause' | 'disconnect') => Effect.void,
+};
+
 /**
  * Requested speech for this socket when the process provides a synthesizer and replies; otherwise
  * capture stays silent and ending the socket only closes any window the gate still holds.
  */
 const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>) =>
   Effect.gen(function* () {
+    // The device credential must not run spoken work with the approver's full scopes.
+    if (start.capabilities !== undefined) return quietSpeech;
     const synthesizer = yield* Effect.serviceOption(SpeechSynthesizer);
     const replies = yield* Effect.serviceOption(SpeechReplies);
     const work = yield* Effect.serviceOption(SpeechWorkRequests);
@@ -338,9 +347,7 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
     }
     const gate = yield* Effect.serviceOption(SpeechGate);
     return {
-      onSegment: (_segment: TranscriptSegment) => Effect.void,
-      onCovered: (_sample_end: number) => Effect.void,
-      replying: () => false,
+      ...quietSpeech,
       onEnd: (_reason: 'pause' | 'disconnect') => Effect.sync(() => Option.map(gate, value => value.cancel(listener.id, 'disconnect'))),
     };
   });
@@ -371,7 +378,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
     let persisted = watermark;
     const fenced = yield* Deferred.make<never, SessionRejected>();
     const speech = yield* requestedSpeech({ access, listener, start, send });
-    // Every transcript the client sees also reaches the speech gate (barge-in and direct requests).
+    // Browser transcript events also reach the speech gate for barge-in and direct requests.
     const relay = (message: ServerControlMessage) =>
       Effect.zipRight(send(message), message._tag === 'transcript' ? speech.onSegment(message.segment) : Effect.void);
     const asr = yield* liveAsr({ access, listener, start, send: relay, speech });
@@ -395,7 +402,9 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
       }),
     );
     yield* Effect.forkScoped(Effect.repeat(flush, Schedule.spaced(liveLimits.watermarkFlushMs)));
-    yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
+    if (start.capabilities === undefined) {
+      yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
+    }
 
     /** Validates one binary frame, advances the watermark, feeds live ASR and acknowledges live acceptance. */
     const frame = (bytes: Uint8Array) =>

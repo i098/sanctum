@@ -239,11 +239,16 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, start.listener_id, true);
-        if (start.archive_only) return yield* registerArchive(access, listener, start);
-        if (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener))) {
+        if (!start.archive_only && (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener)))) {
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
-        return yield* startLive(access, listener, start);
+        const verdict = yield* (start.archive_only ? registerArchive(access, listener, start) : startLive(access, listener, start));
+        if (verdict._tag === 'accepted' && start.capabilities !== undefined) {
+          yield* sql`UPDATE listeners
+            SET capabilities = JSON_SET(capabilities, '$.device', CAST(${JSON.stringify(start.capabilities)} AS JSON))
+            WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
+        }
+        return verdict;
       }),
     );
   });
