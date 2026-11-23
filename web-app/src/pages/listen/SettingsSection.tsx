@@ -2,6 +2,7 @@ import type { SanctumClient } from '@sanctum/sdk';
 import { lazy, Suspense, useId, useState, type FormEvent, type ReactNode } from 'react';
 import type { CaptureView, PermissionState } from '../../lib/capture/view.ts';
 import { accountLabel, connectSignIn, SIGN_IN_URL, signOut, type SignInNotice, type SignInState } from '../../lib/session.ts';
+import { DevicesSection } from './DevicesSection.tsx';
 import { Dialog } from './Dialog.tsx';
 import { InputPicker } from './InputPicker.tsx';
 import { LocalRecordings } from './LocalRecordings.tsx';
@@ -254,7 +255,10 @@ function deviceRows(permission: PermissionState, engine: CaptureView, fullscreen
   ];
 }
 
-/** Settings section in four groups: Account, Device, Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
+/** The hardware listeners paired to this person; they need a session to list. */
+const devicesGroup = (signIn: SignInState) => signIn.status === 'signed_in' && <Group title="Devices"><DevicesSection /></Group>;
+
+/** Settings section in five groups: Account, Device, Devices (signed in), Data and Welcome. Real device and session facts, and the unselected policies stated as unselected. */
 export function SettingsSection({ permission, engine, client, signIn, notice, onSignInChange, onWelcome, fullscreen }: SettingsProps) {
   return (
     <>
@@ -265,6 +269,7 @@ export function SettingsSection({ permission, engine, client, signIn, notice, on
       <Group title="Device">
         <Rows rows={deviceRows(permission, engine, fullscreen)} />
       </Group>
+      {devicesGroup(signIn)}
       <Group title="Data">
         <Rows rows={[['Retention', 'Not selected: nothing is deleted automatically']]} />
         <LocalRecordings engine={engine} />

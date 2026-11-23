@@ -7,6 +7,7 @@ import './styles.css';
 const AccountPage = lazy(() => import('./pages/auth/index.tsx').then(module => ({ default: module.AccountPage })));
 const ConsentPage = lazy(() => import('./pages/auth/index.tsx').then(module => ({ default: module.ConsentPage })));
 const InvitePage = lazy(() => import('./pages/auth/index.tsx').then(module => ({ default: module.InvitePage })));
+const PairPage = lazy(() => import('./pages/pair/index.tsx').then(module => ({ default: module.PairPage })));
 
 const container = document.getElementById('root');
 if (!container) throw new Error('Missing #root element');
@@ -22,6 +23,8 @@ createRoot(container).render(
         <ConsentPage />
       ) : invitation !== undefined ? (
         <InvitePage id={invitation} />
+      ) : path === '/pair' ? (
+        <PairPage />
       ) : (
         <ListenPage />
       )}

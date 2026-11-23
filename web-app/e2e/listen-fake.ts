@@ -170,6 +170,8 @@ export async function serveListening(page: Page, options: ListenOptions = {}): P
   await page.route('**/api/v1/workspace/team', route => route.request().method() === 'GET'
     ? route.fulfill({ json: { linked: options.teamLinked ?? true } })
     : route.fallback());
+  // Settings > Devices lists the person's hardware listeners; the listening specs have none.
+  await page.route('**/api/v1/devices', route => route.fulfill({ json: { items: [] } }));
   await page.route(/\/api\/v1\/(onboarding|workspace\/name)$/, route => {
     const state = options.onboarding;
     if (state === undefined) return route.fallback();
