@@ -55,7 +55,7 @@ const credentials = (access: AccessScope, where: (sql: SqlClient.SqlClient) => S
       Result: CredentialRow,
       execute: () => sql`SELECT c.id, c.principal_id AS agent_id, p.display_name, c.scopes, c.meeting_allowlist,
           c.expires_at, c.revoked_at, c.last_used_at, c.created_at
-        FROM agent_credentials c JOIN principals p ON p.id = c.principal_id
+        FROM agent_credentials c JOIN principals p ON p.id = c.principal_id AND p.kind = 'agent'
         WHERE c.workspace_id = ${access.workspace_id} AND ${owned} AND ${where(sql)}
         ORDER BY c.id LIMIT ${limit}`,
     })(undefined).pipe(Effect.orDie);

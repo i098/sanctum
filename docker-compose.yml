@@ -13,7 +13,7 @@ x-app: &app
   build:
     context: .
     dockerfile: server/Dockerfile
-  environment:
+  environment: &app-env
     SANCTUM_ENV: ${SANCTUM_ENV:-production}
     # Passed through only when set: comma-separated decisions an operator has selected.
     SANCTUM_SELECTED_DECISIONS:
@@ -56,6 +56,9 @@ services:
 
   api:
     <<: *app
+    environment:
+      <<: *app-env
+      SANCTUM_DEVICE_PROXY: caddy
     ports:
       - 127.0.0.1:${API_PORT:-7102}:7102
     restart: unless-stopped

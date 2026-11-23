@@ -7,9 +7,9 @@ import { CurrentAccess } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Layer } from 'effect';
 import { ActionsLive } from './actions.ts';
-import { AgentsLive } from './agents.ts';
 import { AuthenticatedLive, WorkspaceOwnerLive } from './auth.ts';
 import { ContextLive } from './context.ts';
+import { CredentialsLive } from './devices.ts';
 import { HealthLive } from './health.ts';
 import { ListenersLive } from './listeners-api.ts';
 import { MatchingLive } from './matching.ts';
@@ -36,7 +36,7 @@ export const ApiLive = (migrations: ReadonlyArray<Migration>) =>
       IntegrationAccountsLive,
       ActionsLive,
       MatchingLive,
-      AgentsLive,
+      CredentialsLive,
       WorkspaceLive,
       OnboardingLive,
     ]),
