@@ -25,6 +25,7 @@ describe('migration files', () => {
       { kind: 'table', table: 'devices' },
       { kind: 'table', table: 'device_pair_capacity' },
       { kind: 'table', table: 'device_pair_attempts' },
+      { kind: 'column', table: 'listeners', column: 'device_id' },
     ]);
     const created = migrations.flatMap(migration => migration.steps.map(step => step.object.table));
     expect(created).toEqual(
@@ -76,7 +77,7 @@ describe('migrate against MySQL 8.4', () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* migrate(migrations);
-        // Simulate a crash between CREATE TABLE and its ledger insert in the last migration.
+        // Simulate a crash after the last migration ran DDL but before the ledger recorded it.
         const last = migrations.at(-1)!;
         yield* sql`DELETE FROM schema_migration_steps WHERE version = ${last.version}`;
         yield* sql`UPDATE schema_migrations SET completed_at = NULL WHERE version = ${last.version}`;
