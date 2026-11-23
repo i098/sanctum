@@ -574,8 +574,17 @@ export const fakeApi = <R = SqlClient.SqlClient>(
   health: Layer.Layer<HttpApiGroup.ApiGroup<'sanctum', 'health'>, never, R> = HealthLive(loadMigrations()) as never,
 ) =>
   HttpApiBuilder.api(SanctumApi).pipe(
-    Layer.provide([health, SessionLive, workspaceGroup, onboardingGroup, integrationAccountsGroup, domain.groups]),
+    Layer.provide([health, SessionLive, workspaceGroup, onboardingGroup, integrationAccountsGroup, PairingLive, DevicesLive, domain.groups]),
     Layer.provide([AuthenticatedLive, FakeWorkspaceOwner]),
   );
 
 const SessionLive = HttpApiBuilder.group(SanctumApi, 'session', handlers => handlers.handle('getSession', () => CurrentAccess));
+
+const PairingLive = HttpApiBuilder.group(SanctumApi, 'devicePairing', handlers => handlers
+  .handle('authorizeDevice', () => Effect.fail(new Unavailable({ message: 'Pairing needs the real server', retryable: false })))
+  .handle('deviceToken', () => Effect.fail({ error: 'invalid_grant' as const })));
+const DevicesLive = HttpApiBuilder.group(SanctumApi, 'devices', handlers => handlers
+  .handle('pendingDevice', () => Effect.fail(new NotFound({ message: 'Device not found' })))
+  .handle('approveDevice', () => Effect.fail(new NotFound({ message: 'Device not found' })))
+  .handle('listDevices', () => Effect.succeed({ items: [] }))
+  .handle('revokeDevice', () => Effect.fail(new NotFound({ message: 'Device not found' }))));

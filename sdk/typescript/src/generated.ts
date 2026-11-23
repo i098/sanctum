@@ -639,6 +639,76 @@ export type DeleteWorkspace = {
   readonly confirm_name: string;
 };
 
+export type AuthorizeDeviceInput = {
+  readonly name: string;
+  readonly capabilities: DeviceCapabilities;
+};
+
+export type DeviceCapabilities = {
+  readonly mic: true;
+  readonly screen: boolean;
+  readonly light: "none" | "mono" | "pwm" | "rgb";
+  readonly speaker: boolean;
+};
+
+export type DeviceAuthorization = {
+  readonly device_code: string;
+  readonly user_code: string;
+  readonly verification_uri: string;
+  readonly verification_uri_complete: string;
+  readonly expires_in: 600;
+  readonly interval: 5;
+};
+
+export type DeviceTokenInput = {
+  readonly grant_type: "urn:ietf:params:oauth:grant-type:device_code";
+  readonly device_code: string;
+};
+
+export type DeviceToken = {
+  readonly access_token: string;
+  readonly token_type: "Bearer";
+  readonly device_id: string;
+  readonly workspace_id: string;
+  readonly approved_by_name: string;
+  readonly workspace_name: string;
+};
+
+export type PendingDeviceInput = {
+  readonly user_code: string;
+};
+
+export type PendingDeviceOutput = {
+  readonly name: string;
+  readonly capabilities: DeviceCapabilities;
+  readonly expires_at: string;
+};
+
+export type ApproveDeviceInput = {
+  readonly user_code: string;
+  readonly approve: boolean;
+};
+
+export type Device = {
+  readonly id: string;
+  readonly name: string;
+  readonly capabilities: DeviceCapabilities;
+  readonly status: "pending" | "approved" | "denied" | "revoked";
+  readonly approved_by: Principal | null;
+  readonly created_at: string;
+  readonly approved_at: string | null;
+  readonly last_used_at: string | null;
+  readonly revoked_at: string | null;
+};
+
+export type ListDevicesOutput = {
+  readonly items: ReadonlyArray<Device>;
+};
+
+export type RevokeDeviceInput = {
+  readonly device_id: string;
+};
+
 export interface Operations {
   'health.healthz': { input: Readonly<Record<string, unknown>>; output: HealthzOutput };
   'health.readyz': { input: Readonly<Record<string, unknown>>; output: ReadyzOutput };
@@ -676,6 +746,12 @@ export interface Operations {
   'workspace.getWorkspace': { input: Readonly<Record<string, unknown>>; output: Workspace };
   'workspace.deleteWorkspace': { input: DeleteWorkspace; output: Workspace };
   'workspace.restoreWorkspace': { input: Readonly<Record<string, unknown>>; output: Workspace };
+  'devicePairing.authorizeDevice': { input: AuthorizeDeviceInput; output: DeviceAuthorization };
+  'devicePairing.deviceToken': { input: DeviceTokenInput; output: DeviceToken };
+  'devices.pendingDevice': { input: PendingDeviceInput; output: PendingDeviceOutput };
+  'devices.approveDevice': { input: ApproveDeviceInput; output: Device };
+  'devices.listDevices': { input: Readonly<Record<string, unknown>>; output: ListDevicesOutput };
+  'devices.revokeDevice': { input: RevokeDeviceInput; output: null };
 }
 
 export const operations: Record<keyof Operations, OperationSpec> = {
@@ -715,4 +791,10 @@ export const operations: Record<keyof Operations, OperationSpec> = {
   'workspace.getWorkspace': {"method":"GET","path":"/api/v1/workspace","pathParams":[],"queryParams":[],"body":false},
   'workspace.deleteWorkspace': {"method":"DELETE","path":"/api/v1/workspace","pathParams":[],"queryParams":[],"body":true},
   'workspace.restoreWorkspace': {"method":"POST","path":"/api/v1/workspace/restore","pathParams":[],"queryParams":[],"body":false},
+  'devicePairing.authorizeDevice': {"method":"POST","path":"/api/v1/device/authorize","pathParams":[],"queryParams":[],"body":true},
+  'devicePairing.deviceToken': {"method":"POST","path":"/api/v1/device/token","pathParams":[],"queryParams":[],"body":true},
+  'devices.pendingDevice': {"method":"GET","path":"/api/v1/device/pending","pathParams":[],"queryParams":["user_code"],"body":false},
+  'devices.approveDevice': {"method":"POST","path":"/api/v1/device/approve","pathParams":[],"queryParams":[],"body":true},
+  'devices.listDevices': {"method":"GET","path":"/api/v1/devices","pathParams":[],"queryParams":[],"body":false},
+  'devices.revokeDevice': {"method":"DELETE","path":"/api/v1/devices/{device_id}","pathParams":["device_id"],"queryParams":[],"body":false},
 };
