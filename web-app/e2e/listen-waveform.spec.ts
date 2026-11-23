@@ -23,13 +23,12 @@ test('real audio draws irregular asymmetric needles with quick attack and slow r
   await page.evaluate(() => window.__capture.setGain(0.05));
   await page.waitForTimeout(150);
   const attack = await waveProfile(page);
-  await page.waitForTimeout(500);
-  const loud = await waveProfile(page);
+  let loud!: Awaited<ReturnType<typeof waveProfile>>;
+  await expect.poll(async () => (loud = await waveProfile(page)).needles, { timeout: 5_000 }).toBeGreaterThanOrEqual(2);
   expect(attack.rise).toBeGreaterThan(loud.rise * 0.6);
   expect(loud.rise).toBeGreaterThan(2 * RESTING);
   expect(loud.fall).toBeLessThanOrEqual(loud.rise + 3);
   expect(loud.fall).toBeGreaterThan(loud.rise * 0.2);
-  expect(loud.needles).toBeGreaterThanOrEqual(2);
 
   await page.evaluate(() => window.__capture.setGain(0));
   await page.waitForTimeout(120);
