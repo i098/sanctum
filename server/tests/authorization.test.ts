@@ -344,11 +344,11 @@ describe('authorization boundary', () => {
     ),
   );
 
-  it('requires authentication on every API group except process health', () => {
+  it('requires authentication except for health and public device pairing', () => {
     const groups = Object.values(SanctumApi.groups);
     expect(groups.map(group => group.identifier)).toContain('agents');
     const open = groups.filter(group => ![...group.middlewares].some(middleware => middleware === (Authenticated as never) || middleware === (WorkspaceOwner as never))).map(group => group.identifier);
-    expect(open).toEqual(['health']);
+    expect(open).toEqual(['health', 'devicePairing']);
   });
 
   it('keys cached access by workspace, principal, revision, scopes and meeting access', () => {

@@ -26,8 +26,9 @@ describe('v1 OpenAPI contract', () => {
     expect(new Set(operations.map(op => op.id)).size).toBe(operations.length);
     for (const [path, methods] of Object.entries(openApiDocument.paths)) {
       for (const op of Object.values(methods as Record<string, { operationId: string; responses: Record<string, unknown> }>)) {
-        expect(op.operationId).toMatch(/^[a-z]+\.[a-zA-Z]+$/);
-        if (path.startsWith('/api/v1/') && op.operationId !== 'session.getSession') {
+        expect(op.operationId).toMatch(/^[a-z][a-zA-Z]*\.[a-zA-Z]+$/);
+        if (op.operationId === 'devicePairing.deviceToken') expect(op.responses).toHaveProperty('400');
+        if (path.startsWith('/api/v1/') && op.operationId !== 'session.getSession' && !op.operationId.startsWith('devicePairing.')) {
           expect(Object.keys(op.responses), op.operationId).toEqual(expect.arrayContaining(ERROR_STATUSES));
         }
       }

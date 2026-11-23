@@ -9,6 +9,7 @@ import { ListenersApi } from './capture.ts';
 import { IntegrationAccountsApi, IntegrationsApi } from './integrations.ts';
 import { ContextApi } from './context.ts';
 import { ActionsApi } from './actions-api.ts';
+import { DevicePairingApi, DevicesApi } from './devices.ts';
 import { Forbidden, HashConflict, NotFound, RevisionConflict, Unauthenticated, Unavailable } from './errors.ts';
 import { MatchingApi } from './matching.ts';
 import { MeetingsApi } from './meetings.ts';
@@ -33,6 +34,8 @@ export class SanctumApi extends HttpApi.make('sanctum')
   .add(MatchingApi.middleware(Authenticated))
   .add(AgentsApi)
   .add(WorkspaceApi)
+  .add(DevicePairingApi)
+  .add(DevicesApi)
   .add(OnboardingApi)
   .addError(Unauthenticated)
   .addError(Forbidden)

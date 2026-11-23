@@ -646,6 +646,76 @@ class DeleteWorkspace(TypedDict):
     confirm_name: str
 
 
+class AuthorizeDeviceInput(TypedDict):
+    name: str
+    capabilities: DeviceCapabilities
+
+
+class DeviceCapabilities(TypedDict):
+    mic: Literal[true]
+    screen: bool
+    light: Literal["none", "mono", "pwm", "rgb"]
+    speaker: bool
+
+
+class DeviceAuthorization(TypedDict):
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: Literal[600]
+    interval: Literal[5]
+
+
+class DeviceTokenInput(TypedDict):
+    grant_type: Literal["urn:ietf:params:oauth:grant-type:device_code"]
+    device_code: str
+
+
+class DeviceToken(TypedDict):
+    access_token: str
+    token_type: Literal["Bearer"]
+    device_id: str
+    workspace_id: str
+    approved_by_name: str
+    workspace_name: str
+
+
+class PendingDeviceInput(TypedDict):
+    user_code: str
+
+
+class PendingDeviceOutput(TypedDict):
+    name: str
+    capabilities: DeviceCapabilities
+    expires_at: str
+
+
+class ApproveDeviceInput(TypedDict):
+    user_code: str
+    approve: bool
+
+
+class Device(TypedDict):
+    id: str
+    name: str
+    capabilities: DeviceCapabilities
+    status: Literal["pending", "approved", "denied", "revoked"]
+    approved_by: Principal | None
+    created_at: str
+    approved_at: str | None
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class ListDevicesOutput(TypedDict):
+    items: list[Device]
+
+
+class RevokeDeviceInput(TypedDict):
+    device_id: str
+
+
 # Each entry: input TypedDict -> output TypedDict, then the route.
 OPERATIONS: dict[str, Operation] = {
     # dict[str, Any] -> HealthzOutput
@@ -720,4 +790,16 @@ OPERATIONS: dict[str, Operation] = {
     "workspace.deleteWorkspace": Operation("DELETE", "/api/v1/workspace", (), (), True),
     # dict[str, Any] -> Workspace
     "workspace.restoreWorkspace": Operation("POST", "/api/v1/workspace/restore", (), (), False),
+    # AuthorizeDeviceInput -> DeviceAuthorization
+    "devicePairing.authorizeDevice": Operation("POST", "/api/v1/device/authorize", (), (), True),
+    # DeviceTokenInput -> DeviceToken
+    "devicePairing.deviceToken": Operation("POST", "/api/v1/device/token", (), (), True),
+    # PendingDeviceInput -> PendingDeviceOutput
+    "devices.pendingDevice": Operation("GET", "/api/v1/device/pending", (), ("user_code", ), False),
+    # ApproveDeviceInput -> Device
+    "devices.approveDevice": Operation("POST", "/api/v1/device/approve", (), (), True),
+    # dict[str, Any] -> ListDevicesOutput
+    "devices.listDevices": Operation("GET", "/api/v1/devices", (), (), False),
+    # RevokeDeviceInput -> None
+    "devices.revokeDevice": Operation("DELETE", "/api/v1/devices/{device_id}", ("device_id", ), (), False),
 }
