@@ -6,7 +6,7 @@
  */
 import { HttpApiBuilder, HttpRouter, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
 import type { SqlClient } from '@effect/sql';
-import { ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage } from '@sanctum/contracts';
+import { ClientControlMessage, type Forbidden, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage, type Unauthenticated } from '@sanctum/contracts';
 import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect';
 import { Authenticator, type CaptureAccess } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
@@ -69,7 +69,7 @@ const dialogue = (access: CaptureAccess, listener: ListenerRow, inbound: Mailbox
     );
   });
 
-const converse = (access: CaptureAccess, listener: ListenerRow, socket: Socket.Socket) =>
+const converse = (access: CaptureAccess, listener: ListenerRow, socket: Socket.Socket, refreshAccess: Effect.Effect<CaptureAccess, Unauthenticated | Forbidden>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const writer = yield* socket.writer;
@@ -86,7 +86,10 @@ const converse = (access: CaptureAccess, listener: ListenerRow, socket: Socket.S
           if (!inbound.unsafeOffer(data)) Deferred.unsafeDone(overflow, Exit.succeed({ code: 1013, reason: 'server backlog full; reconnect to resume' }));
         })
         .pipe(Effect.ignore, Effect.ensuring(Effect.zipRight(inbound.end, Deferred.succeed(ended, undefined))), Effect.forkScoped);
-      const closing = yield* dialogue(access, listener, inbound, send).pipe(
+      // A revocation before tracking has no socket to close. Check access again after tracking.
+      const closing = yield* refreshAccess.pipe(
+        Effect.catchAll(error => reject('unauthorized', error.message)),
+        Effect.flatMap(current => dialogue(current, listener, inbound, send)),
         Effect.raceFirst(Deferred.await(overflow)),
         Effect.catchTag('SessionRejected', ({ message }) => Effect.as(send(message), { code: 1008, reason: message.reason })),
         Effect.catchAll(error => Effect.as(Effect.logError('Live session failed', error), { code: 1011, reason: 'internal error' })),
@@ -105,9 +108,10 @@ const upgrade = (allowedOrigins: ReadonlyArray<string>) =>
     const origin = request.headers.origin;
     if (origin !== undefined && !allowedOrigins.includes(origin) && !sameHost(origin, request.headers.host)) return HttpServerResponse.empty({ status: 403 });
     const authenticator = yield* Authenticator;
-    const access = yield* authenticator.authenticate(request);
+    const authenticate = authenticator.authenticate(request);
+    const access = yield* authenticate;
     const listener = yield* ownedListener(access, listener_id.value);
-    yield* converse(access, listener, yield* request.upgrade);
+    yield* converse(access, listener, yield* request.upgrade, authenticate);
     return HttpServerResponse.empty();
   }).pipe(
     Effect.catchTags({

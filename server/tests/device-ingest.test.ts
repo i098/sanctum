@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
-import { CaptureEpochId, type ListenerId } from '@sanctum/contracts';
+import { CaptureEpochId, type ListenerId, Unauthenticated } from '@sanctum/contracts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer } from 'effect';
 import type * as MediaProviders from '../src/media/providers.ts';
 import { vi } from 'vitest';
-import { hashToken, openSession, SESSION_COOKIE } from '../src/auth.ts';
+import { Authenticator, hashToken, KernelAuthenticatorLive, openSession, SESSION_COOKIE } from '../src/auth.ts';
 import { serverLayer } from '../src/main.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { meetingsOf } from './support/capture.ts';
@@ -52,7 +52,7 @@ function hardwareFrame(sequence: number, samples: Int16Array) {
   return bytes;
 }
 
-const setup = Effect.gen(function* () {
+const setupWith = (authenticator = KernelAuthenticatorLive) => Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const [owner] = yield* seedWorkspace('Hardware room', ['owner']);
   const { workspace_id, principal } = owner!;
@@ -66,7 +66,7 @@ const setup = Effect.gen(function* () {
       ${principal.id}, ${credential_id}, UTC_TIMESTAMP(6) + INTERVAL 1 DAY, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
   const speech = fakeSpeech();
   const media = Layer.merge(speech.layer, memoryObjectStore().layer);
-  const host = yield* serveApi((config, _fixtureAuth, overrides) => serverLayer(config, undefined, overrides), new Map(), media);
+  const host = yield* serveApi((config, _fixtureAuth, overrides) => serverLayer(config, authenticator, overrides), new Map(), media);
   const registered = yield* api(host, token, 'POST', '/listeners', { name: 'Fixture device', mode: 'room', capabilities: { fixture: true } });
   expect(registered.status).toBe(201);
   const listener_id = registered.body.id as ListenerId;
@@ -84,6 +84,8 @@ const setup = Effect.gen(function* () {
     .pipe(Effect.map(rows => JSON.parse(rows[0]!.capabilities)));
   return { workspace_id, principal, device_id, token, host, start, connect, stored, speech, media };
 });
+
+const setup = setupWith();
 
 const stop = JSON.stringify({ _tag: 'stop', reason: 'close' });
 const request = 'Sanctum, send the notes.';
@@ -165,6 +167,25 @@ layer(MigratedDatabase, { timeout: 120_000 })('hardware listener ingest', it => 
         authorization: '', cookie: `${SESSION_COOKIE}=${session.token}`, 'x-csrf-token': session.csrf_token, origin: `http://${host}`,
       });
       expect(revoked.status).toBe(204);
+      expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
+      expect((yield* socket.closed).code).toBe(1008);
+    }),
+  );
+
+  it.scoped('closes a newly opened socket if its authorization is no longer current', () =>
+    Effect.gen(function* () {
+      let admitted = false;
+      const authenticator = Layer.effect(Authenticator, Effect.map(Authenticator, service => ({
+        authenticate: request => Effect.suspend(() => {
+          if (request.url.endsWith('/stream')) {
+            if (admitted) return Effect.fail(new Unauthenticated({ message: 'This credential was revoked' }));
+            admitted = true;
+          }
+          return service.authenticate(request);
+        }),
+      }))).pipe(Layer.provide(KernelAuthenticatorLive));
+      const { connect } = yield* setupWith(authenticator);
+      const socket = yield* connect;
       expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
       expect((yield* socket.closed).code).toBe(1008);
     }),
