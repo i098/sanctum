@@ -261,13 +261,12 @@ interface TestSocket {
   readonly close: () => void;
 }
 
-/** Opens a live-ingest socket as a browser would (Origin plus credentials); the test scope closes it. */
-export const openSocket = (host: string, listener_id: string, token: string) =>
+/** Opens a live-ingest socket with the supplied headers; the test scope closes it. */
+export const openSocket = (host: string, listener_id: string, token: string, headers: Record<string, string> = { authorization: `Bearer ${token}`, origin: `http://${host}` }) =>
   Effect.acquireRelease(Effect.promise(
     () =>
       new Promise<TestSocket>((resolve, reject) => {
-        const init = { headers: { authorization: `Bearer ${token}`, origin: `http://${host}` } };
-        const socket = new WebSocket(`ws://${host}/api/v1/listeners/${listener_id}/stream`, init as unknown as string[]);
+        const socket = new WebSocket(`ws://${host}/api/v1/listeners/${listener_id}/stream`, { headers } as unknown as string[]);
         socket.binaryType = 'arraybuffer';
         const messages: Array<ServerControlMessage> = [];
         const closed = new Promise<{ code: number; reason: string }>(done => socket.addEventListener('close', event => done({ code: event.code, reason: event.reason })));

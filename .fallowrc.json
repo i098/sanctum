@@ -5,7 +5,7 @@
     "docs/build/snippets/**",
     "docs/build/blueprint.html"
   ],
-  "entry": ["web-app/landing/index.html"],
+  "entry": ["web-app/landing/index.html", "web-app/kiosk/index.html"],
   "audit": {
     "gate": "new-only"
   },

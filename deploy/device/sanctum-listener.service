@@ -1,0 +1,22 @@
+[Unit]
+Description=Sanctum hardware listener
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=sanctum-listener
+SupplementaryGroups=audio
+StateDirectory=sanctum-listener
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/local/bin/sanctum-listener --server https://sanctum.example.com --state-dir /var/lib/sanctum-listener --name "Meeting room" --input alsa:default --light none --screen kiosk:/usr/local/share/sanctum-kiosk
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

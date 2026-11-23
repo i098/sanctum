@@ -50,6 +50,7 @@ export const PURGED_TABLES = [
   'listeners',
   'capture_groups',
   'profiles',
+  'devices',
   'agent_credentials',
   'workspace_orgs',
   'browser_sessions',

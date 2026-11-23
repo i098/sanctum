@@ -23,6 +23,7 @@ import {
   type WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
+import type { CaptureAccess } from './auth.ts';
 import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { heldUntil } from './lease-claims.ts';
@@ -117,7 +118,7 @@ const storeObject = (key: string, body: Uint8Array, sha256: string) =>
 const EpochClock = Schema.Struct({ sample_rate: DbSafeInt, sample_start: DbSafeInt, lease_generation: DbSafeInt });
 
 /** The epoch's clock when it belongs to `listener_id` and that listener to the caller. */
-const ownedEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: CaptureEpochId) =>
+const ownedEpoch = (access: CaptureAccess, listener_id: ListenerId, epoch_id: CaptureEpochId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const find = SqlSchema.findOne({
@@ -126,7 +127,8 @@ const ownedEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id: Capt
       execute: id => sql`
         SELECT e.sample_rate, e.sample_start, e.lease_generation FROM capture_epochs e
         JOIN listeners l ON l.workspace_id = e.workspace_id AND l.id = e.listener_id
-        WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${id} AND l.id = ${listener_id} AND l.principal_id = ${access.principal.id}`,
+        WHERE e.workspace_id = ${access.workspace_id} AND e.id = ${id} AND l.id = ${listener_id} AND l.principal_id = ${access.principal.id}
+          AND (${access.device_id ?? null} IS NULL OR l.device_id = ${access.device_id ?? null})`,
     });
     return yield* find(epoch_id).pipe(Effect.catchTag('ParseError', Effect.die));
   });

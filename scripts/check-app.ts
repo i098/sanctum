@@ -37,6 +37,8 @@ const STEPS: Step[] = [
   command('Accelerated day replay', 'npm', ['run', 'replay:capture', '--', '--fixture', 'server/tests/fixtures/day.json', '--accelerated']),
 ];
 
+const deviceClient = command('Hardware listener end-to-end', 'npm', ['run', 'check:device']);
+
 function timed(step: Step): boolean {
   console.log(`\n==> ${step.name}`);
   const started = performance.now();
@@ -46,6 +48,6 @@ function timed(step: Step): boolean {
 }
 
 if (import.meta.main) {
-  if (process.argv.includes('--help')) console.log(`Usage: npm run check:app\nSteps, in order:\n${STEPS.map(step => `  - ${step.name}`).join('\n')}`);
-  else if (!STEPS.every(timed)) process.exitCode = 1;
+  if (process.argv.includes('--help')) console.log(`Usage: npm run check:app [-- --device-client]\nSteps, in order:\n${STEPS.map(step => `  - ${step.name}`).join('\n')}\n--device-client runs only the hardware listener check.`);
+  else if (!(process.argv.includes('--device-client') ? [deviceClient] : STEPS).every(timed)) process.exitCode = 1;
 }

@@ -21,6 +21,7 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, hashToken, newToken, requireScope } from './auth.ts';
 import { DbJson, DbUtc } from './db.ts';
+import { closeCredentialSockets } from './media/open-sockets.ts';
 import { addMember, bumpPermissionRevision, write } from './store.ts';
 
 const CredentialRow = Schema.Struct({
@@ -55,7 +56,7 @@ const credentials = (access: AccessScope, where: (sql: SqlClient.SqlClient) => S
       Result: CredentialRow,
       execute: () => sql`SELECT c.id, c.principal_id AS agent_id, p.display_name, c.scopes, c.meeting_allowlist,
           c.expires_at, c.revoked_at, c.last_used_at, c.created_at
-        FROM agent_credentials c JOIN principals p ON p.id = c.principal_id
+        FROM agent_credentials c JOIN principals p ON p.id = c.principal_id AND p.kind = 'agent'
         WHERE c.workspace_id = ${access.workspace_id} AND ${owned} AND ${where(sql)}
         ORDER BY c.id LIMIT ${limit}`,
     })(undefined).pipe(Effect.orDie);
@@ -111,6 +112,7 @@ const revokeCredential = (access: AccessScope, agent_id: PrincipalId, key_id: Ag
         }),
       )
       .pipe(Effect.orDie);
+    yield* closeCredentialSockets(key_id);
   });
 
 export const AgentsLive = HttpApiBuilder.group(SanctumApi, 'agents', handlers =>

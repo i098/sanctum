@@ -26,6 +26,7 @@ import {
   WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
+import type { CaptureAccess } from './auth.ts';
 import { claimGroupLease, holdsGroupLease } from './capture-groups.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
@@ -61,7 +62,7 @@ type StartVerdict = typeof AcceptedMessage.Type | typeof RejectedMessage.Type;
 const rejected = (reason: (typeof RejectedMessage.Type)['reason'], message: string): StartVerdict => RejectedMessage.make({ reason, message });
 
 /** The caller's own listener (optionally row-locked); other principals' and workspaces' listeners are NotFound. */
-export const ownedListener = (access: AccessScope, listener_id: ListenerId, lock = false) =>
+export const ownedListener = (access: CaptureAccess, listener_id: ListenerId, lock = false) =>
   Effect.gen(function* () {
     if (!access.scopes.includes('capture:ingest')) {
       return yield* new Forbidden({ message: 'The capture:ingest scope is required', required_scope: 'capture:ingest' });
@@ -75,6 +76,7 @@ export const ownedListener = (access: AccessScope, listener_id: ListenerId, lock
                last_heartbeat_at, COALESCE(lease_expires_at > UTC_TIMESTAMP(6), 0) AS lease_active
         FROM listeners
         WHERE workspace_id = ${access.workspace_id} AND id = ${id} AND principal_id = ${access.principal.id}
+          AND (${access.device_id ?? null} IS NULL OR device_id = ${access.device_id ?? null})
         ${lock ? sql.unsafe('FOR UPDATE') : sql.unsafe('')}`,
     });
     const row = yield* find(listener_id).pipe(Effect.catchTag('ParseError', Effect.die));
@@ -97,7 +99,7 @@ const findEpoch = (workspace_id: WorkspaceId, epoch_id: CaptureEpochId) =>
 
 const toListener = ({ capture_group_id: _group, lease_active: _active, ...listener }: ListenerRow): Listener => listener;
 
-export const registerListener = (access: AccessScope, input: typeof RegisterListener.Type) =>
+export const registerListener = (access: CaptureAccess, input: typeof RegisterListener.Type) =>
   Effect.gen(function* () {
     if (!access.scopes.includes('capture:ingest')) {
       return yield* new Forbidden({ message: 'The capture:ingest scope is required', required_scope: 'capture:ingest' });
@@ -105,8 +107,8 @@ export const registerListener = (access: AccessScope, input: typeof RegisterList
     const sql = yield* SqlClient.SqlClient;
     const id = ListenerId.make(randomUUID());
     yield* sql`
-      INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
-      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${input.name}, ${input.mode}, ${JSON.stringify(input.capabilities)}, UTC_TIMESTAMP(6))`;
+      INSERT INTO listeners (id, workspace_id, principal_id, device_id, name, mode, capabilities, created_at)
+      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${access.device_id ?? null}, ${input.name}, ${input.mode}, ${JSON.stringify(input.capabilities)}, UTC_TIMESTAMP(6))`;
     return toListener(yield* ownedListener(access, id));
   });
 
@@ -239,13 +241,28 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const listener = yield* ownedListener(access, start.listener_id, true);
-        if (start.archive_only) return yield* registerArchive(access, listener, start);
-        if (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener))) {
+        if (!start.archive_only && (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener)))) {
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
-        return yield* startLive(access, listener, start);
+        const verdict = yield* (start.archive_only ? registerArchive(access, listener, start) : startLive(access, listener, start));
+        if (verdict._tag === 'accepted' && !start.archive_only && start.capabilities !== undefined) {
+          yield* sql`UPDATE listeners
+            SET capabilities = JSON_SET(capabilities, '$.device', CAST(${JSON.stringify(start.capabilities)} AS JSON))
+            WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
+        }
+        return verdict;
       }),
     );
+  });
+
+/** Whether the bearer credential behind a live socket is still unrevoked and unexpired; browser sessions have none and always pass. */
+export const credentialActive = (access: CaptureAccess) =>
+  Effect.gen(function* () {
+    if (access.credential_id === undefined) return true;
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql`SELECT 1 FROM agent_credentials
+      WHERE workspace_id = ${access.workspace_id} AND id = ${access.credential_id} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))`;
+    return rows.length > 0;
   });
 
 /**

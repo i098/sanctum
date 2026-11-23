@@ -152,7 +152,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           ...(workspace === null ? {} : { workspace }),
           ...(create === undefined ? {} : { create }),
         };
-        const pkce = verifier === undefined ? {} : { code_challenge: yield* Effect.promise(() => oidc.calculatePKCECodeChallenge(verifier)), code_challenge_method: 'S256' };
+        const pkce: Record<string, string> = verifier === undefined ? {} : { code_challenge: yield* Effect.promise(() => oidc.calculatePKCECodeChallenge(verifier)), code_challenge_method: 'S256' };
         const url = oidc.buildAuthorizationUrl(config, { redirect_uri: settings.redirectUri.href, scope: settings.scopes, state: flow.state, nonce: flow.nonce, ...pkce });
         return { url: url.href, flow };
       });

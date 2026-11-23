@@ -1,0 +1,142 @@
+{
+  "start": {
+    "_tag": "start",
+    "protocol_version": 1,
+    "listener_id": "0b8f5c1e-3a52-4c1b-9d0e-5f7a2b6c8d90",
+    "epoch_id": "6c1d4e2f-8a3b-4c5d-9e6f-7a8b9c0d1e2f",
+    "track": 2,
+    "clock": {
+      "sample_rate": 16000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "sample_start": 0,
+      "captured_at": "2026-09-26T17:08:16.123Z",
+      "timezone": "UTC"
+    },
+    "lease_generation": 1,
+    "start_reason": "start",
+    "capabilities": {
+      "mic": true,
+      "screen": false,
+      "light": "mono",
+      "speaker": false
+    }
+  },
+  "frames": [
+    {
+      "track": 2,
+      "sequence": 0,
+      "sample_start": 0,
+      "sample_count": 320,
+      "sample_cycle": [
+        0,
+        1,
+        -1,
+        -32768,
+        32767
+      ],
+      "hex": "01010200000000000000000000000000400100000000000000000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f00000100ffff0080ff7f"
+    },
+    {
+      "track": 2,
+      "sequence": 1,
+      "sample_start": 320,
+      "sample_count": 320,
+      "sample_cycle": [
+        12345,
+        -12345,
+        0,
+        256,
+        1
+      ],
+      "hex": "0101020001000000400100000000000040010000000000003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf0000000101003930c7cf000000010100"
+    }
+  ],
+  "wav": {
+    "sample_count": 32000,
+    "byte_length": 64044,
+    "header_hex": "5249464624fa000057415645666d74201000000001000100803e0000007d0000020010006461746100fa0000"
+  },
+  "pairing_codes": [
+    "1234-5678",
+    "0000-0000"
+  ],
+  "non_recording_entry_dark_ms": 300,
+  "patterns": {
+    "unpaired": {
+      "color": "hsl(220 100% 62%)",
+      "recording": false,
+      "pulse_ms": [
+        200,
+        200
+      ],
+      "digit_gap_ms": 1000,
+      "repeat_gap_ms": 3000,
+      "zero_blinks": 10
+    },
+    "stopped": {
+      "color": "hsl(220 100% 62%)",
+      "recording": false,
+      "segments_ms": [
+        100,
+        3900
+      ]
+    },
+    "starting": {
+      "color": "hsl(220 100% 62%)",
+      "recording": false,
+      "segments_ms": [
+        250,
+        250
+      ]
+    },
+    "listening": {
+      "color": "hsl(175 72% 48%)",
+      "recording": true,
+      "segments_ms": [
+        1000
+      ],
+      "brightness_floor": 0.4
+    },
+    "reconnecting": {
+      "color": "hsl(34 88% 59%)",
+      "recording": true,
+      "segments_ms": [
+        900,
+        100
+      ]
+    },
+    "degraded": {
+      "color": "hsl(34 88% 59%)",
+      "recording": true,
+      "segments_ms": [
+        760,
+        60,
+        120,
+        60
+      ]
+    },
+    "paused": {
+      "color": "hsl(220 100% 62%)",
+      "recording": false,
+      "segments_ms": [
+        100,
+        200,
+        100,
+        3600
+      ]
+    },
+    "error": {
+      "color": "hsl(0 100% 68%)",
+      "recording": false,
+      "segments_ms": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        1500
+      ]
+    }
+  }
+}

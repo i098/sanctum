@@ -276,6 +276,21 @@ Owns `server/src/onboarding.ts`, migration `020_onboarding`, `OnboardingApi` in 
 - `OnboardingApi` is website only (`OpenApi.Exclude`, so not in the SDKs or MCP): `GET`/`POST /api/v1/onboarding` read and set `principals.onboarded_at` with the workspace name, and `POST /api/v1/workspace/name` renames the workspace for `workspace:admin`.
 - `TeamButton` in SettingsSection.tsx opens this server's Team (self-hosted issuer, WorkOS widgets or Set up team) in a dialog over the welcome; Settings shows the same `TeamBody` inline; the microphone step uses listen-ui's `InputPicker`, `InputCheckText` and `useInputLevel`.
 
+### Hardware listeners (S0 to S7)
+
+The [device protocol](devices/protocol.md) is the shared wire contract. Keep fixture audio independent of providers.
+
+| Slice | Owns | Shared contract |
+| --- | --- | --- |
+| S0 | `packages/contracts/src/devices.ts`, the optional `StartMessage.capabilities`, `packages/contracts/fixtures/device-wire.json`, `devices/crates/contract` | `DevicePairingApi`, `DevicesApi`, `DeviceCapabilities`, `DeviceState`, `Device`, the golden fixture and the Rust `Indicate` trait. |
+| S1 | Device enrollment, migration `024_devices`, registration and SDK generation | Six endpoints across `DevicePairingApi` and `DevicesApi`; device tokens have only `capture:ingest`. |
+| S2 | Media ingest and listener capability persistence | The existing capture endpoints and WebSocket with device capabilities. |
+| S3 | `devices/crates/listener` | `Input`, `Config`, `input_from_arg` and `run`; consumes `Indicate`. |
+| S4 | `devices/crates/indicator` | `Indicator`, `pattern`, `light_from_arg` and `screen_from_arg`; implements `Indicate`. |
+| S5 | `web-app/kiosk`, `web-app/src/pages/kiosk` | The standalone kiosk consumes loopback `/events` and reads the existing waveform API. |
+| S6 | The pairing route, browser device API client and Devices settings section | The `DevicesApi` session endpoints. |
+| S7 | `devices/crates/cli`, workspace lockfile, `scripts/device-e2e.ts`, device CI and setup instructions | The `sanctum-listener` binary and end-to-end proof. |
+
 ## Hot files
 
 | File | Who touches it | How |

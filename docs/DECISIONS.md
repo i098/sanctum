@@ -355,6 +355,29 @@ MySQL is an Aiven MySQL 8.4 service reached only over TLS verified with its proj
 Anyone may open the site; visitors without a session are signed out.
 This selects no sign-in issuer or any other decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
 
+## Hardware listener decision
+
+The hardware listener is an additional capture surface. The fullscreen browser listener and the TypeScript application runtime stay in place.
+
+| Decision | Behavior |
+| --- | --- |
+| D1 | Sanctum serves one RFC 8628 device pairing flow for every sign-in issuer. |
+| D2 | A device token has only `capture:ingest`. The approver owns the listener and its conversations. |
+| D3 | A pairing code has eight decimal digits in `1234-5678` form. A screen shows the digits, or a light blinks them. |
+| D4 | Devices send mono PCM16 LE at 16 kHz in 20 ms frames. The existing ingest path and archive format stay in place. |
+| D5 | Eight device states have defined screen and light indications. |
+| D6 | The client must show the recording indication before it opens the microphone. An indication fault stops recording. |
+| D7 | The reference hardware listener is one Rust binary. It does not need Node.js. |
+| D8 | The client reads ALSA audio from `arecord`. A command that emits the specified PCM can supply audio on other systems. |
+| D9 | The reference light driver writes to the Linux LED class. |
+| D10 | The client serves a kiosk page on loopback and owns the microphone. The kiosk needs no sign-in or microphone permission. |
+
+This flow does not use the existing browser session path for a principal of kind `device`.
+It binds a scoped bearer credential to the human approver instead.
+Device sockets do not start spoken work. They do not act with the approver's broader scopes.
+
+See the [device protocol](devices/protocol.md) for the recording indication rules and wire format.
+
 ## Runtime decision — 2026-09-28
 
 Accepted: all-TypeScript application with Effect, replacing the earlier mixed-language plan.

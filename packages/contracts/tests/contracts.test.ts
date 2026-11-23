@@ -238,6 +238,12 @@ describe('HTTP API contract', () => {
       '/api/v1/agents/{agent_id}/credentials/{key_id}',
       '/api/v1/workspace',
       '/api/v1/workspace/restore',
+      '/api/v1/device/authorize',
+      '/api/v1/device/token',
+      '/api/v1/device/pending',
+      '/api/v1/device/approve',
+      '/api/v1/devices',
+      '/api/v1/devices/{device_id}',
     ]);
     expect(OpenApi.fromApi(SanctumApi).paths['/api/v1/integrations/actions']?.get?.operationId).toBe('integrations.searchIntegrationActions');
   });

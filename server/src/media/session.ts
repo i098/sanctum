@@ -27,7 +27,8 @@ import {
 import { Cause, Data, Deferred, Effect, Either, Exit, Fiber, Option, Schedule, Schema, Scope, Stream } from 'effect';
 import { engineeringDefaults } from '../config.ts';
 import { listenerFeed } from '../actions.ts';
-import { advanceLiveWatermark, stopEpoch } from '../listeners.ts';
+import type { CaptureAccess } from '../auth.ts';
+import { advanceLiveWatermark, credentialActive, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
 import { asrPrompt, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
@@ -76,7 +77,7 @@ interface Lane {
 }
 
 export interface LiveSessionInput {
-  readonly access: AccessScope;
+  readonly access: CaptureAccess;
   readonly listener: { readonly id: ListenerId; readonly capture_group_id: string | null };
   readonly start: typeof StartMessage.Type;
   readonly resume_from_sample: number;
@@ -223,7 +224,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
       return draining === 0 ? speech.onCovered(covered) : Effect.void;
     });
     const { degrade, answered } = asrHealth(send);
-    const prompt = yield* itemPrompt(access);
+    const prompt = start.capabilities === undefined ? yield* itemPrompt(access) : undefined;
 
     const closeLane = (current: Lane, reason: string) =>
       Effect.gen(function* () {
@@ -321,12 +322,21 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
     return { feed, close };
   });
 
+const quietSpeech = {
+  onSegment: (_segment: TranscriptSegment) => Effect.void,
+  onCovered: (_sample_end: number) => Effect.void,
+  replying: () => false,
+  onEnd: (_reason: 'pause' | 'disconnect') => Effect.void,
+};
+
 /**
  * Requested speech for this socket when the process provides a synthesizer and replies; otherwise
  * capture stays silent and ending the socket only closes any window the gate still holds.
  */
 const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInput, 'resume_from_sample'>) =>
   Effect.gen(function* () {
+    // The device credential must not run spoken work with the approver's full scopes.
+    if (start.capabilities !== undefined) return quietSpeech;
     const synthesizer = yield* Effect.serviceOption(SpeechSynthesizer);
     const replies = yield* Effect.serviceOption(SpeechReplies);
     const work = yield* Effect.serviceOption(SpeechWorkRequests);
@@ -338,9 +348,7 @@ const requestedSpeech = ({ access, listener, start, send }: Omit<LiveSessionInpu
     }
     const gate = yield* Effect.serviceOption(SpeechGate);
     return {
-      onSegment: (_segment: TranscriptSegment) => Effect.void,
-      onCovered: (_sample_end: number) => Effect.void,
-      replying: () => false,
+      ...quietSpeech,
       onEnd: (_reason: 'pause' | 'disconnect') => Effect.sync(() => Option.map(gate, value => value.cancel(listener.id, 'disconnect'))),
     };
   });
@@ -371,7 +379,7 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
     let persisted = watermark;
     const fenced = yield* Deferred.make<never, SessionRejected>();
     const speech = yield* requestedSpeech({ access, listener, start, send });
-    // Every transcript the client sees also reaches the speech gate (barge-in and direct requests).
+    // Browser transcript events also reach the speech gate for barge-in and direct requests.
     const relay = (message: ServerControlMessage) =>
       Effect.zipRight(send(message), message._tag === 'transcript' ? speech.onSegment(message.segment) : Effect.void);
     const asr = yield* liveAsr({ access, listener, start, send: relay, speech });
@@ -394,8 +402,15 @@ export const openLiveSession = ({ access, listener, start, resume_from_sample, s
         yield* speech.onEnd('disconnect');
       }),
     );
-    yield* Effect.forkScoped(Effect.repeat(flush, Schedule.spaced(liveLimits.watermarkFlushMs)));
-    yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
+    // Another API process may have revoked the credential; its sockets there cannot be closed from here.
+    const stillAuthorized = credentialActive(access).pipe(
+      Effect.flatMap(active => active ? Effect.void : Deferred.fail(fenced, new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message: 'This credential was revoked' }) }))),
+      Effect.catchAll(error => Effect.logWarning('Live credential not checked', error)),
+    );
+    yield* Effect.forkScoped(Effect.repeat(Effect.zipRight(stillAuthorized, flush), Schedule.spaced(liveLimits.watermarkFlushMs)));
+    if (start.capabilities === undefined) {
+      yield* Effect.forkScoped(Effect.repeat(actionFeed(access, listener.id, send), Schedule.spaced(liveLimits.actionFeedMs)));
+    }
 
     /** Validates one binary frame, advances the watermark, feeds live ASR and acknowledges live acceptance. */
     const frame = (bytes: Uint8Array) =>

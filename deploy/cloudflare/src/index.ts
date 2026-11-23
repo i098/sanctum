@@ -41,7 +41,7 @@ async function landing(request: Request, env: Env): Promise<Response | undefined
 
 /** Both processes run the same image with the same settings, restarted when those settings change. */
 class SanctumContainer extends Container<Env> {
-  override envVars = containerEnv(this.env);
+  override envVars = { ...containerEnv(this.env), SANCTUM_DEVICE_PROXY: 'cloudflare' };
   #envChecked = false;
 
   /** Once per object instance: a deploy or secret change starts a new instance with no open socket. */

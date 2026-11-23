@@ -6,9 +6,9 @@
  */
 import { HttpApiBuilder, HttpRouter, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
 import type { SqlClient } from '@effect/sql';
-import { type AccessScope, ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage } from '@sanctum/contracts';
+import { ClientControlMessage, type Forbidden, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage, type Unauthenticated } from '@sanctum/contracts';
 import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect';
-import { Authenticator } from '../auth.ts';
+import { Authenticator, type CaptureAccess } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
 import type { SpeechToText } from '../providers/whisper.ts';
 import { trackSocket } from './open-sockets.ts';
@@ -24,8 +24,7 @@ interface Closing {
   readonly reason: string;
 }
 
-/** Start handshake, then frames until `stop`, disconnect, rejection or fencing by a newer owner. */
-const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
+const readStart = (access: CaptureAccess, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>) =>
   Effect.gen(function* () {
     const first = yield* inbound.take.pipe(
       Effect.timeout('10 seconds'),
@@ -35,11 +34,22 @@ const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.R
     if (Option.isNone(start) || start.value._tag !== 'start' || start.value.listener_id !== listener.id) {
       return yield* reject('invalid_start', 'Expected a valid start message for this listener');
     }
-    const verdict = yield* startEpoch(access, start.value);
+    // Paired hardware authenticates as its human approver, but has only the capture scope.
+    if (start.value.capabilities === undefined && access.device_id !== undefined) {
+      return yield* reject('invalid_start', 'A paired device must declare its capabilities');
+    }
+    return start.value;
+  });
+
+/** Start handshake, then frames until `stop`, disconnect, rejection or fencing by a newer owner. */
+const dialogue = (access: CaptureAccess, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
+  Effect.gen(function* () {
+    const start = yield* readStart(access, listener, inbound);
+    const verdict = yield* startEpoch(access, start);
     if (verdict._tag === 'rejected') return yield* new SessionRejected({ message: verdict });
     yield* send(verdict);
-    if (start.value.archive_only) return { code: 1000, reason: 'registered' } satisfies Closing;
-    const session = yield* openLiveSession({ access, listener, start: start.value, resume_from_sample: verdict.resume_from_sample, send });
+    if (start.archive_only) return { code: 1000, reason: 'registered' } satisfies Closing;
+    const session = yield* openLiveSession({ access, listener, start, resume_from_sample: verdict.resume_from_sample, send });
     const loop = Effect.gen(function* () {
       for (;;) {
         const message = yield* inbound.take;
@@ -59,14 +69,14 @@ const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.R
     );
   });
 
-const converse = (access: AccessScope, listener: ListenerRow, socket: Socket.Socket) =>
+const converse = (access: CaptureAccess, listener: ListenerRow, socket: Socket.Socket, refreshAccess: Effect.Effect<CaptureAccess, Unauthenticated | Forbidden>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const writer = yield* socket.writer;
       const inbound = yield* Mailbox.make<string | Uint8Array>(INBOUND_LIMIT);
       const overflow = yield* Deferred.make<Closing, SessionRejected>();
-      const deleted = new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message: 'This workspace was deleted' }) });
-      yield* trackSocket(access.workspace_id, () => Deferred.unsafeDone(overflow, Exit.fail(deleted)));
+      yield* trackSocket(access, message =>
+        Deferred.unsafeDone(overflow, Exit.fail(new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message }) }))));
       const ended = yield* Deferred.make<void>();
       // The writer waits for an open socket, so writes race the peer's disconnect instead of hanging.
       const write = (chunk: string | Socket.CloseEvent) => writer(chunk).pipe(Effect.ignore, Effect.raceFirst(Deferred.await(ended)));
@@ -76,7 +86,10 @@ const converse = (access: AccessScope, listener: ListenerRow, socket: Socket.Soc
           if (!inbound.unsafeOffer(data)) Deferred.unsafeDone(overflow, Exit.succeed({ code: 1013, reason: 'server backlog full; reconnect to resume' }));
         })
         .pipe(Effect.ignore, Effect.ensuring(Effect.zipRight(inbound.end, Deferred.succeed(ended, undefined))), Effect.forkScoped);
-      const closing = yield* dialogue(access, listener, inbound, send).pipe(
+      // A revocation before tracking has no socket to close. Check access again after tracking.
+      const closing = yield* refreshAccess.pipe(
+        Effect.catchAll(error => reject('unauthorized', error.message)),
+        Effect.flatMap(current => dialogue(current, listener, inbound, send)),
         Effect.raceFirst(Deferred.await(overflow)),
         Effect.catchTag('SessionRejected', ({ message }) => Effect.as(send(message), { code: 1008, reason: message.reason })),
         Effect.catchAll(error => Effect.as(Effect.logError('Live session failed', error), { code: 1011, reason: 'internal error' })),
@@ -95,9 +108,10 @@ const upgrade = (allowedOrigins: ReadonlyArray<string>) =>
     const origin = request.headers.origin;
     if (origin !== undefined && !allowedOrigins.includes(origin) && !sameHost(origin, request.headers.host)) return HttpServerResponse.empty({ status: 403 });
     const authenticator = yield* Authenticator;
-    const access = yield* authenticator.authenticate(request);
+    const authenticate = authenticator.authenticate(request);
+    const access = yield* authenticate;
     const listener = yield* ownedListener(access, listener_id.value);
-    yield* converse(access, listener, yield* request.upgrade);
+    yield* converse(access, listener, yield* request.upgrade, authenticate);
     return HttpServerResponse.empty();
   }).pipe(
     Effect.catchTags({

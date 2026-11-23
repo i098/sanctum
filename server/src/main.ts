@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { type HttpApi, HttpApiBuilder, HttpMiddleware, HttpServer } from '@effect/platform';
+import { type HttpApi, HttpApiBuilder, HttpMiddleware, HttpServer, HttpServerRequest } from '@effect/platform';
 import { NodeHttpServer, NodeRuntime } from '@effect/platform-node';
 import type { SqlClient } from '@effect/sql';
 import { type ConfigError, Effect, Layer, flow } from 'effect';
@@ -30,6 +30,14 @@ import { WidgetTokenLive } from './widget-token.ts';
 /** `vite build` output; the same relative path from `src/` in the repository and `dist/` in the image. */
 const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.url));
 
+// These URLs can contain the user's pairing code. Do not send them to logs or traces.
+const hasPairingCode = ({ url }: HttpServerRequest.HttpServerRequest) =>
+  url.startsWith('/pair?') || url.startsWith('/api/v1/device/pending?') || (url.startsWith('/auth/login?') && url.includes('return_to=%2Fpair%3F'));
+const requestLogger = HttpMiddleware.make(app => {
+  const logged = HttpMiddleware.logger(app);
+  return Effect.flatMap(HttpServerRequest.HttpServerRequest, request => hasPairingCode(request) ? app : logged);
+});
+
 /**
  * Process layer: API routes, authentication and database, served on `apiPort` (0 picks a free
  * port), plus the website from `webRoot` when given.
@@ -47,7 +55,7 @@ export const serverLayer = (
     readonly llm?: Layer.Layer<LlmClient, ConfigError.ConfigError>;
   } = {},
 ) =>
-  HttpApiBuilder.serve(flow(HttpMiddleware.logger, secureResponses)).pipe(
+  HttpApiBuilder.serve(flow(requestLogger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
     Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
@@ -60,6 +68,7 @@ export const serverLayer = (
     Layer.provide(overrides.organizations ?? WorkosOrganizationsFromEnv),
     Layer.provide(dbLayer(config.mysql)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),
+    HttpMiddleware.withTracerDisabledWhen(hasPairingCode),
   );
 
 if (import.meta.main) {

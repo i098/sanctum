@@ -17,6 +17,16 @@ Model evidence includes the public speech baseline below and small synthetic com
 | Deployed | Yes, development mode | Cloudflare, 42nights account ([operations.md](operations.md#cloudflare)): Worker `sanctum` at `https://app.sanctum.42nights.dev` (custom domain; the apex `https://sanctum.42nights.dev` answers 308 to it), Container applications `sanctum-sanctumapi` and `sanctum-sanctumjobs`, R2 bucket `sanctum-recordings`, `SANCTUM_ENV=development`. The initial deployment had no provider keys; [operations.md](operations.md#configuration) owns current configuration guidance. The deployed commit is recorded on the pull request that added the deployment. |
 | Live-verified | Development checks only | Through the Worker, recorded before the app moved from the apex to `app.sanctum.42nights.dev`: the website loads, `/healthz` is ok and `/readyz` is ready (MySQL reachable over TLS, schema current), `/api/v1/meetings` answers 200 with the owner session and 401 without it, Listen in Chromium with a fake microphone upgrades the listener WebSocket and uploads 30-second chunks to the private bucket, a presigned GET for an uploaded chunk returns the WAV (unsigned is refused), and the job worker keeps polling MySQL while the API container sleeps. The [24-hour soak](#completed-24-hour-soak---2026-10-16) completed but failed retrieval acceptance. No live microphone session against real providers, no meeting playback through Review (detected meetings start restricted), and no staging environment. |
 
+## Hardware listeners
+
+- Older evidence: the build and replay below were recorded around commit `4b740ff`. The exact source commit of the binary is not proved. They predate later Rust and server changes on this branch, including the kiosk start confirmation and the capture-only device boundary. A new run has not been made.
+- Build: `cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p sanctum-listener` produced a static ARM64 Linux executable of 3,562,304 bytes. SHA-256: `ffaba8121cacea0666ede05949e930bfe725f8dee1e5f5d91e82d596a6beda7e`.
+- Fixture verification: [`npm run check:app -- --device-client`](../scripts/device-e2e.ts) passed V1 through V7 with the ARM64 executable under QEMU.
+  The run used Chromium, a disposable MySQL database, synthetic audio, and a local speech-to-text fixture.
+  The test paired both devices and verified the transcripts, private meeting access, archive continuity, and revocation.
+- Not run: V8, a separate manual check against the development stack. It is not part of the automated V1 through V7 replay. This task's development stack had no speech-to-text settings.
+- Not run: physical hardware, hosted deployment, production migration, or a live microphone. The ARM64 build does not prove compatibility with physical hardware.
+
 ## Acceptance (plan section 18)
 
 | Area | Result | Evidence and gaps |
