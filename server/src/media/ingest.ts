@@ -24,8 +24,7 @@ interface Closing {
   readonly reason: string;
 }
 
-/** Start handshake, then frames until `stop`, disconnect, rejection or fencing by a newer owner. */
-const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
+const readStart = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>) =>
   Effect.gen(function* () {
     const first = yield* inbound.take.pipe(
       Effect.timeout('10 seconds'),
@@ -35,11 +34,23 @@ const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.R
     if (Option.isNone(start) || start.value._tag !== 'start' || start.value.listener_id !== listener.id) {
       return yield* reject('invalid_start', 'Expected a valid start message for this listener');
     }
-    const verdict = yield* startEpoch(access, start.value);
+    // Paired hardware authenticates as its human approver, but has only the capture scope.
+    if (start.value.capabilities === undefined && access.principal.kind === 'human'
+      && access.scopes.length === 1 && access.scopes[0] === 'capture:ingest') {
+      return yield* reject('invalid_start', 'A paired device must declare its capabilities');
+    }
+    return start.value;
+  });
+
+/** Start handshake, then frames until `stop`, disconnect, rejection or fencing by a newer owner. */
+const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
+  Effect.gen(function* () {
+    const start = yield* readStart(access, listener, inbound);
+    const verdict = yield* startEpoch(access, start);
     if (verdict._tag === 'rejected') return yield* new SessionRejected({ message: verdict });
     yield* send(verdict);
-    if (start.value.archive_only) return { code: 1000, reason: 'registered' } satisfies Closing;
-    const session = yield* openLiveSession({ access, listener, start: start.value, resume_from_sample: verdict.resume_from_sample, send });
+    if (start.archive_only) return { code: 1000, reason: 'registered' } satisfies Closing;
+    const session = yield* openLiveSession({ access, listener, start, resume_from_sample: verdict.resume_from_sample, send });
     const loop = Effect.gen(function* () {
       for (;;) {
         const message = yield* inbound.take;
