@@ -245,7 +245,7 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
         const verdict = yield* (start.archive_only ? registerArchive(access, listener, start) : startLive(access, listener, start));
-        if (verdict._tag === 'accepted' && start.capabilities !== undefined) {
+        if (verdict._tag === 'accepted' && !start.archive_only && start.capabilities !== undefined) {
           yield* sql`UPDATE listeners
             SET capabilities = JSON_SET(capabilities, '$.device', CAST(${JSON.stringify(start.capabilities)} AS JSON))
             WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;

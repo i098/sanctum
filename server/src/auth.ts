@@ -28,9 +28,6 @@ import { DbJson, DbSafeInt } from './db.ts';
 
 export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId; readonly credential_id?: string };
 
-/** A paired device authenticates as its human approver but is capture-only, so it is never a person. */
-export const isPerson = (access: CaptureAccess) => access.principal.kind === 'human' && access.device_id === undefined;
-
 export class Authenticator extends Context.Tag('sanctum/Authenticator')<
   Authenticator,
   {
@@ -128,13 +125,21 @@ const credentialAccess = (token: string) =>
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Credential is not valid' });
     yield* sql`UPDATE agent_credentials SET last_used_at = UTC_TIMESTAMP(6) WHERE id = ${row.value.id}`;
     const access = toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
-    return row.value.device_id === null ? { ...access, credential_id: row.value.id } : { ...access, credential_id: row.value.id, device_id: row.value.device_id };
+    const captured: CaptureAccess = row.value.device_id === null ? { ...access, credential_id: row.value.id } : { ...access, credential_id: row.value.id, device_id: row.value.device_id };
+    return captured;
   });
 
-/** Bearer credentials first, then the session cookie. */
+const DEVICE_ROUTES = /^\/api\/v1\/listeners(?:[/?]|$)/;
+
+/** Bearer credentials first, then the session cookie. A paired device reaches only the listener routes; it holds the approver's identity and nothing else of theirs. */
 const authenticate = (request: HttpServerRequest.HttpServerRequest) => {
   const bearer = /^Bearer (\S+)$/.exec(request.headers.authorization ?? '')?.[1];
-  return bearer ? credentialAccess(bearer) : sessionAccess(request);
+  return bearer
+    ? credentialAccess(bearer).pipe(Effect.filterOrFail(
+      access => access.device_id === undefined || DEVICE_ROUTES.test(request.url),
+      () => new Forbidden({ message: 'A paired device can only capture audio' }),
+    ))
+    : sessionAccess(request);
 };
 
 export const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`;

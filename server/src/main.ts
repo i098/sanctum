@@ -32,7 +32,7 @@ const BUILT_WEBSITE = fileURLToPath(new URL('../../web-app/dist/', import.meta.u
 
 // These URLs can contain the user's pairing code. Do not send them to logs or traces.
 const hasPairingCode = ({ url }: HttpServerRequest.HttpServerRequest) =>
-  url.startsWith('/pair?') || url.startsWith('/api/v1/device/pending?');
+  url.startsWith('/pair?') || url.startsWith('/api/v1/device/pending?') || (url.startsWith('/auth/login?') && url.includes('return_to=%2Fpair%3F'));
 const requestLogger = HttpMiddleware.make(app => {
   const logged = HttpMiddleware.logger(app);
   return Effect.flatMap(HttpServerRequest.HttpServerRequest, request => hasPairingCode(request) ? app : logged);

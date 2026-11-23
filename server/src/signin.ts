@@ -10,7 +10,7 @@ import { SqlClient, SqlSchema } from '@effect/sql';
 import { Forbidden, type NotFound, Unauthenticated, Unavailable, WorkspaceId } from '@sanctum/contracts';
 import { ConfigError, Context, Data, Effect, Layer, Option, Redacted, Schema } from 'effect';
 import * as oidc from 'openid-client';
-import { Authenticator, identityPrincipal, isPerson, linkIdentity, openSession, ownerUntilPurge, revokeSession, SESSION_COOKIE } from './auth.ts';
+import { Authenticator, identityPrincipal, linkIdentity, openSession, ownerUntilPurge, revokeSession, SESSION_COOKIE } from './auth.ts';
 import { serverConfig } from './config.ts';
 import { reconcileSignIn, SelfServeRequest, WorkosOrganizations } from './org-sync.ts';
 import { DbSafeInt } from './db.ts';
@@ -207,7 +207,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
     const link = (identity: { issuer: string; subject: string }, flow: Flow, request: HttpServerRequest.HttpServerRequest) =>
       Effect.gen(function* () {
         const access = yield* authenticator.authenticate(request).pipe(Effect.mapError(error => new SignInFailed({ code: 'failed', reason: error.message })));
-        if (!isPerson(access)) return yield* new SignInFailed({ code: 'failed', reason: 'link needs a human session' });
+        if (access.principal.kind !== 'human') return yield* new SignInFailed({ code: 'failed', reason: 'link needs a human session' });
         yield* linkIdentity({ ...identity, principal_id: access.principal.id }).pipe(
           Effect.catchTag('Forbidden', error => new SignInFailed({ code: 'already_linked', reason: error.message })),
         );
@@ -269,7 +269,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
         const request = yield* HttpServerRequest.HttpServerRequest;
         // Cookie mutations need the CSRF header here; a bearer credential is an agent and is refused.
         const access = yield* authenticator.authenticate(request);
-        if (!isPerson(access)) return errorResponse(new Forbidden({ message: 'Linking a sign-in needs a human browser session' }));
+        if (access.principal.kind !== 'human') return errorResponse(new Forbidden({ message: 'Linking a sign-in needs a human browser session' }));
         const { url, flow } = yield* start(party.value, 'link', request);
         return HttpServerResponse.unsafeJson({ url }).pipe(flowCookie(flow));
       }).pipe(Effect.catchAll(answer)),

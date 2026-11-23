@@ -76,7 +76,6 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect(polls.find(result => result.status === 400)).toMatchObject({ body: { error: 'invalid_grant' } });
   const { device_id, access_token } = issued.body;
   const headers = bearer(issued.body);
-  expect(yield* http.call('/session', { headers })).toMatchObject({ status: 200, body: { principal: { id: member!.principal.id }, scopes: ['capture:ingest'] } });
   const registration = yield* http.call<{ id: string }>('/listeners', { method: 'POST', headers, body: { name: listenerName, mode: 'room', capabilities: { device: capabilities } } });
   expect(registration.status).toBe(201);
   const heartbeat = (id = registration.body.id) => http.call(`/listeners/${id}/heartbeat`, {
@@ -93,15 +92,22 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect((yield* http.list(headers)).status).toBe(403);
   expect((yield* http.revoke(device_id, headers)).status).toBe(403);
   const [account_id, grantee, meeting_id] = [randomUUID(), randomUUID(), randomUUID()];
-  for (const [path, body] of [
-    ['/action-grants', { grantee, action_key: 'slack-send-message', account_id, meeting_id, restrictions: {}, expires_at: null }],
-    ['/integrations/connect', { app: 'slack' }],
-    ['/integrations/accounts/sync', undefined],
-    [`/integrations/accounts/${account_id}/disconnect`, undefined],
-    ['/onboarding', undefined],
+  for (const [method, path, body] of [
+    ['POST', '/action-grants', { grantee, action_key: 'slack-send-message', account_id, meeting_id, restrictions: {}, expires_at: null }],
+    ['POST', '/integrations/connect', { app: 'slack' }],
+    ['POST', '/integrations/accounts/sync', undefined],
+    ['POST', `/integrations/accounts/${account_id}/disconnect`, undefined],
+    ['POST', '/onboarding', undefined],
+    ['GET', '/onboarding', undefined],
+    ['GET', '/session', undefined],
+    ['GET', '/agents', undefined],
+    ['GET', '/integrations/accounts', undefined],
+    ['DELETE', `/action-grants/${randomUUID()}`, undefined],
+    ['DELETE', `/agents/${randomUUID()}/credentials/${randomUUID()}`, undefined],
   ] as const) {
-    expect(yield* http.call(path, { method: 'POST', headers, body })).toMatchObject({ status: 403 });
+    expect(yield* http.call(path, { method, headers, body }), `${method} ${path}`).toMatchObject({ status: 403 });
   }
+  expect(yield* http.call('/session', { headers: approver! })).toMatchObject({ status: 200, body: { principal: { id: member!.principal.id } } });
   expect((yield* http.call('/onboarding', { method: 'POST', headers: approver!, body: undefined })).status).toBe(200);
   const [onboarded] = yield* sql`SELECT onboarded_at FROM principals WHERE id = ${member!.principal.id}`;
   expect(onboarded).toMatchObject({ onboarded_at: expect.anything() });

@@ -23,7 +23,7 @@ Model evidence includes the public speech baseline below and small synthetic com
 - Fixture verification: [`npm run check:app -- --device-client`](../scripts/device-e2e.ts) passed V1 through V7 with the ARM64 executable under QEMU.
   The run used Chromium, a disposable MySQL database, synthetic audio, and a local speech-to-text fixture.
   The test paired both devices and verified the transcripts, private meeting access, archive continuity, and revocation.
-- Not run: V8 against the development stack. This task's development stack had no speech-to-text settings.
+- Not run: V8, a separate manual check against the development stack. It is not part of the automated V1 through V7 replay. This task's development stack had no speech-to-text settings.
 - Not run: physical hardware, hosted deployment, production migration, or a live microphone. The ARM64 build does not prove compatibility with physical hardware.
 
 ## Acceptance (plan section 18)

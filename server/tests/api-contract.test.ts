@@ -27,7 +27,7 @@ describe('v1 OpenAPI contract', () => {
     for (const [path, methods] of Object.entries(openApiDocument.paths)) {
       for (const op of Object.values(methods as Record<string, { operationId: string; responses: Record<string, unknown> }>)) {
         expect(op.operationId).toMatch(/^[a-z][a-zA-Z]*\.[a-zA-Z]+$/);
-        if (op.operationId === 'devicePairing.deviceToken') expect(op.responses).toHaveProperty('400');
+        if (op.operationId === 'devicePairing.deviceToken') expect(JSON.stringify(op.responses['400'])).toContain('authorization_pending');
         if (path.startsWith('/api/v1/') && op.operationId !== 'session.getSession' && !op.operationId.startsWith('devicePairing.')) {
           expect(Object.keys(op.responses), op.operationId).toEqual(expect.arrayContaining(ERROR_STATUSES));
         }

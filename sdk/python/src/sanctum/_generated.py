@@ -652,7 +652,7 @@ class AuthorizeDeviceInput(TypedDict):
 
 
 class DeviceCapabilities(TypedDict):
-    mic: Literal[true]
+    mic: Literal[True]
     screen: bool
     light: Literal["none", "mono", "pwm", "rgb"]
     speaker: bool

@@ -208,7 +208,7 @@ function renderPython() {
   const emit = emitter({
     primitives: { string: 'str', integer: 'int', number: 'float', boolean: 'bool', null: 'None' },
     unknown: 'Any',
-    literals: values => `Literal[${values.map(v => JSON.stringify(v)).join(', ')}]`,
+    literals: values => `Literal[${values.map(v => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(v))).join(', ')}]`,
     declare: (name, fields) => {
       const typed = fields.map(([key, type, required]) => [key, required ? type : `NotRequired[${type}]`] as const);
       // A Python keyword (e.g. `from`) cannot be a class attribute; the functional form takes any key.

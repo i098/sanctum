@@ -43,7 +43,7 @@ Wait five seconds between token polls. A token failure returns HTTP `400` with `
 | `invalid_grant` | Stop polling. The code is unknown or the server already issued the token. |
 
 Pending lookup returns `404` for an unknown, expired, or used code.
-The sixth wrong code from one principal in ten minutes returns `403`.
+After five wrong codes from one principal in ten minutes, every lookup returns `403`, even with a correct code, until the oldest miss is ten minutes old.
 One IPv4 address or IPv6 /64 prefix can have at most five pending codes.
 Authorization removes expired rows and returns `503` when 1,000 pending rows fill the limit.
 Sanctum stores hashes of both codes and the token, not their plain values.
@@ -79,7 +79,7 @@ See the [golden fixture](../../packages/contracts/fixtures/device-wire.json) for
 
 Devices send capabilities on each `start`. The server saves the last declaration under `device` in the listener capabilities.
 An invalid declaration receives `rejected` with reason `invalid_start` and close code `1008`.
-A browser can omit capabilities. Its default is `{mic: true, screen: true, light: "none", speaker: true}`.
+A browser can omit capabilities. The server then stores no `device` entry for it. An archive-only start never changes the stored declaration.
 A socket that sends `capabilities` cannot start spoken work. It does not receive `speech_chunk`, `speech_cancel`, or `action_update`.
 Only browser sockets receive vocabulary prompts.
 

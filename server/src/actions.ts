@@ -33,7 +33,7 @@ import {
 } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Option, Schema } from 'effect';
-import { authorizeMeeting, type CaptureAccess, isPerson, requireScope } from './auth.ts';
+import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { listenerMeeting } from './meeting-store.ts';
@@ -307,8 +307,8 @@ export const listenerFeed = (access: AccessScope, listener_id: ListenerId) =>
     return { meeting_id, actions: rows.toReversed().map(row => ({ action_id: row.id, action_key: row.action_key, state: row.state, title: actionTitle(row) })) };
   }).pipe(Effect.catchTag('NotFound', () => Effect.succeed({ meeting_id: null, actions: [] })));
 
-export const requireHuman = (access: CaptureAccess, what: string) =>
-  isPerson(access) ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
+export const requireHuman = (access: AccessScope, what: string) =>
+  access.principal.kind === 'human' ? Effect.void : Effect.fail(new Forbidden({ message: `Only a person can ${what}` }));
 
 /** A person records the checked outcome of an `unknown` action, signed with who and when; automatic replay never does. */
 export const resolveAction = (access: AccessScope, action_id: ActionId, input: ResolveActionInput) =>

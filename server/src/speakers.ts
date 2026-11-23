@@ -23,7 +23,7 @@ import {
   type WorkspaceId,
 } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
-import { authorizeMeeting, type CaptureAccess, isPerson, requireScope } from './auth.ts';
+import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbJson, DbSafeInt } from './db.ts';
 import { asJobResult, currentRanges, dbFailures, MeetingJobPayload, type MeetingJob, OPEN_STATES, scheduleFinalize, selectMeeting } from './meeting-store.ts';
@@ -249,11 +249,11 @@ export const mapSpeaker = (access: AccessScope, meeting_id: MeetingId, input: Ma
   }).pipe(dbFailures);
 
 /** Explicit, consented enrollment: only the person a profile belongs to can enroll their own voice. */
-export const enrollVoice = (access: CaptureAccess, input: { readonly profile_id: ProfileId; readonly voiceprint: string; readonly consent_version: string }) =>
+export const enrollVoice = (access: AccessScope, input: { readonly profile_id: ProfileId; readonly voiceprint: string; readonly consent_version: string }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [profile] = yield* sql<{ principal_id: string | null }>`SELECT principal_id FROM profiles WHERE workspace_id = ${access.workspace_id} AND id = ${input.profile_id}`;
-    if (!isPerson(access) || profile === undefined || profile.principal_id !== access.principal.id) {
+    if (access.principal.kind !== 'human' || profile === undefined || profile.principal_id !== access.principal.id) {
       return yield* new Forbidden({ message: 'Only the person a profile belongs to can enroll their voice' });
     }
     const id = randomUUID();

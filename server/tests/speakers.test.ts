@@ -2,10 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { HttpClient, HttpClientResponse } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { type AccessScope, DeviceId, MeetingId, ProfileId, type ProviderConnectionId, SpeakerTrackId } from '@sanctum/contracts';
+import { type AccessScope, MeetingId, ProfileId, type ProviderConnectionId, SpeakerTrackId } from '@sanctum/contracts';
 import { Effect, Layer, Redacted } from 'effect';
 import { evaluateSpeakers } from '../../scripts/evaluate-speakers.ts';
-import type { CaptureAccess } from '../src/auth.ts';
 import { getTranscript } from '../src/meetings-api.ts';
 import { closeMeeting, getMeeting } from '../src/meetings.ts';
 import { issueRecordingAccess } from '../src/playback.ts';
@@ -51,7 +50,7 @@ const meetingWithPeople = Effect.gen(function* () {
   return { owner: owner!, member: member!, admin: admin!, listener, epoch, meeting, people };
 });
 
-const enroll = (access: CaptureAccess, profile_id: ProfileId) => enrollVoice(access, { profile_id, voiceprint: `vp-${profile_id}`, consent_version: '2026-09' });
+const enroll = (access: AccessScope, profile_id: ProfileId) => enrollVoice(access, { profile_id, voiceprint: `vp-${profile_id}`, consent_version: '2026-09' });
 
 const fakePyannote = (result: BatchDiarization, seen: Array<ReadonlyArray<string>> = []) =>
   Layer.succeed(PyannoteClient, {
@@ -190,7 +189,6 @@ describe('speaker attribution', () => {
         expect(yield* Effect.flip(enroll(owner, people.bob))).toMatchObject({ _tag: 'Forbidden' });
         const agent: AccessScope = { ...member, principal: { ...member.principal, kind: 'agent' } };
         expect(yield* Effect.flip(enroll(agent, people.bob))).toMatchObject({ _tag: 'Forbidden' });
-        expect(yield* Effect.flip(enroll({ ...member, device_id: DeviceId.make(randomUUID()) }, people.bob))).toMatchObject({ _tag: 'Forbidden' });
       }),
       { migrated: true },
     ),
