@@ -24,6 +24,7 @@ const fixture: {
     sample_cycle: readonly number[];
   }[];
   pairing_codes: readonly string[];
+  non_recording_entry_dark_ms: number;
   patterns: Record<DeviceState, Pattern>;
 } = JSON.parse(readFileSync(new URL('../fixtures/device-wire.json', import.meta.url), 'utf8'));
 
@@ -70,8 +71,9 @@ function measurePattern(pattern: Pattern, code: string) {
   let run = 0;
   let longestRun = 0;
   let leastLit = 1_000;
+  const entryDark = pattern.recording ? 0 : fixture.non_recording_entry_dark_ms;
   for (let ms = 0; ms < 60_000; ms++) {
-    const on = cycle[ms % cycle.length]!;
+    const on = ms < entryDark ? 0 : cycle[(ms - entryDark) % cycle.length]!;
     const slot = ms % window.length;
     total += on - window[slot]!;
     window[slot] = on;

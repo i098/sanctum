@@ -372,6 +372,10 @@ The hardware listener is an additional capture surface. The fullscreen browser l
 | D9 | The reference light driver writes to the Linux LED class. |
 | D10 | The client serves a kiosk page on loopback and owns the microphone. The kiosk needs no sign-in or microphone permission. |
 
+This flow does not use the existing browser session path for a principal of kind `device`.
+It binds a scoped bearer credential to the human approver instead.
+Device sockets do not start spoken work. They do not act with the approver's broader scopes.
+
 See the [device protocol](devices/protocol.md) for the recording indication rules and wire format.
 
 ## Runtime decision — 2026-09-28

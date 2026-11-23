@@ -61,6 +61,7 @@
     "1234-5678",
     "0000-0000"
   ],
+  "non_recording_entry_dark_ms": 300,
   "patterns": {
     "unpaired": {
       "color": "hsl(220 100% 62%)",
@@ -101,18 +102,18 @@
       "color": "hsl(34 88% 59%)",
       "recording": true,
       "segments_ms": [
-        850,
-        150
+        900,
+        100
       ]
     },
     "degraded": {
       "color": "hsl(34 88% 59%)",
       "recording": true,
       "segments_ms": [
-        700,
-        100,
-        100,
-        100
+        760,
+        60,
+        120,
+        60
       ]
     },
     "paused": {

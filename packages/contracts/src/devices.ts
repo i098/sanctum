@@ -53,6 +53,8 @@ export const DeviceToken = Schema.Struct({
   token_type: Schema.Literal('Bearer'),
   device_id: DeviceId,
   workspace_id: WorkspaceId,
+  approved_by_name: Schema.String,
+  workspace_name: Schema.String,
 });
 export type DeviceToken = typeof DeviceToken.Type;
 

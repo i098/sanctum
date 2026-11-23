@@ -22,6 +22,13 @@ pub struct Status {
     pub name: String,
     pub cause: Option<String>,
     pub saved_through: Option<String>,
+    pub owner: Option<Owner>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Owner {
+    pub approved_by_name: String,
+    pub workspace_name: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,7 +42,6 @@ pub struct Lit {
 pub struct Capabilities {
     pub screen: bool,
     pub light: LightKind,
-    pub speaker: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
