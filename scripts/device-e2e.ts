@@ -153,20 +153,24 @@ function startDevice(binary: string, scratch: string, origin: string, name: stri
   };
 }
 
+function* blinkCycles(pulses: readonly Indication[]) {
+  let groups = [1];
+  for (let i = 1; i < pulses.length; i++) {
+    const gap = pulses[i].t_ms - pulses[i - 1].t_ms;
+    // The interdigit gap is 1.4 s. The next cycle starts after a 3.4 s gap.
+    if (gap > 2_500) {
+      yield groups;
+      groups = [1];
+    } else if (gap > 900) groups.push(1);
+    else groups[groups.length - 1]++;
+  }
+}
+
 function checkBlinks(rows: () => Indication[], code: string) {
   const digits = [...code.replace('-', '')].map(digit => Number(digit) || 10).join(',');
   return until('complete eight-digit cycle on the terminal light', () => {
     const pulses = rows().filter(row => row.state === 'unpaired' && row.lit);
-    let groups = [1];
-    for (let i = 1; i < pulses.length; i++) {
-      const gap = pulses[i].t_ms - pulses[i - 1].t_ms;
-      // The interdigit gap is 1.4 s. The next cycle starts after a 3.4 s gap.
-      if (gap > 2_500) {
-        if (groups.join(',') === digits) return true;
-        groups = [1];
-      } else if (gap > 900) groups.push(1);
-      else groups[groups.length - 1]++;
-    }
+    for (const cycle of blinkCycles(pulses)) if (cycle.join(',') === digits) return true;
   }, 90_000);
 }
 
