@@ -264,6 +264,23 @@ function checkArchive(
   }
 }
 
+function checkInvalidConfig(binary: string, scratch: string, origin: string, wav: string, webRoot: string) {
+  const noIndicator = spawnSync(binary, ['--light', 'none', '--screen', 'none'], { encoding: 'utf8', timeout: 5_000 });
+  assert.equal(noIndicator.status, 2, noIndicator.stderr);
+  assert.match(noIndicator.stderr, /light or a screen/i);
+  for (const [server, name, error] of [
+    ['http://invalid.example', 'Fixture', /HTTPS server origin/],
+    [origin, 'a'.repeat(201), /name of 1 to 200 characters/],
+  ] as const) {
+    const invalid = spawnSync(binary, [
+      '--server', server, '--state-dir', scratch, '--name', name, '--input', `file:${wav}`,
+      '--screen', `kiosk:${join(webRoot, 'kiosk')}:7171`,
+    ], { encoding: 'utf8', timeout: 5_000 });
+    assert.equal(invalid.status, 2, invalid.stderr);
+    assert.match(invalid.stderr, error);
+  }
+}
+
 async function runSuite(admin: string, binary: string, screenshots: string | undefined) {
   const scratch = mkdtempSync(join(tmpdir(), 'sanctum-device-e2e-'));
   const scope = Effect.runSync(Scope.make());
@@ -315,9 +332,7 @@ async function runSuite(admin: string, binary: string, screenshots: string | und
       JOIN transcript_segments s ON s.epoch_id = r.epoch_id
       WHERE m.listener_id = ${listener} AND m.state = 'provisional' AND a.principal_id = ${seed.approver.principal.id} AND a.access = 'owner' AND s.text = ${sentence}`))[0]);
 
-    const noIndicator = spawnSync(binary, ['--light', 'none', '--screen', 'none'], { encoding: 'utf8' });
-    assert.equal(noIndicator.status, 2, noIndicator.stderr);
-    assert.match(noIndicator.stderr, /light or a screen/i);
+    checkInvalidConfig(binary, scratch, link.origin, wav, webRoot);
     const light = startDevice(binary, scratch, link.origin, 'Fixture light', `file:${wav}`, 'none');
     devices.push(light);
     const lightCode = await until('light authorization response', () => link.codes[0]);

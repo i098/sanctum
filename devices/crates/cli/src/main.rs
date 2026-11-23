@@ -54,7 +54,13 @@ fn start(mut flags: HashMap<String, String>) -> Result<ExitCode, String> {
         flags.remove("--indication-log").map(Into::into),
     ));
     if let Err(error) = run(config, indicator) {
-        if matches!(error, RunError::NoIndicator) {
+        if matches!(
+            error,
+            RunError::NoIndicator
+                | RunError::InvalidServer
+                | RunError::InvalidConfig
+                | RunError::Credential
+        ) {
             return Err(error.to_string());
         }
         eprintln!("Listener stopped: {error}");

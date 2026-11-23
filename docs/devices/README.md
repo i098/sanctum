@@ -62,6 +62,7 @@ Use `--light none --screen kiosk:/path/to/kiosk` and open `http://127.0.0.1:7171
 Disable display blanking and keep the kiosk page visible.
 The page does not request the microphone or a sign-in.
 Losing the kiosk connection stops recording.
+The listener checks the connection with two separate writes before it opens the microphone.
 
 ## Run as a service
 
@@ -69,6 +70,7 @@ Install the binary at `/usr/local/bin/sanctum-listener` and copy the kiosk asset
 Create a local service user named `sanctum-listener` and give it access to the selected audio input.
 Copy the [systemd example](../../deploy/device/sanctum-listener.service) to `/etc/systemd/system/` and set its origin, name, input, and outputs.
 Open the kiosk in the device's desktop session if the service uses `--screen kiosk:…`.
+The service does not restart after an invalid configuration or stored credential. Correct the problem before you start it again.
 
 ```sh
 sudo systemctl daemon-reload

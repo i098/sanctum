@@ -13,6 +13,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 use crate::pattern::{recording, state_name};
 
 const VIEWER_TIMEOUT: Duration = Duration::from_secs(2);
+const RECORDING_INTERVAL: Duration = Duration::from_millis(40);
 const NO_VIEWER: &str = "No kiosk viewer received an event for two seconds";
 
 #[derive(Default)]
@@ -30,6 +31,7 @@ struct Frame {
     sequence: u64,
     published: Instant,
     bytes: Vec<u8>,
+    confirm_start: bool,
 }
 
 pub(crate) struct Kiosk {
@@ -102,7 +104,7 @@ impl Screen for Kiosk {
             return Ok(());
         }
         let interval = if active {
-            Duration::from_millis(40)
+            RECORDING_INTERVAL
         } else {
             Duration::from_secs(1)
         };
@@ -118,11 +120,12 @@ impl Screen for Kiosk {
             sequence,
             published: now,
             bytes: encode_event(status)?,
+            confirm_start: started,
         }));
         wake.notify_all();
         if started {
             self.recording_since = Some(now);
-            // Require a flushed event before the first recording frame can succeed.
+            // A viewer must confirm both writes before recording starts.
             let (mut guard, _) = wake
                 .wait_timeout_while(viewers, VIEWER_TIMEOUT, |viewers| {
                     !viewers.clients.iter().flatten().any(|id| *id >= sequence)
@@ -180,6 +183,10 @@ fn encode_event(status: &Status) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn matches_host(value: Option<&str>, address: &str) -> bool {
+    value.is_some_and(|value| value == address || address.strip_suffix(":80") == Some(value))
+}
+
 fn respond(request: Request, root: &Path, host: &str, stream: &Arc<Stream>) {
     let header = |name: &'static str| {
         request
@@ -188,9 +195,10 @@ fn respond(request: Request, root: &Path, host: &str, stream: &Arc<Stream>) {
             .find(|h| h.field.equiv(name))
             .map(|h| h.value.as_str())
     };
-    if header("Host") != Some(host)
+    if !matches_host(header("Host"), host)
         || header("Sec-Fetch-Site").is_some_and(|site| !matches!(site, "none" | "same-origin"))
-        || header("Origin").is_some_and(|origin| origin.strip_prefix("http://") != Some(host))
+        || header("Origin")
+            .is_some_and(|origin| !matches_host(origin.strip_prefix("http://"), host))
     {
         let _ = request.respond(Response::empty(403));
         return;
@@ -286,6 +294,12 @@ impl Viewer {
             drop(viewers);
             writer.write_all(&frame.bytes)?;
             writer.flush()?;
+            if frame.confirm_start {
+                // A TCP connection can accept one write after the peer has closed it.
+                thread::sleep(RECORDING_INTERVAL);
+                writer.write_all(b": ready\n\n")?;
+                writer.flush()?;
+            }
             sequence = frame.sequence;
             let mut viewers = lock.lock().unwrap();
             viewers.clients[self.slot] = Some(sequence);
@@ -369,6 +383,45 @@ mod tests {
             std::os::unix::fs::symlink("/dev/null", root.0.join("outside")).unwrap();
             assert!(line(&mut request(&host, "/outside", &host)).contains(" 404 "));
         }
+    }
+
+    #[test]
+    fn matches_the_browser_host_on_the_default_http_port() {
+        assert!(matches_host(Some("127.0.0.1"), "127.0.0.1:80"));
+        assert!(matches_host(Some("127.0.0.1:80"), "127.0.0.1:80"));
+        assert!(!matches_host(Some("127.0.0.1"), "127.0.0.1:7171"));
+        assert!(!matches_host(Some("untrusted.test"), "127.0.0.1:80"));
+        assert!(!matches_host(None, "127.0.0.1:80"));
+    }
+
+    #[test]
+    fn a_viewer_lost_after_the_first_write_cannot_confirm_recording() {
+        struct Disconnected(usize);
+        impl Write for Disconnected {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                if self.0 > 2 {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let root = Scratch::new();
+        let mut kiosk = kiosk(&root);
+        let viewer = Viewer::open(Arc::clone(&kiosk.stream)).unwrap();
+        let worker = thread::spawn(move || viewer.send_events(Disconnected(0)));
+        let result = kiosk.show(&status(Listening));
+        drop(kiosk);
+        assert_eq!(
+            worker.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
