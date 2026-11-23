@@ -21,6 +21,7 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, hashToken, newToken, requireScope } from './auth.ts';
 import { DbJson, DbUtc } from './db.ts';
+import { closeCredentialSockets } from './media/open-sockets.ts';
 import { addMember, bumpPermissionRevision, write } from './store.ts';
 
 const CredentialRow = Schema.Struct({
@@ -111,6 +112,7 @@ const revokeCredential = (access: AccessScope, agent_id: PrincipalId, key_id: Ag
         }),
       )
       .pipe(Effect.orDie);
+    yield* closeCredentialSockets(key_id);
   });
 
 export const AgentsLive = HttpApiBuilder.group(SanctumApi, 'agents', handlers =>

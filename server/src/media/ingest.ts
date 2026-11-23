@@ -6,9 +6,9 @@
  */
 import { HttpApiBuilder, HttpRouter, HttpServerRequest, HttpServerResponse, Socket } from '@effect/platform';
 import type { SqlClient } from '@effect/sql';
-import { type AccessScope, ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage } from '@sanctum/contracts';
+import { ClientControlMessage, LISTENER_STREAM_PATH, ListenerId, RejectedMessage, type ServerControlMessage } from '@sanctum/contracts';
 import { Config, Deferred, Effect, Exit, Mailbox, Option, Schema } from 'effect';
-import { Authenticator } from '../auth.ts';
+import { Authenticator, type CaptureAccess } from '../auth.ts';
 import { type ListenerRow, ownedListener, startEpoch } from '../listeners.ts';
 import type { SpeechToText } from '../providers/whisper.ts';
 import { trackSocket } from './open-sockets.ts';
@@ -24,7 +24,7 @@ interface Closing {
   readonly reason: string;
 }
 
-const readStart = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>) =>
+const readStart = (access: CaptureAccess, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>) =>
   Effect.gen(function* () {
     const first = yield* inbound.take.pipe(
       Effect.timeout('10 seconds'),
@@ -35,15 +35,14 @@ const readStart = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.
       return yield* reject('invalid_start', 'Expected a valid start message for this listener');
     }
     // Paired hardware authenticates as its human approver, but has only the capture scope.
-    if (start.value.capabilities === undefined && access.principal.kind === 'human'
-      && access.scopes.length === 1 && access.scopes[0] === 'capture:ingest') {
+    if (start.value.capabilities === undefined && access.device_id !== undefined) {
       return yield* reject('invalid_start', 'A paired device must declare its capabilities');
     }
     return start.value;
   });
 
 /** Start handshake, then frames until `stop`, disconnect, rejection or fencing by a newer owner. */
-const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
+const dialogue = (access: CaptureAccess, listener: ListenerRow, inbound: Mailbox.ReadonlyMailbox<string | Uint8Array>, send: (message: ServerControlMessage) => Effect.Effect<void>) =>
   Effect.gen(function* () {
     const start = yield* readStart(access, listener, inbound);
     const verdict = yield* startEpoch(access, start);
@@ -70,14 +69,14 @@ const dialogue = (access: AccessScope, listener: ListenerRow, inbound: Mailbox.R
     );
   });
 
-const converse = (access: AccessScope, listener: ListenerRow, socket: Socket.Socket) =>
+const converse = (access: CaptureAccess, listener: ListenerRow, socket: Socket.Socket) =>
   Effect.scoped(
     Effect.gen(function* () {
       const writer = yield* socket.writer;
       const inbound = yield* Mailbox.make<string | Uint8Array>(INBOUND_LIMIT);
       const overflow = yield* Deferred.make<Closing, SessionRejected>();
-      const deleted = new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message: 'This workspace was deleted' }) });
-      yield* trackSocket(access.workspace_id, () => Deferred.unsafeDone(overflow, Exit.fail(deleted)));
+      yield* trackSocket(access, message =>
+        Deferred.unsafeDone(overflow, Exit.fail(new SessionRejected({ message: RejectedMessage.make({ reason: 'unauthorized', message }) }))));
       const ended = yield* Deferred.make<void>();
       // The writer waits for an open socket, so writes race the peer's disconnect instead of hanging.
       const write = (chunk: string | Socket.CloseEvent) => writer(chunk).pipe(Effect.ignore, Effect.raceFirst(Deferred.await(ended)));

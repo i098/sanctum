@@ -26,7 +26,10 @@ import {
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { DbJson, DbSafeInt } from './db.ts';
 
-export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId };
+export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId; readonly credential_id?: string };
+
+/** A paired device authenticates as its human approver but is capture-only, so it is never a person. */
+export const isPerson = (access: CaptureAccess) => access.principal.kind === 'human' && access.device_id === undefined;
 
 export class Authenticator extends Context.Tag('sanctum/Authenticator')<
   Authenticator,
@@ -125,7 +128,7 @@ const credentialAccess = (token: string) =>
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Credential is not valid' });
     yield* sql`UPDATE agent_credentials SET last_used_at = UTC_TIMESTAMP(6) WHERE id = ${row.value.id}`;
     const access = toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
-    return row.value.device_id === null ? access : { ...access, device_id: row.value.device_id };
+    return row.value.device_id === null ? { ...access, credential_id: row.value.id } : { ...access, credential_id: row.value.id, device_id: row.value.device_id };
   });
 
 /** Bearer credentials first, then the session cookie. */

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { expect, it } from '@effect/vitest';
 import type { DeviceAuthorization, DeviceToken } from '@sanctum/contracts';
@@ -91,6 +92,19 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect((yield* http.approve(user_code, headers)).status).toBe(403);
   expect((yield* http.list(headers)).status).toBe(403);
   expect((yield* http.revoke(device_id, headers)).status).toBe(403);
+  const [account_id, grantee, meeting_id] = [randomUUID(), randomUUID(), randomUUID()];
+  for (const [path, body] of [
+    ['/action-grants', { grantee, action_key: 'slack-send-message', account_id, meeting_id, restrictions: {}, expires_at: null }],
+    ['/integrations/connect', { app: 'slack' }],
+    ['/integrations/accounts/sync', undefined],
+    [`/integrations/accounts/${account_id}/disconnect`, undefined],
+    ['/onboarding', undefined],
+  ] as const) {
+    expect(yield* http.call(path, { method: 'POST', headers, body })).toMatchObject({ status: 403 });
+  }
+  expect((yield* http.call('/onboarding', { method: 'POST', headers: approver!, body: undefined })).status).toBe(200);
+  const [onboarded] = yield* sql`SELECT onboarded_at FROM principals WHERE id = ${member!.principal.id}`;
+  expect(onboarded).toMatchObject({ onboarded_at: expect.anything() });
   expect(yield* http.call('/agents', { headers: admin! })).toMatchObject({ status: 200, body: { items: [] } });
   expect(yield* http.list(other!)).toMatchObject({ status: 200, body: { items: [] } });
   expect((yield* http.revoke(device_id, other!)).status).toBe(404);

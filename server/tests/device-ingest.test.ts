@@ -57,8 +57,13 @@ const setup = Effect.gen(function* () {
   const [owner] = yield* seedWorkspace('Hardware room', ['owner']);
   const { workspace_id, principal } = owner!;
   const token = randomUUID();
+  const credential_id = randomUUID();
+  const device_id = randomUUID();
   yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
-    VALUES (${randomUUID()}, ${workspace_id}, ${principal.id}, ${principal.id}, ${hashToken(token)}, '["capture:ingest"]', UTC_TIMESTAMP(6))`;
+    VALUES (${credential_id}, ${workspace_id}, ${principal.id}, ${principal.id}, ${hashToken(token)}, '["capture:ingest"]', UTC_TIMESTAMP(6))`;
+  yield* sql`INSERT INTO devices (id, workspace_id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, status, approved_by, credential_id, expires_at, created_at, approved_at)
+    VALUES (${device_id}, ${workspace_id}, 'Fixture device', ${JSON.stringify(lightOnly)}, ${hashToken(randomUUID())}, ${hashToken(randomUUID())}, ${hashToken(randomUUID())}, 'approved',
+      ${principal.id}, ${credential_id}, UTC_TIMESTAMP(6) + INTERVAL 1 DAY, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
   const speech = fakeSpeech();
   const media = Layer.merge(speech.layer, memoryObjectStore().layer);
   const host = yield* serveApi((config, _fixtureAuth, overrides) => serverLayer(config, undefined, overrides), new Map(), media);
@@ -77,7 +82,7 @@ const setup = Effect.gen(function* () {
   const connect = openSocket(host, listener_id, token, { authorization: `Bearer ${token}` });
   const stored = sql<{ capabilities: string }>`SELECT CAST(capabilities AS CHAR) AS capabilities FROM listeners WHERE id = ${listener_id}`
     .pipe(Effect.map(rows => JSON.parse(rows[0]!.capabilities)));
-  return { workspace_id, principal, token, host, start, connect, stored, speech, media };
+  return { workspace_id, principal, device_id, token, host, start, connect, stored, speech, media };
 });
 
 const stop = JSON.stringify({ _tag: 'stop', reason: 'close' });
@@ -144,6 +149,24 @@ layer(MigratedDatabase, { timeout: 120_000 })('hardware listener ingest', it => 
       ] });
       yield* browser.take('speech_chunk');
       expect(work).toHaveBeenCalledWith('send the notes.');
+    }),
+  );
+
+  it.scoped('closes a live device socket when its owner revokes the device', () =>
+    Effect.gen(function* () {
+      const { workspace_id, principal, device_id, host, start, connect } = yield* setup;
+      const socket = yield* connect;
+      socket.send(JSON.stringify({ ...start, capabilities: lightOnly }));
+      yield* socket.take('accepted');
+      socket.send(hardwareFrame(0, syntheticPcm({ sampleRate: RATE, seconds: 1, toneHz: 440 })));
+      yield* socket.take('ack');
+      const session = yield* openSession({ workspace_id, principal_id: principal.id });
+      const revoked = yield* api(host, '', 'DELETE', `/devices/${device_id}`, undefined, {
+        authorization: '', cookie: `${SESSION_COOKIE}=${session.token}`, 'x-csrf-token': session.csrf_token, origin: `http://${host}`,
+      });
+      expect(revoked.status).toBe(204);
+      expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
+      expect((yield* socket.closed).code).toBe(1008);
     }),
   );
 

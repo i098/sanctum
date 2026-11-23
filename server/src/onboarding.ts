@@ -8,6 +8,7 @@ import { SqlClient, SqlSchema } from '@effect/sql';
 import { type AccessScope, CurrentAccess } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
+import { requireHuman } from './actions.ts';
 import { requireScope } from './auth.ts';
 import { DbUtc } from './db.ts';
 
@@ -31,6 +32,7 @@ export const OnboardingLive = HttpApiBuilder.group(SanctumApi, 'onboarding', han
     .handle('completeOnboarding', () =>
       Effect.gen(function* () {
         const access = yield* CurrentAccess;
+        yield* requireHuman(access, 'complete onboarding');
         const sql = yield* SqlClient.SqlClient;
         // Idempotent: the first completion time stays.
         yield* Effect.orDie(sql`UPDATE principals SET onboarded_at = COALESCE(onboarded_at, UTC_TIMESTAMP(6)) WHERE id = ${access.principal.id}`);

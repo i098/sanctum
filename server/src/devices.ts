@@ -11,6 +11,7 @@ import { Config, Effect, Layer, Option, Schema } from 'effect';
 import { AgentsLive } from './agents.ts';
 import { hashToken, newToken, requireScope } from './auth.ts';
 import { DbJson, DbSafeInt, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
+import { closeCredentialSockets } from './media/open-sockets.ts';
 import { bumpPermissionRevision } from './store.ts';
 
 const EXPIRES_IN = 600;
@@ -225,15 +226,17 @@ const listDevices = (access: AccessScope) => Effect.gen(function* () {
 const revokeDevice = (access: AccessScope, id: DeviceId) => Effect.gen(function* () {
   yield* checkManager(access);
   const sql = yield* SqlClient.SqlClient;
-  return yield* sql.withTransaction(Effect.gen(function* () {
+  const revoked = yield* sql.withTransaction(Effect.gen(function* () {
     const [device] = yield* find(Schema.Struct({ credential_id: AgentCredentialId, status: Device.fields.status }), sql`
       SELECT d.credential_id, d.status FROM devices d WHERE d.id = ${id} AND ${ownedDevices(access, sql)} FOR UPDATE`).pipe(Effect.orDie);
     if (!device) return yield* missing();
-    if (device.status === 'revoked') return;
+    if (device.status === 'revoked') return device.credential_id;
     yield* sql`UPDATE devices SET status = 'revoked', revoked_at = UTC_TIMESTAMP(6) WHERE id = ${id}`.pipe(Effect.orDie);
     yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${device.credential_id}`.pipe(Effect.orDie);
     yield* bumpPermissionRevision(access.workspace_id).pipe(Effect.orDie);
+    return device.credential_id;
   })).pipe(Effect.catchTag('SqlError', Effect.die));
+  yield* closeCredentialSockets(revoked);
 });
 
 const PairingLive = Layer.unwrapEffect(Effect.gen(function* () {
