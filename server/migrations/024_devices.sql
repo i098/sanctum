@@ -40,6 +40,4 @@ CREATE TABLE device_pair_attempts (
   CONSTRAINT device_pair_attempts_principal FOREIGN KEY (principal_id) REFERENCES principals (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-ALTER TABLE listeners
-  ADD COLUMN device_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
-  ADD CONSTRAINT listener_device FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE SET NULL;
+ALTER TABLE listeners ADD COLUMN device_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL;
