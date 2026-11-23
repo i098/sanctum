@@ -33,18 +33,30 @@ const pairingIngress = Config.all({
   signInRedirect: Config.option(Config.url('SANCTUM_OIDC_REDIRECT_URI')),
 });
 
+const ipv6QuotaKey = (address: string) => {
+  const canonical = new URL(`http://[${address}]`).hostname.slice(1, -1);
+  if (canonical.startsWith('::ffff:')) {
+    const [high, low] = canonical.slice(7).split(':').map(group => Number.parseInt(group, 16));
+    return `${high! >> 8}.${high! & 255}.${low! >> 8}.${low! & 255}`;
+  }
+  const [head, tail] = canonical.split('::');
+  const prefix = head!.split(':').filter(Boolean);
+  if (tail === undefined || prefix.length >= 4) return prefix.slice(0, 4).join(':');
+  const suffix = tail.split(':').filter(Boolean);
+  return [...prefix, ...Array<string>(8 - prefix.length - suffix.length).fill('0'), ...suffix].slice(0, 4).join(':');
+};
+
 const addressHash = (raw: string | undefined) => {
   if (raw === undefined) return undefined;
   const address = raw.split('%', 1)[0]!;
   switch (isIP(address)) {
     case 4: return hashToken(address);
-    case 6: return hashToken(new URL(`http://[${address}]`).hostname);
+    case 6: return hashToken(ipv6QuotaKey(address));
   }
 };
 
-const pairingRequest = Effect.gen(function* () {
+const pairingRequest = (ingress: Config.Config.Success<typeof pairingIngress>) => Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const ingress = yield* pairingIngress.pipe(Effect.orDie);
   // Only managed ingress can opt in. Caddy replaces XFF; Cloudflare sets CF-Connecting-IP.
   const client = addressHash(ingress.proxy === 'direct' ? Option.getOrUndefined(request.remoteAddress)
     : request.headers[ingress.proxy === 'caddy' ? 'x-forwarded-for' : 'cf-connecting-ip']);
@@ -54,8 +66,8 @@ const pairingRequest = Effect.gen(function* () {
   return { client, origin };
 });
 
-const authorizeDevice = (input: { name: string; capabilities: DeviceCapabilities }) => Effect.gen(function* () {
-  const { client, origin } = yield* pairingRequest;
+const authorizeDevice = (ingress: Config.Config.Success<typeof pairingIngress>, input: { name: string; capabilities: DeviceCapabilities }) => Effect.gen(function* () {
+  const { client, origin } = yield* pairingRequest(ingress);
   const sql = yield* SqlClient.SqlClient;
   const grant = yield* sql.withTransaction(Effect.gen(function* () {
     yield* sql`INSERT INTO device_pair_capacity (id) VALUES (1) ON DUPLICATE KEY UPDATE id = id`;
@@ -76,7 +88,10 @@ const authorizeDevice = (input: { name: string; capabilities: DeviceCapabilities
       } satisfies DeviceAuthorization));
     });
     return yield* insert.pipe(Effect.retry({ times: 3, while: error => mysqlErrno(error) === ER_DUP_ENTRY }), Effect.map(Option.some));
-  })).pipe(Effect.catchTags({ SqlError: () => unavailable(), ParseError: Effect.die }));
+  })).pipe(Effect.catchTags({
+    SqlError: error => Effect.logError('Device pairing database request failed', { errno: mysqlErrno(error) }).pipe(Effect.zipRight(unavailable())),
+    ParseError: Effect.die,
+  }));
   return yield* Option.match(grant, { onNone: () => Effect.fail(unavailable()), onSome: Effect.succeed });
 });
 
@@ -108,12 +123,12 @@ const deviceToken = (code: string) => Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(Effect.gen(function* () {
     const [grant] = yield* find(Grant, sql`SELECT id, status, workspace_id, credential_id, token_delivered_at IS NOT NULL AS delivered,
-        expires_at <= UTC_TIMESTAMP(6) AS expired,
+        TIMESTAMPADD(SECOND, IF(status = 'approved', 60, 0), expires_at) <= UTC_TIMESTAMP(6) AS expired,
         COALESCE(TIMESTAMPADD(SECOND, poll_interval_seconds, last_polled_at) > UTC_TIMESTAMP(6), FALSE) AS early
       FROM devices WHERE device_code_hash = ${hashToken(code)} FOR UPDATE`);
     if (!grant || grant.delivered) return pollError('invalid_grant');
-    if (grant.expired) return pollError('expired_token');
     if (grant.status === 'denied' || grant.status === 'revoked') return pollError('access_denied');
+    if (grant.expired) return pollError('expired_token');
     if (grant.status === 'pending' || grant.early) {
       yield* sql`UPDATE devices SET last_polled_at = UTC_TIMESTAMP(6),
         poll_interval_seconds = poll_interval_seconds + ${grant.early * POLL_INTERVAL} WHERE id = ${grant.id}`;
@@ -140,7 +155,7 @@ const withPending = <A>(access: AccessScope, code: string, use: (pending: typeof
     const sql = yield* SqlClient.SqlClient;
     const result = yield* sql.withTransaction(Effect.gen(function* () {
       const principal = access.principal.id;
-      const [clock] = yield* find(PairingClock, sql`SELECT CAST(UNIX_TIMESTAMP(UTC_TIMESTAMP(6)) * 1000 AS UNSIGNED) AS now_ms FROM principals WHERE id = ${principal} FOR UPDATE`);
+      const [clock] = yield* find(PairingClock, sql`SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS UNSIGNED) AS now_ms FROM principals WHERE id = ${principal} FOR UPDATE`);
       const now = clock!.now_ms;
       const [row] = yield* find(AttemptTimes, sql`SELECT attempts FROM device_pair_attempts WHERE principal_id = ${principal}`);
       const attempts = row?.attempts.filter(time => time > now - 600_000) ?? [];
@@ -221,11 +236,14 @@ const revokeDevice = (access: AccessScope, id: DeviceId) => Effect.gen(function*
   })).pipe(Effect.catchTag('SqlError', Effect.die));
 });
 
-const PairingLive = HttpApiBuilder.group(SanctumApi, 'devicePairing', handlers => handlers
-  .handle('authorizeDevice', ({ payload }) => Effect.map(authorizeDevice(payload), grant => HttpServerResponse.unsafeJson(grant, { headers: noStore })))
-  .handle('deviceToken', ({ payload }) => Effect.map(deviceToken(payload.device_code), result => HttpServerResponse.unsafeJson(result, {
-    status: 'error' in result ? 400 : 200, headers: noStore,
-  }))));
+const PairingLive = Layer.unwrapEffect(Effect.gen(function* () {
+  const ingress = yield* pairingIngress.pipe(Effect.orDie);
+  return HttpApiBuilder.group(SanctumApi, 'devicePairing', handlers => handlers
+    .handle('authorizeDevice', ({ payload }) => Effect.map(authorizeDevice(ingress, payload), grant => HttpServerResponse.unsafeJson(grant, { headers: noStore })))
+    .handle('deviceToken', ({ payload }) => Effect.map(deviceToken(payload.device_code), result => HttpServerResponse.unsafeJson(result, {
+      status: 'error' in result ? 400 : 200, headers: noStore,
+    }))));
+}));
 
 const ManagementLive = HttpApiBuilder.group(SanctumApi, 'devices', handlers => handlers
   .handle('pendingDevice', ({ urlParams }) => Effect.flatMap(CurrentAccess, access => withPending(access, urlParams.user_code,

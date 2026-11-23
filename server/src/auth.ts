@@ -12,6 +12,7 @@ import {
   type AccessScope,
   AccessScopeName,
   Authenticated,
+  DeviceId,
   Forbidden,
   MeetingId,
   NotFound,
@@ -25,11 +26,13 @@ import {
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { DbJson, DbSafeInt } from './db.ts';
 
+export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId };
+
 export class Authenticator extends Context.Tag('sanctum/Authenticator')<
   Authenticator,
   {
     /** Resolves credentials on the request to an access scope; never trusts client-supplied scopes. */
-    readonly authenticate: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<AccessScope, Unauthenticated | Forbidden>;
+    readonly authenticate: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<CaptureAccess, Unauthenticated | Forbidden>;
   }
 >() {}
 
@@ -114,12 +117,15 @@ const sessionAccess = (request: HttpServerRequest.HttpServerRequest, workspace?:
 const credentialAccess = (token: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const Row = Schema.Struct({ ...MemberRow.fields, id: Schema.String, scopes: Scopes, meeting_allowlist: Allowlist });
-    const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.id, x.scopes, x.meeting_allowlist FROM agent_credentials x ${activeMember(sql)}
+    const Row = Schema.Struct({ ...MemberRow.fields, id: Schema.String, scopes: Scopes, meeting_allowlist: Allowlist, device_id: Schema.NullOr(DeviceId) });
+    const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.id, x.scopes, x.meeting_allowlist, d.id AS device_id
+      FROM agent_credentials x ${activeMember(sql)}
+      LEFT JOIN devices d ON d.workspace_id = x.workspace_id AND d.credential_id = x.id
       WHERE x.token_hash = ${hashToken(token)} AND x.revoked_at IS NULL AND (x.expires_at IS NULL OR x.expires_at > UTC_TIMESTAMP(6))`);
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Credential is not valid' });
     yield* sql`UPDATE agent_credentials SET last_used_at = UTC_TIMESTAMP(6) WHERE id = ${row.value.id}`;
-    return toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
+    const access = toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
+    return row.value.device_id === null ? access : { ...access, device_id: row.value.device_id };
   });
 
 /** Bearer credentials first, then the session cookie. */

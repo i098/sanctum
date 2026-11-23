@@ -22,6 +22,7 @@ CREATE TABLE devices (
   UNIQUE KEY devices_pending_code (pending_code_hash),
   KEY devices_expiry (status, expires_at),
   KEY devices_address (status, client_address_hash),
+  UNIQUE KEY devices_credential_unique (workspace_id, credential_id),
   KEY devices_owner (workspace_id, approved_by),
   CONSTRAINT devices_member FOREIGN KEY (workspace_id, approved_by) REFERENCES workspace_members (workspace_id, principal_id),
   CONSTRAINT devices_credential FOREIGN KEY (workspace_id, credential_id) REFERENCES agent_credentials (workspace_id, id)
@@ -38,3 +39,7 @@ CREATE TABLE device_pair_attempts (
   PRIMARY KEY (principal_id),
   CONSTRAINT device_pair_attempts_principal FOREIGN KEY (principal_id) REFERENCES principals (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+ALTER TABLE listeners
+  ADD COLUMN device_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  ADD CONSTRAINT listener_device FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE SET NULL;

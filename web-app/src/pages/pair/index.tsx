@@ -66,7 +66,7 @@ function CodeForm({ code, busy, onChange, onSubmit }: { code: string; busy: bool
   );
 }
 
-function Found({ device, busy, onAnswer }: { device: PendingDevice; busy: boolean; onAnswer: (approve: boolean) => void }) {
+function Found({ device, code, busy, onAnswer }: { device: PendingDevice; code: string; busy: boolean; onAnswer: (approve: boolean) => void }) {
   return (
     <>
       <p className="text-base text-ink">{device.name}</p>
@@ -75,6 +75,7 @@ function Found({ device, busy, onAnswer }: { device: PendingDevice; busy: boolea
           .filter(part => typeof part === 'string')
           .map(part => <li key={part}>{part}</li>)}
       </ul>
+      <p>Approve only if your device shows the code {formatCode(code)}.</p>
       <p className="mb-5">It records the room while its light is steady or its screen shows listening.</p>
       <div className="flex gap-3">
         <button className={primary} type="button" disabled={busy} onClick={() => onAnswer(true)}>Approve</button>
@@ -128,7 +129,7 @@ export function PairPage() {
   return (
     <Card title="Pair a device" error={error}>
       {step.kind === 'found'
-        ? <Found device={step.device} busy={busy} onAnswer={approve => answer(step, approve)} />
+        ? <Found device={step.device} code={step.code} busy={busy} onAnswer={approve => answer(step, approve)} />
         : <CodeForm code={code} busy={busy} onChange={setCode} onSubmit={lookUp} />}
     </Card>
   );

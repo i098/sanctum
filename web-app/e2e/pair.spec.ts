@@ -87,6 +87,7 @@ test('shows the device before approval and approves it', async ({ page }) => {
   await expect(page.getByText('Kitchen Pi')).toBeVisible();
   await expect(page.getByRole('list', { name: 'What it has' })).toHaveText('MicrophoneLight');
   await expect(page.getByText('It records the room while its light is steady or its screen shows listening.')).toBeVisible();
+  await expect(page.getByText('Approve only if your device shows the code 1234-5678.')).toBeVisible();
   await page.getByRole('button', { name: 'Approve' }).click();
   await expect(page.getByRole('heading', { name: 'Paired' })).toBeVisible();
   expect(api.answers).toEqual([{ user_code: CODE, approve: true }]);

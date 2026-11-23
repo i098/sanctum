@@ -261,7 +261,7 @@ pub(crate) fn register_archive(api: &Api, token: &str, start: &Start) -> Result<
         .map(|_| ())
         .map_err(|event| match event {
             Event::Unauthorized => Error::Status(401),
-            Event::LeaseLost | Event::EpochClosed | Event::Invalid => Error::InvalidResponse,
+            Event::LeaseLost | Event::EpochClosed | Event::Invalid => Error::ArchiveRejected,
             _ => Error::Transport,
         })
 }

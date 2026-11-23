@@ -27,6 +27,7 @@ Secrets come from the environment only; none are committed.
 | Group | Variables |
 | --- | --- |
 | Core | `SANCTUM_ENV`, `SANCTUM_SELECTED_DECISIONS`, `API_PORT`, `SANCTUM_ALLOWED_ORIGINS`, `SANCTUM_WORKSPACE_PURGE_GRACE_DAYS` (days from a workspace deletion to its purge, default 7, at least 1) |
+| Device pairing | `SANCTUM_DEVICE_PROXY`: `direct` uses the socket address (default); Compose selects `caddy`, and the hosted container selects `cloudflare`. |
 | Workspaces | `SANCTUM_DEFAULT_SEAT_LIMIT`: owner, admin and member seats per workspace; a positive integer, unset for no limit (the hosted Worker sets `5` in `deploy/cloudflare/wrangler.jsonc`). A workspace's own `workspaces.seat_limit` overrides it (operator SQL; NULL uses the default). A malformed value stops startup. A member beyond the limit is refused with `SeatLimitReached`; existing members stay. |
 | Organizations (hosted) | `WORKOS_API_KEY` (server-only WorkOS API key; with `SANCTUM_OIDC_ISSUER` set to the AuthKit issuer, it turns on [WorkOS organization sync](#workos-organizations)), `SANCTUM_SELF_SERVE_WORKSPACES` (`true` lets a signed-in person with no membership create a workspace; default `false`; needs `WORKOS_API_KEY`) |
 | MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
@@ -40,6 +41,9 @@ Secrets come from the environment only; none are committed.
 WorkOS AuthKit (hosted) and embedded Better Auth (self-hosted) both use one value for `SANCTUM_OIDC_ISSUER` and `SANCTUM_MCP_ISSUER`; when the two differ, an identity linked at login does not authorize MCP.
 The sign-in routes read the Sign-in group; a partial `SANCTUM_OIDC_*` set does not stop startup unless `identity_issuer` is listed, and sign-in then stays off.
 With `SANCTUM_EMBEDDED_ISSUER` set, the embedded issuer reads `SANCTUM_OIDC_ISSUER`, `SANCTUM_MCP_RESOURCE` and `BETTER_AUTH_SECRET`, and `/mcp` reads the `SANCTUM_MCP_*` settings; `issuer:client` also reads `SANCTUM_OIDC_REDIRECT_URI`.
+In `caddy` or `cloudflare` mode, allow only the trusted ingress to reach the API.
+That ingress must replace `X-Forwarded-For` or `CF-Connecting-IP`, respectively.
+With `direct` behind a proxy, all clients can share the proxy's five-code limit.
 
 Missing provider keys fail as `Unavailable`; Sanctum never invents output.
 See the [classifier provider decision](DECISIONS.md#spoken-classifier-provider-decision---2026-10-10) and the [extraction provider decision](DECISIONS.md#extraction-provider-decision---2026-10-15) for the two cross-provider fallbacks.

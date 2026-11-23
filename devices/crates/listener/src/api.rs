@@ -10,6 +10,8 @@ pub(crate) enum Error {
     Status(u16),
     Transport,
     InvalidResponse,
+    CorruptChunk(std::path::PathBuf),
+    ArchiveRejected,
 }
 
 #[derive(Clone)]
@@ -119,6 +121,9 @@ impl Api {
                 "{}/api/v1/listeners/{}/chunks/{}",
                 self.origin, m.listener_id, m.chunk_id
             ))
+            .config()
+            .timeout_global(Some(Duration::from_secs(60)))
+            .build()
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "audio/wav")
             .header(

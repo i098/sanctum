@@ -483,6 +483,39 @@ fn unaccepted_epoch_registers_before_upload_and_closed_epoch_changes_id() {
 }
 
 #[test]
+fn keeps_a_corrupt_chunk_and_uploads_the_next_chunk() {
+    let server = Server::new(Case::Normal);
+    let scratch = Scratch::new();
+    server.credential(&scratch.0);
+    let credential = Credential::load(&scratch.0, &server.url).unwrap().unwrap();
+    let id = credential.device_id;
+    let dir = scratch.0.join("chunks").join(id.to_string());
+    let mut archive = Archive::open(&scratch.0, id, 8).unwrap();
+    let start = Start::new(
+        credential.listener_id.unwrap(),
+        1,
+        DeviceCapabilities::new(CAPS, false),
+        "start",
+    );
+    archive.queue(&start, 0, &[1, 0]).unwrap();
+    fs::write(dir.join("0.chunk"), b"corrupt").unwrap();
+    let mut archive = Archive::open(&scratch.0, id, 8).unwrap();
+    let api = Api::new(&server.url).unwrap();
+    let job = archive
+        .start_upload(&api, &credential, None)
+        .unwrap()
+        .unwrap();
+    assert!(archive.finish_upload(job).unwrap().is_none());
+    assert_eq!(fs::read(dir.join("0.rejected")).unwrap(), b"corrupt");
+    let job = archive
+        .start_upload(&api, &credential, None)
+        .unwrap()
+        .unwrap();
+    assert!(archive.finish_upload(job).unwrap().is_some());
+    assert_eq!(&server.log.uploads.lock().unwrap()[0].1[44..], &[1, 0]);
+}
+
+#[test]
 fn refuses_capture_without_visible_indicator() {
     let dir = Scratch::new();
     let config = Config {

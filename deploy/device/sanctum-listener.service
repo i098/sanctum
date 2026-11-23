@@ -13,6 +13,7 @@ UMask=0077
 ExecStart=/usr/local/bin/sanctum-listener --server https://sanctum.example.com --state-dir /var/lib/sanctum-listener --name "Meeting room" --input alsa:default --light none --screen kiosk:/usr/local/share/sanctum-kiosk
 Restart=on-failure
 RestartSec=5s
+RestartPreventExitStatus=2
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

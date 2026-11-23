@@ -336,6 +336,9 @@ fn paired(
                 revoke(config, display)?;
                 return Ok(false);
             }
+            Err(Error::Status(408 | 429)) => {
+                signals.wait_until(Instant::now() + RETRY);
+            }
             Err(Error::Status(400..=499) | Error::InvalidResponse) => {
                 return Err(io::Error::other("The server refused listener registration.").into());
             }
@@ -461,9 +464,12 @@ impl Session {
         }
         match self.archive.finish_upload(self.upload.take().unwrap()) {
             Ok(saved) => {
-                display.status.saved_through = Some(saved);
                 self.upload_behind = self.archive.len() != 0;
-                (None, true)
+                if let Some(saved) = saved {
+                    display.status.saved_through = Some(saved);
+                    return (None, true);
+                }
+                (None, false)
             }
             Err(Error::Status(401)) => (Some(Next::Revoke), false),
             Err(_) => {

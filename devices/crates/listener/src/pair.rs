@@ -158,12 +158,9 @@ fn poll_token(
     wait_until: impl Fn(Instant) -> bool,
 ) -> Result<Option<Credential>, RunError> {
     loop {
-        let next = (Instant::now() + interval).min(expires);
+        let next = (Instant::now() + interval).min(expires + Duration::from_secs(60));
         if wait_until(next) {
             return Ok(None);
-        }
-        if Instant::now() >= expires {
-            return Err(RunError::Pairing("The pairing code expired."));
         }
         let result: Result<(u16, Poll), _> = api.post("/device/token", None, json!({
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device_code,
@@ -198,6 +195,9 @@ fn poll_token(
                     "The server returned an invalid pairing response.",
                 ));
             }
+        }
+        if Instant::now() >= expires {
+            return Err(RunError::Pairing("The pairing code expired."));
         }
     }
 }

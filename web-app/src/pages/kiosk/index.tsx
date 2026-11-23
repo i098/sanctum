@@ -2,7 +2,6 @@
  * The small-screen kiosk a device shows while it listens (shared spec D10, section 2.4). The device
  * client serves this page on loopback and owns the microphone; the page only renders its `/events`.
  */
-import type { DeviceState } from '@sanctum/contracts';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { LevelSource, ListenerState } from '../../lib/capture/view.ts';
@@ -10,23 +9,13 @@ import { startWaveform } from '../listen/waveform.ts';
 import { type KioskStatus, statusLines, subscribeStatus } from './status-source.ts';
 import './kiosk.css';
 
-/** The waveform look for each state that draws one; reconnecting keeps the connecting look (spec E8). */
-const LOOK: Record<Exclude<DeviceState, 'unpaired' | 'error'>, ListenerState> = {
-  stopped: 'stopped',
-  paused: 'paused',
-  starting: 'starting',
-  listening: 'listening',
-  reconnecting: 'reconnecting',
-  degraded: 'degraded',
-};
-
 /** The waveform's slots read 33 bands; each of the device's 8 bands feeds its share of them. */
 const WAVE_BANDS = 33;
 
 const START: KioskStatus = { state: 'starting', bands: [], code: null, verification_uri: null, name: '', cause: null, saved_through: null, owner: null };
 
 /** The approved waveform, fed from the latest event; mounted only while the state draws a line. */
-function Wave({ status }: { status: KioskStatus & { state: keyof typeof LOOK } }) {
+function Wave({ status }: { status: KioskStatus & { state: ListenerState } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const latest = useRef(status);
   latest.current = status;
@@ -39,7 +28,7 @@ function Wave({ status }: { status: KioskStatus & { state: keyof typeof LOOK } }
         return 0;
       },
     };
-    return startWaveform(canvas.current!, levels, () => LOOK[latest.current.state]);
+    return startWaveform(canvas.current!, levels, () => latest.current.state);
   }, []);
   return <canvas ref={canvas} className="kiosk-wave" aria-hidden="true" />;
 }

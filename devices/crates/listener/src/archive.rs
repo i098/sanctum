@@ -31,12 +31,16 @@ impl Archive {
         let mut used = 0;
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
-            if entry.path().extension().is_some_and(|ext| ext == "chunk")
-                && entry.file_type()?.is_file()
-            {
-                used += entry.metadata()?.len();
-                pending.push(entry.path());
+            if !entry.file_type()?.is_file() {
+                continue;
             }
+            let path = entry.path();
+            match path.extension().and_then(|ext| ext.to_str()) {
+                Some("chunk") => pending.push(path),
+                Some("rejected" | "tmp") => {}
+                _ => continue,
+            }
+            used += entry.metadata()?.len();
         }
         pending.sort_unstable();
         Ok(Self {
@@ -46,6 +50,17 @@ impl Archive {
             limit: u64::from(max_mb) * 1024 * 1024,
             registered: None,
         })
+    }
+
+    fn reject(&mut self, path: &Path) -> Result<Option<String>, Error> {
+        let rejected = path.with_extension("rejected");
+        fs::rename(path, &rejected).map_err(|_| Error::Transport)?;
+        self.pending.retain(|queued| queued != path);
+        eprintln!(
+            "Cannot upload recording chunk. Kept {}.",
+            rejected.display()
+        );
+        Ok(None)
     }
 
     pub fn len(&self) -> usize {
@@ -124,17 +139,27 @@ impl Archive {
             .map(Some)
     }
 
-    pub fn finish_upload(&mut self, job: Upload) -> Result<String, Error> {
-        let (bytes, saved, epoch) = job.join().map_err(|_| Error::Transport)??;
+    pub fn finish_upload(&mut self, job: Upload) -> Result<Option<String>, Error> {
+        let result = job.join().map_err(|_| Error::Transport)?;
         let path = self
             .pending
             .front()
             .expect("An upload has one pending chunk.");
+        let (bytes, saved, epoch) = match result {
+            Ok(value) => value,
+            Err(Error::CorruptChunk(path)) => return self.reject(&path),
+            Err(
+                Error::ArchiveRejected | Error::Status(400 | 403 | 404 | 409 | 413 | 415 | 422),
+            ) => {
+                return self.reject(&path.clone());
+            }
+            Err(error) => return Err(error),
+        };
         fs::remove_file(path).map_err(|_| Error::Transport)?;
         self.pending.pop_front();
         self.used -= bytes;
         self.registered = Some(epoch);
-        Ok(saved)
+        Ok(Some(saved))
     }
 }
 
@@ -194,18 +219,19 @@ fn sample_time(start: &Start, sample: u64) -> time::OffsetDateTime {
 }
 
 fn read(path: &Path) -> Result<(Vec<u8>, Start, Manifest, usize), Error> {
+    let corrupt = || Error::CorruptChunk(path.to_owned());
     if fs::metadata(path).map_err(|_| Error::Transport)?.len() > CHUNK_PCM as u64 + 4096 {
-        return Err(Error::InvalidResponse);
+        return Err(corrupt());
     }
     let bytes = fs::read(path).map_err(|_| Error::Transport)?;
     let split = bytes
         .iter()
         .position(|&byte| byte == b'\n')
-        .ok_or(Error::InvalidResponse)?;
+        .ok_or_else(corrupt)?;
     let (start, manifest): (Start, Manifest) =
-        serde_json::from_slice(&bytes[..split]).map_err(|_| Error::InvalidResponse)?;
+        serde_json::from_slice(&bytes[..split]).map_err(|_| corrupt())?;
     if manifest.byte_length != bytes.len() - split - 1 {
-        return Err(Error::InvalidResponse);
+        return Err(corrupt());
     }
     Ok((bytes, start, manifest, split + 1))
 }

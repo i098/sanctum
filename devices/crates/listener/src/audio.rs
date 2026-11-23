@@ -175,11 +175,13 @@ impl Source {
                 command.args([
                     "-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1", "-D", device,
                 ]);
+                command.stderr(Stdio::inherit());
                 command
             }
             Input::Cmd(script) => {
                 let mut command = Command::new("sh");
                 command.args(["-c", script]);
+                command.stderr(Stdio::null());
                 command
             }
         };
@@ -187,7 +189,6 @@ impl Source {
             .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
             .spawn()?;
         let stdout = child.stdout.take().expect("stdout is piped");
         let source = Self::Process { child, stdout };

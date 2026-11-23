@@ -78,4 +78,8 @@ sudo systemctl enable --now sanctum-listener.service
 Send `SIGUSR1` to pause or resume.
 Use `systemctl stop sanctum-listener.service` to close capture and give the client time to upload buffered audio.
 Revoke a lost device in Menu → Settings → Devices in the website.
+Revocation removes the credential. The device cannot upload its old local recordings after it pairs again.
+If a chunk cannot upload, the device logs its `.rejected` file and tries later chunks.
+Preserve rejected files and crash staging files until you decide what to do with the audio.
+Those files count toward the recording buffer limit for that pairing.
 Keep the service state directory private. It holds the credential and unwritten audio until the server confirms storage.

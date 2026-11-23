@@ -1,7 +1,7 @@
 import { SqlClient } from '@effect/sql';
 import { expect, it } from '@effect/vitest';
 import type { DeviceAuthorization, DeviceToken } from '@sanctum/contracts';
-import { Effect } from 'effect';
+import { ConfigProvider, Effect } from 'effect';
 import { hashToken, openSession } from '../src/auth.ts';
 import { MCP_TOOL_NAMES } from '../src/mcp.ts';
 import { serveApiWithDb } from './http-server.ts';
@@ -67,6 +67,7 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   });
   expect((yield* http.pending(user_code, approver!)).status).toBe(404);
   yield* sql`UPDATE devices SET last_polled_at = UTC_TIMESTAMP(6) - INTERVAL 16 SECOND WHERE device_code_hash = ${hashToken(device_code)}`;
+  yield* sql`UPDATE devices SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE device_code_hash = ${hashToken(device_code)}`;
   const polls = yield* Effect.all([http.poll(device_code), http.poll(device_code)], { concurrency: 2 });
   const issued = polls.find(result => result.status === 200)!;
   expect(issued).toMatchObject({ status: 200, cache: 'no-store', body: { token_type: 'Bearer', workspace_id: member!.workspace_id, workspace_name: 'Room team' } });
@@ -77,10 +78,15 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect(yield* http.call('/session', { headers })).toMatchObject({ status: 200, body: { principal: { id: member!.principal.id }, scopes: ['capture:ingest'] } });
   const registration = yield* http.call<{ id: string }>('/listeners', { method: 'POST', headers, body: { name: listenerName, mode: 'room', capabilities: { device: capabilities } } });
   expect(registration.status).toBe(201);
-  const heartbeat = () => http.call(`/listeners/${registration.body.id}/heartbeat`, {
+  const heartbeat = (id = registration.body.id) => http.call(`/listeners/${id}/heartbeat`, {
     method: 'POST', headers, body: { lease_generation: 0, state: 'starting', epoch_id: null, buffered_chunks: 0, storage_bytes_free: null },
   });
   expect(yield* heartbeat()).toMatchObject({ status: 200, body: { owner: true } });
+  const browser = yield* http.call<{ id: string }>('/listeners', {
+    method: 'POST', headers: approver!, body: { name: 'Browser', mode: 'room', capabilities: {} },
+  });
+  expect(browser.status).toBe(201);
+  expect((yield* heartbeat(browser.body.id)).status).toBe(404);
   expect((yield* http.call('/context/search?q=device', { headers })).status).toBe(403);
   expect((yield* http.approve(user_code, headers)).status).toBe(403);
   expect((yield* http.list(headers)).status).toBe(403);
@@ -125,6 +131,18 @@ it.scoped('limits pending grants by socket address even when clients supply diff
   const grants = yield* Effect.forEach([1, 2, 3, 4, 5, 6], index => http.authorize({ 'x-forwarded-for': `192.0.2.${index}` }), { concurrency: 6 });
   expect(grants.map(grant => grant.status).sort()).toEqual([200, 200, 200, 200, 200, 503]);
 })));
+
+it.scoped('applies the IPv6 quota to a prefix and keeps IPv4 clients separate', () => withApi(base => Effect.gen(function* () {
+  const http = api(base);
+  const authorize = (ip: string) => http.authorize({ 'x-forwarded-for': ip });
+  const hosts = ['2001:db8::1', '2001:db8:0:0:ffff:1234:5678:9abc', '2001:db8:0:0:1::1', '2001:db8::a:b:c:d', '2001:db8:0:0::5'];
+  const grants = yield* Effect.forEach(hosts, authorize);
+  expect(grants.map(grant => grant.status)).toEqual([200, 200, 200, 200, 200]);
+  expect((yield* authorize('2001:db8::6')).status).toBe(503);
+  expect((yield* authorize('2001:db8:0:1::1')).status).toBe(200);
+  expect((yield* authorize('192.0.2.1')).status).toBe(200);
+})).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map([['SANCTUM_DEVICE_PROXY', 'caddy']]))
+  .pipe(ConfigProvider.orElse(ConfigProvider.fromEnv)))));
 
 it.scoped('enforces the global grant cap and frees capacity when a grant expires', () => withApi(base => Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

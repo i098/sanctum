@@ -39,15 +39,18 @@ Wait five seconds between token polls. A token failure returns HTTP `400` with `
 | `authorization_pending` | Wait for the next poll. |
 | `slow_down` | Add five seconds to the interval for all further polls in this pairing attempt. |
 | `access_denied` | Stop polling. The person denied the request. |
-| `expired_token` | Stop polling. The code expires after 600 seconds. |
-| `invalid_grant` | Stop polling. The code is unknown or the server already gave the token. |
+| `expired_token` | Stop polling. The ten-minute approval window ended. |
+| `invalid_grant` | Stop polling. The code is unknown or the server already issued the token. |
 
 Pending lookup returns `404` for an unknown, expired, or used code.
 The sixth wrong code from one principal in ten minutes returns `403`.
-One client address can have at most five pending codes.
+One IPv4 address or IPv6 /64 prefix can have at most five pending codes.
 Authorization removes expired rows and returns `503` when 1,000 pending rows fill the limit.
 Sanctum stores hashes of both codes and the token, not their plain values.
 Approval creates a non-expiring token for the approver with only `capture:ingest`. The device uses no seat.
+The device can redeem an approval once, up to 60 seconds after the approval window ends.
+If the device does not receive the token response, revoke the device in Settings and pair it again.
+The token can capture only through listeners that this device registers.
 Keep the token in private storage. Send it in `Authorization: Bearer <token>` with each capture request.
 Show the approver and workspace names on the screen or terminal after pairing.
 The approver sees their devices. A workspace administrator can see and revoke all devices in the workspace.
