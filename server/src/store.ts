@@ -51,8 +51,9 @@ const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSa
 /**
  * Refuses a new seat once active seats reach the workspace's `seat_limit`, else the configured
  * default (NULL default: no limit). Holders keep their seat and may change role even over the limit;
- * a null principal holds none. Locks the workspace row, so concurrent additions in one workspace
- * cannot overshoot; outside `addMember`, run it in its own transaction as a check.
+ * a null principal holds none. Locks the workspace row, then its seated member rows, so concurrent
+ * additions in one workspace cannot overshoot; outside `addMember`, run it in its own transaction
+ * as a check.
  */
 export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId | null) =>
   Effect.gen(function* () {
