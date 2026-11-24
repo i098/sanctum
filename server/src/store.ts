@@ -58,13 +58,11 @@ export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId |
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fallback = yield* Effect.orDie(defaultSeatLimit);
-    const seated = sql`m.workspace_id = w.id AND m.revoked_at IS NULL AND m.role IN ${sql.in(seatRoles)}`;
-    const [row] = yield* sql`SELECT w.seat_limit,
-        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
-        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
-      FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE`;
+    const [row] = yield* sql`SELECT seat_limit FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
     if (row === undefined) return;
-    const seats = Schema.decodeUnknownSync(SeatRow)(row);
+    // Locking read: TiDB serves a plain or subquery SELECT from the transaction snapshot, which misses seats committed while we waited for the workspace lock.
+    const seated = yield* sql`SELECT principal_id FROM workspace_members WHERE workspace_id = ${workspace_id} AND revoked_at IS NULL AND role IN ${sql.in(seatRoles)} FOR UPDATE`;
+    const seats = Schema.decodeUnknownSync(SeatRow)({ ...row, used: seated.length, held: seated.filter(m => m.principal_id === principal_id).length });
     const limit = seats.seat_limit ?? fallback;
     if (limit !== null && seats.held === 0 && seats.used >= limit) {
       return yield* new SeatLimitReached({ limit, message: `Workspace seat limit of ${limit} reached` });
