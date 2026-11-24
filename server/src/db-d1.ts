@@ -9,7 +9,6 @@ import type { DbBackend, DbResult, DbStatement } from './db.ts';
 const encode = (value: unknown): unknown => {
   if (value instanceof Uint8Array) return { $b: Buffer.from(value).toString('base64') };
   if (typeof value === 'boolean') return Number(value);
-  if (typeof value === 'bigint') return Number.isSafeInteger(Number(value)) ? Number(value) : value.toString();
   return value === undefined ? null : value;
 };
 
