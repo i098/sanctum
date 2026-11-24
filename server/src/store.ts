@@ -78,12 +78,13 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const revision = yield* bumpPermissionRevision(input.workspace_id);
+        // Workspace row first, then member rows: the order `setMembership` revoke follows, so the two cannot deadlock. An unknown workspace stays a foreign-key error at the INSERT.
+        yield* sql`SELECT id FROM workspaces WHERE id = ${input.workspace_id} FOR UPDATE`;
         if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, org_issuer, created_at)
           VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, UTC_TIMESTAMP(6)) AS new
           ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL, org_issuer = new.org_issuer`;
-        return revision;
+        return yield* bumpPermissionRevision(input.workspace_id);
       }),
     );
   });
