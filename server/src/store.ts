@@ -51,20 +51,19 @@ const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSa
 /**
  * Refuses a new seat once active seats reach the workspace's `seat_limit`, else the configured
  * default (NULL default: no limit). Holders keep their seat and may change role even over the limit;
- * a null principal holds none. Locks the workspace row, so concurrent additions in one workspace
- * cannot overshoot; outside `addMember`, run it in its own transaction as a check.
+ * a null principal holds none. Locks the workspace row, then its seated member rows, so concurrent
+ * additions in one workspace cannot overshoot; outside `addMember`, run it in its own transaction
+ * as a check.
  */
 export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fallback = yield* Effect.orDie(defaultSeatLimit);
-    const seated = sql`m.workspace_id = w.id AND m.revoked_at IS NULL AND m.role IN ${sql.in(seatRoles)}`;
-    const [row] = yield* sql`SELECT w.seat_limit,
-        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
-        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
-      FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE`;
+    const [row] = yield* sql`SELECT seat_limit FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
     if (row === undefined) return;
-    const seats = Schema.decodeUnknownSync(SeatRow)(row);
+    // Locking read: TiDB serves a plain or subquery SELECT from the transaction snapshot, which misses seats committed while we waited for the workspace lock.
+    const seated = yield* sql`SELECT principal_id FROM workspace_members WHERE workspace_id = ${workspace_id} AND revoked_at IS NULL AND role IN ${sql.in(seatRoles)} FOR UPDATE`;
+    const seats = Schema.decodeUnknownSync(SeatRow)({ ...row, used: seated.length, held: seated.filter(m => m.principal_id === principal_id).length });
     const limit = seats.seat_limit ?? fallback;
     if (limit !== null && seats.held === 0 && seats.used >= limit) {
       return yield* new SeatLimitReached({ limit, message: `Workspace seat limit of ${limit} reached` });
@@ -80,6 +79,8 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
+        // Workspace row first, then member rows: the order `setMembership` revoke follows, so the two cannot deadlock. An unknown workspace stays a foreign-key error at the INSERT.
+        yield* sql`SELECT id FROM workspaces WHERE id = ${input.workspace_id} FOR UPDATE`;
         if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, org_issuer, created_at)
           VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, UTC_TIMESTAMP(6)) AS new
@@ -107,8 +108,8 @@ export const setMembership = (issuer: string, workspace_id: WorkspaceId, princip
       if (active === undefined || active.org_issuer !== issuer) return;
       yield* sql.withTransaction(
         Effect.zipRight(
-          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
           bumpPermissionRevision(workspace_id),
+          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
         ),
       );
       return;
