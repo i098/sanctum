@@ -74,7 +74,7 @@ const authorizeDevice = (ingress: Config.Config.Success<typeof pairingIngress>, 
     yield* sql`INSERT INTO device_pair_capacity (id) VALUES (1) ON DUPLICATE KEY UPDATE id = id`;
     yield* sql`DELETE FROM devices WHERE status IN ('pending', 'denied') AND expires_at <= UTC_TIMESTAMP(6)`;
     const [pending] = yield* find(PendingCounts, sql`SELECT COUNT(*) AS total,
-      COUNT(CASE WHEN client_address_hash = ${client} THEN 1 END) AS by_address FROM devices WHERE status = 'pending'`);
+      COUNT(CASE WHEN client_address_hash = ${client} THEN 1 END) AS by_address FROM devices WHERE status = 'pending' FOR UPDATE`);
     if (pending!.total >= PAIRING_CAPACITY || pending!.by_address >= ADDRESS_CAPACITY) return Option.none<DeviceAuthorization>();
 
     const insert = Effect.suspend(() => {
@@ -83,7 +83,7 @@ const authorizeDevice = (ingress: Config.Config.Success<typeof pairingIngress>, 
       const verification_uri = `${origin}/pair`;
       return sql`INSERT INTO devices (id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, expires_at, created_at)
         VALUES (${crypto.randomUUID()}, ${input.name}, ${JSON.stringify(input.capabilities)}, ${hashToken(device_code)}, ${hashToken(digits)}, ${client},
-          TIMESTAMPADD(SECOND, ${EXPIRES_IN}, UTC_TIMESTAMP(6)), UTC_TIMESTAMP(6))`.pipe(Effect.as({
+          UTC_TIMESTAMP(6) + INTERVAL ${sql.literal(String(EXPIRES_IN))} SECOND, UTC_TIMESTAMP(6))`.pipe(Effect.as({
         device_code, user_code: `${digits.slice(0, 4)}-${digits.slice(4)}`, verification_uri, verification_uri_complete: `${verification_uri}?code=${digits}`,
         expires_in: EXPIRES_IN, interval: POLL_INTERVAL,
       } satisfies DeviceAuthorization));

@@ -80,40 +80,34 @@ const detectDialect = Effect.gen(function*() {
   fullTextAvailable = !/tidb/i.test(row?.version ?? '');
 });
 
-/** TiDB lacks the MySQL 8.0.19 row alias (`VALUES (...) AS new ON DUPLICATE KEY UPDATE x = new.x`); `VALUES(x)` means the same there. */
-const forDialect = (text: string) =>
-  fullTextAvailable ? text : text.replace(/\)\s*AS\s+(\w+)\s+ON DUPLICATE KEY UPDATE([\s\S]*)$/i, (_all, alias: string, update: string) =>
-    `) ON DUPLICATE KEY UPDATE${update.replace(new RegExp(`\\b${alias}\\.(\`?\\w+\`?)`, 'g'), 'VALUES($1)')}`);
-
 /**
- * TiDB rejects a prepared `LIMIT ?` / `OFFSET ?` ("Incorrect arguments to LIMIT"); a safe integer bound there is
- * written into the text instead (it cannot inject) and leaves the parameter list.
+ * TiDB lacks the MySQL 8.0.19 row alias (`VALUES (...) AS new ON DUPLICATE KEY UPDATE x = new.x`); `VALUES(x)` means the same there.
+ * It also rejects a bound `LIMIT ?`/`OFFSET ?` because mysql2 sends every number as DOUBLE, so those integers are inlined.
  */
-const inlineBounds = (text: string, params: ReadonlyArray<unknown>): readonly [string, ReadonlyArray<unknown>] => {
+const forDialect = (text: string, params: ReadonlyArray<unknown>): [string, ReadonlyArray<unknown>] => {
   if (fullTextAvailable) return [text, params];
-  const rest: Array<unknown> = [];
-  let index = 0;
-  const inlined = text.replace(/\b(LIMIT|OFFSET)\s+\?|\?/gi, (placeholder, keyword?: string) => {
-    const value = params[index++];
-    if (keyword === undefined || !Number.isSafeInteger(value) || (value as number) < 0) {
-      rest.push(value);
-      return placeholder;
-    }
-    return `${keyword} ${value}`;
-  });
-  return [inlined, rest];
+  let out = text.replace(/\)\s*AS\s+(\w+)\s+ON DUPLICATE KEY UPDATE([\s\S]*)$/i, (_all, alias: string, update: string) =>
+    `) ON DUPLICATE KEY UPDATE${update.replace(new RegExp(`\\b${alias}\\.(\`?\\w+\`?)`, 'g'), 'VALUES($1)')}`);
+  const kept = [...params];
+  const hits = [...out.matchAll(/\b(?:LIMIT|OFFSET)\s+\?/gi)].reverse();
+  for (const hit of hits) {
+    const at = hit.index + hit[0].length - 1;
+    const slot = out.slice(0, at).split('?').length - 1;
+    const value = kept[slot];
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) continue;
+    out = `${out.slice(0, at)}${value}${out.slice(at + 1)}`;
+    kept.splice(slot, 1);
+  }
+  return [out, kept];
 };
 
-const translated = (c: SqlConnection.Connection): SqlConnection.Connection => {
-  const prepare = <A>(run: (sql: string, params: ReadonlyArray<unknown>) => A) => (sql: string, params: ReadonlyArray<unknown>) => run(...inlineBounds(forDialect(sql), params));
-  return {
-    execute: (sql, params, transform) => prepare((text, rest) => c.execute(text, rest, transform))(sql, params),
-    executeRaw: prepare((text, rest) => c.executeRaw(text, rest)),
-    executeValues: prepare((text, rest) => c.executeValues(text, rest)),
-    executeUnprepared: (sql, params, transform) => prepare((text, rest) => c.executeUnprepared(text, rest, transform))(sql, params),
-    executeStream: (sql, params, transform) => prepare((text, rest) => c.executeStream(text, rest, transform))(sql, params),
-  };
-};
+const translated = (c: SqlConnection.Connection): SqlConnection.Connection => ({
+  execute: (sql, params, transform) => c.execute(...forDialect(sql, params), transform),
+  executeRaw: (sql, params) => c.executeRaw(...forDialect(sql, params)),
+  executeValues: (sql, params) => c.executeValues(...forDialect(sql, params)),
+  executeUnprepared: (sql, params, transform) => c.executeUnprepared(...forDialect(sql, params), transform),
+  executeStream: (sql, params, transform) => c.executeStream(...forDialect(sql, params), transform),
+});
 
 /**
  * The pool cannot drop a waiter: mysql2 keeps the queued callback of a cancelled request, and

@@ -19,7 +19,8 @@ const lockClauses = <A, E, R>(effect: Effect.Effect<A, E, R | SqlClient.SqlClien
     const spy = new Proxy(sql, {
       apply: (target, self, args) => {
         const statement = Reflect.apply(target, self, args);
-        const found = /\bFROM (workspaces|meeting_recordings)\b[^;]*?\b(FOR (?:SHARE|UPDATE))\b/i.exec(statement.compile()[0]);
+        const compiled = 'compile' in statement && typeof statement.compile === 'function' ? statement.compile()[0] : '';
+        const found = /\bFROM (workspaces|meeting_recordings)\b[^;]*?\b(FOR (?:SHARE|UPDATE))\b/i.exec(compiled);
         if (found) sent.add(`${found[1]} ${found[2]!.toUpperCase()}`);
         return statement;
       },
