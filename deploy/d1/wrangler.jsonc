@@ -1,0 +1,15 @@
+// Standby D1 database only (docs/d1-switchover.md): `wrangler d1 ... --config deploy/d1/wrangler.jsonc`. It deploys no Worker.
+// The database_id is a placeholder; d1-sync.yml writes the real one from the D1_DATABASE_ID secret before it runs wrangler.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "sanctum-d1-standby",
+  "compatibility_date": "2026-10-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sanctum",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../server/migrations-d1"
+    }
+  ]
+}
