@@ -2,10 +2,10 @@ name: CI and documentation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/d1-store]
     types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, feat/d1-store]
   workflow_dispatch:
 
 permissions:
