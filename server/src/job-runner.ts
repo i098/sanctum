@@ -61,8 +61,10 @@ export const claimJob = (kinds: ReadonlyArray<JobKind>, leaseMs: number) =>
           WHERE status = 'pending' AND available_at <= UTC_TIMESTAMP(6) AND kind IN ${sql.in(kinds)}
           ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
         if (!due) return Option.none<Lease>();
-        yield* sql`UPDATE jobs SET status = 'running', lease_token = ${token}, lease_generation = lease_generation + 1,
-          lease_until = ${later(sql, leaseMs)}, attempts = attempts + 1, updated_at = UTC_TIMESTAMP(6) WHERE id = ${due.id}`;
+        // TiDB parses SKIP LOCKED but ignores it: a claimer that waited on the lock re-reads a job another claimer took.
+        const taken = yield* write(sql`UPDATE jobs SET status = 'running', lease_token = ${token}, lease_generation = lease_generation + 1,
+          lease_until = ${later(sql, leaseMs)}, attempts = attempts + 1, updated_at = UTC_TIMESTAMP(6) WHERE id = ${due.id} AND status = 'pending'`);
+        if (taken.affectedRows !== 1) return Option.none<Lease>();
         const job = yield* SqlSchema.single({
           Request: JobId,
           Result: ClaimedRow,

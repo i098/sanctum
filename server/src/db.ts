@@ -69,7 +69,7 @@ export const verifyUtcSession = Effect.gen(function*() {
  */
 let fullTextAvailable = true;
 export const hasFullText = () => fullTextAvailable;
-export const detectDialect = Effect.gen(function*() {
+const detectDialect = Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ version: string }>`SELECT VERSION() AS version`;
   fullTextAvailable = !/tidb/i.test(row?.version ?? '');

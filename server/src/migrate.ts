@@ -143,6 +143,8 @@ export interface MigrationReport {
 const stepLabel = (migration: Migration, step: MigrationStep) =>
   `${migration.version}.${step.index} ${step.object.kind === 'table' ? step.object.table : step.object.kind === 'backfill' ? `${step.object.table} backfill` : `${step.object.table}.${step.object.kind === 'index' ? step.object.index : step.object.column}`}`;
 
+const unsupportedOnTidb = (step: MigrationStep) => !hasFullText() && step.object.kind !== 'table' && /\bFULLTEXT\b|\bSTORED\b/i.test(step.sql);
+
 function runStep(migration: Migration, step: MigrationStep, resumed: boolean, recorded: Map<number, string>, report: { applied: string[]; adopted: string[] }) {
   return Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
@@ -153,7 +155,7 @@ function runStep(migration: Migration, step: MigrationStep, resumed: boolean, re
       return;
     }
     // TiDB has no FULLTEXT and cannot add a stored generated column; its search path (context.ts) needs neither.
-    if (!hasFullText() && step.object.kind !== 'table' && /\bFULLTEXT\b|\bSTORED\b/i.test(step.sql)) return;
+    if (unsupportedOnTidb(step)) return;
     const exists = yield* objectExists(step.object);
     if (exists && !resumed) return yield* new MigrationError({ message: `Step ${label} targets an object that already exists outside the ledger` });
     if (!exists) yield* sql.unsafe(step.sql);
