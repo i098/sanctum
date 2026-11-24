@@ -2,7 +2,7 @@
  * Process configuration and the plan section 02 engineering defaults.
  * Defaults are acceptance-test inputs and calibration starting points, not measured optima.
  */
-import { Config, Effect, Option, Redacted, Schema } from 'effect';
+import { Config, Effect, Option, Schema } from 'effect';
 import { AccessScopeName, type JobKind, Unavailable } from '@sanctum/contracts';
 
 /** Plan section 02 "Recommended engineering defaults"; change here, never as scattered literals. */
@@ -159,16 +159,9 @@ export const serverConfig = Config.all({
   seatLimit: defaultSeatLimit,
   workspacePurgeGraceDays,
   apiPort: port('API_PORT', 7102),
-  mysql: Config.all({
-    host: Config.string('MYSQL_HOST').pipe(Config.withDefault('127.0.0.1')),
-    port: port('MYSQL_PORT', 3306),
-    database: Config.string('MYSQL_DATABASE').pipe(Config.withDefault('sanctum')),
-    username: Config.string('MYSQL_USER').pipe(Config.withDefault('sanctum')),
-    password: Config.redacted('MYSQL_PASSWORD').pipe(Config.withDefault(Redacted.make(''))),
-    maxConnections: Config.integer('MYSQL_POOL_SIZE').pipe(Config.withDefault(10)),
-    queueLimit: Config.integer('MYSQL_POOL_QUEUE').pipe(Config.withDefault(100)),
-    /** PEM CA certificate; when set, connections require TLS verified against it, host name included. */
-    caCert: Config.option(Config.string('MYSQL_CA_CERT')).pipe(Config.map(Option.getOrUndefined)),
+  /** `file:<path>`, `:memory:`, or the D1 gateway `http://d1.internal`. */
+  db: Config.all({
+    url: Config.string('SANCTUM_DB_URL').pipe(Config.withDefault('file:./sanctum.db')),
   }),
   /** Decisions an operator has explicitly selected and configured, comma-separated. */
   selectedDecisions: Config.array(Config.literal(...activationDecisions)(), 'SANCTUM_SELECTED_DECISIONS').pipe(Config.withDefault(noDecisions)),

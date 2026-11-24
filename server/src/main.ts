@@ -13,7 +13,7 @@ import { type ConfigError, Effect, Layer, flow } from 'effect';
 import { ApiLive, OpenApiLive } from './api.ts';
 import { type Authenticator, KernelAuthenticatorLive } from './auth.ts';
 import { requireActivation, serverConfig } from './config.ts';
-import { dbLayer, type MysqlOptions } from './db.ts';
+import { dbLayer, type DbOptions } from './db.ts';
 import { embeddedIssuerLive } from './issuer.ts';
 import { McpAuthorizationFromEnv, type McpAuthorizationServer, McpLive, withMcpDelegation } from './mcp.ts';
 import { ListenerStreamLive } from './media/ingest.ts';
@@ -43,7 +43,7 @@ const requestLogger = HttpMiddleware.make(app => {
  * port), plus the website from `webRoot` when given.
  */
 export const serverLayer = (
-  config: { readonly apiPort: number; readonly mysql: MysqlOptions; readonly webRoot?: string | undefined },
+  config: { readonly apiPort: number; readonly db: DbOptions; readonly webRoot?: string | undefined },
   authenticator: Layer.Layer<Authenticator, never, SqlClient.SqlClient> = KernelAuthenticatorLive,
   // Tests replace providers, models, the handler set, the MCP authorization server or the sign-in issuer; production uses the defaults.
   overrides: {
@@ -58,7 +58,7 @@ export const serverLayer = (
   HttpApiBuilder.serve(flow(requestLogger, secureResponses)).pipe(
     HttpServer.withLogAddress,
     Layer.provide(config.webRoot === undefined ? Layer.empty : webAssetsLive(config.webRoot)),
-    Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.mysql)]),
+    Layer.provide([ListenerStreamLive, McpLive, SignInLive, WidgetTokenLive, OpenApiLive, embeddedIssuerLive(config.db)]),
     Layer.provide([SpeechSynthesizerLive, Layer.merge(SpeechRepliesLive, SpeechWorkRequestsLive).pipe(Layer.provide(overrides.llm ?? LlmLive))]),
     Layer.provide((overrides.api ?? ApiLive(loadMigrations())).pipe(Layer.provide(overrides.llm ?? LlmLive))),
     Layer.provide(overrides.media ?? MediaProvidersLive),
@@ -66,7 +66,7 @@ export const serverLayer = (
     Layer.provide(overrides.mcp ?? McpAuthorizationFromEnv),
     Layer.provide(overrides.signIn ?? SignInFromEnv),
     Layer.provide(overrides.organizations ?? WorkosOrganizationsFromEnv),
-    Layer.provide(dbLayer(config.mysql)),
+    Layer.provide(dbLayer(config.db)),
     Layer.provideMerge(NodeHttpServer.layer(createServer, { port: config.apiPort, host: '0.0.0.0' })),
     HttpMiddleware.withTracerDisabledWhen(hasPairingCode),
   );
