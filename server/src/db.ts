@@ -80,13 +80,35 @@ const forDialect = (text: string) =>
   fullTextAvailable ? text : text.replace(/\)\s*AS\s+(\w+)\s+ON DUPLICATE KEY UPDATE([\s\S]*)$/i, (_all, alias: string, update: string) =>
     `) ON DUPLICATE KEY UPDATE${update.replace(new RegExp(`\\b${alias}\\.(\`?\\w+\`?)`, 'g'), 'VALUES($1)')}`);
 
-const translated = (c: SqlConnection.Connection): SqlConnection.Connection => ({
-  execute: (sql, params, transform) => c.execute(forDialect(sql), params, transform),
-  executeRaw: (sql, params) => c.executeRaw(forDialect(sql), params),
-  executeValues: (sql, params) => c.executeValues(forDialect(sql), params),
-  executeUnprepared: (sql, params, transform) => c.executeUnprepared(forDialect(sql), params, transform),
-  executeStream: (sql, params, transform) => c.executeStream(forDialect(sql), params, transform),
-});
+/**
+ * TiDB rejects a prepared `LIMIT ?` / `OFFSET ?` ("Incorrect arguments to LIMIT"); a safe integer bound there is
+ * written into the text instead (it cannot inject) and leaves the parameter list.
+ */
+const inlineBounds = (text: string, params: ReadonlyArray<unknown>): readonly [string, ReadonlyArray<unknown>] => {
+  if (fullTextAvailable) return [text, params];
+  const rest: Array<unknown> = [];
+  let index = 0;
+  const inlined = text.replace(/\b(LIMIT|OFFSET)\s+\?|\?/gi, (placeholder, keyword?: string) => {
+    const value = params[index++];
+    if (keyword === undefined || !Number.isSafeInteger(value) || (value as number) < 0) {
+      rest.push(value);
+      return placeholder;
+    }
+    return `${keyword} ${value}`;
+  });
+  return [inlined, rest];
+};
+
+const translated = (c: SqlConnection.Connection): SqlConnection.Connection => {
+  const prepare = <A>(run: (sql: string, params: ReadonlyArray<unknown>) => A) => (sql: string, params: ReadonlyArray<unknown>) => run(...inlineBounds(forDialect(sql), params));
+  return {
+    execute: (sql, params, transform) => prepare((text, rest) => c.execute(text, rest, transform))(sql, params),
+    executeRaw: prepare((text, rest) => c.executeRaw(text, rest)),
+    executeValues: prepare((text, rest) => c.executeValues(text, rest)),
+    executeUnprepared: (sql, params, transform) => prepare((text, rest) => c.executeUnprepared(text, rest, transform))(sql, params),
+    executeStream: (sql, params, transform) => prepare((text, rest) => c.executeStream(text, rest, transform))(sql, params),
+  };
+};
 
 /**
  * The pool cannot drop a waiter: mysql2 keeps the queued callback of a cancelled request, and

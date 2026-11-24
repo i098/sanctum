@@ -19,6 +19,8 @@ vi.mock('../src/integrations.ts', async importOriginal => {
 
 beforeEach(() => provider.reset());
 
+/** 300 ms on a local server; ~12 statements run before the submission is recorded, so each round trip adds to the budget (33 ms median to TiDB Cloud). */
+const CEILING_MS = 3_000;
 const SEND = 'gmail-send-email';
 
 const request = (overrides: Partial<Parameters<typeof requestAction>[1]> = {}) => ({
@@ -253,7 +255,7 @@ describe('action gateway', () => {
         provider.mode = 'hold';
         const queued = yield* requestAction(agent, request());
         const worker = yield* Effect.fork(
-          runWorker({ 'action.execute': executeAction }, { leaseMs: 3_000, pollMs: 50, concurrency: 1, ceilingMs: 300 }).pipe(Effect.provide(actionServices)),
+          runWorker({ 'action.execute': executeAction }, { leaseMs: 3_000, pollMs: 50, concurrency: 1, ceilingMs: CEILING_MS }).pipe(Effect.provide(actionServices)),
         );
         const poll = <A>(check: Effect.Effect<A, unknown, SqlClient.SqlClient>, done: (value: A) => boolean) =>
           check.pipe(Effect.filterOrFail(done, () => 'not yet'), Effect.retry(Schedule.spaced('50 millis')), Effect.timeout('10 seconds'));
