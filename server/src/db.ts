@@ -69,6 +69,9 @@ export const verifyUtcSession = Effect.gen(function*() {
  */
 let fullTextAvailable = true;
 export const hasFullText = () => fullTextAvailable;
+export const setFullTextForTest = (available: boolean) => {
+  fullTextAvailable = available;
+};
 /** TiDB rejects `FOR SHARE` (it only has a no-op `LOCK IN SHARE MODE`), so there an exclusive lock keeps the same guarantee. */
 export const shareLock = () => (fullTextAvailable ? 'FOR SHARE' : 'FOR UPDATE');
 const detectDialect = Effect.gen(function*() {
