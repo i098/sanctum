@@ -1,9 +1,10 @@
 import { SqlClient, type SqlError, SqlSchema } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { Deferred, Effect, Exit, Fiber, Schema } from 'effect';
+import { Context, Deferred, Effect, Exit, Fiber, Schema } from 'effect';
 import type { WorkspaceId } from '@sanctum/contracts';
 import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, dbLayer, increment, isCheckViolation, isDuplicate, isMissingReference } from '../src/db.ts';
 import { d1Backend } from '../src/db-d1.ts';
+import { sqliteBackend } from '../src/db-sqlite.ts';
 import { addSeconds, chunked, diffMicros, diffSeconds, now } from '../src/sql-dialect.ts';
 
 const workspace = 'w1' as WorkspaceId;
@@ -175,4 +176,94 @@ describe('D1 backend', () => {
         globalThis.fetch = original;
       }
     }));
+});
+
+describe('review fixes', () => {
+  it.live('an autocommit increment between a transaction read and its commit forces a rerun, so no number repeats', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const started = yield* Deferred.make<void>();
+      const rival = yield* Deferred.make<void>();
+      let attempts = 0;
+      const slow = yield* Effect.fork(sql.withTransaction(Effect.gen(function* () {
+        attempts++;
+        const mine = yield* increment('context_seq')(workspace);
+        if (attempts === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(rival);
+        }
+        return mine;
+      })));
+      yield* Deferred.await(started);
+      const other = yield* increment('context_seq')(workspace);
+      yield* Deferred.succeed(rival, undefined);
+      expect([other, yield* Fiber.join(slow)]).toEqual([1, 2]);
+      expect(attempts).toBe(2);
+    })));
+
+  it.effect('an increment of a workspace this transaction only buffered is a typed failure', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(Effect.zipRight(sql`INSERT INTO workspaces (id, name) VALUES ('w2', 'two')`, increment('context_seq')('w2' as WorkspaceId))));
+      expect(error.message).toMatch(/Unknown workspace w2/);
+    })));
+
+  it.effect('a nested transaction that fails drops its own writes only', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.withTransaction(Effect.gen(function* () {
+        yield* sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 1)`;
+        yield* Effect.ignore(sql.withTransaction(Effect.zipRight(sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 2)`, Effect.fail('inner'))));
+      }));
+      const rows = yield* sql<{ flag: number }>`SELECT flag FROM notes`;
+      expect(rows.map(row => row.flag)).toEqual([1]);
+    })));
+
+  it.effect('a write with RETURNING inside a transaction fails loudly; a WITH select still reads', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(sql`INSERT INTO notes (workspace_id) VALUES (${workspace}) RETURNING id`));
+      expect(error.message).toMatch(/RETURNING is not supported/);
+      const rows = yield* sql.withTransaction(sql<{ n: number }>`WITH c AS (SELECT 7 AS n) SELECT n FROM c`);
+      expect(rows).toEqual([{ n: 7 }]);
+    })));
+
+  it.live('conflicts that never clear end in a readable error after the retries', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      let attempts = 0;
+      const error = yield* failureOf(sql.withTransaction(Effect.gen(function* () {
+        attempts++;
+        // Outside the transaction, so it commits and moves tx_clock under this attempt.
+        yield* Effect.mapInputContext(sql.withTransaction(sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`), (context: Context.Context<SqlClient.SqlClient>) => Context.omit(SqlClient.TransactionConnection)(context));
+        yield* sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`;
+      })));
+      expect(error.message).toBe('Transaction conflict: retries exhausted, try again');
+      expect(attempts).toBe(9);
+    })), 15_000);
+
+  it.effect('time helpers refuse fragments that carry values or identifiers', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      expect(() => diffSeconds(sql`${'x'}`, now)).toThrow(/plain literals/);
+    })));
+
+  it.effect('the D1 backend reports the status of a non-JSON gateway answer', () =>
+    Effect.gen(function* () {
+      const original = globalThis.fetch;
+      globalThis.fetch = (async () => new Response('<html>Bad gateway</html>', { status: 502 })) as typeof fetch;
+      try {
+        const error = yield* Effect.flip(d1Backend('http://d1.internal').run({ sql: 'SELECT 1', params: [] }));
+        expect(error.message).toMatch(/answered 502: <html>Bad gateway/);
+      } finally {
+        globalThis.fetch = original;
+      }
+    }));
+
+  it.effect('a batch that already rolled back reports the real error', () =>
+    Effect.scoped(Effect.gen(function* () {
+      const backend = yield* sqliteBackend(':memory:');
+      const error = yield* Effect.flip(backend.batch([{ sql: 'ROLLBACK', params: [] }, { sql: 'SELECT * FROM missing_table', params: [] }]));
+      expect(error.message).toMatch(/no such table/);
+    })));
 });
