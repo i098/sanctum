@@ -29,7 +29,7 @@ import { evaluateBoundary, LOW_CONFIDENCE, PROMOTE_AFTER_MS, type Utterance } fr
 import { engineeringDefaults } from './config.ts';
 import { boundaryChanged } from './context-events.ts';
 import { requestLiveContextRefresh } from './context-schedule.ts';
-import { DbUtc } from './db.ts';
+import { DbUtc, shareLock } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
   asJobResult,
@@ -284,7 +284,7 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     if (OPEN_STATES.includes(row.state)) return yield* claimSource(row, source);
-    const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1 FOR SHARE`;
+    const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1 ${sql.literal(shareLock())}`;
     const bump = built !== undefined;
     const revision = row.boundary_revision + Number(bump);
     if (bump) {

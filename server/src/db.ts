@@ -69,6 +69,8 @@ export const verifyUtcSession = Effect.gen(function*() {
  */
 let fullTextAvailable = true;
 export const hasFullText = () => fullTextAvailable;
+/** TiDB rejects `FOR SHARE` (it only has a no-op `LOCK IN SHARE MODE`), so there an exclusive lock keeps the same guarantee. */
+export const shareLock = () => (fullTextAvailable ? 'FOR SHARE' : 'FOR UPDATE');
 const detectDialect = Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ version: string }>`SELECT VERSION() AS version`;
@@ -215,6 +217,12 @@ export const DbSha256 = Schema.transform(Schema.Uint8ArrayFromSelf, Sha256Hex, {
 export const mysqlErrno = (error: SqlError.SqlError): number | undefined => {
   const cause: unknown = error.cause;
   return typeof cause === 'object' && cause !== null && 'errno' in cause && typeof cause.errno === 'number' ? cause.errno : undefined;
+};
+
+/** The server's own message for a failed statement (never sent to clients; for server logs). */
+export const mysqlMessage = (error: SqlError.SqlError): string | undefined => {
+  const cause: unknown = error.cause;
+  return typeof cause === 'object' && cause !== null && 'sqlMessage' in cause && typeof cause.sqlMessage === 'string' ? cause.sqlMessage : error.message;
 };
 
 export const ER_DUP_ENTRY = 1062;
