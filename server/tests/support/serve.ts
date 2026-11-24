@@ -11,11 +11,11 @@ import { fakeApi, fakeDomain } from './fake-domain.ts';
 /** `env` overrides process settings read while the layer builds, such as the embedded issuer's. */
 export const serveFake = (mcp: Option.Option<McpAuthorization> = Option.none(), env: Record<string, string> = {}) =>
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    const db = dbLayer(database.mysql);
+    const database = yield* Effect.acquireRelease(Effect.promise(() => createTestDatabase()), db => Effect.promise(db.drop));
+    const db = dbLayer(database.db);
     yield* Effect.provide(migrate(loadMigrations()), db);
     const domain = fakeDomain();
-    const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, domain.authenticator, {
+    const layer = serverLayer({ apiPort: 0, db: database.db }, domain.authenticator, {
       api: fakeApi(domain),
       mcp: Layer.succeed(McpAuthorizationServer, mcp),
     });

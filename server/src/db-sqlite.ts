@@ -17,12 +17,12 @@ const execute = (database: DatabaseSync, { sql, params }: DbStatement): DbResult
   return { rows: [], changes: Number(statement.run(...bind(params)).changes) };
 };
 
-/** `path` is `:memory:`, `file:<path>` or a bare path. */
+/** `path` is `:memory:`, `file:<path>`, a bare path, or a `file:` URI with a query (`file:name?mode=memory&cache=shared` shares one memory database between connections). */
 export const sqliteBackend = (path: string): Effect.Effect<DbBackend, SqlError.SqlError, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.try({
       try: () => {
-        const database = new DatabaseSync(path.replace(/^file:/, ''));
+        const database = new DatabaseSync(path.includes('?') ? path : path.replace(/^file:/, ''));
         database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL');
         return database;
       },
