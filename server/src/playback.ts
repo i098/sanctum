@@ -10,7 +10,7 @@ import { type AccessScope, JobFailure, type MeetingId, type RecordingAccess, Sam
 import { Effect, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
-import { DbJson, DbSafeInt, DbSha256 } from './db.ts';
+import { DbJson, DbSafeInt, DbSha256, shareLock } from './db.ts';
 import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { asJobResult, currentRanges, MeetingJobPayload, type MeetingJob, OPEN_STATES, selectMeeting, type TimedRange } from './meeting-store.ts';
 import { ObjectStore, wavFile } from './providers/object-store.ts';
@@ -113,7 +113,7 @@ export const assembleRecording = (job: MeetingJob) =>
             return yield* new JobFailure({ message: 'Meeting ranges changed during recording assembly', retryable: true });
           }
           const [published] = yield* sql<{ object_key: string }>`SELECT object_key FROM meeting_recordings
-            WHERE meeting_id = ${meeting_id} AND boundary_revision = ${revision} FOR SHARE`;
+            WHERE meeting_id = ${meeting_id} AND boundary_revision = ${revision} ${sql.literal(shareLock())}`;
           if (published !== undefined) return { object_key: published.object_key, boundary_revision: revision };
           if (cut === null) return yield* Effect.as(setStatus, { missing: 'no committed audio inside the meeting ranges', boundary_revision: revision });
           const { object_key, sha256, wav } = cut;

@@ -29,7 +29,7 @@ import { evaluateBoundary, LOW_CONFIDENCE, PROMOTE_AFTER_MS, type Utterance } fr
 import { engineeringDefaults } from './config.ts';
 import { boundaryChanged } from './context-events.ts';
 import { requestLiveContextRefresh } from './context-schedule.ts';
-import { DbUtc } from './db.ts';
+import { DbUtc, shareLock } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import {
   asJobResult,
@@ -284,7 +284,7 @@ const joinSealed = (row: MeetingRow, source: SourceRange) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     if (OPEN_STATES.includes(row.state)) return yield* claimSource(row, source);
-    const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1 FOR SHARE`;
+    const [built] = yield* sql`SELECT 1 FROM meeting_recordings WHERE meeting_id = ${row.id} AND boundary_revision = ${row.boundary_revision} LIMIT 1 ${sql.literal(shareLock())}`;
     const bump = built !== undefined;
     const revision = row.boundary_revision + Number(bump);
     if (bump) {
@@ -682,11 +682,11 @@ const sealForClose = (access: AccessScope, row: MeetingRow, fence: EndMeeting | 
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [live] = yield* sql<{ epoch_id: SourceRange['epoch_id']; track: number; live_sample_end: string }>`SELECT e.id AS epoch_id, r.track, e.live_sample_end
-      FROM listeners l JOIN capture_epochs e ON e.workspace_id = l.workspace_id AND e.id = COALESCE(l.current_epoch_id, (
-        SELECT p.id FROM capture_epochs p JOIN meeting_ranges q ON q.epoch_id = p.id AND q.meeting_id = ${row.id} AND q.boundary_revision = ${row.boundary_revision}
-        WHERE p.workspace_id = l.workspace_id AND p.listener_id = l.id AND p.ended_at IS NOT NULL ORDER BY p.ended_at DESC, p.started_at DESC LIMIT 1))
+      FROM listeners l JOIN capture_epochs e ON e.workspace_id = l.workspace_id
       JOIN meeting_ranges r ON r.meeting_id = ${row.id} AND r.boundary_revision = ${row.boundary_revision} AND r.epoch_id = e.id
-      WHERE l.workspace_id = ${access.workspace_id} AND l.id = ${row.listener_id} LIMIT 1`;
+      WHERE l.workspace_id = ${access.workspace_id} AND l.id = ${row.listener_id} AND e.id = COALESCE(l.current_epoch_id, (
+        SELECT p.id FROM capture_epochs p JOIN meeting_ranges q ON q.epoch_id = p.id AND q.meeting_id = ${row.id} AND q.boundary_revision = ${row.boundary_revision}
+        WHERE p.workspace_id = l.workspace_id AND p.listener_id = l.id AND p.ended_at IS NOT NULL ORDER BY p.ended_at DESC, p.started_at DESC LIMIT 1)) LIMIT 1`;
     yield* sealMeeting(row, {
       watermark: live === undefined ? null : { epoch_id: live.epoch_id, track: live.track, sample_end: Number(live.live_sample_end) },
       state: 'closing',

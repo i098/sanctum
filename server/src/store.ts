@@ -19,7 +19,7 @@ import {
   type WorkspaceRole,
 } from '@sanctum/contracts';
 import { defaultSeatLimit } from './config.ts';
-import { DbSafeInt, increment } from './db.ts';
+import { DbSafeInt, increment, shareLock } from './db.ts';
 
 interface WriteResult { readonly affectedRows: number; readonly insertId: number | string }
 
@@ -32,13 +32,13 @@ export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effec
   increment('permission_revision');
 
 /**
- * True while the workspace is not deleted. The share lock holds until the caller's transaction ends,
+ * True while the workspace is not deleted. The lock (shared where the database has one) holds until the caller's transaction ends,
  * so a delete waits for the write in flight and a write after the delete sees it.
  */
 export const workspaceIsLive = (workspace_id: WorkspaceId) =>
   Effect.flatMap(
     SqlClient.SqlClient,
-    sql => sql`SELECT 1 FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NULL FOR SHARE`,
+    sql => sql`SELECT 1 FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NULL ${sql.literal(shareLock())}`,
   ).pipe(Effect.map(rows => rows.length > 0));
 
 /** Roles that take a seat; agents and devices never count against the limit. */
