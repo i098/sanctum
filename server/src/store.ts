@@ -78,11 +78,12 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
+        const revision = yield* bumpPermissionRevision(input.workspace_id);
         if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, org_issuer, created_at)
           VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, UTC_TIMESTAMP(6)) AS new
           ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL, org_issuer = new.org_issuer`;
-        return yield* bumpPermissionRevision(input.workspace_id);
+        return revision;
       }),
     );
   });
@@ -105,8 +106,8 @@ export const setMembership = (issuer: string, workspace_id: WorkspaceId, princip
       if (active === undefined || active.org_issuer !== issuer) return;
       yield* sql.withTransaction(
         Effect.zipRight(
-          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
           bumpPermissionRevision(workspace_id),
+          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
         ),
       );
       return;
