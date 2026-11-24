@@ -22,17 +22,30 @@ const decodeResult = (result: DbResult): DbResult => ({
 
 const toBody = ({ sql, params }: DbStatement) => ({ sql, params: params.map(encode) });
 
+/** Most gateway requests in flight at once: backpressure instead of an unbounded fan-out. */
+const MAX_IN_FLIGHT = 8;
+const TIMEOUT_MS = 30_000;
+
 export const d1Backend = (baseUrl: string): DbBackend => {
+  const slots = Effect.unsafeMakeSemaphore(MAX_IN_FLIGHT);
   const post = <A>(path: string, body: unknown) =>
-    Effect.tryPromise({
-      try: async signal => {
-        const response = await fetch(new URL(path, baseUrl), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
-        const payload = (await response.json()) as A & { readonly error?: string };
-        if (!response.ok) throw new Error(payload.error ?? `D1 gateway answered ${response.status}`);
-        return payload;
-      },
-      catch: cause => new SqlError.SqlError({ cause, message: cause instanceof Error ? cause.message : String(cause) }),
-    });
+    slots.withPermits(1)(
+      Effect.tryPromise({
+        try: async signal => {
+          const response = await fetch(new URL(path, baseUrl), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
+          const text = await response.text();
+          let payload: (A & { readonly error?: string }) | undefined;
+          try {
+            payload = JSON.parse(text) as A & { readonly error?: string };
+          } catch {
+            if (response.ok) throw new Error(`D1 gateway answered ${response.status} with a non-JSON body`);
+          }
+          if (!response.ok) throw new Error(payload?.error ?? `D1 gateway answered ${response.status}: ${text.slice(0, 200)}`);
+          return payload as A;
+        },
+        catch: cause => new SqlError.SqlError({ cause, message: cause instanceof Error ? cause.message : String(cause) }),
+      }),
+    );
   return {
     run: statement => Effect.map(post<DbResult>('/run', toBody(statement)), decodeResult),
     batch: statements => Effect.map(post<{ readonly results: ReadonlyArray<DbResult> }>('/batch', { statements: statements.map(toBody) }), payload => payload.results.map(decodeResult)),

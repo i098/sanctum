@@ -41,7 +41,7 @@ export const sqliteBackend = (path: string): Effect.Effect<DbBackend, SqlError.S
               database.exec('COMMIT');
               return results;
             } catch (error) {
-              database.exec('ROLLBACK');
+              if (database.isTransaction) database.exec('ROLLBACK');
               throw error;
             }
           },

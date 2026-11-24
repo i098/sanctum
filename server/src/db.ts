@@ -10,7 +10,7 @@
  */
 import * as Reactivity from '@effect/experimental/Reactivity';
 import { SqlClient, type SqlConnection, SqlError, Statement } from '@effect/sql';
-import { Context, Effect, Layer, Option, ParseResult, Schedule, Schema, Stream } from 'effect';
+import { Context, Duration, Effect, Layer, Option, ParseResult, Schedule, Schema, Stream } from 'effect';
 import { Sha256Hex, UtcTimestamp, type WorkspaceId } from '@sanctum/contracts';
 import { d1Backend } from './db-d1.ts';
 import type { DbBackend, DbOptions, DbResult, DbStatement } from './db-types.ts';
@@ -33,7 +33,29 @@ export const isMissingReference = (error: SqlError.SqlError) => /FOREIGN KEY con
 export const isCheckViolation = (error: SqlError.SqlError) => /CHECK constraint failed/.test(messageOf(error)) && !CONFLICT.test(messageOf(error));
 
 /** Statements that return rows run at once; every other statement waits for the commit. */
-const isRead = (sql: string) => /^\s*(select|pragma|explain)\b/i.test(sql);
+// shortcut: a keyword inside a string literal can misclassify a WITH statement; upgrade if domain SQL needs that.
+const isRead = (sql: string) => {
+  const lead = sql.replace(/^(?:\s|\(|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/, '');
+  return /^(select|pragma|explain|values)\b/i.test(lead) || (/^with\b/i.test(lead) && !/\b(insert|update|delete|replace)\b/i.test(lead));
+};
+
+const backoff = Schedule.exponential('10 millis').pipe(Schedule.modifyDelay((_, delay) => Duration.min(delay, Duration.millis(200))), Schedule.jittered);
+
+/** A nested transaction joins its parent's buffer; when its body fails, its writes and counters are dropped. */
+const rollbackOnError = <A, E, R>(connection: SqlConnection.Connection, effect: Effect.Effect<A, E, R>) =>
+  Effect.suspend(() => {
+    const state = states.get(connection);
+    if (state === undefined) return effect;
+    const length = state.buffer.length;
+    const counters = new Map(state.counters);
+    return Effect.tapErrorCause(effect, () =>
+      Effect.sync(() => {
+        state.buffer.length = length;
+        state.counters.clear();
+        for (const [key, value] of counters) state.counters.set(key, value);
+      }),
+    );
+  });
 
 interface TransactionState {
   readonly backend: DbBackend;
@@ -50,6 +72,7 @@ const asRows = (result: DbResult, transform: Parameters<SqlConnection.Connection
 const transactionConnection = (backend: DbBackend, state: TransactionState): SqlConnection.Connection => {
   const execute = (sql: string, params: ReadonlyArray<unknown>): Effect.Effect<DbResult, SqlError.SqlError> => {
     if (!isRead(sql)) {
+      if (/\breturning\b/i.test(sql)) return Effect.fail(fail(`RETURNING is not supported in a transaction: ${sql}`));
       state.buffer.push({ sql, params });
       return Effect.succeed({ rows: [], changes: 0 });
     }
@@ -95,10 +118,11 @@ const makeClient = (backend: DbBackend) =>
       });
     const withTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError.SqlError, R> =>
       Effect.flatMap(Effect.serviceOption(SqlClient.TransactionConnection), nested =>
-        // shortcut: a nested transaction joins its parent and cannot roll back alone; upgrade when a caller needs savepoints.
         Option.isSome(nested)
-          ? effect
-          : Effect.retry(attempt(effect), { schedule: Schedule.jittered(Schedule.exponential('10 millis')), times: 4, while: isConflict }),
+          ? rollbackOnError(nested.value[0], effect)
+          : Effect.retry(attempt(effect), { schedule: backoff, times: 8, while: isConflict }).pipe(
+              Effect.mapError(error => (isConflict(error) ? fail('Transaction conflict: retries exhausted, try again') : error)),
+            ),
       );
     return Object.assign(client, { withTransaction });
   }).pipe(Effect.provide(Reactivity.layer));
@@ -168,8 +192,10 @@ export const increment = (column: 'context_seq' | 'permission_revision') => (wor
     if (current === undefined) {
       // Straight from the backend, past the read-after-write check: this transaction has not written the counter.
       const [row] = (yield* state.backend.run({ sql: `SELECT ${column} AS value FROM workspaces WHERE id = ?`, params: [workspace_id] })).rows;
-      if (row === undefined) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
+      if (row === undefined) return yield* fail(`Unknown workspace ${workspace_id}`);
       current = Schema.decodeUnknownSync(DbSafeInt)(row.value);
+      // The commit guard watches tx_clock, which an autocommit increment does not bump: guard the counter itself.
+      yield* sql`INSERT INTO tx_conflict (v) SELECT 1 WHERE (SELECT ${sql(column)} FROM workspaces WHERE id = ${workspace_id}) <> ${current}`;
     }
     const next = current + 1;
     state.counters.set(key, next);
