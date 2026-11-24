@@ -64,6 +64,31 @@ export const verifyUtcSession = Effect.gen(function*() {
 });
 
 /**
+ * TiDB speaks the MySQL protocol but has no `MATCH ... AGAINST`, FULLTEXT indexes or stored generated columns added by
+ * ALTER. Set once per process by `dbLayer`; search and migrations take their TiDB path when it is false.
+ */
+let fullTextAvailable = true;
+export const hasFullText = () => fullTextAvailable;
+export const detectDialect = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ version: string }>`SELECT VERSION() AS version`;
+  fullTextAvailable = !/tidb/i.test(row?.version ?? '');
+});
+
+/** TiDB lacks the MySQL 8.0.19 row alias (`VALUES (...) AS new ON DUPLICATE KEY UPDATE x = new.x`); `VALUES(x)` means the same there. */
+const forDialect = (text: string) =>
+  fullTextAvailable ? text : text.replace(/\)\s*AS\s+(\w+)\s+ON DUPLICATE KEY UPDATE([\s\S]*)$/i, (_all, alias: string, update: string) =>
+    `) ON DUPLICATE KEY UPDATE${update.replace(new RegExp(`\\b${alias}\\.(\`?\\w+\`?)`, 'g'), 'VALUES($1)')}`);
+
+const translated = (c: SqlConnection.Connection): SqlConnection.Connection => ({
+  execute: (sql, params, transform) => c.execute(forDialect(sql), params, transform),
+  executeRaw: (sql, params) => c.executeRaw(forDialect(sql), params),
+  executeValues: (sql, params) => c.executeValues(forDialect(sql), params),
+  executeUnprepared: (sql, params, transform) => c.executeUnprepared(forDialect(sql), params, transform),
+  executeStream: (sql, params, transform) => c.executeStream(forDialect(sql), params, transform),
+});
+
+/**
  * The pool cannot drop a waiter: mysql2 keeps the queued callback of a cancelled request, and
  * @effect/sql-mysql2 then still dispatches that request's statement once a connection frees.
  * Waiting therefore happens here, in a FIFO semaphore whose waiters leave when interrupted;
@@ -84,7 +109,7 @@ const gatedClient = (mysql: MysqlOptions) =>
         return permits.release(1);
       });
       // Waiting is interruptible only where the caller is: a cleanup write of an interrupted fiber still waits its turn.
-      const reserve = Effect.uninterruptibleMask(restore =>
+      const reserveRaw = Effect.uninterruptibleMask(restore =>
         Effect.suspend(() => {
           if (busy >= mysql.maxConnections && mysql.queueLimit > 0 && waiting >= mysql.queueLimit) return Effect.fail(new SqlError.SqlError({ cause: new Error('Queue limit reached.'), message: 'Failed to acquire connection' }));
           waiting++;
@@ -95,6 +120,7 @@ const gatedClient = (mysql: MysqlOptions) =>
           Effect.tap(() => Effect.addFinalizer(() => giveBack)),
         ),
       );
+      const reserve = Effect.map(reserveRaw, translated);
       // An interrupted statement is not aborted: MySQL still runs it on its connection, which must not be handed out before it
       // answers. A daemon therefore owns the permit and connection until then, while the caller may leave at once.
       const held = <A>(use: (connection: SqlConnection.Connection) => Effect.Effect<A, SqlError.SqlError>) =>
@@ -125,7 +151,7 @@ const gatedClient = (mysql: MysqlOptions) =>
   ).pipe(Layer.provide(Reactivity.layer), Layer.provide(pooledClient(mysql)));
 
 /** Pool plus the UTC precondition; API and worker each build their own process-scoped layer. */
-export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(verifyUtcSession).pipe(Layer.provideMerge(gatedClient(mysql)));
+export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(Effect.zipRight(verifyUtcSession, detectDialect)).pipe(Layer.provideMerge(gatedClient(mysql)));
 
 const MYSQL_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
 

@@ -25,12 +25,17 @@ const LOW_MEMORY = [
   '--table-open-cache=400',
 ];
 
+/** A server that requires TLS (TiDB Cloud) is trusted through `SANCTUM_TEST_MYSQL_CA_CERT`, PEM text. */
+export const testCaCert = process.env.SANCTUM_TEST_MYSQL_CA_CERT;
+export const testSsl = testCaCert === undefined ? {} : { ssl: { ca: testCaCert } };
+export const connectAdmin = (url: string) => createConnection({ uri: url, ...testSsl });
+
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8' }).trim();
 
 async function waitForServer(url: string, deadline: number): Promise<void> {
   for (;;) {
     try {
-      const connection = await createConnection(url);
+      const connection = await connectAdmin(url);
       await connection.end();
       return;
     } catch (error) {

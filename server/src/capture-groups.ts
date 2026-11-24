@@ -42,7 +42,7 @@ export const claimGroupLease = (input: { readonly workspace_id: WorkspaceId; rea
         FROM capture_groups g
         JOIN listeners l ON l.workspace_id = g.workspace_id AND l.capture_group_id = g.id
         WHERE g.workspace_id = ${request.workspace_id} AND g.id = ${request.capture_group_id} AND l.id = ${request.listener_id}
-        FOR UPDATE OF g`,
+        FOR UPDATE`,
     });
     const claim = Effect.gen(function* () {
       const found = yield* findLease(input);

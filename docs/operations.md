@@ -129,7 +129,7 @@ npm run start -w server                                 # keep it running
 
 ## Cloudflare
 
-The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL on Aiven over verified TLS (database `sanctum`), recordings in the private R2 bucket `sanctum-recordings`.
+The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL-compatible TiDB Cloud Starter (free tier, AWS us-east-1, database `sanctum`) over verified TLS; set `SANCTUM_TEST_MYSQL_CA_CERT` to run the tests against it. TiDB has no `FULLTEXT`, so context search matches words with regular expressions there and migrations skip the `FULLTEXT` and `STORED` steps (`hasFullText` in `server/src/db.ts`), recordings in the private R2 bucket `sanctum-recordings`.
 It serves two Workers custom domains declared in `wrangler.jsonc`: `https://app.sanctum.42nights.dev` (the app, `/api/v1`, `/mcp`, `/.well-known/*`, `/auth/*`, `/invite/*`) and the apex `https://sanctum.42nights.dev`; `workers_dev` is off.
 On deploy, Cloudflare creates the DNS record and certificate for each custom domain in the `42nights.dev` zone; no DNS record is added by hand.
 
@@ -145,7 +145,7 @@ On deploy, Cloudflare creates the DNS record and certificate for each custom dom
 - **Mode**: `SANCTUM_ENV=development` (production refuses to start while decisions are open). Provider requirements are listed under [Configuration](#configuration).
 - **Deploy** (Docker must be usable by the deploying user, or set `WRANGLER_DOCKER_BIN` to a wrapper): from `deploy/cloudflare`, `npx wrangler deploy`. Wrangler first builds the landing page (`npm run build:landing` in `web-app`, the `build` command in `wrangler.jsonc`, which runs relative to this directory), then builds `server/Dockerfile`, pushes it to the account registry and rolls out both containers.
 - **Settings changes**: a running container keeps the environment it started with, and Cloudflare cannot restart it from outside. Each container records a SHA-256 hash of its start environment (no values). After a deploy or `wrangler secret put` changes a forwarded setting, the next request (the API) or cron start (the job worker) records the new hash, then stops the old container and starts it with the current settings. Each hash allows one restart attempt, so a stop that fails cannot loop. Requests wait during the restart, and an open listener reconnects and resumes.
-- **Secrets** (`npx wrangler secret put NAME`, read from stdin): `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_CA_CERT` (the provider's project CA, PEM).
+- **Secrets** (`npx wrangler secret put NAME`, read from stdin): `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_CA_CERT` (the provider's CA, PEM: ISRG Root X1 for TiDB Cloud).
   R2 uses `R2_ENDPOINT`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, limited to the private bucket.
   Sign-in uses `SANCTUM_OIDC_CLIENT_SECRET` for the WorkOS OAuth application.
   Set the provider credentials listed under [Configuration](#configuration).

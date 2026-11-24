@@ -16,7 +16,7 @@ import { SqlClient } from '@effect/sql';
 import { NodeRuntime } from '@effect/platform-node';
 import { Data, Effect } from 'effect';
 import { serverConfig } from './config.ts';
-import { dbLayer } from './db.ts';
+import { dbLayer, hasFullText } from './db.ts';
 
 export class MigrationError extends Data.TaggedError('MigrationError')<{ readonly message: string }> { }
 
@@ -152,6 +152,8 @@ function runStep(migration: Migration, step: MigrationStep, resumed: boolean, re
       if (previous !== step.checksum) return yield* new MigrationError({ message: `Applied step ${label} was edited` });
       return;
     }
+    // TiDB has no FULLTEXT and cannot add a stored generated column; its search path (context.ts) needs neither.
+    if (!hasFullText() && step.object.kind !== 'table' && /\bFULLTEXT\b|\bSTORED\b/i.test(step.sql)) return;
     const exists = yield* objectExists(step.object);
     if (exists && !resumed) return yield* new MigrationError({ message: `Step ${label} targets an object that already exists outside the ledger` });
     if (!exists) yield* sql.unsafe(step.sql);

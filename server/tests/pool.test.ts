@@ -13,6 +13,7 @@ import { serverLayer } from '../src/main.ts';
 import { loadMigrations, migrate } from '../src/migrate.ts';
 import { createTestDatabase, runSql, type TestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { testSsl } from './support/mysql-server.ts';
 
 const POOL = 2;
 
@@ -43,7 +44,7 @@ const holdAll = Effect.all(Array.from({ length: POOL }, () => hold));
 const connectionsOn = (database: TestDatabase) =>
   Effect.promise(async () => {
     const { host, port, username, password } = database.mysql;
-    const observer = await createConnection({ host, port, user: username, password: Redacted.value(password) });
+    const observer = await createConnection({ host, port, user: username, password: Redacted.value(password), ...testSsl });
     try {
       const [rows] = await observer.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM information_schema.processlist WHERE db = ?', [database.name]);
       return Number(rows[0]!.total);
@@ -240,7 +241,7 @@ const serveRenames = Effect.gen(function* () {
   const { host, port, username, password } = database.mysql;
   const lock = yield* Effect.acquireRelease(
     Effect.promise(async () => {
-      const connection = await createConnection({ host, port, user: username, password: Redacted.value(password), database: database.name });
+      const connection = await createConnection({ host, port, user: username, password: Redacted.value(password), database: database.name, ...testSsl });
       await connection.query('SET autocommit = 0');
       await connection.query('SELECT id FROM workspaces WHERE id = ? FOR UPDATE', [owner!.workspace_id]);
       return connection;

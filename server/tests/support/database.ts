@@ -2,9 +2,9 @@
 import { randomBytes } from 'node:crypto';
 import type { SqlClient } from '@effect/sql';
 import { Effect, Redacted } from 'effect';
-import { createConnection } from 'mysql2/promise';
 import { dbLayer, type MysqlOptions } from '../../src/db.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
+import { connectAdmin, testCaCert } from './mysql-server.ts';
 
 export interface TestDatabase {
   readonly name: string;
@@ -13,7 +13,7 @@ export interface TestDatabase {
 
 /** Creates `sanctum_t_<random>` on the server at `adminUrl`; the returned `drop` removes it. Usable outside Vitest. */
 export async function createDatabaseOn(adminUrl: string): Promise<TestDatabase & { drop: () => Promise<void> }> {
-  const admin = () => createConnection(adminUrl);
+  const admin = () => connectAdmin(adminUrl);
   const name = `sanctum_t_${randomBytes(6).toString('hex')}`;
   const connection = await admin();
   await connection.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
@@ -27,6 +27,7 @@ export async function createDatabaseOn(adminUrl: string): Promise<TestDatabase &
     password: Redacted.make(decodeURIComponent(url.password)),
     maxConnections: 4,
     queueLimit: 50,
+    caCert: testCaCert,
   };
   const drop = async () => {
     const cleanup = await admin();
