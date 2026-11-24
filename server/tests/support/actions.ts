@@ -1,5 +1,5 @@
 /** Fixture accounts, grants, ledger rows and a fake provider behind `executeIntegrationAction`; nothing leaves the process. */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, type ActionId, IntegrationAccountId, JobId, type JobKind, type MeetingId, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Layer } from 'effect';
@@ -8,6 +8,7 @@ import type { executeIntegrationAction, IntegrationFailure } from '../../src/int
 import { LlmClient, makeLlm } from '../../src/llm.ts';
 import { claimed } from './capture.ts';
 import { fixturePipedream } from './pipedream.ts';
+import { now } from '../../src/sql-dialect.ts';
 
 type ExecuteInput = Parameters<typeof executeIntegrationAction>[0];
 
@@ -52,7 +53,7 @@ export const seedAccount = (owner: AccessScope, status: 'active' | 'disconnected
     const id = IntegrationAccountId.make(randomUUID());
     yield* sql`
       INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
-      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`user-${id}`}, ${`apn_${id}`}, ${app}, ${status}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`user-${id}`}, ${`apn_${id}`}, ${app}, ${status}, ${now}, ${now})`;
     return id;
   });
 
@@ -60,7 +61,7 @@ export const seedAccount = (owner: AccessScope, status: 'active' | 'disconnected
 export const seedCredential = (owner: AccessScope, agent: AccessScope) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql`
     INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
-    VALUES (${randomUUID()}, ${agent.workspace_id}, ${agent.principal.id}, ${owner.principal.id}, UNHEX(SHA2(${randomUUID()}, 256)), ${JSON.stringify(agent.scopes)}, UTC_TIMESTAMP(6))`);
+    VALUES (${randomUUID()}, ${agent.workspace_id}, ${agent.principal.id}, ${owner.principal.id}, ${createHash('sha256').update(randomUUID()).digest()}, ${JSON.stringify(agent.scopes)}, ${now})`);
 
 /** Restricted meeting; each of `writers` gets write access. */
 export const seedMeeting = (workspace_id: WorkspaceId, writers: ReadonlyArray<AccessScope> = []) =>
@@ -69,11 +70,11 @@ export const seedMeeting = (workspace_id: WorkspaceId, writers: ReadonlyArray<Ac
     const id = randomUUID() as MeetingId;
     yield* sql`
       INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
-      VALUES (${id}, ${workspace_id}, 'active', 'America/Los_Angeles', UTC_TIMESTAMP(6),
-        ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${workspace_id}, 'active', 'America/Los_Angeles', ${now},
+        ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, ${now}, ${now})`;
     for (const writer of writers) {
       yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-        VALUES (${workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, UTC_TIMESTAMP(6))`;
+        VALUES (${workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, ${now})`;
     }
     return id;
   });

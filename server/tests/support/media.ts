@@ -24,15 +24,15 @@ import { type AsrBatch, type AsrResult, SpeechToText, whisperSpeechToText } from
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
 
-class TestMysql extends Context.Tag('test/TestMysql')<TestMysql, TestDatabase['mysql']>() {}
+class TestDb extends Context.Tag('test/TestDb')<TestDb, TestDatabase['db']>() {}
 
 /** One migrated database for a whole suite; tests isolate themselves with fresh workspaces. */
 export const MigratedDatabase = Layer.unwrapScoped(
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    const db = dbLayer(database.mysql);
+    const database = yield* Effect.acquireRelease(Effect.promise(() => createTestDatabase()), db => Effect.promise(db.drop));
+    const db = dbLayer(database.db);
     yield* Effect.provide(migrate(loadMigrations()), db);
-    return Layer.merge(db, Layer.succeed(TestMysql, database.mysql));
+    return Layer.merge(db, Layer.succeed(TestDb, database.db));
   }),
 );
 
@@ -189,8 +189,8 @@ const liveClock = Clock.make();
 /** Starts the real API server (`serverLayer` from main.ts, port 0) on the suite database; resolves to `host:port`. */
 export const serveApi = (server: typeof serverLayer, tokens: Map<string, AccessScope>, media: Layer.Layer<ObjectStore | SpeechToText>) =>
   Effect.gen(function* () {
-    const mysql = yield* TestMysql;
-    const context = yield* Effect.withClock(Layer.build(server({ apiPort: 0, mysql }, tokenAuthenticator(tokens), { media })), liveClock);
+    const db = yield* TestDb;
+    const context = yield* Effect.withClock(Layer.build(server({ apiPort: 0, db }, tokenAuthenticator(tokens), { media })), liveClock);
     const address = Context.get(context, HttpServer.HttpServer).address;
     if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
     return `127.0.0.1:${address.port}`;

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, type AccessScopeName, PrincipalId, WorkspaceId, type WorkspaceRole } from '@sanctum/contracts';
 import { Effect } from 'effect';
+import { now } from '../../src/sql-dialect.ts';
 
 const ALL_SCOPES: ReadonlyArray<AccessScopeName> = ['context:read', 'context:write', 'recordings:read', 'actions:request', 'actions:execute', 'workspace:admin'];
 
@@ -24,13 +25,13 @@ export const seedWorkspace = (name: string, roles: ReadonlyArray<WorkspaceRole> 
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const workspace_id = WorkspaceId.make(randomUUID());
-    yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${name}, 'America/Los_Angeles', UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${name}, 'America/Los_Angeles', ${now})`;
     return yield* Effect.forEach(roles, role =>
       Effect.gen(function* () {
         const access = fixtureAccess({ workspace_id, role });
         const kind = role === 'agent' || role === 'device' ? role : 'human';
-        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${access.principal.id}, ${kind}, ${`${name} ${role}`}, UTC_TIMESTAMP(6))`;
-        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${workspace_id}, ${access.principal.id}, ${role}, UTC_TIMESTAMP(6))`;
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${access.principal.id}, ${kind}, ${`${name} ${role}`}, ${now})`;
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${workspace_id}, ${access.principal.id}, ${role}, ${now})`;
         return { ...access, principal: { ...access.principal, kind } } satisfies AccessScope;
       }),
     );

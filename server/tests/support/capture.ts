@@ -18,6 +18,7 @@ import {
 import { Effect } from 'effect';
 import { finalizeMeeting, onFinalSegments } from '../../src/meetings.ts';
 import type { MemoryObjectStore } from './object-store.ts';
+import { now } from '../../src/sql-dialect.ts';
 
 export const RATE = 16_000;
 const CHUNK_SECONDS = 10;
@@ -34,7 +35,7 @@ export const seedListener = (device: AccessScope, options: { readonly group?: st
     const sql = yield* SqlClient.SqlClient;
     const listener_id = randomUUID();
     yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, capture_group_id, name, mode, state, capabilities, created_at)
-      VALUES (${listener_id}, ${device.workspace_id}, ${device.principal.id}, ${options.group ?? null}, 'Room', 'room', 'listening', '{}', UTC_TIMESTAMP(6))`;
+      VALUES (${listener_id}, ${device.workspace_id}, ${device.principal.id}, ${options.group ?? null}, 'Room', 'room', 'listening', '{}', ${now})`;
     return { workspace_id: device.workspace_id, listener_id, capture_group_id: options.group ?? null } satisfies Listener;
   });
 
@@ -42,7 +43,7 @@ export const seedGroup = (workspace_id: WorkspaceId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = randomUUID();
-    yield* sql`INSERT INTO capture_groups (id, workspace_id, name, created_at) VALUES (${id}, ${workspace_id}, 'Room A', UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO capture_groups (id, workspace_id, name, created_at) VALUES (${id}, ${workspace_id}, 'Room A', ${now})`;
     return id;
   });
 
@@ -68,8 +69,8 @@ export const commitChunk = (listener: Listener, epoch: CaptureEpochId, sequence:
     const key = `chunks/${epoch}/${sequence}.wav`;
     store.objects.set(key, { body: wav, sha256, contentType: 'audio/wav' });
     yield* sql`INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at, byte_length, sha256, object_key, upload_state, created_at, committed_at)
-      VALUES (${randomUUID()}, ${listener.workspace_id}, ${listener.listener_id}, ${epoch}, 0, ${sequence}, ${sequence * count}, ${count}, ${RATE}, UTC_TIMESTAMP(6), ${wav.byteLength},
-        ${Buffer.from(sha256, 'hex')}, ${key}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${randomUUID()}, ${listener.workspace_id}, ${listener.listener_id}, ${epoch}, 0, ${sequence}, ${sequence * count}, ${count}, ${RATE}, ${now}, ${wav.byteLength},
+        ${Buffer.from(sha256, 'hex')}, ${key}, 'committed', ${now}, ${now})`;
   });
 
 export const seedConnection = (listener: Listener, epoch_id: CaptureEpochId, purpose = 'asr', provider = 'workers-ai') =>
@@ -77,7 +78,7 @@ export const seedConnection = (listener: Listener, epoch_id: CaptureEpochId, pur
     const sql = yield* SqlClient.SqlClient;
     const id = ProviderConnectionId.make(randomUUID());
     yield* sql`INSERT INTO provider_connections (id, workspace_id, epoch_id, track, purpose, provider, model, anchor_sample, sample_rate, opened_at)
-      VALUES (${id}, ${listener.workspace_id}, ${epoch_id}, 0, ${purpose}, ${provider}, 'fixture', 0, ${RATE}, UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${listener.workspace_id}, ${epoch_id}, 0, ${purpose}, ${provider}, 'fixture', 0, ${RATE}, ${now})`;
     return id;
   });
 
@@ -109,9 +110,9 @@ export const speak = (
     };
     yield* sql`INSERT INTO transcript_segments (id, workspace_id, epoch_id, track, sample_start, sample_end, text, status, revision, origin, provider, model, provider_connection_id, speaker_label, confidence, created_at)
       VALUES (${segment.id}, ${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, ${text}, 'final', 1, 'live', 'workers-ai', 'fixture',
-        ${segment.provider_connection_id}, ${segment.speaker_label}, 0.9, UTC_TIMESTAMP(6))`;
+        ${segment.provider_connection_id}, ${segment.speaker_label}, 0.9, ${now})`;
     yield* sql`INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
-      VALUES (${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, 'live', UTC_TIMESTAMP(6))`;
+      VALUES (${listener.workspace_id}, ${epoch_id}, 0, ${segment.source.sample_start}, ${segment.source.sample_end}, 'live', ${now})`;
     return segment;
   });
 
@@ -131,10 +132,11 @@ export const hear = (...args: Parameters<typeof speak>) =>
 const assignOwners = (workspace_id: WorkspaceId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-      SELECT m.workspace_id, m.id, w.principal_id, 'owner', w.principal_id, UTC_TIMESTAMP(6)
+    yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+      SELECT m.workspace_id, m.id, w.principal_id, 'owner', w.principal_id, ${now}
       FROM meetings m JOIN workspace_members w ON w.workspace_id = m.workspace_id AND w.role IN ('owner', 'admin') AND w.revoked_at IS NULL
-      WHERE m.workspace_id = ${workspace_id}`;
+      WHERE m.workspace_id = ${workspace_id}
+      ON CONFLICT DO NOTHING`;
   });
 
 export const meetingsOf = (workspace_id: WorkspaceId) =>

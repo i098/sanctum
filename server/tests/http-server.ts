@@ -36,10 +36,10 @@ export const serveApiWithDb = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-    const db = dbLayer(database.mysql);
+    const database = yield* Effect.acquireRelease(Effect.promise(() => createTestDatabase()), db => Effect.promise(db.drop));
+    const db = dbLayer(database.db);
     if (options.migrated !== false) yield* Effect.provide(migrate(loadMigrations()), db);
-    const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql, webRoot: options.webRoot }, options.auth, options.overrides));
+    const context = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db, webRoot: options.webRoot }, options.auth, options.overrides));
     const address = Context.get(context, HttpServer.HttpServer).address;
     if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
     return { base: `http://127.0.0.1:${address.port}`, db };

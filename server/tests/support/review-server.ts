@@ -1,6 +1,6 @@
 /**
  * Real API server for the website's Review end-to-end test: `serverLayer` from main.ts on a free
- * port over a disposable migrated database on `SANCTUM_TEST_MYSQL_URL`, seeded with one closed
+ * port over a disposable migrated in-memory database, seeded with one closed
  * meeting whose recording was assembled with a gap, context items, a committed memory revision
  * and an action receipt. A second port serves the in-memory object store behind the URLs the API
  * signs, refusing expired or unsigned ones. The owner signs in with a real browser session, so
@@ -22,9 +22,10 @@ import { loadMigrations, migrate } from '../../src/migrate.ts';
 import { assembleRecording } from '../../src/playback.ts';
 import { SpeechToTextLive } from '../../src/media/providers.ts';
 import { claimed, commitChunk, hear, meetingsOf, seedEpoch, seedListener } from './capture.ts';
-import { createDatabaseOn } from './database.ts';
+import { createTestDatabase } from './database.ts';
 import { seedWorkspace } from './fixtures.ts';
 import { type MemoryObjectStore, memoryObjectStore } from './object-store.ts';
+import { now } from '../../src/sql-dialect.ts';
 
 /** Seconds `[0, 30)` and `[40, 60)` of audio reached storage; the meeting's speech ends at 55 s. */
 const seed = (store: MemoryObjectStore) =>
@@ -55,9 +56,9 @@ const seed = (store: MemoryObjectStore) =>
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, attempts, created_at, updated_at)
       VALUES (${randomUUID()}, ${owner!.workspace_id}, ${meeting_id}, ${owner!.principal.id}, 'gmail-send-email', 'notes-email', '{}', ${randomBytes(32)}, '0.1.4', 'succeeded', 1,
-        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+        ${now}, ${now})`;
     // A returning person: the first-run welcome was done before, so it does not cover Review.
-    yield* sql`UPDATE principals SET onboarded_at = UTC_TIMESTAMP(6) WHERE id = ${owner!.principal.id}`;
+    yield* sql`UPDATE principals SET onboarded_at = ${now} WHERE id = ${owner!.principal.id}`;
     return owner!;
   });
 
@@ -74,9 +75,7 @@ const objectServer = (store: MemoryObjectStore) =>
     response.writeHead(from === undefined ? 200 : 206, { 'content-type': object.contentType, 'accept-ranges': 'bytes', ...range }).end(body.subarray(start, end + 1));
   });
 
-const adminUrl = process.env['SANCTUM_TEST_MYSQL_URL'];
-if (adminUrl === undefined) throw new Error('SANCTUM_TEST_MYSQL_URL must name a MySQL server that allows CREATE/DROP DATABASE');
-const { mysql, drop } = await createDatabaseOn(adminUrl);
+const { db: dbOptions, drop } = await createTestDatabase();
 const store = memoryObjectStore();
 const scope = Effect.runSync(Scope.make());
 const objects = objectServer(store);
@@ -88,10 +87,10 @@ const stop = async () => {
 };
 process.once('SIGTERM', () => void stop());
 try {
-  const db = Layer.merge(dbLayer(mysql), store.layer);
+  const db = Layer.merge(dbLayer(dbOptions), store.layer);
   const owner = seed(store).pipe(Effect.flatMap(({ workspace_id, principal }) => openSession({ workspace_id, principal_id: principal.id })));
   const { token: session, csrf_token: csrf } = await Effect.runPromise(Effect.provide(owner, db));
-  const layer = serverLayer({ apiPort: 0, mysql }, KernelAuthenticatorLive, { media: Layer.merge(SpeechToTextLive, store.layer) });
+  const layer = serverLayer({ apiPort: 0, db: dbOptions }, KernelAuthenticatorLive, { media: Layer.merge(SpeechToTextLive, store.layer) });
   const address = Context.get(await Effect.runPromise(Scope.extend(Layer.build(layer), scope)), HttpServer.HttpServer).address;
   if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
   await new Promise<void>(resolve => objects.listen(0, '127.0.0.1', resolve));
