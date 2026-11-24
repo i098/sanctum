@@ -26,14 +26,15 @@ export async function createEmptyDatabase(): Promise<TestDatabase & { drop: () =
 /** An empty database with every `migrations-d1` file applied. */
 export async function createTestDatabase() {
   const database = await createEmptyDatabase();
-  await migrateDatabase(database);
+  await Effect.runPromise(migrateDatabase(database));
   return database;
 }
 
-/** A fresh migrated database dropped with the scope. */
-export const freshDatabase = Effect.acquireRelease(Effect.promise(() => createTestDatabase()), database => Effect.promise(database.drop));
+/** A fresh empty database dropped with the scope; migrate it with `migrateDatabase`. */
+export const freshDatabase = Effect.acquireRelease(Effect.promise(createEmptyDatabase), database => Effect.promise(database.drop));
 
-export const migrateDatabase = (database: TestDatabase) => Effect.runPromise(Effect.provide(migrate(loadMigrations()), dbLayer(database.db)));
+/** Applies every `migrations-d1` file to `database`. */
+export const migrateDatabase = (database: TestDatabase) => Effect.provide(migrate(loadMigrations()), dbLayer(database.db));
 
 /** Runs `effect` against `database` and resolves with its result. */
 export const runSql = <A, E>(database: TestDatabase, effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.runPromise(Effect.provide(effect, dbLayer(database.db)));
