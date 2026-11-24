@@ -11,6 +11,7 @@ Index of the documentation, grouped by audience. Each page appears once.
 
 - [operations.md](operations.md): Explains how to run, check and recover Sanctum.
 - [release-evidence.md](release-evidence.md): Records what was run as release evidence and which checks remain unrun.
+- [d1-switchover.md](d1-switchover.md): Describes the D1 standby database, its daily sync from TiDB and the switch-over steps.
 
 ## Contributing
 
