@@ -2,7 +2,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { SqlError } from '@effect/sql';
 import { Effect, type Scope } from 'effect';
-import type { DbBackend, DbResult, DbStatement } from './db.ts';
+import type { DbBackend, DbResult, DbStatement } from './db-types.ts';
 
 const sqlError = (cause: unknown) => new SqlError.SqlError({ cause, message: cause instanceof Error ? cause.message : String(cause) });
 

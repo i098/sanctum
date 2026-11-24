@@ -4,7 +4,7 @@
  */
 import { SqlError } from '@effect/sql';
 import { Effect } from 'effect';
-import type { DbBackend, DbResult, DbStatement } from './db.ts';
+import type { DbBackend, DbResult, DbStatement } from './db-types.ts';
 
 const encode = (value: unknown): unknown => {
   if (value instanceof Uint8Array) return { $b: Buffer.from(value).toString('base64') };
