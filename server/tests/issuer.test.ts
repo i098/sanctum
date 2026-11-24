@@ -7,12 +7,12 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Effect, Option, Redacted } from 'effect';
 import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTVerifyGetKey } from 'jose';
-import { createConnection } from 'mysql2/promise';
 import { inject } from 'vitest';
 import { createIssuer, registerSanctumClient } from '../src/issuer.ts';
 import { freshDatabase, migrateDatabase, type TestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
+import { connectAdmin } from './support/mysql-server.ts';
 
 const ORIGIN = 'https://sanctum.fixture.test';
 const ISSUER = `${ORIGIN}/idp`;
@@ -257,7 +257,7 @@ describe('embedded Better Auth issuer', () => {
           return rows[0]!.name;
         }),
       );
-      const admin = yield* Effect.promise(() => createConnection(inject('mysqlAdminUrl')));
+      const admin = yield* Effect.promise(() => connectAdmin(inject('mysqlAdminUrl')));
       const open = () => admin.query('SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE DB = ?', [database]).then(([rows]) => (rows as Array<{ n: number }>)[0]!.n);
       yield* Effect.promise(() => expect.poll(open, { timeout: 5_000 }).toBe(0));
       yield* Effect.promise(() => admin.end());

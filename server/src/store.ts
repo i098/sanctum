@@ -62,7 +62,7 @@ export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId |
     const [row] = yield* sql`SELECT w.seat_limit,
         (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
         (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
-      FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE OF w`;
+      FROM workspaces w WHERE w.id = ${workspace_id} FOR UPDATE`;
     if (row === undefined) return;
     const seats = Schema.decodeUnknownSync(SeatRow)(row);
     const limit = seats.seat_limit ?? fallback;

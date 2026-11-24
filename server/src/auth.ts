@@ -180,7 +180,7 @@ type MemberKey = { readonly workspace_id: WorkspaceId; readonly principal_id: Pr
 const findMember = (input: MemberKey, workspace?: (sql: SqlClient.SqlClient) => Statement.Fragment) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     findOne(MemberRow, sql`SELECT ${memberColumns(sql)}
-      FROM (SELECT ${input.workspace_id} AS workspace_id, ${input.principal_id} AS principal_id) x ${activeMember(sql, workspace?.(sql))}`),
+      FROM (SELECT CAST(${input.workspace_id} AS CHAR(36) CHARACTER SET ascii) COLLATE ascii_bin AS workspace_id, CAST(${input.principal_id} AS CHAR(36) CHARACTER SET ascii) COLLATE ascii_bin AS principal_id) x ${activeMember(sql, workspace?.(sql))}`),
   );
 
 export const resolveAccess = (input: MemberKey) =>

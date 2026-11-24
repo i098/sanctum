@@ -43,7 +43,7 @@ import { authorizeMeeting, requireScope } from './auth.ts';
 import { scopedCacheKey } from './cache.ts';
 import { decodeRows, encodeCursor, getContextChanges, getSource, resolveSources, type VisibleScope, visibleScope, visibleWhere } from './context-changes.ts';
 import { appendContextEvent } from './context-events.ts';
-import { DbJson, DbSafeInt, DbSha256, DbUtc } from './db.ts';
+import { DbJson, DbSafeInt, DbSha256, DbUtc, hasFullText } from './db.ts';
 import { LlmClient } from './llm.ts';
 
 /** Most items one snapshot or search returns; `truncated` reports the rest. */
@@ -123,8 +123,8 @@ export const relevantItems = (workspace_id: string, meeting_id: string, prefixes
   const sql = yield* SqlClient.SqlClient;
   const current = sql`ci.meeting_id = ${meeting_id} AND ci.state <> 'superseded'`;
   const newest = yield* latestItems(workspace_id, current, recent);
-  const against = sql`MATCH(ci.text) AGAINST (${prefixes.map(prefix => `${prefix}*`).join(' ')} IN BOOLEAN MODE)`;
-  const shared = prefixes.length === 0 ? [] : yield* latestItems(workspace_id, sql.and([current, against]), matching, sql`${against} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
+  const against = anyPrefix(sql, prefixes, 'ci.text');
+  const shared = prefixes.length === 0 ? [] : yield* latestItems(workspace_id, sql.and([current, against.must]), matching, sql`${against.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
   const at = (item: ContextItem) => Date.parse(item.event_at ?? item.created_at);
   return [...new Map([...shared, ...newest].map(item => [item.id, item])).values()].sort((a, b) => at(a) - at(b));
  });
@@ -393,6 +393,21 @@ const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, afte
 const decodeSearchCursor = (cursor: string) =>
  Schema.decode(SearchCursor)(Buffer.from(cursor, 'base64url').toString()).pipe(Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })));
 
+/** TiDB has no FULLTEXT: a regex stands in for a MATCH word prefix, at a word start of `column`. */
+const wordPrefix = (sql: SqlClient.SqlClient, column: string, pattern: string) =>
+ sql`REGEXP_LIKE(${sql.literal(column)}, ${`(?i)(^|[^\\p{L}\\p{N}])${pattern}`})`;
+const escapeRegex = (text: string) => text.replace(/[\\.+*?()|[\]{}^$]/g, '\\$&');
+
+/** Items matching any word as a prefix: FULLTEXT `word*` on MySQL, one regex per word on TiDB, where the matched count is the relevance. */
+const anyPrefix = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, columns: string) => {
+ if (hasFullText()) {
+  const against = sql`MATCH(${sql.literal(columns)}) AGAINST (${words.map(word => `${word}*`).join(' ')} IN BOOLEAN MODE)`;
+  return { must: against, relevance: against };
+ }
+ const each = words.map(word => wordPrefix(sql, 'ci.text', escapeRegex(word)));
+ return { must: sql.or(each), relevance: sql.join(' + ', true)(each) };
+};
+
 /**
  * Every word is required: FULLTEXT for three or more characters, `LOCATE` for shorter ones. A hyphenated word matches its
  * spaced form as a phrase and its joined form as a word; `text_joined` (text without hyphens) lets "offsite" find "off-site".
@@ -402,6 +417,10 @@ export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string
  const word = (w: string) => {
   const parts = w.split('-');
   if (parts.length > 1 && parts.every(part => part.length < 3)) return sql`LOCATE(${w}, ci.text) > 0`;
+  if (!hasFullText() && w.length >= 3) {
+   const joined = sql`REGEXP_LIKE(REPLACE(ci.text, '-', ''), ${`(?i)(^|[^\\p{L}\\p{N}])${escapeRegex(parts.join(''))}`})`;
+   return parts.length > 1 ? sql.or([wordPrefix(sql, 'ci.text', parts.map(escapeRegex).join('[^\\p{L}\\p{N}]+')), joined]) : wordPrefix(sql, 'ci.text', escapeRegex(w));
+  }
   // The joined prefix must precede the phrase: MySQL 8.4 boolean mode drops rows matching only the wildcard when a phrase comes first.
   if (parts.length > 1) return sql`MATCH(ci.text, ci.text_joined) AGAINST (${`${parts.join('')}* "${parts.join(' ')}"`} IN BOOLEAN MODE)`;
   return w.length >= 3 ? sql`MATCH(ci.text, ci.text_joined) AGAINST (${`+${w}*`} IN BOOLEAN MODE)` : sql`LOCATE(${w}, ci.text) > 0`;
@@ -445,9 +464,9 @@ Return only refs that appear in the list.`;
 /** Items matching any content word, best FULLTEXT relevance first: `must` selects them and `relevance` ranks them. */
 const candidateMatch = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
  const plain = words.filter(word => word.length >= 3 && !word.includes('-'));
- const fulltext = plain.length === 0 ? null : sql`MATCH(ci.text, ci.text_joined) AGAINST (${plain.map(word => `${word}*`).join(' ')} IN BOOLEAN MODE)`;
+ const fulltext = plain.length === 0 ? null : anyPrefix(sql, plain, 'ci.text, ci.text_joined');
  const other = words.filter(word => !plain.includes(word)).map(word => termFilter(sql, [word]));
- return { must: sql.or([...(fulltext === null ? [] : [fulltext]), ...other]), relevance: fulltext ?? sql`0` };
+ return { must: sql.or([...(fulltext === null ? [] : [fulltext.must]), ...other]), relevance: fulltext?.relevance ?? sql`0` };
 };
 
 /** Each stored text is one JSON string with `<`, `>` and every line break escaped, so it can neither close the data block nor start a line. */
