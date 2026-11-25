@@ -28,7 +28,8 @@ import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
 import { heldUntil } from './lease-claims.ts';
 import { ObjectStore, type ObjectStoreError } from './providers/object-store.ts';
-import { workspaceIsLive, write } from './store.ts';
+import { now } from './sql-dialect.ts';
+import { workspaceIsLive } from './store.ts';
 
 /** Batch reconciliation waits this long after an upload so live finals for the range can land first. */
 const RECONCILE_DELAY_MS = 60_000;
@@ -159,10 +160,11 @@ const heldEpoch = (access: AccessScope, listener_id: ListenerId, manifest: Recor
 const endArchiveAt = (access: AccessScope, manifest: RecordingChunkManifest) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const moved = yield* write(sql`
+    const moved = yield* sql`
       UPDATE capture_epochs SET archive_sample_end = ${manifest.sample_start}
-      WHERE workspace_id = ${access.workspace_id} AND id = ${manifest.epoch_id} AND archive_sample_end > ${manifest.sample_start}`);
-    if (moved.affectedRows === 0) return;
+      WHERE workspace_id = ${access.workspace_id} AND id = ${manifest.epoch_id} AND archive_sample_end > ${manifest.sample_start}
+      RETURNING id`;
+    if (moved.length === 0) return;
     yield* enqueueJob({
       workspace_id: access.workspace_id,
       kind: 'transcript.reconcile',
@@ -202,11 +204,12 @@ const claimManifest = (access: AccessScope, manifest: RecordingChunkManifest, sh
     if (overlap !== undefined) return yield* new HashConflict({ message: 'Another chunk already holds this sequence or source range', existing_sha256: overlap.sha256 });
     const object_key = `workspaces/${access.workspace_id}/epochs/${epoch_id}/tracks/${track}/${sample_start}-${chunk_id}.wav`;
     yield* sql`
-      INSERT IGNORE INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at,
+      INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at,
                                            byte_length, sha256, object_key, upload_state, created_at)
       VALUES (${chunk_id}, ${access.workspace_id}, ${manifest.listener_id}, ${epoch_id}, ${track}, ${manifest.sequence}, ${sample_start},
               ${manifest.sample_count}, ${manifest.sample_rate}, ${Schema.encodeSync(DbUtc)(manifest.captured_at)}, ${manifest.byte_length},
-              ${Buffer.from(sha256, 'hex')}, ${object_key}, 'pending', UTC_TIMESTAMP(6))`;
+              ${Buffer.from(sha256, 'hex')}, ${object_key}, 'pending', ${now})
+      ON CONFLICT DO NOTHING`;
     const [row] = yield* chunksWhere(sql => sql`workspace_id = ${access.workspace_id} AND id = ${chunk_id}`);
     if (row === undefined || row.sha256 !== sha256) {
       return yield* new HashConflict({ message: 'This chunk ID was already uploaded with different content', existing_sha256: row?.sha256 ?? '' });
@@ -226,7 +229,7 @@ export const putChunk = (access: AccessScope, listener_id: ListenerId, chunk_id:
       Effect.gen(function* () {
         if (!(yield* workspaceIsLive(access.workspace_id))) return yield* new Forbidden({ message: 'This workspace is deleted' });
         yield* sql`
-          UPDATE recording_chunks SET upload_state = 'committed', committed_at = UTC_TIMESTAMP(6)
+          UPDATE recording_chunks SET upload_state = 'committed', committed_at = ${now}
           WHERE workspace_id = ${access.workspace_id} AND id = ${chunk_id} AND upload_state = 'pending'`;
         yield* enqueueJob({
           workspace_id: access.workspace_id,
