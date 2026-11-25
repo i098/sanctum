@@ -9,6 +9,7 @@ import { JobFailure, MeetingId, type WorkspaceId } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
 import { summarizeMeeting } from './extraction.ts';
 import { loadMeeting, meetingEvidence } from './meeting-evidence.ts';
+import { now } from './sql-dialect.ts';
 
 /** Enough final transcript for any meeting the extraction role can summarize in one request. */
 const MAX_SEGMENTS = 5_000;
@@ -18,7 +19,7 @@ const Payload = Schema.Struct({ meeting_id: MeetingId });
 
 const markFailed = (workspace_id: WorkspaceId, meeting_id: MeetingId) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
-    sql`UPDATE meetings SET processing = JSON_SET(processing, '$.notes', 'failed'), updated_at = UTC_TIMESTAMP(6)
+    sql`UPDATE meetings SET processing = json_set(processing, '$.notes', 'failed'), updated_at = ${now}
       WHERE workspace_id = ${workspace_id} AND id = ${meeting_id}`,
   );
 
@@ -38,12 +39,11 @@ export const summarizeNotes = (job: { readonly workspace_id: WorkspaceId; readon
     const stored = { ...notes, boundary_revision: meeting.boundary_revision, generated_at: new Date().toISOString() };
     // The notes title names a meeting nobody titled; a title already set is never replaced.
     const updated = yield* sql`UPDATE meetings SET notes = ${JSON.stringify(stored)}, notes_revision = notes_revision + 1,
-        title = COALESCE(title, NULLIF(${notes.title.slice(0, 300)}, '')),
-        processing = JSON_SET(processing, '$.notes', 'complete'), updated_at = UTC_TIMESTAMP(6)
-      WHERE workspace_id = ${job.workspace_id} AND id = ${meeting.id} AND boundary_revision = ${meeting.boundary_revision}`.raw;
-    const affected = typeof updated === 'object' && updated !== null && 'affectedRows' in updated ? Number(updated.affectedRows) : 0;
+        title = coalesce(title, nullif(${notes.title.slice(0, 300)}, '')),
+        processing = json_set(processing, '$.notes', 'complete'), updated_at = ${now}
+      WHERE workspace_id = ${job.workspace_id} AND id = ${meeting.id} AND boundary_revision = ${meeting.boundary_revision} RETURNING id`;
     // A boundary change during summarization re-finalizes the meeting, which schedules fresh notes.
-    if (affected === 0) return { status: 'succeeded', result: { skipped: 'boundaries changed during summarization' } } as const;
+    if (updated.length === 0) return { status: 'succeeded', result: { skipped: 'boundaries changed during summarization' } } as const;
     return { status: 'succeeded', result: { meeting_id: meeting.id, points: notes.sections.reduce((total, section) => total + section.points.length, 0) } } as const;
   }).pipe(
     Effect.catchTags({
