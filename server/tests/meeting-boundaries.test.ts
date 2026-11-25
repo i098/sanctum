@@ -9,6 +9,7 @@ import { closeMeeting, finalizeMeeting, getMeeting, listMeetings, meetingRanges,
 import { splitMeeting } from '../src/meeting-corrections.ts';
 import { claimed, commitChunk, hear, jobsOf, type Listener, meetingsOf, RATE, rangesOf, seedConnection, seedEpoch, seedGroup, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -44,7 +45,7 @@ const deliverRecoveredFinals = (listener: Listener, segments: TranscriptSegment[
       const [recovered] = yield* meetingsOf(listener.workspace_id);
       yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: recovered!.id }));
       yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
-        VALUES (UUID(), ${listener.workspace_id}, ${recovered!.id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+        VALUES (${randomUUID()}, ${listener.workspace_id}, ${recovered!.id}, 1, 'cut-1.wav', ${Buffer.alloc(32)}, 1, ${RATE}, 1, '[]', ${now})`;
       yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
     }
     yield* onFinalSegments({ ...listener, segments: delivery === 'reverse' ? [segments[0]!] : segments.slice(1) });
@@ -114,7 +115,7 @@ describe('automatic meeting lifecycle', () => {
         const sql = yield* SqlClient.SqlClient;
         const action_id = randomUUID();
         yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, title, created_at, updated_at)
-          VALUES (${action_id}, ${listener.workspace_id}, ${id}, ${device.principal.id}, 'gmail-send-email', 'k1', '{}', ${Buffer.alloc(32)}, '1', 'queued', 'Email the notes', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+          VALUES (${action_id}, ${listener.workspace_id}, ${id}, ${device.principal.id}, 'gmail-send-email', 'k1', '{}', ${Buffer.alloc(32)}, '1', 'queued', 'Email the notes', ${now}, ${now})`;
         const listener_id = ListenerId.make(listener.listener_id);
         expect(yield* listenerFeed(device, listener_id)).toEqual({ meeting_id: id, actions: [{ action_id, action_key: 'gmail-send-email', state: 'queued', title: 'Email the notes' }] });
         expect(yield* listenerFeed(owner, listener_id)).toEqual({ meeting_id: null, actions: [] });
@@ -311,7 +312,7 @@ describe('automatic meeting lifecycle', () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { listener, epoch } = yield* setup;
-        const refresh = sql<{ work_key: string; due: string }>`SELECT work_key, CAST(available_at <= UTC_TIMESTAMP(6) AS CHAR) AS due
+        const refresh = sql<{ work_key: string; due: string }>`SELECT work_key, CAST(available_at <= ${now} AS CHAR) AS due
           FROM jobs WHERE workspace_id = ${listener.workspace_id} AND kind = 'context.refresh'`;
         yield* hear(listener, epoch, 0, 5, 'we should review the budget numbers today');
         yield* hear(listener, epoch, 5, 10, 'the travel line is over by ten percent');
@@ -399,10 +400,10 @@ describe('automatic meeting lifecycle', () => {
         const id = MeetingId.make(meeting!.id);
         const action = randomUUID();
         yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, created_at, updated_at, version)
-          VALUES (${action}, ${listener.workspace_id}, ${id}, ${owner.principal.id}, 'gmail-send', 'k1', '{}', ${Buffer.alloc(32)}, 'running', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
+          VALUES (${action}, ${listener.workspace_id}, ${id}, ${owner.principal.id}, 'gmail-send', 'k1', '{}', ${Buffer.alloc(32)}, 'running', ${now}, ${now}, '0.1.0')`;
         yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
         const closed = yield* closeMeeting(owner, id);
-        expect(closed).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });
+        expect(closed).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40.000000Z' });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 40 * RATE }]);
         const [actionRow] = yield* sql<{ state: string }>`SELECT state FROM actions WHERE id = ${action}`;
         expect(actionRow!.state).toBe('running');
@@ -486,7 +487,7 @@ describe('automatic meeting lifecycle', () => {
         const laptop = yield* seedListener(device!, { group });
         const roomEpoch = yield* seedEpoch(room);
         yield* hear(room, roomEpoch, 0, 30, 'room and laptop share this meeting');
-        yield* sql`UPDATE capture_groups SET lease_listener_id = ${laptop.listener_id}, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL 45 SECOND WHERE id = ${group}`;
+        yield* sql`UPDATE capture_groups SET lease_listener_id = ${laptop.listener_id}, lease_expires_at = ${addSeconds(now, 45)} WHERE id = ${group}`;
         yield* onCaptureEnded({ workspace_id: room.workspace_id, listener_id: room.listener_id, epoch_id: roomEpoch, track: 0, sample_end: 31 * RATE, reason: 'interrupted' });
         const laptopEpoch = yield* seedEpoch(laptop, '2026-09-28 16:00:32.000000');
         yield* hear(laptop, laptopEpoch, 0, 5, 'the laptop picks up where the room left off');
@@ -524,11 +525,11 @@ describe('automatic meeting lifecycle', () => {
         const [meeting] = yield* meetingsOf(listener.workspace_id);
         const id = MeetingId.make(meeting!.id);
         // Pause ended the epoch with 40 s accepted; a later archive epoch that ended afterwards holds none of this meeting.
-        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE}, ended_at = UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE, end_reason = 'pause' WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE}, ended_at = ${addSeconds(now, -60)}, end_reason = 'pause' WHERE id = ${epoch}`;
         const archive = yield* seedEpoch(listener, '2026-09-28 17:00:00.000000', 99 * RATE);
-        yield* sql`UPDATE capture_epochs SET ended_at = UTC_TIMESTAMP(6), end_reason = 'pause' WHERE id = ${archive}`;
+        yield* sql`UPDATE capture_epochs SET ended_at = ${now}, end_reason = 'pause' WHERE id = ${archive}`;
         yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE id = ${listener.listener_id}`;
-        expect(yield* closeMeeting(owner, id)).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });
+        expect(yield* closeMeeting(owner, id)).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40.000000Z' });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 40 * RATE }]);
         yield* hear(listener, epoch, 33, 39, 'and the final segment arrives after the end');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
@@ -545,7 +546,7 @@ describe('automatic meeting lifecycle', () => {
     yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
     const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
     yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
-    expect(yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 50 * RATE })).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40Z' });
+    expect(yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 50 * RATE })).toMatchObject({ state: 'closing', ended_at: '2026-09-28T16:00:40.000000Z' });
     return { owner, listener, epoch, id };
   });
 
@@ -556,22 +557,22 @@ describe('automatic meeting lifecycle', () => {
         const { owner, listener, epoch, id } = yield* endWhileLive;
         yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
-        expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closing', boundary_revision: 1, ended_at: '2026-09-28T16:00:40Z' });
+        expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closing', boundary_revision: 1, ended_at: '2026-09-28T16:00:40.000000Z' });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 46 * RATE }]);
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
         // The worker finished the close's finalize; a late final then finalizes the meeting again (the #68 path).
         yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
-          VALUES (UUID(), ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+          VALUES (${randomUUID()}, ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', ${Buffer.alloc(32)}, 1, ${RATE}, 1, '[]', ${now})`;
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 47, 49, 'and copy the finance lead on the report');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closed']);
-        expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closed', boundary_revision: 2, ended_at: '2026-09-28T16:00:40Z', processing: { recording: 'pending' } });
-        expect(yield* sql`SELECT COUNT(*) AS n FROM meeting_recordings r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision WHERE m.id = ${id}`).toEqual([{ n: '0' }]);
+        expect(yield* getMeeting(owner, id)).toMatchObject({ state: 'closed', boundary_revision: 2, ended_at: '2026-09-28T16:00:40.000000Z', processing: { recording: 'pending' } });
+        expect(yield* sql`SELECT COUNT(*) AS n FROM meeting_recordings r JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision WHERE m.id = ${id}`).toEqual([{ n: 0 }]);
         expect(yield* sql`SELECT boundary_revision, operation, actor_principal_id FROM boundary_events WHERE meeting_id = ${id} AND boundary_revision = 2`).toEqual([
           { boundary_revision: 2, operation: 'close', actor_principal_id: null },
         ]);
         expect(yield* sql`SELECT change_kind, source_revision FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([
-          { change_kind: 'meeting_boundary_changed', source_revision: '2' },
+          { change_kind: 'meeting_boundary_changed', source_revision: 2 },
         ]);
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 49 * RATE }]);
         const pending = (yield* jobsOf(listener.workspace_id)).filter(job => job.kind === 'meeting.finalize' && job.status === 'pending');
@@ -588,7 +589,7 @@ describe('automatic meeting lifecycle', () => {
         const { owner, listener, epoch, id } = yield* endWhileLive;
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
         yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
-          VALUES (UUID(), ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+          VALUES (${randomUUID()}, ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', ${Buffer.alloc(32)}, 1, ${RATE}, 1, '[]', ${now})`;
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         const segments = [
           yield* speak(listener, epoch, 41, 46, 'Alice will fish the billing report'),
@@ -600,7 +601,7 @@ describe('automatic meeting lifecycle', () => {
         expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 50 * RATE }]);
         expect(yield* sql`SELECT boundary_revision FROM boundary_events WHERE meeting_id = ${id} AND operation = 'close' ORDER BY boundary_revision`).toEqual([{ boundary_revision: 1 }, { boundary_revision: 2 }]);
-        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '1' }]);
+        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: 1 }]);
       }),
       { migrated: true },
     ),
@@ -613,7 +614,7 @@ describe('automatic meeting lifecycle', () => {
         const { owner, listener, epoch, id } = yield* endWhileLive;
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
         yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
-          VALUES (UUID(), ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+          VALUES (${randomUUID()}, ${listener.workspace_id}, ${id}, 1, 'cut-1.wav', ${Buffer.alloc(32)}, 1, ${RATE}, 1, '[]', ${now})`;
         yield* sql`UPDATE jobs SET status = 'pending', rearmed = 0 WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
         expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2, processing: { recording: 'pending' } });
@@ -621,11 +622,11 @@ describe('automatic meeting lifecycle', () => {
         yield* hear(listener, epoch, 47, 49, 'and copy the finance lead on the report');
         expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 2 });
         yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
-          VALUES (UUID(), ${listener.workspace_id}, ${id}, 2, 'cut-2.wav', UNHEX(REPEAT('00', 32)), 1, ${RATE}, 1, '[]', UTC_TIMESTAMP(6))`;
+          VALUES (${randomUUID()}, ${listener.workspace_id}, ${id}, 2, 'cut-2.wav', ${Buffer.alloc(32)}, 1, ${RATE}, 1, '[]', ${now})`;
         yield* hear(listener, epoch, 49, 50, 'then we are done for today');
         expect(yield* getMeeting(owner, id)).toMatchObject({ boundary_revision: 3 });
         expect(yield* rangesOf(id)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 50 * RATE }]);
-        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: '2' }]);
+        expect(yield* sql`SELECT COUNT(*) AS n FROM context_events WHERE meeting_id = ${id} AND change_kind = 'meeting_boundary_changed'`).toEqual([{ n: 2 }]);
       }),
       { migrated: true },
     ),
@@ -651,7 +652,7 @@ describe('automatic meeting lifecycle', () => {
         const { device, listener, epoch } = yield* setup;
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
-        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE}, ended_at = UTC_TIMESTAMP(6), end_reason = 'pause' WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE}, ended_at = ${now}, end_reason = 'pause' WHERE id = ${epoch}`;
         yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE id = ${listener.listener_id}`;
         yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 50 * RATE });
         yield* hear(listener, epoch, 41, 46, 'Alice will fish the billing report');
@@ -689,7 +690,7 @@ describe('automatic meeting lifecycle', () => {
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
         yield* sql`UPDATE capture_epochs SET live_sample_end = ${40 * RATE} WHERE id = ${epoch}`;
         yield* closeMeeting(owner, id);
-        yield* sql`UPDATE capture_epochs SET live_sample_end = ${50 * RATE}, ended_at = UTC_TIMESTAMP(6), end_reason = 'pause' WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET live_sample_end = ${50 * RATE}, ended_at = ${now}, end_reason = 'pause' WHERE id = ${epoch}`;
         yield* hear(listener, epoch, 41, 46, "good morning everyone, let's go over the hiring plan");
         const meetings = yield* meetingsOf(listener.workspace_id);
         expect(meetings.map(row => row.state)).toEqual(['closing', 'provisional']);
@@ -722,8 +723,8 @@ describe('automatic meeting lifecycle', () => {
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
         for (const writer of [owner, agent]) {
-          yield* sql`INSERT IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-            VALUES (${writer.workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, UTC_TIMESTAMP(6))`;
+          yield* sql`INSERT OR IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+            VALUES (${writer.workspace_id}, ${id}, ${writer.principal.id}, 'write', ${writer.principal.id}, ${now})`;
         }
         for (const caller of [owner, agent]) {
           for (const epoch_id of [epoch, CaptureEpochId.make(randomUUID())]) {
@@ -745,7 +746,7 @@ describe('automatic meeting lifecycle', () => {
         const { device, listener, epoch } = yield* setup;
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
-        yield* sql`UPDATE capture_epochs SET started_at = UTC_TIMESTAMP(6) - INTERVAL 100 SECOND WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET started_at = ${addSeconds(now, -100)} WHERE id = ${epoch}`;
         yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 10_000 * RATE });
         const [row] = yield* sql<{ end_fence_sample: string }>`SELECT end_fence_sample FROM capture_epochs WHERE id = ${epoch}`;
         expect(Number(row!.end_fence_sample)).toBeGreaterThanOrEqual(105 * RATE);
@@ -764,9 +765,9 @@ describe('automatic meeting lifecycle', () => {
         const { device, listener, epoch } = yield* setup;
         yield* hear(listener, epoch, 0, 10, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
-        yield* sql`UPDATE capture_epochs SET started_at = UTC_TIMESTAMP(6) - INTERVAL 60 SECOND, live_sample_end = ${10 * RATE} WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET started_at = ${addSeconds(now, -60)}, live_sample_end = ${10 * RATE} WHERE id = ${epoch}`;
         yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 45 * RATE });
-        expect(yield* sql`SELECT end_fence_sample FROM capture_epochs WHERE id = ${epoch}`).toEqual([{ end_fence_sample: String(45 * RATE) }]);
+        expect(yield* sql`SELECT end_fence_sample FROM capture_epochs WHERE id = ${epoch}`).toEqual([{ end_fence_sample: 45 * RATE }]);
         yield* hear(listener, epoch, 20, 30, 'Alice will fish the billing report');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closing']);
         yield* hear(listener, epoch, 50, 55, "good morning everyone, let's go over the hiring plan");
@@ -784,7 +785,7 @@ describe('automatic meeting lifecycle', () => {
         yield* hear(listener, epoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
         expect(yield* closeMeeting(device, id, { epoch_id: CaptureEpochId.make(randomUUID()), fence_sample: 5 * RATE })).toMatchObject({ state: 'closing' });
-        expect(yield* sql`SELECT end_fence_from_sample, end_fence_sample > 0 AS fenced FROM capture_epochs WHERE id = ${epoch}`).toEqual([{ end_fence_from_sample: '0', fenced: '1' }]);
+        expect(yield* sql`SELECT end_fence_from_sample, end_fence_sample > 0 AS fenced FROM capture_epochs WHERE id = ${epoch}`).toEqual([{ end_fence_from_sample: 0, fenced: 1 }]);
       }),
       { migrated: true },
     ),
@@ -819,9 +820,9 @@ describe('automatic meeting lifecycle', () => {
         yield* hear(first, firstEpoch, 0, 30, 'please send the summary to the whole team');
         const id = MeetingId.make((yield* meetingsOf(first.workspace_id))[0]!.id);
         yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-          VALUES (${laptop!.workspace_id}, ${id}, ${laptop!.principal.id}, 'write', ${laptop!.principal.id}, UTC_TIMESTAMP(6))`;
+          VALUES (${laptop!.workspace_id}, ${id}, ${laptop!.principal.id}, 'write', ${laptop!.principal.id}, ${now})`;
         expect(yield* closeMeeting(laptop!, id, { epoch_id: secondEpoch, fence_sample: 5 * RATE })).toMatchObject({ state: 'closing' });
-        expect(yield* sql`SELECT id, end_fence_sample FROM capture_epochs WHERE id = ${secondEpoch}`).toEqual([{ id: secondEpoch, end_fence_sample: String(5 * RATE) }]);
+        expect(yield* sql`SELECT id, end_fence_sample FROM capture_epochs WHERE id = ${secondEpoch}`).toEqual([{ id: secondEpoch, end_fence_sample: 5 * RATE }]);
         expect(yield* sql`SELECT id FROM capture_epochs WHERE end_fence_from_sample = 0 AND id = ${firstEpoch}`).toEqual([{ id: firstEpoch }]);
       }),
       { migrated: true },
@@ -897,7 +898,7 @@ describe('automatic meeting lifecycle', () => {
         yield* sql`UPDATE capture_epochs SET live_sample_end = ${440 * RATE} WHERE id = ${epoch}`;
         yield* closeMeeting(device, id, { epoch_id: epoch, fence_sample: 440 * RATE });
         expect(yield* sql`SELECT end_fence_from_sample, end_fence_sample FROM capture_epochs WHERE id = ${epoch}`).toEqual([
-          { end_fence_from_sample: String(400 * RATE), end_fence_sample: String(440 * RATE) },
+          { end_fence_from_sample: 400 * RATE, end_fence_sample: 440 * RATE },
         ]);
         yield* hear(listener, epoch, 10, 15, "good morning everyone, let's go over the hiring plan");
         const meetings = yield* meetingsOf(listener.workspace_id);
@@ -919,7 +920,7 @@ describe('automatic meeting lifecycle', () => {
         yield* closeMeeting(device, morning, { epoch_id: epoch, fence_sample: 30 * RATE });
         yield* hear(listener, epoch, 5_000, 5_030, "good morning everyone, let's go over the hiring plan");
         const afternoon = MeetingId.make((yield* meetingsOf(listener.workspace_id))[1]!.id);
-        yield* sql`UPDATE capture_epochs SET started_at = UTC_TIMESTAMP(6) - INTERVAL 6000 SECOND, live_sample_end = ${5_040 * RATE} WHERE id = ${epoch}`;
+        yield* sql`UPDATE capture_epochs SET started_at = ${addSeconds(now, -6000)}, live_sample_end = ${5_040 * RATE} WHERE id = ${epoch}`;
         yield* closeMeeting(device, afternoon, { epoch_id: epoch, fence_sample: 5_040 * RATE });
         yield* hear(listener, epoch, 2_000, 2_005, 'Alice will fish the billing report');
         expect(yield* rangesOf(morning)).toEqual([{ epoch_id: epoch, sample_start: 0, sample_end: 30 * RATE }]);
@@ -948,7 +949,7 @@ describe('automatic meeting lifecycle', () => {
           { epoch_id: epoch, sample_start: 0, sample_end: 27_342 },
           { epoch_id: epoch, sample_start: 28_665, sample_end: 30 * RATE },
         ]);
-        expect(yield* getMeeting(device, id)).toMatchObject({ started_at: '2026-09-28T16:00:00Z' });
+        expect(yield* getMeeting(device, id)).toMatchObject({ started_at: '2026-09-28T16:00:00.000000Z' });
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: id }));
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 27_500 / RATE, 28_000 / RATE, 'and one more thing about the plan');
@@ -996,7 +997,7 @@ describe('automatic meeting lifecycle', () => {
         yield* sql`UPDATE jobs SET status = 'succeeded' WHERE workspace_id = ${listener.workspace_id} AND kind = 'meeting.finalize'`;
         yield* hear(listener, epoch, 0, 27_342 / RATE, 'Good morning to you.');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.state)).toEqual(['closed']);
-        expect(yield* getMeeting(device, id)).toMatchObject({ state: 'closed', started_at: '2026-09-28T16:00:00Z' });
+        expect(yield* getMeeting(device, id)).toMatchObject({ state: 'closed', started_at: '2026-09-28T16:00:00.000000Z' });
         expect(yield* rangesOf(id)).toEqual([
           { epoch_id: epoch, sample_start: 0, sample_end: 27_342 },
           { epoch_id: epoch, sample_start: 28_665, sample_end: 30 * RATE },
@@ -1027,13 +1028,13 @@ describe('automatic meeting lifecycle', () => {
         const transcribed = ({ listener, epoch }: Talked, from: number, to: number) =>
           Effect.gen(function* () {
             yield* sql`INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
-              VALUES (${listener.workspace_id}, ${epoch}, 0, ${from * RATE}, ${to * RATE}, 'live', UTC_TIMESTAMP(6))`;
-            yield* sql`UPDATE capture_epochs SET live_sample_end = GREATEST(live_sample_end, ${to * RATE}) WHERE id = ${epoch}`;
+              VALUES (${listener.workspace_id}, ${epoch}, 0, ${from * RATE}, ${to * RATE}, 'live', ${now})`;
+            yield* sql`UPDATE capture_epochs SET live_sample_end = max(live_sample_end, ${to * RATE}) WHERE id = ${epoch}`;
           });
         /** The listener paused `ago` minutes back with `accepted` seconds of audio accepted. */
         const paused = ({ listener, epoch }: Talked, ago: number, accepted: number) =>
           Effect.gen(function* () {
-            yield* sql`UPDATE capture_epochs SET live_sample_end = ${accepted * RATE}, ended_at = UTC_TIMESTAMP(6) - INTERVAL ${ago * MIN} SECOND, end_reason = 'pause' WHERE id = ${epoch}`;
+            yield* sql`UPDATE capture_epochs SET live_sample_end = ${accepted * RATE}, ended_at = ${addSeconds(now, -ago * MIN)}, end_reason = 'pause' WHERE id = ${epoch}`;
             yield* sql`UPDATE listeners SET current_epoch_id = NULL, state = 'paused' WHERE id = ${listener.listener_id}`;
           });
         /** Committed 10-second recording chunks with sequence numbers `[from, to)`. */
@@ -1080,8 +1081,8 @@ describe('automatic meeting lifecycle', () => {
         ]);
         const [closed] = yield* sql<{ id: string }>`SELECT id FROM meetings WHERE listener_id = ${silent.listener.listener_id}`;
         expect(yield* rangesOf(closed!.id)).toEqual([{ epoch_id: silent.epoch, sample_start: 0, sample_end: 30 * RATE }]);
-        const [event] = yield* sql<{ evidence: string }>`SELECT JSON_EXTRACT(decision, '$.evidence') AS evidence FROM boundary_events WHERE meeting_id = ${closed!.id} AND operation = 'close'`;
-        expect(event!.evidence).toEqual(['idle_close']);
+        const [event] = yield* sql<{ evidence: string }>`SELECT json_extract(decision, '$.evidence') AS evidence FROM boundary_events WHERE meeting_id = ${closed!.id} AND operation = 'close'`;
+        expect(JSON.parse(event!.evidence)).toEqual(['idle_close']);
         // Same final work as an explicit close, scheduled once per meeting even when the sweep runs again.
         yield* sweepIdleMeetings();
         expect((yield* jobsOf(device.workspace_id)).filter(job => job.kind !== 'context.refresh')).toHaveLength(2);
