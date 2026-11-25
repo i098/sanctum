@@ -34,10 +34,11 @@ import {
   selectMeeting,
   type TimedRange,
 } from './meeting-store.ts';
+import { now } from './sql-dialect.ts';
 
-const lockedAtRevision = (access: AccessScope, meeting_id: MeetingId, expected: number) =>
+const atRevision = (access: AccessScope, meeting_id: MeetingId, expected: number) =>
   Effect.gen(function* () {
-    const found = yield* selectMeeting(access.workspace_id, meeting_id, true);
+    const found = yield* selectMeeting(access.workspace_id, meeting_id);
     if (found._tag === 'None') return yield* Effect.die(new Error(`meeting ${meeting_id} vanished after authorization`));
     if (found.value.boundary_revision !== expected) {
       return yield* new RevisionConflict({ message: `Meeting ${meeting_id} is at boundary revision ${found.value.boundary_revision}`, current_revision: found.value.boundary_revision });
@@ -73,9 +74,9 @@ const copyMeeting = (row: MeetingRow, input: { readonly state: MeetingRow['state
     const id = MeetingIdSchema.make(randomUUID());
     yield* sql`INSERT INTO meetings (id, workspace_id, capture_group_id, listener_id, state, title, timezone, started_at, ended_at, boundary_revision, visibility, processing, created_at, updated_at)
       SELECT ${id}, workspace_id, capture_group_id, listener_id, ${input.state}, title, timezone, ${dbTime(input.started_ms)}, ${input.ended_at}, 1, visibility, processing,
-        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) FROM meetings WHERE id = ${row.id}`;
+        ${now}, ${now} FROM meetings WHERE id = ${row.id}`;
     yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-      SELECT workspace_id, ${id}, principal_id, access, granted_by, UTC_TIMESTAMP(6) FROM meeting_access WHERE meeting_id = ${row.id}`;
+      SELECT workspace_id, ${id}, principal_id, access, granted_by, ${now} FROM meeting_access WHERE meeting_id = ${row.id}`;
     return id;
   });
 
@@ -91,7 +92,7 @@ export const splitMeeting = (access: AccessScope, meeting_id: MeetingId, input: 
     yield* authorizeMeeting(access, meeting_id, 'write');
     const later_id = yield* sql.withTransaction(
       Effect.gen(function* () {
-        const row = yield* lockedAtRevision(access, meeting_id, input.expected_revision);
+        const row = yield* atRevision(access, meeting_id, input.expected_revision);
         const ranges = yield* currentRanges(access.workspace_id, meeting_id);
         const anchor = ranges.find(range => range.epoch_id === input.at.epoch_id);
         const splitMs = anchor === undefined ? Number.NaN : anchor.start_ms + ((input.at.sample - anchor.sample_start) * 1000) / anchor.epoch.sample_rate;
@@ -102,9 +103,11 @@ export const splitMeeting = (access: AccessScope, meeting_id: MeetingId, input: 
         const revision = row.boundary_revision + 1;
         const open = OPEN_STATES.includes(row.state);
         const earlierEnd = Math.max(...earlier.map(range => range.start_ms + ((range.sample_end - range.sample_start) * 1000) / range.epoch.sample_rate));
-        const later_id = yield* copyMeeting(row, { state: row.state, started_ms: Math.min(...later.map(range => Math.max(range.start_ms, splitMs))), ended_at: row.ended_at === null ? null : row.ended_at.slice(0, -1).replace('T', ' ') });
+        // A transaction cannot read after its first write.
+        const linked_actions = yield* linkedActions(access, [meeting_id]);
+        const later_id = yield* copyMeeting(row, { state: row.state, started_ms: Math.min(...later.map(range => Math.max(range.start_ms, splitMs))), ended_at: row.ended_at === null ? null : dbTime(Date.parse(row.ended_at)) });
         yield* sql`UPDATE meetings SET boundary_revision = ${revision}, state = ${open || row.state === 'interrupted' ? 'closing' : row.state},
-          ended_at = ${dbTime(earlierEnd)}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${meeting_id}`;
+          ended_at = ${dbTime(earlierEnd)}, updated_at = ${now} WHERE id = ${meeting_id}`;
         yield* insertRanges(access.workspace_id, meeting_id, revision, earlier.map(source));
         yield* insertRanges(access.workspace_id, later_id, 1, later.map(source));
         const decision = {
@@ -115,7 +118,7 @@ export const splitMeeting = (access: AccessScope, meeting_id: MeetingId, input: 
           uncertainty: 0,
           earlier_meeting_id: meeting_id,
           later_meeting_id: later_id,
-          linked_actions: yield* linkedActions(access, [meeting_id]),
+          linked_actions,
         };
         yield* recordBoundary({ meeting: row, revision, operation: 'split', decision, actor: access.principal.id });
         yield* recordBoundary({ meeting: { id: later_id, workspace_id: access.workspace_id }, revision: 1, operation: 'split', decision, actor: access.principal.id });
@@ -181,7 +184,7 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
     yield* sql.withTransaction(
       Effect.gen(function* () {
         const [first, second] = [target, from].sort((a, b) => a.meeting_id.localeCompare(b.meeting_id));
-        const locked = [yield* lockedAtRevision(access, first!.meeting_id, first!.expected_revision), yield* lockedAtRevision(access, second!.meeting_id, second!.expected_revision)];
+        const locked = [yield* atRevision(access, first!.meeting_id, first!.expected_revision), yield* atRevision(access, second!.meeting_id, second!.expected_revision)];
         const into = locked.find(row => row.id === target.meeting_id)!;
         const folded = locked.find(row => row.id === from.meeting_id)!;
         const open = yield* mergeable(into, folded);
@@ -191,9 +194,10 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
         }
         const ended = open ? null : dbTime(Math.max(...ranges.map(range => range.end_ms)));
         const revision = into.boundary_revision + 1;
+        const linked_actions = yield* linkedActions(access, [into.id, folded.id]);
         yield* sql`UPDATE meetings SET boundary_revision = ${revision}, state = ${open ? 'active' : 'closing'}, ended_at = ${ended},
-          started_at = ${dbTime(Math.min(...ranges.map(range => range.start_ms)))}, updated_at = UTC_TIMESTAMP(6) WHERE id = ${into.id}`;
-        yield* sql`UPDATE meetings SET boundary_revision = ${folded.boundary_revision + 1}, state = 'closed', updated_at = UTC_TIMESTAMP(6) WHERE id = ${folded.id}`;
+          started_at = ${dbTime(Math.min(...ranges.map(range => range.start_ms)))}, updated_at = ${now} WHERE id = ${into.id}`;
+        yield* sql`UPDATE meetings SET boundary_revision = ${folded.boundary_revision + 1}, state = 'closed', updated_at = ${now} WHERE id = ${folded.id}`;
         yield* insertRanges(access.workspace_id, into.id, revision, coalesce(ranges.map(source)));
         const decision = {
           decision: 'continue' as const,
@@ -203,7 +207,7 @@ export const mergeMeetings = (access: AccessScope, input: MergeMeetings) =>
           uncertainty: 0,
           target_meeting_id: into.id,
           merged_meeting_id: folded.id,
-          linked_actions: yield* linkedActions(access, [into.id, folded.id]),
+          linked_actions,
         };
         yield* recordBoundary({ meeting: into, revision, operation: 'merge', decision, actor: access.principal.id });
         yield* recordBoundary({ meeting: folded, revision: folded.boundary_revision + 1, operation: 'merge', decision, actor: access.principal.id });

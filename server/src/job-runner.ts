@@ -1,9 +1,8 @@
 /**
- * Worker side of the job ledger: a claim is one short transaction (`SELECT ... FOR UPDATE SKIP
- * LOCKED`, then lease token, generation and attempt written before commit); handlers run outside
- * any transaction while the lease is renewed; completion only lands if token and generation still
- * match. Deadlocks and lock wait timeouts retry a bounded number of times; handler failures retry
- * with capped backoff.
+ * Worker side of the job ledger: a claim is one `UPDATE ... RETURNING` statement that picks the
+ * oldest due row and writes lease token, generation and attempt, so two claimers never take one
+ * job; handlers run outside any transaction while the lease is renewed; completion only lands if
+ * token and generation still match. Handler failures retry with capped backoff.
  */
 import { randomUUID } from 'node:crypto';
 import { SqlClient, SqlError, SqlSchema } from '@effect/sql';
@@ -11,24 +10,14 @@ import { JobFailure, JobId, JobKind, PrincipalId, WorkspaceId } from '@sanctum/c
 import { Cause, Effect, Exit, Option, Schedule, Schema } from 'effect';
 import { resolveAccess } from './auth.ts';
 import { engineeringDefaults } from './config.ts';
-import { DbSafeInt, mysqlErrno } from './db.ts';
+import { DbJson, DbSafeInt } from './db.ts';
 import type { ClaimedJob, JobHandlers, JobOutcome } from './job-types.ts';
 import { later, REQUESTER_REFUSED } from './jobs.ts';
 import { sweepLapsedListeners } from './listeners.ts';
 import { sweepIdleMeetings } from './meetings.ts';
-import { write } from './store.ts';
+import { now } from './sql-dialect.ts';
 
-const ER_LOCK_WAIT_TIMEOUT = 1205;
-const ER_LOCK_DEADLOCK = 1213;
 const MAX_BACKOFF_MS = 5 * 60_000;
-
-/** InnoDB rolled the whole transaction back; rerunning it is safe. */
-export const retryDeadlocks = <A, R>(transaction: Effect.Effect<A, SqlError.SqlError, R>) =>
-  Effect.retry(transaction, {
-    schedule: Schedule.jittered(Schedule.exponential('10 millis')),
-    times: 4,
-    while: error => [ER_LOCK_DEADLOCK, ER_LOCK_WAIT_TIMEOUT].includes(mysqlErrno(error) ?? 0),
-  });
 
 export interface Lease {
   readonly job: ClaimedJob;
@@ -40,7 +29,7 @@ const ClaimedRow = Schema.Struct({
   workspace_id: WorkspaceId,
   kind: JobKind,
   work_key: Schema.String,
-  payload: Schema.Unknown,
+  payload: DbJson(Schema.Unknown),
   requested_by: Schema.NullOr(PrincipalId),
   source_revision: Schema.NullOr(DbSafeInt),
   attempt: DbSafeInt,
@@ -48,33 +37,22 @@ const ClaimedRow = Schema.Struct({
 });
 
 /**
- * Claims the oldest due job of `kinds`. The `(status, available_at)` index keeps the locking read
- * to one row.
+ * Claims the oldest due job of `kinds` in one statement; call it outside a transaction, since a
+ * transaction cannot return rows from a write. The `(status, available_at)` index keeps the pick to one row.
  */
 export const claimJob = (kinds: ReadonlyArray<JobKind>, leaseMs: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const token = randomUUID();
-    const claimed = sql.withTransaction(
-      Effect.gen(function* () {
-        const [due] = yield* sql<{ id: JobId }>`SELECT id FROM jobs
-          WHERE status = 'pending' AND available_at <= UTC_TIMESTAMP(6) AND kind IN ${sql.in(kinds)}
-          ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
-        if (!due) return Option.none<Lease>();
-        // TiDB parses SKIP LOCKED but ignores it: a claimer that waited on the lock re-reads a job another claimer took.
-        const taken = yield* write(sql`UPDATE jobs SET status = 'running', lease_token = ${token}, lease_generation = lease_generation + 1,
-          lease_until = ${later(sql, leaseMs)}, attempts = attempts + 1, updated_at = UTC_TIMESTAMP(6) WHERE id = ${due.id} AND status = 'pending'`);
-        if (taken.affectedRows !== 1) return Option.none<Lease>();
-        const job = yield* SqlSchema.single({
-          Request: JobId,
-          Result: ClaimedRow,
-          execute: id => sql`SELECT id, workspace_id, kind, work_key, payload, requested_by, source_revision,
-            attempts AS attempt, lease_generation FROM jobs WHERE id = ${id}`,
-        })(due.id).pipe(Effect.orDie);
-        return Option.some({ job, token });
-      }),
-    );
-    return yield* retryDeadlocks(claimed);
+    const job = yield* SqlSchema.findOne({
+      Request: Schema.Void,
+      Result: ClaimedRow,
+      execute: () => sql`UPDATE jobs SET status = 'running', lease_token = ${token}, lease_generation = lease_generation + 1,
+          lease_until = ${later(leaseMs)}, attempts = attempts + 1, updated_at = ${now}
+        WHERE id = (SELECT id FROM jobs WHERE status = 'pending' AND available_at <= ${now} AND kind IN ${sql.in(kinds)} ORDER BY available_at LIMIT 1)
+        RETURNING id, workspace_id, kind, work_key, payload, requested_by, source_revision, attempts AS attempt, lease_generation`,
+    })(undefined).pipe(Effect.catchTag('ParseError', error => Effect.die(error)));
+    return Option.map(job, (claimed): Lease => ({ job: claimed, token }));
   });
 
 const fenced = (sql: SqlClient.SqlClient, lease: Lease) =>
@@ -84,52 +62,51 @@ const fenced = (sql: SqlClient.SqlClient, lease: Lease) =>
 const renewLease = (lease: Lease, leaseMs: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const renewed = yield* write(sql`UPDATE jobs SET lease_until = ${later(sql, leaseMs)} WHERE ${fenced(sql, lease)}`);
-    return renewed.affectedRows === 1;
+    const renewed = yield* sql`UPDATE jobs SET lease_until = ${later(leaseMs)} WHERE ${fenced(sql, lease)} RETURNING id`;
+    return renewed.length === 1;
   });
 
 export type Completion = JobOutcome | { readonly status: 'failed'; readonly error: JobFailure };
 
 /**
  * Generation-fenced completion; false means the lease was lost and nothing was written.
- * Assignments run left to right, so `rearmed` and `attempts` are read before being reset.
+ * SQLite evaluates every assignment against the row as it was, so `rearmed` and `attempts` are read before being reset.
  */
 export const completeJob = (lease: Lease, completion: Completion) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const release = sql`lease_token = NULL, lease_until = NULL, updated_at = UTC_TIMESTAMP(6)`;
+    const release = sql`lease_token = NULL, lease_until = NULL, updated_at = ${now}`;
     const update = (() => {
       switch (completion.status) {
         case 'succeeded':
-          return sql`UPDATE jobs SET status = IF(rearmed, 'pending', 'succeeded'), attempts = IF(rearmed, 0, attempts), rearmed = 0,
-            result = ${JSON.stringify(completion.result ?? null)}, last_error = NULL, ${release} WHERE ${fenced(sql, lease)}`;
+          return sql`UPDATE jobs SET status = iif(rearmed, 'pending', 'succeeded'), attempts = iif(rearmed, 0, attempts), rearmed = 0,
+            result = ${JSON.stringify(completion.result ?? null)}, last_error = NULL, ${release} WHERE ${fenced(sql, lease)} RETURNING id`;
         case 'paused':
           // A budget or rate-limit pause does not consume an attempt; the resumed run uses the latest payload.
-          return sql`UPDATE jobs SET status = 'paused', attempts = attempts - 1, rearmed = 0, available_at = ${later(sql, completion.resume_after_ms)},
-            last_error = ${JSON.stringify({ message: completion.reason, retryable: true })}, ${release} WHERE ${fenced(sql, lease)}`;
+          return sql`UPDATE jobs SET status = 'paused', attempts = attempts - 1, rearmed = 0, available_at = ${later(completion.resume_after_ms)},
+            last_error = ${JSON.stringify({ message: completion.reason, retryable: true })}, ${release} WHERE ${fenced(sql, lease)} RETURNING id`;
         case 'failed': {
           const backoff = Math.min(1000 * 2 ** (lease.job.attempt - 1), MAX_BACKOFF_MS);
           return sql`UPDATE jobs SET
-            status = IF(rearmed OR (${completion.error.retryable} AND attempts < max_attempts), 'pending', 'failed'),
-            available_at = IF(rearmed, available_at, ${later(sql, backoff)}), attempts = IF(rearmed, 0, attempts), rearmed = 0,
+            status = iif(rearmed OR (${completion.error.retryable ? 1 : 0} AND attempts < max_attempts), 'pending', 'failed'),
+            available_at = iif(rearmed, available_at, ${later(backoff)}), attempts = iif(rearmed, 0, attempts), rearmed = 0,
             last_error = ${JSON.stringify({ message: completion.error.message, retryable: completion.error.retryable })}, ${release}
-            WHERE ${fenced(sql, lease)}`;
+            WHERE ${fenced(sql, lease)} RETURNING id`;
         }
       }
     })();
-    const done = yield* retryDeadlocks(write(update));
-    return done.affectedRows === 1;
+    return (yield* update).length === 1;
   });
 
 /** Resumes due paused jobs and returns expired leases to the queue (or fails them when exhausted). */
 export const sweepJobs = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* retryDeadlocks(sql`UPDATE jobs SET status = 'pending', updated_at = UTC_TIMESTAMP(6) WHERE status = 'paused' AND available_at <= UTC_TIMESTAMP(6)`);
-  yield* retryDeadlocks(sql`UPDATE jobs SET
-      status = IF(attempts >= max_attempts AND NOT rearmed, 'failed', 'pending'), attempts = IF(rearmed, 0, attempts), rearmed = 0,
+  yield* sql`UPDATE jobs SET status = 'pending', updated_at = ${now} WHERE status = 'paused' AND available_at <= ${now}`;
+  yield* sql`UPDATE jobs SET
+      status = iif(attempts >= max_attempts AND NOT rearmed, 'failed', 'pending'), attempts = iif(rearmed, 0, attempts), rearmed = 0,
       last_error = ${JSON.stringify({ message: 'Lease expired before completion', retryable: true })},
-      lease_token = NULL, lease_until = NULL, updated_at = UTC_TIMESTAMP(6)
-    WHERE status = 'running' AND lease_until <= UTC_TIMESTAMP(6)`);
+      lease_until = NULL, lease_token = NULL, updated_at = ${now}
+    WHERE status = 'running' AND lease_until <= ${now}`;
 });
 
 /** A handler's typed failure; a database error it died on is transient and retryable, any other defect is not. */

@@ -10,6 +10,7 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
 import { requireScope } from './auth.ts';
 import { DbUtc } from './db.ts';
+import { now } from './sql-dialect.ts';
 
 const Row = Schema.Struct({ onboarded_at: Schema.NullOr(DbUtc), name: Schema.String });
 
@@ -33,7 +34,7 @@ export const OnboardingLive = HttpApiBuilder.group(SanctumApi, 'onboarding', han
         const access = yield* CurrentAccess;
         const sql = yield* SqlClient.SqlClient;
         // Idempotent: the first completion time stays.
-        yield* Effect.orDie(sql`UPDATE principals SET onboarded_at = COALESCE(onboarded_at, UTC_TIMESTAMP(6)) WHERE id = ${access.principal.id}`);
+        yield* Effect.orDie(sql`UPDATE principals SET onboarded_at = COALESCE(onboarded_at, ${now}) WHERE id = ${access.principal.id}`);
         return yield* readOnboarding(access);
       }))
     .handle('renameWorkspace', ({ payload }) =>

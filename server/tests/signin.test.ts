@@ -11,6 +11,7 @@ import { enqueueJob } from '../src/jobs.ts';
 import { armWorkosSync, syncWorkosEvents, WorkosOrganizations, workosSettings } from '../src/org-sync.ts';
 import { createOwner, type OwnerInput } from '../src/owner.ts';
 import { type SignIn, SignInSettings } from '../src/signin.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { purgeWorkspace } from '../src/workspaces.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -20,7 +21,7 @@ import { fixturePipedream } from './support/pipedream.ts';
 const ISSUER = 'https://issuer.fixture.test';
 const CLIENT_ID = 'sanctum-fixture';
 const linkWorkspaceOrg = (link: { readonly workspace_id: WorkspaceId; readonly issuer: string; readonly org_id: string }) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES (${link.issuer}, ${link.org_id}, ${link.workspace_id}, UTC_TIMESTAMP(6))`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES (${link.issuer}, ${link.org_id}, ${link.workspace_id}, ${now})`);
 const { publicKey, privateKey } = await generateKeyPair('ES256');
 const jwk = { ...(await exportJWK(publicKey)), alg: 'ES256', kid: 'fixture' };
 
@@ -182,7 +183,7 @@ const withServer = (client: Option.Option<SignIn>, organizations?: Layer.Layer<W
 
 /** Soft-deletes a workspace as `deleteWorkspace` does; a negative `days` puts the purge time in the past. */
 const markDeleted = (db: Layer.Layer<SqlClient.SqlClient, unknown>) => (id: string, days: number) =>
-  Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${id}`), db);
+  Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = ${now}, purge_after = ${addSeconds(now, days * 86400)} WHERE id = ${id}`), db);
 
 const configured = () => {
   const issuer = fixtureIssuer();
@@ -349,8 +350,8 @@ describe('OIDC sign-in', () => {
       yield* Effect.provide(
         Effect.flatMap(SqlClient.SqlClient, sql =>
           Effect.zip(
-            sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${revoked!.principal.id}`,
-            sql`UPDATE principals SET disabled_at = UTC_TIMESTAMP(6) WHERE id = ${disabled!.principal.id}`,
+            sql`UPDATE workspace_members SET revoked_at = ${now} WHERE principal_id = ${revoked!.principal.id}`,
+            sql`UPDATE principals SET disabled_at = ${now} WHERE id = ${disabled!.principal.id}`,
           ),
         ),
         db,
@@ -641,7 +642,7 @@ describe('workos.sync events job', () => {
         // An identity that never signed in gets no principal until its first sign-in.
         expect(yield* count('principals')).toBe(2);
         // The pass scheduled the next one a minute out.
-        const next = yield* sql<{ later: number }>`SELECT available_at > UTC_TIMESTAMP(6) + INTERVAL 30 SECOND AS later FROM jobs WHERE kind = 'workos.sync' AND status = 'pending'`;
+        const next = yield* sql<{ later: number }>`SELECT available_at > ${addSeconds(now, 30)} AS later FROM jobs WHERE kind = 'workos.sync' AND status = 'pending'`;
         expect(next.map(job => Number(job.later))).toEqual([1]);
 
         workos.deleteMembership('user_member', 'org_acme');

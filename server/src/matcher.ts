@@ -1,5 +1,5 @@
 /**
- * Semantic needs/offers matching (plan section 08, T04): versioned profile embeddings in MySQL
+ * Semantic needs/offers matching (plan section 08, T04): versioned profile embeddings in the database
  * and exact cosine top-k in bounded Float32Array batches, scoped to one workspace before any
  * vector is loaded. Exact O(N x dimensions) scan, not an ANN index; see
  * scripts/benchmark-matching.ts for its measured cost.
@@ -8,11 +8,12 @@ import { endianness } from 'node:os';
 import { SqlClient, SqlSchema, type SqlError } from '@effect/sql';
 import { type AccessScope, NotFound, ProfileId, RevisionConflict } from '@sanctum/contracts';
 import { Effect, Schema } from 'effect';
-import { ER_NO_REFERENCED_ROW, mysqlErrno } from './db.ts';
+import { isMissingReference } from './db.ts';
+import { now } from './sql-dialect.ts';
 
 /** Rows per ranking batch; matches `candidate_batch_size` in benchmarks/workload.json. */
 export const MATCH_BATCH_SIZE = 1_000;
-/** `VARBINARY(16384)` holds at most 4,096 float32 values. */
+/** A `BLOB` of 16,384 bytes holds at most 4,096 float32 values. */
 const MAX_DIMENSION = 4_096;
 const MAX_TOP_K = 100;
 
@@ -70,7 +71,7 @@ export class TopK {
 }
 
 /**
- * mysql2 returns Buffers sliced from a shared packet buffer: an aligned one is viewed in
+ * A BLOB may come back as a view into a larger buffer: an aligned one is viewed in
  * place, an unaligned one is copied (`Buffer#slice` would not copy).
  */
 const float32View = (bytes: Uint8Array) =>
@@ -97,15 +98,14 @@ const writeEmbedding = (sql: SqlClient.SqlClient, access: AccessScope, input: St
       return yield* new InvalidEmbedding({ message: `model ${input.model} uses dimension ${known.dimension}, got ${unit.length}` });
     }
     const bytes = Buffer.from(unit.buffer, unit.byteOffset, unit.byteLength);
-    // One atomic upsert without locking reads: an older revision leaves the row unchanged.
-    yield* sql`INSERT INTO profile_embeddings (workspace_id, profile_id, kind, model, dimension, embedding, source_revision, created_at)
-      VALUES (${access.workspace_id}, ${input.profile_id}, ${input.kind}, ${input.model}, ${unit.length}, ${bytes}, ${input.source_revision}, UTC_TIMESTAMP(6)) AS incoming
-      ON DUPLICATE KEY UPDATE
-        embedding = IF(incoming.source_revision >= profile_embeddings.source_revision, incoming.embedding, profile_embeddings.embedding),
-        created_at = IF(incoming.source_revision >= profile_embeddings.source_revision, incoming.created_at, profile_embeddings.created_at),
-        source_revision = GREATEST(incoming.source_revision, profile_embeddings.source_revision)`;
-    const [stored] = yield* sql<{ source_revision: number }>`SELECT source_revision FROM profile_embeddings
-      WHERE workspace_id = ${access.workspace_id} AND profile_id = ${input.profile_id} AND kind = ${input.kind} AND model = ${input.model}`;
+    // One atomic upsert: an older revision leaves the row unchanged, and RETURNING reads the winner without a second statement.
+    const [stored] = yield* sql<{ source_revision: number }>`INSERT INTO profile_embeddings (workspace_id, profile_id, kind, model, dimension, embedding, source_revision, created_at)
+      VALUES (${access.workspace_id}, ${input.profile_id}, ${input.kind}, ${input.model}, ${unit.length}, ${bytes}, ${input.source_revision}, ${now})
+      ON CONFLICT (profile_id, kind, model) DO UPDATE SET
+        embedding = iif(excluded.source_revision >= profile_embeddings.source_revision, excluded.embedding, profile_embeddings.embedding),
+        created_at = iif(excluded.source_revision >= profile_embeddings.source_revision, excluded.created_at, profile_embeddings.created_at),
+        source_revision = max(excluded.source_revision, profile_embeddings.source_revision)
+      RETURNING source_revision`;
     if (stored && stored.source_revision > input.source_revision) {
       return yield* new RevisionConflict({ message: 'a newer profile revision is already embedded', current_revision: stored.source_revision });
     }
@@ -119,7 +119,7 @@ export const storeEmbedding = (access: AccessScope, input: StoreEmbeddingInput) 
     return yield* writeEmbedding(yield* SqlClient.SqlClient, access, input, unit);
   }).pipe(
     Effect.catchIf(
-      (error): error is SqlError.SqlError => error._tag === 'SqlError' && mysqlErrno(error) === ER_NO_REFERENCED_ROW,
+      (error): error is SqlError.SqlError => error._tag === 'SqlError' && isMissingReference(error),
       () => new NotFound({ message: 'profile not found' }),
     ),
   );

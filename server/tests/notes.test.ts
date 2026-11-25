@@ -4,6 +4,7 @@ import { Effect, Layer } from 'effect';
 import { fixtureLlm } from '../src/llm.ts';
 import { summarizeNotes } from '../src/notes-job.ts';
 import { exportMeeting, getMeetingNotes } from '../src/notes.ts';
+import { now } from '../src/sql-dialect.ts';
 import { migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -16,13 +17,13 @@ const answer = JSON.stringify({
   ],
 });
 
-const close = (meeting_id: string) => Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE meetings SET state = 'closed', ended_at = UTC_TIMESTAMP(6) WHERE id = ${meeting_id}`);
+const close = (meeting_id: string) => Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE meetings SET state = 'closed', ended_at = ${now} WHERE id = ${meeting_id}`);
 
 const meetingTitle = (meeting_id: string) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql<{ title: string | null }>`SELECT title FROM meetings WHERE id = ${meeting_id}`);
 
 const processingNotes = (meeting_id: string) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ notes: string }>`SELECT JSON_UNQUOTE(JSON_EXTRACT(processing, '$.notes')) AS notes FROM meetings WHERE id = ${meeting_id}`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ notes: string }>`SELECT json_extract(processing, '$.notes') AS notes FROM meetings WHERE id = ${meeting_id}`);
 
 layer(Layer.merge(migratedDatabase, fixtureLlm([answer, answer])), { timeout: 120_000 })('meeting notes', it => {
   it.effect('summarizes a closed meeting once into canonical notes, read and exported with fresh access checks', () =>

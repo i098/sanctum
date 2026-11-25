@@ -30,6 +30,7 @@ import { listenerFeed } from '../actions.ts';
 import type { CaptureAccess } from '../auth.ts';
 import { advanceLiveWatermark, credentialActive, stopEpoch } from '../listeners.ts';
 import { type AsrBatch, type AsrResult, type AsrStream, SpeechToText } from '../providers/whisper.ts';
+import { now } from '../sql-dialect.ts';
 import { asrPrompt, PROMPT_TERMS } from './asr-hint.ts';
 import { visibleScope, visibleWhere } from '../context-changes.ts';
 import { publishFinalWindow } from '../transcripts.ts';
@@ -181,7 +182,7 @@ const itemPrompt = (access: AccessScope) =>
     if (!access.scopes.includes('context:read')) return () => Effect.succeed('');
     const sql = yield* SqlClient.SqlClient;
     const read = Effect.flatMap(visibleScope(access), scope =>
-      sql<{ text: string }>`SELECT LEFT(ci.text, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${access.workspace_id} AND ci.state = 'committed'
+      sql<{ text: string }>`SELECT substr(ci.text, 1, 1000) AS text FROM context_items ci WHERE ci.workspace_id = ${access.workspace_id} AND ci.state = 'committed'
         AND ${visibleWhere(sql, scope, 'ci.meeting_id')} AND ci.revision = (SELECT MAX(x.revision) FROM context_items x WHERE x.id = ci.id)
         ORDER BY ci.created_at DESC, ci.id LIMIT ${PROMPT_TERMS * 5}`,
     ).pipe(
@@ -232,7 +233,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         if (current.consumer !== null) yield* Fiber.await(current.consumer).pipe(Effect.timeout(liveLimits.finishTimeoutMs), Effect.ignore);
         yield* Scope.close(current.scope, Exit.void);
         yield* sql`
-          UPDATE provider_connections SET closed_at = UTC_TIMESTAMP(6), close_reason = ${reason}
+          UPDATE provider_connections SET closed_at = ${now}, close_reason = ${reason}
           WHERE workspace_id = ${workspace_id} AND id = ${current.connection_id}`.pipe(Effect.catchAll(error => Effect.logWarning('Provider connection close not recorded', error)));
       });
 
@@ -272,7 +273,7 @@ const liveAsr = ({ access, listener, start, send, speech }: Omit<LiveSessionInpu
         const connection_id = ProviderConnectionId.make(randomUUID());
         yield* sql`
           INSERT INTO provider_connections (id, workspace_id, epoch_id, track, purpose, provider, model, anchor_sample, sample_rate, opened_at)
-          VALUES (${connection_id}, ${workspace_id}, ${epoch_id}, ${track}, 'asr', ${stt.provider}, ${stt.model}, ${anchor}, ${rate}, UTC_TIMESTAMP(6))`.pipe(
+          VALUES (${connection_id}, ${workspace_id}, ${epoch_id}, ${track}, 'asr', ${stt.provider}, ${stt.model}, ${anchor}, ${rate}, ${now})`.pipe(
           Effect.onError(cause => Scope.close(scope, Exit.failCause(cause))),
         );
         const current: Lane = { connection_id, anchor, next_sample: anchor, stream: opened.right, scope, consumer: null };
