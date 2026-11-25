@@ -34,7 +34,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
 
       const [epoch] = yield* sql<{ captured_at: string; server_gap_ms: number }>`
         SELECT captured_at, ABS(${diffMicros('started_at', now)}) / 1000 AS server_gap_ms FROM capture_epochs WHERE id = ${epoch_id}`;
-      expect(epoch!.captured_at).toBe('2031-03-14 08:30:00.123000');
+      expect(epoch!.captured_at).toBe('2031-03-14 08:30:00.123');
       expect(Number(epoch!.server_gap_ms)).toBeLessThan(60_000);
 
       for (let sequence = 0; sequence < 40; sequence++) {
@@ -49,7 +49,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       yield* socket.take('transcript');
 
       const [meeting] = yield* meetingsOf(access.workspace_id);
-      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123000');
+      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123');
       const transcript = yield* api(host, 'reader', 'GET', `/meetings/${meeting!.id}/transcript`);
       expect(transcript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(['I will send the pilot plan tomorrow.', 'Sounds good.']);
 
