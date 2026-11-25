@@ -11,7 +11,7 @@ import { serverLayer } from '../src/main.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { meetingsOf } from './support/capture.ts';
 import { seedWorkspace } from './support/fixtures.ts';
-import { api, chunk, eventually, fakeSpeech, MigratedDatabase, openSocket, serveApi, uploadChunk } from './support/media.ts';
+import { api, chunk, eventually, fakeSpeech, MigratedDatabase, openSocket, serveMediaApi, uploadChunk } from './support/media.ts';
 import { addSeconds, now } from '../src/sql-dialect.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -67,7 +67,7 @@ const setupWith = (authenticator = KernelAuthenticatorLive) => Effect.gen(functi
       ${principal.id}, ${credential_id}, ${addSeconds(now, 86_400)}, ${now}, ${now})`;
   const speech = fakeSpeech();
   const media = Layer.merge(speech.layer, memoryObjectStore().layer);
-  const host = yield* serveApi((config, _fixtureAuth, overrides) => serverLayer(config, authenticator, overrides), new Map(), media);
+  const host = yield* serveMediaApi((config, _fixtureAuth, overrides) => serverLayer(config, authenticator, overrides), new Map(), media);
   const registered = yield* api(host, token, 'POST', '/listeners', { name: 'Fixture device', mode: 'room', capabilities: { fixture: true } });
   expect(registered.status).toBe(201);
   const listener_id = registered.body.id as ListenerId;

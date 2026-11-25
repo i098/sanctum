@@ -16,7 +16,7 @@ import { d1Backend } from './db-d1.ts';
 import type { DbBackend, DbOptions, DbResult, DbStatement } from './db-types.ts';
 import { sqliteBackend } from './db-sqlite.ts';
 
-export type { DbBackend, DbOptions, DbResult, DbStatement } from './db-types.ts';
+export type { DbOptions, DbResult } from './db-types.ts';
 
 const fail = (message: string) => new SqlError.SqlError({ cause: new Error(message), message });
 const messageOf = (error: SqlError.SqlError) => {
