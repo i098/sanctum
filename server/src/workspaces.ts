@@ -80,7 +80,6 @@ export const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
           // Compared in code, byte for byte.
           if (row!.name !== confirm_name) return yield* new Forbidden({ message: 'Type the workspace name exactly to confirm deletion' });
           if (row!.deleted_at !== null) return;
-          // First: enqueueJob reads before it writes, and a read after a buffered write fails.
           // No requester: the worker would re-check it against the deleted workspace and refuse the job.
           yield* enqueueJob({
             workspace_id: access.workspace_id,
@@ -199,7 +198,7 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | Pipe
     const [finished] = yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: Schema.Struct({ result: DbJson(PurgeReceipt) }),
-      execute: () => sql`SELECT result FROM jobs WHERE id = ${job.id} AND result ->> '$.purged' = 'true'`,
+      execute: () => sql`SELECT result FROM jobs WHERE id = ${job.id} AND result ->> '$.purged' = 1`,
     })(undefined).pipe(Effect.orDie);
     if (finished !== undefined) return { status: 'succeeded' as const, result: finished.result };
     // A restore can no longer start once the deadline passed; one that started before it is caught again inside the final transaction.

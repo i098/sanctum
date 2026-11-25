@@ -7,10 +7,10 @@ import { resolveAccess } from '../src/auth.ts';
 import type { ClaimedJob, JobHandlers } from '../src/job-types.ts';
 import { claimJob, completeJob, type Lease, runWorker, sweepJobs } from '../src/job-runner.ts';
 import { dbLayer } from '../src/db.ts';
-import { enqueueJob } from '../src/jobs.ts';
 import { addSeconds, now } from '../src/sql-dialect.ts';
 import { createTestDatabase, withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { enqueuedId } from './support/jobs.ts';
 
 const migrated = { migrated: true };
 const KINDS: ReadonlyArray<JobKind> = ['context.refresh'];
@@ -39,7 +39,7 @@ const fail = (lease: Lease, retryable: boolean) => completeJob(lease, { status: 
 
 const seed = Effect.map(seedWorkspace('Jobs', ['owner']), ([owner]) => owner!);
 const job = (workspace_id: WorkspaceId, work_key: string, payload: unknown = {}, extra: { requested_by?: PrincipalId; max_attempts?: number; delay_ms?: number } = {}) =>
-  enqueueJob({ workspace_id, kind: 'context.refresh', work_key, payload, requested_by: extra.requested_by ?? null, ...extra });
+  enqueuedId({ workspace_id, kind: 'context.refresh', work_key, payload, requested_by: extra.requested_by ?? null, ...extra });
 
 /** Polls the ledger until `predicate` holds for the row (worker tests run on real time). */
 const until = (id: string, predicate: (row: Row) => boolean) =>

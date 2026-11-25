@@ -49,7 +49,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       yield* socket.take('transcript');
 
       const [meeting] = yield* meetingsOf(access.workspace_id);
-      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123');
+      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123000');
       const transcript = yield* api(host, 'reader', 'GET', `/meetings/${meeting!.id}/transcript`);
       expect(transcript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(['I will send the pilot plan tomorrow.', 'Sounds good.']);
 
