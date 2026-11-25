@@ -9,28 +9,27 @@
  * - `context_read_write`: `getContextSnapshot` and `addContextItem` at the manifest's 9:1 mix.
  * - `cosine_ranking`: scripts/benchmark-matching.ts.
  *
- * The MySQL workloads need `--mysql-url` (an account allowed to create and drop a database);
- * without it they are reported as unrun. Every record is `verified: false`: no controlled
+ * The database workloads run on a fresh in-memory SQLite database per client. Every record is `verified: false`: no controlled
  * benchmark host exists, so parity and absolute budgets stay unclaimed. The matched Rust
  * reference (benchmarks/rust) runs through scripts/benchmark-compare.ts.
  *
- * Usage: node scripts/benchmark.ts [--smoke] [--mysql-url mysql://...] [--out benchmarks/results/x.jsonl]
+ * Usage: node scripts/benchmark.ts [--smoke] [--out benchmarks/results/x.jsonl]
  *        node scripts/benchmark.ts --job '<job json>' (one matched job; see scripts/benchmark-compare.ts)
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { type AccessScope, CaptureEpochId, ListenerId, MeetingId, PrincipalId, RecordingChunkId, RecordingChunkManifest, TranscriptSegmentId, WorkspaceId, decodePcmFrame, encodePcmFrame } from '@sanctum/contracts';
 import { SqlClient } from '@effect/sql';
-import { Effect, Either, Layer, ManagedRuntime, Redacted, Schema } from 'effect';
-import { createConnection } from 'mysql2/promise';
+import { Effect, Either, Layer, ManagedRuntime, Schema } from 'effect';
 import { type BenchmarkRecord, gitSha, sample, seededRandom, toRecord } from '../benchmarks/measure.ts';
 import { validateResult } from '../benchmarks/result-format.ts';
 import { runCosineBenchmark } from './benchmark-matching.ts';
 import { addContextItem, getContextSnapshot } from '../server/src/context.ts';
 import { dbLayer } from '../server/src/db.ts';
-import { loadMigrations, migrate } from '../server/src/migrate.ts';
+import { now } from '../server/src/sql-dialect.ts';
+import { createTestDatabase } from '../server/tests/support/database.ts';
 import { ObjectStore } from '../server/src/providers/object-store.ts';
 import { putChunk } from '../server/src/recordings.ts';
 import { publishFinalWindow } from '../server/src/transcripts.ts';
@@ -89,11 +88,6 @@ interface Fixture extends Attached { drop: () => Promise<void> }
 /** IDs of the rows `createDatabase` seeds; the Rust reference attaches to the same rows. */
 export interface FixtureIds { workspace: WorkspaceId; owner: PrincipalId; device: PrincipalId; listener: ListenerId; epoch: CaptureEpochId }
 
-const mysqlOptions = (url: string) => {
-  const parsed = new URL(url);
-  return { host: parsed.hostname, port: Number(parsed.port || 3306), database: parsed.pathname.slice(1), username: decodeURIComponent(parsed.username), password: Redacted.make(decodeURIComponent(parsed.password)), maxConnections: 8, queueLimit: 100 };
-};
-
 const access = (workspace_id: WorkspaceId, id: PrincipalId, kind: 'human' | 'device', scopes: AccessScope['scopes']): AccessScope => ({
   workspace_id,
   principal: { id, kind, display_name: kind },
@@ -103,39 +97,36 @@ const access = (workspace_id: WorkspaceId, id: PrincipalId, kind: 'human' | 'dev
   permission_revision: 1,
 });
 
-/** A fresh `sanctum_bench_*` database, migrated and seeded with one workspace, owner, device, listener and 48 kHz epoch. */
-export async function createDatabase(url: string): Promise<{ url: string; ids: FixtureIds; drop: () => Promise<void> }> {
-  const name = `sanctum_bench_${randomBytes(6).toString('hex')}`;
-  const admin = await createConnection(url);
-  await admin.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
-  const migrator = ManagedRuntime.make(dbLayer(mysqlOptions(`${url}/${name}`)));
-  await migrator.runPromise(migrate(loadMigrations()));
-  await migrator.dispose();
+/** A fresh in-memory database with every migration, seeded with one workspace, owner, device, listener and 48 kHz epoch. */
+export async function createDatabase(): Promise<{ url: string; ids: FixtureIds; drop: () => Promise<void> }> {
+  const { db, drop } = await createTestDatabase();
   const [workspace, owner, device, listener, epoch] = [WorkspaceId.make(randomUUID()), PrincipalId.make(randomUUID()), PrincipalId.make(randomUUID()), ListenerId.make(randomUUID()), CaptureEpochId.make(randomUUID())];
-  const seed = await createConnection(`${url}/${name}`);
-  await seed.query(`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (?, 'Bench', 'UTC', UTC_TIMESTAMP(6))`, [workspace]);
-  await seed.query(`INSERT INTO principals (id, kind, display_name, created_at) VALUES (?, 'human', 'Owner', UTC_TIMESTAMP(6)), (?, 'device', 'Room', UTC_TIMESTAMP(6))`, [owner, device]);
-  await seed.query(`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (?, ?, 'owner', UTC_TIMESTAMP(6)), (?, ?, 'device', UTC_TIMESTAMP(6))`, [workspace, owner, workspace, device]);
-  await seed.query(`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, state, lease_generation, current_epoch_id, capabilities, created_at) VALUES (?, ?, ?, 'Room', 'room', 'listening', 1, ?, '{}', UTC_TIMESTAMP(6))`, [listener, workspace, device, epoch]);
-  await seed.query(`INSERT INTO listener_lease_claims (workspace_id, listener_id, lease_generation, claimed_at) VALUES (?, ?, 1, UTC_TIMESTAMP(6))`, [workspace, listener]);
-  await seed.query(`INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at, timezone, start_reason, started_at, live_sample_end)
-        VALUES (?, ?, ?, 1, 48000, 1, 'pcm_s16le', 0, '2026-09-29 09:00:00', 'UTC', 'start', UTC_TIMESTAMP(6), 0)`, [epoch, workspace, listener]);
-  await seed.end();
-  const drop = async () => {
-    await admin.query(`DROP DATABASE IF EXISTS \`${name}\``);
-    await admin.end();
-  };
-  return { url: `${url}/${name}`, ids: { workspace, owner, device, listener, epoch }, drop };
+  const seed = ManagedRuntime.make(dbLayer(db));
+  try {
+    await seed.runPromise(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace}, 'Bench', 'UTC', ${now})`;
+      yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${owner}, 'human', 'Owner', ${now}), (${device}, 'device', 'Room', ${now})`;
+      yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${workspace}, ${owner}, 'owner', ${now}), (${workspace}, ${device}, 'device', ${now})`;
+      yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, state, lease_generation, current_epoch_id, capabilities, created_at) VALUES (${listener}, ${workspace}, ${device}, 'Room', 'room', 'listening', 1, ${epoch}, '{}', ${now})`;
+      yield* sql`INSERT INTO listener_lease_claims (workspace_id, listener_id, lease_generation, claimed_at) VALUES (${workspace}, ${listener}, 1, ${now})`;
+      yield* sql`INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at, timezone, start_reason, started_at, live_sample_end)
+        VALUES (${epoch}, ${workspace}, ${listener}, 1, 48000, 1, 'pcm_s16le', 0, '2026-09-29 09:00:00', 'UTC', 'start', ${now}, 0)`;
+    }));
+  } finally {
+    await seed.dispose();
+  }
+  return { url: db.url, ids: { workspace, owner, device, listener, epoch }, drop };
 }
 
-/** The application runtime (real MySQL pool, in-memory object store) over a database `createDatabase` seeded. */
+/** The application runtime (SQLite connection, in-memory object store) over a database `createDatabase` seeded. */
 function attachDatabase(url: string, ids: FixtureIds): Attached {
-  const runtime = ManagedRuntime.make(Layer.merge(dbLayer(mysqlOptions(url)), memoryStore));
+  const runtime = ManagedRuntime.make(Layer.merge(dbLayer({ url }), memoryStore));
   return { runtime, owner: access(ids.workspace, ids.owner, 'human', ['context:read', 'context:write', 'recordings:read']), device: access(ids.workspace, ids.device, 'device', ['capture:ingest']), listener: ids.listener, epoch: ids.epoch };
 }
 
-export async function database(url: string): Promise<Fixture> {
-  const created = await createDatabase(url);
+export async function database(): Promise<Fixture> {
+  const created = await createDatabase();
   const attached = attachDatabase(created.url, created.ids);
   return { ...attached, drop: async () => (await attached.runtime.dispose(), await created.drop()) };
 }
@@ -182,7 +173,7 @@ async function archiveStreaming(dbs: Attached[], chunks: number, seconds: number
     const manifest = decodeManifest({ chunk_id, listener_id: db.listener, epoch_id: db.epoch, track: 0, sequence: i, sample_start: i * samples, sample_count: samples, sample_rate: 48_000, captured_at: '2026-09-29T09:00:00Z', byte_length: body.byteLength, sha256: bodySha });
     if (await failures(db.runtime, putChunk(db.device, db.listener, chunk_id, manifest, body))) errors[client]!++;
   }, 0, dbs.length);
-  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: dbs.length, errors: sum(errors), checked: chunks * dbs.length, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against MySQL' } })];
+  return [toRecord({ workload_id: 'archive_streaming', phase: 'steady', sample: run, fixture_sha256: bodySha, git_sha, started_at, concurrency: dbs.length, errors: sum(errors), checked: chunks * dbs.length, dropped_samples: 0, parameters: { chunks, chunk_seconds: seconds, object_store: 'in-memory stub', scope: 'putChunk end to end against SQLite' } })];
 }
 
 /** `transcript-segments-v1`: 5-second final segments on each client's epoch through `publishFinalWindow`. */
@@ -241,14 +232,14 @@ const citedSegments = (owner: AccessScope) =>
             JOIN meeting_ranges r ON r.epoch_id = s.epoch_id AND s.sample_start >= r.sample_start AND s.sample_start < r.sample_end
             JOIN meetings m ON m.id = r.meeting_id AND m.boundary_revision = r.boundary_revision
             ORDER BY m.started_at, r.meeting_id, s.sample_start`;
-    yield* sql`INSERT IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-            SELECT workspace_id, id, ${owner.principal.id}, 'owner', ${owner.principal.id}, UTC_TIMESTAMP(6) FROM meetings WHERE workspace_id = ${owner.workspace_id}`;
+    yield* sql`INSERT OR IGNORE INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
+            SELECT workspace_id, id, ${owner.principal.id}, 'owner', ${owner.principal.id}, ${now} FROM meetings WHERE workspace_id = ${owner.workspace_id}`;
     return rows
       .filter((row, i) => row.meeting_id !== rows[i - 1]?.meeting_id)
       .map(row => ({ meeting_id: MeetingId.make(row.meeting_id), segment_id: TranscriptSegmentId.make(row.segment_id), sample_start: String(row.sample_start) }));
   });
 
-/** The three MySQL workloads in fixed order (context_read_write cites the meetings transcript_ingest creates); each phase runs all clients concurrently. */
+/** The three database workloads in fixed order (context_read_write cites the meetings transcript_ingest creates); each phase runs all clients concurrently. */
 const databaseWorkloads = async (dbs: Attached[], chunks: number, seconds: number, segments: number, operations: number, git_sha: string) => [
   ...(await archiveStreaming(dbs, chunks, seconds, git_sha)),
   ...(await transcriptIngest(dbs, segments, git_sha)),
@@ -256,23 +247,19 @@ const databaseWorkloads = async (dbs: Attached[], chunks: number, seconds: numbe
 ];
 
 /** Runs every workload at `smoke` or manifest-derived scale; returns validated records and whether all were correct. */
-export async function runBenchmarks(options: { readonly smoke: boolean; readonly mysqlUrl: string | undefined }, git_sha = gitSha()) {
+export async function runBenchmarks(options: { readonly smoke: boolean }, git_sha = gitSha()) {
   const scale = options.smoke ? { frames: 2_000, chunks: 3, seconds: 2, segments: 40, operations: 100 } : { frames: 50_000, chunks: 24, seconds: 30, segments: 2_000, operations: 5_000 };
   const cosine = workload('cosine_ranking').parameters;
   const records: BenchmarkRecord[] = [...(await pcmIngest(scale.frames, git_sha))];
   records.push(...(await runCosineBenchmark({ size: options.smoke ? 2_000 : 10_000, dimension: options.smoke ? 64 : Number(cosine['dimension']), queries: options.smoke ? 10 : 200, verify: 10, topK: 10, seed: workload('cosine_ranking').fixture.seed }, git_sha)));
-  const unrun: string[] = [];
-  if (options.mysqlUrl === undefined) unrun.push('archive_streaming', 'transcript_ingest', 'context_read_write');
-  else {
-    const db = await database(options.mysqlUrl);
-    try {
-      records.push(...(await databaseWorkloads([db], scale.chunks, scale.seconds, scale.segments, scale.operations, git_sha)));
-    } finally {
-      await db.drop();
-    }
+  const db = await database();
+  try {
+    records.push(...(await databaseWorkloads([db], scale.chunks, scale.seconds, scale.segments, scale.operations, git_sha)));
+  } finally {
+    await db.drop();
   }
   const problems = records.flatMap(record => [...validateResult(record), ...(record.correctness.errors > 0 ? [`${record.workload_id}: ${record.correctness.errors} failed operations`] : [])]);
-  return { records, unrun, problems };
+  return { records, problems };
 }
 
 /**
@@ -300,8 +287,8 @@ export async function runJob(job: Job): Promise<BenchmarkRecord[]> {
 if (import.meta.main && process.argv[2] === '--job') {
   for (const record of await runJob(JSON.parse(process.argv[3]!))) console.log(JSON.stringify(record));
 } else if (import.meta.main) {
-  const { values } = parseArgs({ options: { smoke: { type: 'boolean', default: false }, 'mysql-url': { type: 'string' }, out: { type: 'string' } } });
-  const { records, unrun, problems } = await runBenchmarks({ smoke: values.smoke, mysqlUrl: values['mysql-url'] ?? process.env['SANCTUM_TEST_MYSQL_URL'] });
+  const { values } = parseArgs({ options: { smoke: { type: 'boolean', default: false }, out: { type: 'string' } } });
+  const { records, problems } = await runBenchmarks({ smoke: values.smoke });
   for (const record of records) {
     const line = JSON.stringify(record);
     console.log(line);
@@ -309,7 +296,6 @@ if (import.meta.main && process.argv[2] === '--job') {
     const m = record.metrics;
     console.error(`${record.workload_id} ${record.phase}: ${m.throughput.toFixed(1)} ops/s, p50 ${m.latency_p50.toFixed(3)} ms, p99 ${m.latency_p99.toFixed(3)} ms, rss ${(m.rss / 2 ** 20).toFixed(0)} MiB, errors ${record.correctness.errors}`);
   }
-  unrun.forEach(id => console.error(`${id}: unrun (no --mysql-url or SANCTUM_TEST_MYSQL_URL)`));
   problems.forEach(problem => console.error(problem));
   if (problems.length > 0) process.exitCode = 1;
 }
