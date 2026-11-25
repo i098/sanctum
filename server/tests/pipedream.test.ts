@@ -322,13 +322,13 @@ describe('integration configuration', () => {
 
         const revoked = yield* queue('grant-revoked');
         yield* revokeActionGrant(owner!, firstGrant as never);
-        expect(yield* run(revoked.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
+        expect(yield* run(revoked.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: expect.stringContaining('"code":"forbidden"') });
 
         yield* grant(owner!, agent!, account);
         const removed = yield* queue('member-removed');
         yield* sql`UPDATE workspace_members SET revoked_at = ${now} WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`;
         yield* sql`UPDATE workspaces SET permission_revision = permission_revision + 1 WHERE id = ${agent!.workspace_id}`;
-        expect(yield* run(removed.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
+        expect(yield* run(removed.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: expect.stringContaining('"code":"forbidden"') });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
       }),
     ),
