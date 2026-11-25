@@ -28,6 +28,7 @@ import { lockMeeting, meetingItems, meetingItemTexts, type NewItem, relevantItem
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
 import { adjacentRuns, contentTerms, echoesEarlier, type ExtractionInput, MATCHING_ITEMS, RECENT_ITEMS, quoted, trackKey } from './extraction.ts';
 import { EpochAnchorRow, MeetingRow, toSegment } from './meeting-evidence.ts';
+import { now } from './sql-dialect.ts';
 
 /** The ledger fields a context job reads; `jobHandlers` checks it against the full `ClaimedJob` contract. */
 interface LedgerJob {
@@ -153,7 +154,7 @@ const refreshMeeting = <R>(extract: Extractor<R>, target: Target) =>
           WHERE workspace_id = ${workspace_id} AND meeting_id = ${meeting_id} AND ${sql.in('segment_id', ids)}`;
     if (Number(marked!.n) > 0) return 0;
     yield* sql`INSERT INTO context_processed_segments (workspace_id, meeting_id, segment_id, processed_at)
-          SELECT workspace_id, ${meeting_id}, id, UTC_TIMESTAMP(6) FROM transcript_segments WHERE workspace_id = ${workspace_id} AND ${sql.in('id', ids)}`;
+          SELECT workspace_id, ${meeting_id}, id, ${now} FROM transcript_segments WHERE workspace_id = ${workspace_id} AND ${sql.in('id', ids)}`;
     yield* Effect.forEach(accepted, item => writeItem(workspace_id, item, { change: 'item_added', source_revision: meeting.boundary_revision }), { discard: true });
     return accepted.length;
    }),
@@ -186,7 +187,7 @@ const distill = (target: Target) =>
       ),
      { discard: true },
     );
-    yield* sql`UPDATE meetings SET processing = JSON_SET(processing, '$.memory', 'complete'), updated_at = UTC_TIMESTAMP(6)
+    yield* sql`UPDATE meetings SET processing = json_set(processing, '$.memory', 'complete'), updated_at = ${now}
           WHERE workspace_id = ${workspace_id} AND id = ${meeting_id}`;
     return settled.length;
    }),

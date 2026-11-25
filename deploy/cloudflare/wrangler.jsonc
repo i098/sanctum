@@ -1,5 +1,5 @@
 // Deploy from this directory: `npx wrangler deploy` (docs/operations.md, "Cloudflare").
-// MySQL host/user/password/CA, R2 endpoint/keys, WORKERS_AI_API_TOKEN, provider keys and SANCTUM_OIDC_CLIENT_SECRET are Worker secrets.
+// R2 endpoint/keys, WORKERS_AI_API_TOKEN, provider keys and SANCTUM_OIDC_CLIENT_SECRET are Worker secrets.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "sanctum",
@@ -36,13 +36,13 @@
     "SANCTUM_MCP_DEFAULT_SCOPES": "context:read,context:write,recordings:read",
     // A signed-in user with no membership may create a workspace and its WorkOS organization; needs the WORKOS_API_KEY secret (docs/operations.md).
     "SANCTUM_SELF_SERVE_WORKSPACES": "true",
-    "MYSQL_DATABASE": "sanctum",
-    // API and worker pools together stay well under the managed server's connection limit.
-    "MYSQL_POOL_SIZE": "8",
     "R2_BUCKET": "sanctum-recordings",
     // Workers AI runs speech-to-text and the voice and extraction models on this account (docs/operations.md).
     "WORKERS_AI_ACCOUNT_ID": "2c040ec5bc2efe34e60ab5b1b4fd2e99"
   },
+  // The containers reach this database only through the gateway (src/d1-gate.ts, host d1.internal); no token or public route.
+  // No database_id: `wrangler deploy` provisions the database on first deploy. Schema: `wrangler d1 migrations apply sanctum`.
+  "d1_databases": [{ "binding": "DB", "database_name": "sanctum", "migrations_dir": "../../server/migrations-d1" }],
   "containers": [
     { "class_name": "SanctumApi", "image": "../../server/Dockerfile", "image_build_context": "../..", "instance_type": "basic", "max_instances": 1 },
     { "class_name": "SanctumJobs", "image": "../../server/Dockerfile", "image_build_context": "../..", "instance_type": "basic", "max_instances": 1 }

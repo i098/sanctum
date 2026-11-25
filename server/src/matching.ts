@@ -12,6 +12,7 @@ import { Effect, Schema } from 'effect';
 import { requireScope, resolveAccess } from './auth.ts';
 import type { ClaimedJob } from './job-types.ts';
 import { rankMatches } from './matcher.ts';
+import { now } from './sql-dialect.ts';
 
 const DEFAULT_TOP_K = 10;
 
@@ -42,7 +43,7 @@ export const rankMatchesJob = (job: ClaimedJob) =>
     yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)
       VALUES (${artifact_id}, ${job.workspace_id}, NULL, 'document', ${`Matches for profile ${payload.profile_id} (${payload.kind})`}, 'application/json',
         ${content}, ${createHash('sha256').update(content).digest()}, ${JSON.stringify({ job_id: job.id, profile_id: payload.profile_id, kind: payload.kind })},
-        ${job.requested_by}, UTC_TIMESTAMP(6))`;
+        ${job.requested_by}, ${now})`;
     return { status: 'succeeded', result: { artifact_id, matches: ranked.matches.length } } as const;
   }).pipe(
     Effect.catchTags({

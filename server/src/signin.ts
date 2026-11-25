@@ -195,7 +195,7 @@ export const SignInLive = HttpApiBuilder.Router.use(router =>
           Effect.gen(function* () {
             const opened = yield* openSession(member).pipe(Effect.catchTag('Forbidden', () => notMember('membership ended during sign-in')));
             const fresh = name === '' ? null : name.slice(0, 200);
-            yield* sql`UPDATE principals SET display_name = IF(${fresh} IS NOT NULL, ${fresh}, IF(${email} IS NOT NULL, NULL, display_name)), email = COALESCE(${email}, email) WHERE id = ${principal.value}`;
+            yield* sql`UPDATE principals SET display_name = iif(${fresh} IS NOT NULL, ${fresh}, iif(${email} IS NOT NULL, NULL, display_name)), email = COALESCE(${email}, email) WHERE id = ${principal.value}`;
             return opened;
           }),
         );

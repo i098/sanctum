@@ -1,6 +1,6 @@
 /**
  * Settings the image reads (docs/operations.md, server/src/config.ts and the provider adapters).
- * Keys and MySQL/R2 values are Worker secrets; a setting the Worker lacks is not forwarded, so the
+ * Keys and R2 values are Worker secrets; a setting the Worker lacks is not forwarded, so the
  * app keeps its own default and a missing provider key reports that provider as unavailable.
  */
 const APP_SETTINGS = [
@@ -9,13 +9,6 @@ const APP_SETTINGS = [
   'SANCTUM_PAID_RESEARCH_CALLS_PER_DAY',
   'SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL',
   'SANCTUM_SELECTED_DECISIONS',
-  'MYSQL_HOST',
-  'MYSQL_PORT',
-  'MYSQL_DATABASE',
-  'MYSQL_USER',
-  'MYSQL_PASSWORD',
-  'MYSQL_CA_CERT',
-  'MYSQL_POOL_SIZE',
   'R2_ENDPOINT',
   'R2_BUCKET',
   'R2_ACCESS_KEY_ID',

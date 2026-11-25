@@ -44,9 +44,9 @@ describe('MeetingsApi over HTTP', () => {
           const [other] = yield* seedWorkspace('Other', ['owner']);
           return { owner: owner!, member: member!, other: other!, epoch, meeting: (yield* meetingsOf(listener.workspace_id))[0]!.id };
         }),
-        dbLayer(database.mysql),
+        dbLayer(database.db),
       );
-      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: fixture.owner, member: fixture.member, other: fixture.other }));
+      const layer = serverLayer({ apiPort: 0, db: database.db }, authenticator({ owner: fixture.owner, member: fixture.member, other: fixture.other }));
       const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
       if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
       const base = `http://127.0.0.1:${address.port}`;
@@ -97,9 +97,9 @@ describe('MeetingsApi over HTTP', () => {
           yield* hear(listener, epoch, 0, 30, 'first topic is the launch date');
           return { owner: owner!, device: device!, epoch, meeting: (yield* meetingsOf(listener.workspace_id))[0]!.id };
         }),
-        dbLayer(database.mysql),
+        dbLayer(database.db),
       );
-      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: fixture.owner, device: fixture.device }));
+      const layer = serverLayer({ apiPort: 0, db: database.db }, authenticator({ owner: fixture.owner, device: fixture.device }));
       const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
       if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
       const base = `http://127.0.0.1:${address.port}`;
@@ -126,9 +126,9 @@ describe('MeetingsApi over HTTP', () => {
           const reader: AccessScope = { ...agent!, scopes: ['context:read'] };
           return { owner: owner!, device: device!, member: member!, reader, other: other!, epoch, meeting: (yield* meetingsOf(listener.workspace_id))[0]!.id };
         }),
-        dbLayer(database.mysql),
+        dbLayer(database.db),
       );
-      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: fixture.owner, device: fixture.device, member: fixture.member, reader: fixture.reader, other: fixture.other }));
+      const layer = serverLayer({ apiPort: 0, db: database.db }, authenticator({ owner: fixture.owner, device: fixture.device, member: fixture.member, reader: fixture.reader, other: fixture.other }));
       const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
       if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
       const base = `http://127.0.0.1:${address.port}`;

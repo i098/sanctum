@@ -5,12 +5,12 @@ Nothing here authorizes a new deployment, a production migration, paid services 
 
 ## Processes
 
-Base images (`node`, `mysql`, `caddy`) come from the Docker Hub library mirror at `mirror.gcr.io/library/` with unchanged tags, because anonymous Docker Hub and ECR Public pulls hit rate limits on CI runners.
+Base images (`node`, `caddy`) come from the Docker Hub library mirror at `mirror.gcr.io/library/` with unchanged tags, because anonymous Docker Hub and ECR Public pulls hit rate limits on CI runners.
 
 One Node image serves two entrypoints ([server/Dockerfile](../server/Dockerfile), [docker-compose.yml](../docker-compose.yml), [Cloudflare](#cloudflare)):
 
 - `api` (`server/src/main.ts`): `/api/v1`, `/mcp`, the listener WebSocket upgrade, the built website and, when [self-hosted sign-in](#self-hosted-sign-in) is on, the embedded issuer at `/idp`, all on one port behind Caddy.
-- `worker` (`server/src/worker.ts`): the durable MySQL job ledger (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions, WorkOS organization sync, workspace purge).
+- `worker` (`server/src/worker.ts`): the durable job ledger in the SQL store (notes, recording assembly, transcript reconciliation, speakers, context, memory, matching, actions, WorkOS organization sync, workspace purge).
 
 Both refuse to start in `SANCTUM_ENV=production` until every decision is listed in `SANCTUM_SELECTED_DECISIONS` (`identity_issuer`, `mcp_authorization_server`, `meeting_retention`, `outside_meeting_speech`).
 In every environment, both refuse to start when a listed decision lacks its settings, and the error names each missing variable: `identity_issuer` needs `SANCTUM_OIDC_ISSUER`, `SANCTUM_OIDC_CLIENT_ID` and `SANCTUM_OIDC_REDIRECT_URI` (plus `BETTER_AUTH_SECRET` with the embedded issuer); `mcp_authorization_server` needs the three `SANCTUM_MCP_*` URLs.
@@ -30,7 +30,7 @@ Secrets come from the environment only; none are committed.
 | Device pairing | `SANCTUM_DEVICE_PROXY`: `direct` uses the socket address (default); Compose selects `caddy`, and the hosted container selects `cloudflare`. |
 | Workspaces | `SANCTUM_DEFAULT_SEAT_LIMIT`: owner, admin and member seats per workspace; a positive integer, unset for no limit (the hosted Worker sets `5` in `deploy/cloudflare/wrangler.jsonc`). A workspace's own `workspaces.seat_limit` overrides it (operator SQL; NULL uses the default). A malformed value stops startup. A member beyond the limit is refused with `SeatLimitReached`; existing members stay. |
 | Organizations (hosted) | `WORKOS_API_KEY` (server-only WorkOS API key; with `SANCTUM_OIDC_ISSUER` set to the AuthKit issuer, it turns on [WorkOS organization sync](#workos-organizations)), `SANCTUM_SELF_SERVE_WORKSPACES` (`true` lets a signed-in person with no membership create a workspace; default `false`; needs `WORKOS_API_KEY`) |
-| MySQL | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_POOL_SIZE`, `MYSQL_POOL_QUEUE`, `MYSQL_CA_CERT` (PEM text; when set, TLS is required and the server certificate and host name are verified) |
+| Database | `SANCTUM_DB_URL`: `file:<path>` or `file:<name>?mode=memory` for SQLite on `node:sqlite` (default `file:./sanctum.db`), or an `https://` URL of the D1 gateway Worker. API and worker use the same value. |
 | Recordings (R2) | `R2_ENDPOINT`, `R2_BUCKET`, `R2_PREFIX`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_TIMEOUT_MS` |
 | Speech | Requested output shares the Workers AI credentials in the Models row; see the [speech output decision](DECISIONS.md#speech-output-decision---2026-10-10). Optional diarization uses `PYANNOTE_API_KEY`. |
 | Models | `WORKERS_AI_ACCOUNT_ID`, `WORKERS_AI_API_TOKEN` (server-only token with Workers AI permission, shared by Whisper, Aura-2, voice, extraction and planner), `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY` (server-only; spoken work classifier, question search and context extraction), `OPENAI_API_KEY` (server-only; web research through Responses API `web_search`), `<ROLE>_MODEL_PROVIDER` (`workers-ai` or `anthropic`; classifier and extraction also accept `cerebras`; research: `openai` or `anthropic`), `<ROLE>_MODEL` for voice, extraction, planner, classifier, research, `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY` (paid web-research calls each workspace may start per UTC day, default 2), `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY_TOTAL` (paid web-research calls all workspaces together may start per UTC day, default 4); `0` turns paid research off, and each call is reserved in `paid_model_calls` before it is sent and records the provider's token usage |
@@ -61,22 +61,21 @@ See the [planner provider decision](DECISIONS.md#planner-provider-decision---202
 Paid web research is capped by those two daily allowances and by `researchMaxSearches` (3 web searches per call) in `engineeringDefaults`; a spent allowance refuses the call before anything is sent and the job result says so.
 Worst case with the defaults: 4 calls a day is about 120 calls a month. At GPT-4.1-mini prices one call costs at most about USD 0.046 (3 searches at USD 0.01, 24,000 search-content input tokens at USD 0.40 per million, 4,096 output tokens at USD 1.60 per million), plus its short prompt, so about USD 5.50 a month at most.
 Engineering defaults (chunk length, heartbeat and lease, context debounce, playback URL lifetime, meeting idle close) live in `engineeringDefaults` in [server/src/config.ts](../server/src/config.ts).
-The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech when ASR finished that much audio past the last speech, or when its listener is paused or stopped for that long with nothing left to transcribe or upload; it never closes while ASR or upload lags. The close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only MySQL ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
+The worker sweeper closes an open meeting after `meetingIdleCloseMs` (default 10 minutes) with no speech when ASR finished that much audio past the last speech, or when its listener is paused or stopped for that long with nothing left to transcribe or upload; it never closes while ASR or upload lags. The close is the same as `POST /api/v1/meetings/{id}/close` and survives worker restarts, because the sweep reads only the database ([DECISIONS.md](DECISIONS.md#meeting-end-decision--2026-10-09)).
 
 ## Local stack
 
 ```bash
 npm ci
 npm run dev -w web-app                                  # website on 3102, proxying /api to 7102
-MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d mysql
-MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose run --rm api node server/dist/migrate.js
-MYSQL_PASSWORD=... SANCTUM_ENV=development docker compose up -d api worker caddy
+SANCTUM_ENV=development docker compose run --rm api node server/dist/migrate.js   # SQLite file on the sanctum-data volume
+SANCTUM_ENV=development docker compose up -d api worker caddy
 ```
 
 ## Self-hosted sign-in
 
 `SANCTUM_EMBEDDED_ISSUER=better-auth` mounts Better Auth ([server/src/issuer.ts](../server/src/issuer.ts)) in the API process at `/idp`: the OIDC issuer for website sign-in and the OAuth authorization server for `/mcp`.
-It uses the existing MySQL through its own two-connection pool and the `auth_*` tables of migrations `011_embedded_issuer` and `013_issuer_organizations`; run migrations first. Sanctum never runs Better Auth's own migrator.
+It uses the same database as the API and the `auth_*` tables of migrations `011_embedded_issuer` and `013_issuer_organizations`; run migrations first. Sanctum never runs Better Auth's own migrator.
 
 | Setting | Value |
 | --- | --- |
@@ -107,7 +106,7 @@ This recipe runs the API from source on `http://localhost:7191` with the embedde
 npm ci
 npm run build -w web-app                                # the API serves web-app/dist
 export SANCTUM_ENV=development API_PORT=7191
-export MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_USER=root MYSQL_PASSWORD=... MYSQL_DATABASE=sanctum   # an empty database
+export SANCTUM_DB_URL=file:/tmp/sanctum-dev.db   # a new SQLite file
 export SANCTUM_EMBEDDED_ISSUER=better-auth BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export SANCTUM_OIDC_ISSUER=http://localhost:7191/idp SANCTUM_MCP_ISSUER=http://localhost:7191/idp
 export SANCTUM_MCP_RESOURCE=http://localhost:7191/mcp SANCTUM_MCP_JWKS_URL=http://localhost:7191/idp/jwks
@@ -129,7 +128,7 @@ npm run start -w server                                 # keep it running
 
 ## Cloudflare
 
-The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), MySQL-compatible TiDB Cloud Starter (free tier, AWS us-east-1, database `sanctum`) over verified TLS; set `SANCTUM_TEST_MYSQL_CA_CERT` to run the tests against it. TiDB has no `FULLTEXT`, so context search matches words with regular expressions there and migrations skip the `FULLTEXT` and `STORED` steps (`hasFullText` in `server/src/db.ts`), recordings in the private R2 bucket `sanctum-recordings`.
+The deployed instance runs in the 42nights Cloudflare account from [deploy/cloudflare](../deploy/cloudflare): Worker `sanctum`, Container applications for `SanctumApi` and `SanctumJobs` (same image, one instance each), Cloudflare D1 database `sanctum` (SQLite dialect; the containers reach it only through the Worker's gateway at `d1.internal`, see [d1-switchover.md](d1-switchover.md)), recordings in the private R2 bucket `sanctum-recordings`.
 It serves two Workers custom domains declared in `wrangler.jsonc`: `https://app.sanctum.42nights.dev` (the app, `/api/v1`, `/mcp`, `/.well-known/*`, `/auth/*`, `/invite/*`) and the apex `https://sanctum.42nights.dev`; `workers_dev` is off.
 On deploy, Cloudflare creates the DNS record and certificate for each custom domain in the `42nights.dev` zone; no DNS record is added by hand.
 
@@ -141,20 +140,20 @@ On deploy, Cloudflare creates the DNS record and certificate for each custom dom
   - sign-up enabled (Authentication → Features) and at least one sign-in method, here Magic Auth (Authentication → Methods);
   - a payment method on the WorkOS team, because the production environment needs one (no charge under 1M monthly active users).
   WorkOS lists `registration_endpoint` and `client_id_metadata_document_supported` only in `/.well-known/oauth-authorization-server`, not in `/.well-known/openid-configuration`.
-- **Job worker**: has no port and is never stopped for inactivity; a cron every five minutes starts it again after a crash or rollout. State lives in MySQL and R2; container disk is disposable.
+- **Job worker**: has no port and is never stopped for inactivity; a cron every five minutes starts it again after a crash or rollout. State lives in D1 and R2; container disk is disposable.
 - **Mode**: `SANCTUM_ENV=development` (production refuses to start while decisions are open). Provider requirements are listed under [Configuration](#configuration).
 - **Deploy** (Docker must be usable by the deploying user, or set `WRANGLER_DOCKER_BIN` to a wrapper): from `deploy/cloudflare`, `npx wrangler deploy`. Wrangler first builds the landing page (`npm run build:landing` in `web-app`, the `build` command in `wrangler.jsonc`, which runs relative to this directory), then builds `server/Dockerfile`, pushes it to the account registry and rolls out both containers.
 - **Settings changes**: a running container keeps the environment it started with, and Cloudflare cannot restart it from outside. Each container records a SHA-256 hash of its start environment (no values). After a deploy or `wrangler secret put` changes a forwarded setting, the next request (the API) or cron start (the job worker) records the new hash, then stops the old container and starts it with the current settings. Each hash allows one restart attempt, so a stop that fails cannot loop. Requests wait during the restart, and an open listener reconnects and resumes.
-- **Secrets** (`npx wrangler secret put NAME`, read from stdin): `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_CA_CERT` (the provider's CA, PEM: ISRG Root X1 for TiDB Cloud).
+- **Secrets** (`npx wrangler secret put NAME`, read from stdin): none for the database; the container holds no D1 token.
   R2 uses `R2_ENDPOINT`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, limited to the private bucket.
   Sign-in uses `SANCTUM_OIDC_CLIENT_SECRET` for the WorkOS OAuth application.
   Set the provider credentials listed under [Configuration](#configuration).
   Optional keys: `CEREBRAS_API_KEY` (spoken work classifier, question search and context extraction; server-only; without it extraction runs on Workers AI Qwen), `ANTHROPIC_API_KEY` (explicit Anthropic model overrides), `OPENAI_API_KEY` (web research only; paid; bounded by `SANCTUM_PAID_RESEARCH_CALLS_PER_DAY`), `PIPEDREAM_PROJECT_ID`, `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` (actions), `PYANNOTE_API_KEY` with `SANCTUM_DIARIZATION=pyannote` (diarization), `WORKOS_API_KEY` (organization sync).
   Non-secret settings, including `WORKERS_AI_ACCOUNT_ID` and `SANCTUM_SELF_SERVE_WORKSPACES`, are `vars` in [wrangler.jsonc](../deploy/cloudflare/wrangler.jsonc).
   The Worker forwards only [listed settings](../deploy/cloudflare/src/settings.ts), including model choices; an unset setting keeps the application default.
-- **Migrate** before deploying a new schema, with the image's own entrypoint and the CA mounted read-only: `docker run --rm --env-file <(...) -v "$CA:/ca.pem:ro" <image> sh -c 'MYSQL_CA_CERT="$(cat /ca.pem)" exec node server/dist/migrate.js'`, where the env file holds the same `MYSQL_*` values. The job worker refuses to start while migrations are pending.
+- **Migrate** before deploying a new schema: `npx wrangler d1 migrations apply sanctum` from `deploy/cloudflare` (files in [server/migrations-d1](../server/migrations-d1)). The job worker refuses to start while migrations are pending.
 - **Logs**: `npx wrangler tail sanctum` for the Worker; container stdout and stderr appear in the dashboard under Workers & Pages → `sanctum` → Containers, and in Workers observability. Workers invocation logs are off (`observability.logs.invocation_logs`) because they record the full request URL, which would store the one-time authorization code in `/auth/callback?code=…`; `wrangler tail` still shows live request URLs.
-- **Rollback**: check out the previous validated commit and `npx wrangler deploy` from it; that rebuilds its image and rolls both containers back with the Worker (`wrangler rollback` alone reverts only the Worker script, not the container image). Migrations are never reversed, so a previous image must support the current schema; MySQL and R2 data are untouched.
+- **Rollback**: check out the previous validated commit and `npx wrangler deploy` from it; that rebuilds its image and rolls both containers back with the Worker (`wrangler rollback` alone reverts only the Worker script, not the container image). Migrations are never reversed, so a previous image must support the current schema; D1 and R2 data are untouched.
 
 ## Migrations
 
@@ -198,9 +197,9 @@ Sync revokes only a membership that WorkOS granted (`workspace_members.org_issue
 | Command | What it proves |
 | --- | --- |
 | `npm run check` | Types, handoff structure, links, generated documentation. |
-| `npm run check:app` | Workspace typechecks, all Vitest suites against MySQL 8.4, the web build, Playwright in Chromium, the benchmark manifest, benchmark correctness smoke, and the accelerated 24-hour replay. Set `SANCTUM_TEST_MYSQL_URL` for the last two. |
-| `npm run check:app -- --device-client` | Pairing, recording indications, archive continuity and revocation with the Rust client. Use test MySQL, Playwright Chromium, Cargo and the Linux `script` utility. |
-| `node scripts/benchmark.ts --mysql-url ...` | Full-scale TypeScript benchmark records (see [benchmarks/README.md](../benchmarks/README.md)). |
+| `npm run check:app` | Workspace typechecks, all Vitest suites on in-memory SQLite, the web build, Playwright in Chromium, the benchmark manifest, benchmark correctness smoke, and the accelerated 24-hour replay. |
+| `npm run check:app -- --device-client` | Pairing, recording indications, archive continuity and revocation with the Rust client. Use Playwright Chromium, Cargo and the Linux `script` utility. |
+| `node scripts/benchmark.ts` | Full-scale TypeScript benchmark records (see [benchmarks/README.md](../benchmarks/README.md)). |
 | `node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated` | A day of synthetic source time: meeting boundaries and one owner per segment (RSS growth reported, not gated). |
 | `npm run soak:checkpoint -- --manifest manifest.json --hours 1 --out cp-1h.json --url <app>` | Read-only retrieval checkpoint (1, 5, 12 or 24 hours) of a soak run: asks the planted questions through context search and source lookups, then scores recall, answer accuracy, time-aware accuracy and latency. Options are in the header of [scripts/soak/checkpoint.ts](../scripts/soak/checkpoint.ts); not part of `npm run check:app`. |
 | `npm run sdk:generate -- --check` | Generated TypeScript and Python SDKs match the v1 OpenAPI document. |

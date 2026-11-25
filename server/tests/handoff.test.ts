@@ -5,6 +5,7 @@ import { type AccessScope, ListenerId, type WorkspaceId } from '@sanctum/contrac
 import { Effect } from 'effect';
 import { claimGroupLease } from '../src/capture-groups.ts';
 import { advanceLiveWatermark, heartbeat, startEpoch } from '../src/listeners.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { newEpochId } from './support/media.ts';
@@ -33,10 +34,10 @@ const seedRoom = (options: { readonly preferRoom: boolean }) =>
     const group = randomUUID();
     const room = { id: ListenerId.make(randomUUID()), access: { ...roomDevice!, scopes: ['capture:ingest'] } } satisfies Device;
     const laptop = { id: ListenerId.make(randomUUID()), access: { ...laptopDevice!, scopes: ['capture:ingest'] } } satisfies Device;
-    yield* sql`INSERT INTO capture_groups (id, workspace_id, name, created_at) VALUES (${group}, ${workspace_id}, 'Board room', UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO capture_groups (id, workspace_id, name, created_at) VALUES (${group}, ${workspace_id}, 'Board room', ${now})`;
     for (const [device, mode] of [[room, 'room'], [laptop, 'laptop']] as const) {
       yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, capture_group_id, name, mode, capabilities, created_at)
-        VALUES (${device.id}, ${workspace_id}, ${device.access.principal.id}, ${group}, ${mode}, ${mode}, '{}', UTC_TIMESTAMP(6))`;
+        VALUES (${device.id}, ${workspace_id}, ${device.access.principal.id}, ${group}, ${mode}, ${mode}, '{}', ${now})`;
     }
     if (options.preferRoom) yield* sql`UPDATE capture_groups SET preferred_listener_id = ${room.id} WHERE id = ${group}`;
     return { workspace_id, group, room, laptop } satisfies Room;
@@ -59,10 +60,10 @@ const liveStart = (device: Device, lease_generation: number, epoch_id = newEpoch
 
 /** Simulates the group holder going silent (tab closed, sleep, partition) for longer than the lease. */
 const expireGroup = (room: Room) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE capture_groups SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${room.group}`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE capture_groups SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${room.group}`);
 
 const expireListener = (device: Device) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${device.id}`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${device.id}`);
 
 const lease = (room: Room) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql<{ holder: string | null; generation: number }>`SELECT lease_listener_id AS holder, lease_generation AS generation FROM capture_groups WHERE id = ${room.group}`).pipe(

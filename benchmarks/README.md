@@ -13,24 +13,24 @@ Parity gates may be stricter than the plan tolerance (90% of Rust throughput, 11
 
 ## TypeScript harness
 
-`node scripts/benchmark.ts [--smoke] [--mysql-url mysql://...] [--out file.jsonl]` (`npm run benchmark`) runs the TypeScript side of every workload through the real application code:
+`node scripts/benchmark.ts [--smoke] [--out file.jsonl]` (`npm run benchmark`) runs the TypeScript side of every workload through the real application code:
 
 | Workload | Timed operation | Scope note |
 | --- | --- | --- |
 | `pcm_ingest` | `decodePcmFrame` plus dispatch into a bounded 256-frame queue | Frame validation and dispatch only; socket, auth and ASR excluded. |
-| `archive_streaming` | `putChunk`: WAV shape, SHA-256, manifest claim, object write, commit | In-memory object store with the production interface; real MySQL. |
-| `transcript_ingest` | `publishFinalWindow`: segments, coverage and meeting hooks | Real MySQL. |
-| `context_read_write` | `getContextSnapshot` and `addContextItem`, 9 reads per write | Real MySQL; cites the earliest segment of each meeting `transcript_ingest` created. |
+| `archive_streaming` | `putChunk`: WAV shape, SHA-256, manifest claim, object write, commit | In-memory object store with the production interface; in-memory SQLite. |
+| `transcript_ingest` | `publishFinalWindow`: segments, coverage and meeting hooks | In-memory SQLite. |
+| `context_read_write` | `getContextSnapshot` and `addContextItem`, 9 reads per write | In-memory SQLite; cites the earliest segment of each meeting `transcript_ingest` created. |
 | `cosine_ranking` | Exact float32 top-k (`scripts/benchmark-matching.ts`) | In-process, verified against a full-sort reference. |
 
-The MySQL workloads create and drop a `sanctum_bench_*` database; without a URL they are reported as unrun.
+The database workloads create a fresh migrated in-memory SQLite database per client and drop it afterwards.
 `npm run check:app` runs `--smoke` as a correctness check: a failed operation or invalid record fails the step, timings never do.
 
 ## Rust reference
 
 `rust/` is a benchmark-only Rust port of the same five workloads over the same fixtures.
 It is not an npm workspace, not built by any application image and never an application dependency.
-It uses the `mysql` crate with server-side prepared statements, as `@effect/sql-mysql2` does through mysql2 `execute`.
+It uses the `mysql` crate with server-side prepared statements. The application moved to SQLite, so the three database workloads of this port no longer match it: `scripts/benchmark-compare.ts` reports them as unrun until a SQLite port of them exists.
 
 | Workload | Port | Differences |
 | --- | --- | --- |
@@ -47,18 +47,18 @@ Rust `heap` is the live byte count of a counting global allocator; `external`, `
 
 ## Matched runner
 
-`node scripts/benchmark-compare.ts [--smoke] [--mysql-url mysql://...] [--clients 1] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
+`node scripts/benchmark-compare.ts [--smoke] [--out file.jsonl] [--soak-seconds 300]` needs `cargo` on `PATH` (for example `PATH=$HOME/.cargo/bin:$PATH`).
 It builds `rust/` with `cargo build --release --locked` and passes one job JSON to `node scripts/benchmark.ts --job` and to the Rust binary, each in its own process.
 It runs three modes:
 
-- `closed_loop`: `pcm_ingest`, `cosine_ranking` and the three MySQL workloads at the TypeScript harness scale; each implementation gets `--clients` fresh seeded databases (default 1).
+- `closed_loop`: `pcm_ingest` and `cosine_ranking` at the TypeScript harness scale.
 - `open_loop_sweep`: `pcm_ingest` at the manifest's offered frame rates, then doubling, for 2 s per rate until achieved throughput falls below 95% of the offered rate.
 - `long_run`: `pcm_ingest` at 3,200 frames/s for `--soak-seconds`; RSS growth from the end of a 10% warm-up to the end must stay within 16 MiB.
 
 Every open-loop run is one sequential stream of frames, so its records carry `offered_load.concurrency: 1`.
 The listener count a rate models at 50 frames/s per listener (64 at 3,200 frames/s) is `parameters.equivalent_listeners_at_50fps`; no run drives concurrent listeners.
 
-The MySQL workloads run as one `database` job whose `clients` array gives each concurrent client its own seeded database on the same server.
+The `database` job of `scripts/benchmark.ts --job` (TypeScript side only) gives each concurrent client its own seeded in-memory database.
 The workload counts apply per client.
 All clients run `archive_streaming` together, then `transcript_ingest`, then `context_read_write`; within a client, operations stay in order.
 Each implementation emits one aggregate record per MySQL workload: `offered_load.concurrency` is the client count, throughput is all completed operations over the phase's wall time, and latency percentiles come from the pooled operation latencies.
@@ -66,8 +66,7 @@ CPU and memory are process-wide, measured once per phase.
 A failed client counts as failed operations or fails the job; it never yields a successful record.
 
 Open-loop latency counts from each frame's scheduled arrival, so a stall cannot hide tail latency; the driver sleeps only when at least 1 ms ahead.
-The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, a database record does not pool every client's operations at the client count, their MySQL end states differ, or a long run exceeds its bound.
-The MySQL end state is compared client by client (client i of TypeScript against client i of Rust) through row counts and content sums of every written table, excluding IDs and wall-clock times; the first differing pair stops the run and is named.
+The runner fails when a record is invalid, an operation fails, the two implementations' fixture SHA-256s differ, or a long run exceeds its bound.
 Records pair only at the same workload, phase, mode, offered rate and concurrency.
 Every record carries the host description, the runtime and the SHA-256 of its implementation's tracked source files in `parameters.harness`.
 Comparative timing stays out of ordinary CI: `npm run check` covers the runner's decision logic and open-loop pacing, not the Rust build or any timing gate.
