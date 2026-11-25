@@ -1,7 +1,6 @@
-# Local production-shaped stack: MySQL, the API and worker from one image, and Caddy for HTTPS.
-#   MYSQL_PASSWORD=... docker compose up -d mysql
-#   MYSQL_PASSWORD=... docker compose run --rm api node server/dist/migrate.js   # explicit schema step
-#   MYSQL_PASSWORD=... docker compose up -d api worker caddy
+# Local production-shaped stack: the API and worker from one image on one SQLite file, and Caddy for HTTPS.
+#   docker compose run --rm api node server/dist/migrate.js   # explicit schema step
+#   docker compose up -d api worker caddy
 # SANCTUM_ENV defaults to production, which refuses to start until the open decisions in
 # docs/DECISIONS.md are selected; use SANCTUM_ENV=development for a local fixture stack.
 # Rollback: set SANCTUM_IMAGE to the previous validated tag and `up -d api worker`; data
@@ -28,32 +27,11 @@ x-app: &app
     SANCTUM_MCP_DEFAULT_SCOPES:
     SANCTUM_EMBEDDED_ISSUER:
     BETTER_AUTH_SECRET:
-    MYSQL_HOST: mysql
-    MYSQL_DATABASE: sanctum
-    MYSQL_USER: sanctum
-    MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
-  depends_on:
-    mysql:
-      condition: service_healthy
+    SANCTUM_DB_URL: file:/data/sanctum.db
+  volumes:
+    - sanctum-data:/data
 
 services:
-  mysql:
-    image: mirror.gcr.io/library/mysql:8.4
-    environment:
-      MYSQL_DATABASE: sanctum
-      MYSQL_USER: sanctum
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
-      MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
-      TZ: UTC
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1']
-      interval: 5s
-      timeout: 5s
-      retries: 30
-    restart: unless-stopped
-
   api:
     <<: *app
     environment:
@@ -83,6 +61,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  mysql-data:
+  sanctum-data:
   caddy-data:
   caddy-config:
