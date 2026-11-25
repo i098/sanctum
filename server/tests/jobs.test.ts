@@ -5,9 +5,11 @@ import { Deferred, Effect, Fiber, Option, Ref, Schedule } from 'effect';
 import { createAgent } from '../src/agents.ts';
 import { resolveAccess } from '../src/auth.ts';
 import type { ClaimedJob, JobHandlers } from '../src/job-types.ts';
-import { claimJob, completeJob, type Lease, retryDeadlocks, runWorker, sweepJobs } from '../src/job-runner.ts';
+import { claimJob, completeJob, type Lease, runWorker, sweepJobs } from '../src/job-runner.ts';
+import { dbLayer } from '../src/db.ts';
 import { enqueueJob } from '../src/jobs.ts';
-import { withDatabase } from './support/database.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
+import { createTestDatabase, withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const migrated = { migrated: true };
@@ -27,12 +29,12 @@ interface Row {
 const row = (id: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const [found] = yield* sql<Row>`SELECT id, status, attempts, rearmed, payload, available_at <= UTC_TIMESTAMP(6) AS due, last_error FROM jobs WHERE id = ${id}`;
-    return { ...found!, due: Number(found!.due) };
+    const [found] = yield* sql<Omit<Row, 'payload' | 'last_error'> & { payload: string; last_error: string | null }>`SELECT id, status, attempts, rearmed, payload, available_at <= ${now} AS due, last_error FROM jobs WHERE id = ${id}`;
+    return { ...found!, due: Number(found!.due), payload: JSON.parse(found!.payload), last_error: found!.last_error === null ? null : JSON.parse(found!.last_error) } satisfies Row;
   });
 
 const claim = Effect.map(claimJob(KINDS, LEASE_MS), Option.getOrThrow);
-const makeDue = (id: string) => Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE jobs SET available_at = UTC_TIMESTAMP(6) WHERE id = ${id}`);
+const makeDue = (id: string) => Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE jobs SET available_at = ${now} WHERE id = ${id}`);
 const fail = (lease: Lease, retryable: boolean) => completeJob(lease, { status: 'failed', error: new JobFailure({ message: 'provider timeout', retryable }) });
 
 const seed = Effect.map(seedWorkspace('Jobs', ['owner']), ([owner]) => owner!);
@@ -72,30 +74,30 @@ describe('job ledger', () => {
     ),
   );
 
+  // Each claimer has its own connection to one database, so claims interleave between statements.
   it.effect('claims each due job exactly once across concurrent workers', () =>
-    withDatabase(
-      Effect.gen(function* () {
+    Effect.gen(function* () {
+      const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), created => Effect.promise(created.drop));
+      const later = yield* Effect.gen(function* () {
         const owner = yield* seed;
         yield* Effect.forEach(Array.from({ length: 12 }, (_, index) => index), index => job(owner.workspace_id, `k${index}`));
-        const later = yield* job(owner.workspace_id, 'later', {}, { delay_ms: 60_000 });
-        const claimed = yield* Ref.make<ReadonlyArray<string>>([]);
-        const worker = Effect.gen(function* () {
-          for (; ;) {
-            const lease = yield* claimJob(KINDS, LEASE_MS);
-            if (Option.isNone(lease)) return;
-            yield* Ref.update(claimed, ids => [...ids, lease.value.job.id]);
-          }
-        });
-        yield* Effect.all([worker, worker, worker, worker], { concurrency: 'unbounded' });
-        const ids = yield* Ref.get(claimed);
-        expect(ids).toHaveLength(12);
-        expect(new Set(ids).size).toBe(12);
-        expect(ids).not.toContain(later);
-        expect(Option.isNone(yield* claimJob(KINDS, LEASE_MS))).toBe(true);
-      }),
-      migrated,
-    ),
-  );
+        return yield* job(owner.workspace_id, 'later', {}, { delay_ms: 60_000 });
+      }).pipe(Effect.provide(dbLayer(database.db)));
+      const claimed = yield* Ref.make<ReadonlyArray<string>>([]);
+      const worker = Effect.gen(function* () {
+        for (; ;) {
+          const lease = yield* claimJob(KINDS, LEASE_MS);
+          if (Option.isNone(lease)) return;
+          yield* Ref.update(claimed, ids => [...ids, lease.value.job.id]);
+        }
+      }).pipe(Effect.provide(dbLayer(database.db)));
+      yield* Effect.all([worker, worker, worker, worker], { concurrency: 'unbounded' });
+      const ids = yield* Ref.get(claimed);
+      expect(ids).toHaveLength(12);
+      expect(new Set(ids).size).toBe(12);
+      expect(ids).not.toContain(later);
+      expect(Option.isNone(yield* Effect.provide(claimJob(KINDS, LEASE_MS), dbLayer(database.db)))).toBe(true);
+    }).pipe(Effect.scoped));
 
   it.effect('fences completion by lease token and generation after an expired lease is reclaimed', () =>
     withDatabase(
@@ -104,7 +106,7 @@ describe('job ledger', () => {
         const owner = yield* seed;
         const id = yield* job(owner.workspace_id, 'meeting:1');
         const stale = yield* claim;
-        yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${id}`;
+        yield* sql`UPDATE jobs SET lease_until = ${addSeconds(now, -1)} WHERE id = ${id}`;
         yield* sweepJobs;
         expect(yield* row(id)).toMatchObject({ status: 'pending', attempts: 1, last_error: { message: 'Lease expired before completion' } });
         const current = yield* claim;
@@ -113,13 +115,13 @@ describe('job ledger', () => {
         expect(yield* row(id)).toMatchObject({ status: 'running', attempts: 2 });
         expect(yield* completeJob(current, { status: 'succeeded', result: 'fresh' })).toBe(true);
         expect(yield* completeJob(current, { status: 'succeeded', result: 'twice' })).toBe(false);
-        const [{ result }] = (yield* sql<{ result: unknown }>`SELECT result FROM jobs WHERE id = ${id}`) as [{ result: unknown }];
-        expect(result).toBe('fresh');
+        const [{ result }] = (yield* sql<{ result: string }>`SELECT result FROM jobs WHERE id = ${id}`) as [{ result: string }];
+        expect(JSON.parse(result)).toBe('fresh');
 
         // An exhausted job whose lease expires fails instead of looping forever.
         const exhausted = yield* job(owner.workspace_id, 'meeting:2', {}, { max_attempts: 1 });
         yield* claim;
-        yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${exhausted}`;
+        yield* sql`UPDATE jobs SET lease_until = ${addSeconds(now, -1)} WHERE id = ${exhausted}`;
         yield* sweepJobs;
         expect(yield* row(exhausted)).toMatchObject({ status: 'failed', attempts: 1 });
       }),
@@ -184,27 +186,8 @@ describe('job ledger', () => {
     ),
   );
 
-  it.live('retries deadlocked transactions a bounded number of times and nothing else', () =>
-    Effect.gen(function* () {
-      const attempts = yield* Ref.make(0);
-      const failing = (errno: number, failures: number) =>
-        Effect.gen(function* () {
-          const attempt = yield* Ref.updateAndGet(attempts, count => count + 1);
-          if (attempt <= failures) return yield* new SqlError.SqlError({ cause: { errno }, message: 'lock failure' });
-          return attempt;
-        });
-      expect(yield* retryDeadlocks(failing(1213, 2))).toBe(3);
-      yield* Ref.set(attempts, 0);
-      expect((yield* Effect.flip(retryDeadlocks(failing(1213, 99)))).message).toBe('lock failure');
-      expect(yield* Ref.get(attempts)).toBe(5);
-      yield* Ref.set(attempts, 0);
-      yield* Effect.flip(retryDeadlocks(failing(1062, 99)));
-      expect(yield* Ref.get(attempts)).toBe(1);
-    }),
-  );
-
   // The slow handler outlives three lease lengths, so it only succeeds with attempt 1 if renewal works;
-  // 1.5 s leases leave room for slow MySQL round trips on a loaded shared host.
+  // 1.5 s leases leave room for slow round trips on a loaded shared host.
   it.live('runs handlers, renews leases, re-checks requesters and records defects', () =>
     withDatabase(
       Effect.gen(function* () {
@@ -219,7 +202,7 @@ describe('job ledger', () => {
               yield* Ref.update(runs, list => [...list, claimed.work_key]);
               if (claimed.work_key === 'slow') yield* Effect.sleep('4500 millis');
               if (claimed.work_key === 'defect') return yield* Effect.die(new Error('handler bug'));
-              if (claimed.work_key === 'db-blip') return yield* Effect.die(new SqlError.SqlError({ cause: { errno: 2013 }, message: 'connection lost' }));
+              if (claimed.work_key === 'db-blip') return yield* Effect.die(new SqlError.SqlError({ cause: new Error('connection lost'), message: 'connection lost' }));
               return { status: 'succeeded' as const, result: { key: claimed.work_key } };
             }),
         };
@@ -229,7 +212,7 @@ describe('job ledger', () => {
         const defect = yield* job(owner.workspace_id, 'defect');
         const blip = yield* job(owner.workspace_id, 'db-blip', {}, { max_attempts: 2 });
         const byAgent = yield* job(owner.workspace_id, 'agent-work', {}, { requested_by: agent.agent.id });
-        yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${agent.agent.id}`;
+        yield* sql`UPDATE agent_credentials SET revoked_at = ${now} WHERE principal_id = ${agent.agent.id}`;
 
         expect(yield* until(slow, current => current.status === 'succeeded')).toMatchObject({ attempts: 1 });
         expect(yield* until(defect, current => current.status === 'failed')).toMatchObject({ attempts: 1 });
@@ -312,9 +295,9 @@ describe('job ledger', () => {
         const held = yield* job(owner.workspace_id, 'held');
         yield* until(held, current => current.status === 'running');
         // Renewals (every second), claims and sweeps fail while the table is gone.
-        yield* sql`RENAME TABLE jobs TO jobs_offline`;
+        yield* sql`ALTER TABLE jobs RENAME TO jobs_offline`;
         yield* Effect.sleep('1500 millis');
-        yield* sql`RENAME TABLE jobs_offline TO jobs`;
+        yield* sql`ALTER TABLE jobs_offline RENAME TO jobs`;
         yield* Deferred.succeed(release, undefined);
         expect(yield* until(held, current => current.status === 'succeeded')).toMatchObject({ attempts: 1 });
         const after = yield* job(owner.workspace_id, 'after');
