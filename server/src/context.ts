@@ -1,8 +1,8 @@
 /**
  * Versioned, time-aware, source-linked shared context (plan section 08). Items are immutable
  * `(id, revision)` rows; every change appends a committed-order event in the same transaction.
- * Lock order inside a change: meeting row (or workspace row for workspace-level items), then
- * the workspace counter in `nextContextSeq`.
+ * A change reads its meeting's revisions first and writes after; the commit guard reruns a change
+ * that lost a race, so nothing here locks a row.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpApiBuilder } from '@effect/platform';
@@ -43,8 +43,9 @@ import { authorizeMeeting, requireScope } from './auth.ts';
 import { scopedCacheKey } from './cache.ts';
 import { decodeRows, encodeCursor, getContextChanges, getSource, resolveSources, type VisibleScope, visibleScope, visibleWhere } from './context-changes.ts';
 import { appendContextEvent } from './context-events.ts';
-import { DbJson, DbSafeInt, DbSha256, DbUtc, hasFullText } from './db.ts';
+import { DbJson, DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { LlmClient } from './llm.ts';
+import { now } from './sql-dialect.ts';
 
 /** Most items one snapshot or search returns; `truncated` reports the rest. */
 const ITEM_LIMIT = 200;
@@ -116,14 +117,14 @@ export const meetingItems = (workspace_id: string, meeting_id: string) =>
 
 /**
  * Candidates to show an extraction prompt, chronological: the meeting's newest `recent` current items plus the
- * `matching` current items of any age that best match `prefixes` (word prefixes, as FULLTEXT `prefix*` terms).
+ * `matching` current items of any age that best match `prefixes` (word prefixes, as FTS5 `prefix*` terms).
  */
 export const relevantItems = (workspace_id: string, meeting_id: string, prefixes: ReadonlyArray<string>, recent: number, matching: number) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const current = sql`ci.meeting_id = ${meeting_id} AND ci.state <> 'superseded'`;
   const newest = yield* latestItems(workspace_id, current, recent);
-  const against = anyPrefix(sql, prefixes, 'ci.text');
+  const against = anyPrefix(sql, prefixes, ['text']);
   const shared = prefixes.length === 0 ? [] : yield* latestItems(workspace_id, sql.and([current, against.must]), matching, sql`${against.relevance} DESC, COALESCE(ci.event_at, ci.created_at) DESC, ci.id`);
   const at = (item: ContextItem) => Date.parse(item.event_at ?? item.created_at);
   return [...new Map([...shared, ...newest].map(item => [item.id, item])).values()].sort((a, b) => at(a) - at(b));
@@ -155,7 +156,7 @@ const ItemColumns = Schema.Struct({
  sources: Schema.parseJson(Schema.Array(SourceRef)),
 });
 
-/** Inserts `item` and its event inside the caller's transaction; the event actor defaults to the author. */
+/** Inserts `item` and its event inside the caller's transaction; the event actor defaults to the author. Stamps `created_at` from this process's clock: a buffered write cannot be read back. */
 export const writeItem = (
  workspace_id: WorkspaceId,
  item: NewItem,
@@ -171,11 +172,12 @@ export const writeItem = (
   const columns = Schema.encodeSync(ItemColumns)(item);
   const supersedes = item.supersedes ?? { id: null, revision: null };
   const idempotency = options.idempotency ?? { key: null, sha256: null };
+  const created_at = new Date().toISOString().replace('T', ' ').replace('Z', '000');
   yield* sql`INSERT INTO context_items (id, revision, workspace_id, meeting_id, kind, text, state, derivation, event_at, valid_from, valid_until,
         time_expression, sources, author_type, author_principal_id, supersedes_id, supersedes_revision, idempotency_key, payload_sha256, created_at)
       VALUES (${item.id}, ${item.revision}, ${workspace_id}, ${item.meeting_id}, ${item.kind}, ${item.text}, ${item.state}, ${item.derivation},
         ${columns.event_at}, ${columns.valid_from}, ${columns.valid_until}, ${columns.time}, ${columns.sources}, ${item.author.type}, ${item.author.id},
-        ${supersedes.id}, ${supersedes.revision}, ${idempotency.key}, ${idempotency.sha256 && Buffer.from(idempotency.sha256, 'hex')}, UTC_TIMESTAMP(6))`;
+        ${supersedes.id}, ${supersedes.revision}, ${idempotency.key}, ${idempotency.sha256 && Buffer.from(idempotency.sha256, 'hex')}, ${created_at})`;
   yield* appendContextEvent({
    workspace_id,
    meeting_id: item.meeting_id,
@@ -184,32 +186,27 @@ export const writeItem = (
    actor: options.actor ?? item.author.id,
    source_revision: options.source_revision,
   });
-  const [row] = yield* decodeRows(ItemRow, sql`SELECT * FROM context_items WHERE id = ${item.id} AND revision = ${item.revision}`);
-  return toItem(row!);
+  return { ...item, created_at: Schema.decodeSync(DbUtc)(created_at) } satisfies ContextItem;
  });
 
 const MeetingLock = Schema.Struct({ context_revision: DbSafeInt, boundary_revision: Schema.Number });
 
-/** Row-locks a meeting for a context change; take it first inside the transaction. Undefined when absent. */
+/** A meeting's revisions for a context change, read first inside the transaction so the commit guard covers them. Undefined when absent. */
 export const lockMeeting = (workspace_id: string, meeting_id: string) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
-  const [meeting] = yield* decodeRows(MeetingLock, sql`SELECT context_revision, boundary_revision FROM meetings WHERE workspace_id = ${workspace_id} AND id = ${meeting_id} FOR UPDATE`);
+  const [meeting] = yield* decodeRows(MeetingLock, sql`SELECT context_revision, boundary_revision FROM meetings WHERE workspace_id = ${workspace_id} AND id = ${meeting_id}`);
   return meeting;
  });
 
 /**
- * Locks the container of a change. Returns the revision `expected_revision` is checked against
+ * Reads the container of a change. Returns the revision `expected_revision` is checked against
  * (the meeting's context revision, or 0 for workspace-level items, which have no shared snapshot)
  * and the source revision its event records.
  */
 const lockContainer = (workspace_id: string, meeting_id: string | null) =>
  Effect.gen(function*() {
-  const sql = yield* SqlClient.SqlClient;
-  if (meeting_id === null) {
-   yield* sql`SELECT id FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
-   return { context_revision: 0, source: {} };
-  }
+  if (meeting_id === null) return { context_revision: 0, source: {} };
   const meeting = (yield* lockMeeting(workspace_id, meeting_id))!;
   return { context_revision: meeting.context_revision, source: { source_revision: meeting.boundary_revision } };
  });
@@ -346,7 +343,7 @@ export const getContextSnapshot = (access: AccessScope, meeting_id: MeetingId) =
    Effect.gen(function*() {
     const [head] = yield* decodeRows(
      SnapshotHead,
-     sql`SELECT UTC_TIMESTAMP(6) AS now, m.context_revision, m.boundary_revision, m.timezone, w.context_seq
+     sql`SELECT ${now} AS now, m.context_revision, m.boundary_revision, m.timezone, w.context_seq
             FROM meetings m JOIN workspaces w ON w.id = m.workspace_id WHERE m.workspace_id = ${access.workspace_id} AND m.id = ${meeting_id}`,
     );
     const key = scopedCacheKey(access, 'context', meeting_id, head!.context_revision, head!.boundary_revision);
@@ -393,37 +390,32 @@ const rangeFilters = (sql: SqlClient.SqlClient, input: SearchContextParams, afte
 const decodeSearchCursor = (cursor: string) =>
  Schema.decode(SearchCursor)(Buffer.from(cursor, 'base64url').toString()).pipe(Effect.mapError(() => new NotFound({ message: 'Unknown cursor' })));
 
-/** TiDB has no FULLTEXT: a regex stands in for a MATCH word prefix, at a word start of `column`. */
-const wordPrefix = (sql: SqlClient.SqlClient, column: string, pattern: string) =>
- sql`REGEXP_LIKE(${sql.literal(column)}, ${`(?i)(^|[^\\p{L}\\p{N}])${pattern}`})`;
-const escapeRegex = (text: string) => text.replace(/[\\.+*?()|[\]{}^$]/g, '\\$&');
+/** A quoted FTS5 word prefix; words come from `TOKEN`, so they hold no quote. */
+const prefixTerm = (word: string) => `"${word}"*`;
 
-/** Items matching any word as a prefix: FULLTEXT `word*` on MySQL, one regex per word on TiDB, where the matched count is the relevance. */
-const anyPrefix = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, columns: string) => {
- if (hasFullText()) {
-  const against = sql`MATCH(${sql.literal(columns)}) AGAINST (${words.map(word => `${word}*`).join(' ')} IN BOOLEAN MODE)`;
-  return { must: against, relevance: against };
- }
- const each = words.map(word => wordPrefix(sql, 'ci.text', escapeRegex(word)));
- return { must: sql.or(each), relevance: sql.join(' + ', true)(each) };
+/** Items whose `context_items_fts` row matches any of `terms` in `columns`; `relevance` is the BM25 score, higher is better, 0 for a row that matched elsewhere. */
+const ftsAny = (sql: SqlClient.SqlClient, terms: ReadonlyArray<string>, columns: ReadonlyArray<'text' | 'text_joined'>) => {
+ const query = `{${columns.join(' ')}} : (${terms.join(' OR ')})`;
+ return {
+  must: sql`ci.rowid IN (SELECT rowid FROM context_items_fts WHERE context_items_fts MATCH ${query})`,
+  relevance: sql`COALESCE((SELECT -bm25(context_items_fts) FROM context_items_fts WHERE context_items_fts MATCH ${query} AND rowid = ci.rowid), 0)`,
+ };
 };
 
+/** Items matching any word as a prefix in `columns`: `must` selects them and `relevance` ranks them. */
+const anyPrefix = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, columns: ReadonlyArray<'text' | 'text_joined'>) => ftsAny(sql, words.map(prefixTerm), columns);
+
 /**
- * Every word is required: FULLTEXT for three or more characters, `LOCATE` for shorter ones. A hyphenated word matches its
- * spaced form as a phrase and its joined form as a word; `text_joined` (text without hyphens) lets "offsite" find "off-site".
- * Hyphenated words whose parts are all shorter than three characters have no FULLTEXT tokens, so they use `LOCATE`.
+ * Every word is required: a full-text prefix match for three or more characters, a substring match for shorter ones. A hyphenated
+ * word matches its spaced form as a phrase and its joined form as a word prefix; `text_joined` (text without hyphens) lets "offsite"
+ * find "off-site". Hyphenated words whose parts are all shorter than three characters use the substring match.
  */
 export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
  const word = (w: string) => {
   const parts = w.split('-');
-  if (parts.length > 1 && parts.every(part => part.length < 3)) return sql`LOCATE(${w}, ci.text) > 0`;
-  if (!hasFullText() && w.length >= 3) {
-   const joined = sql`REGEXP_LIKE(REPLACE(ci.text, '-', ''), ${`(?i)(^|[^\\p{L}\\p{N}])${escapeRegex(parts.join(''))}`})`;
-   return parts.length > 1 ? sql.or([wordPrefix(sql, 'ci.text', parts.map(escapeRegex).join('[^\\p{L}\\p{N}]+')), joined]) : wordPrefix(sql, 'ci.text', escapeRegex(w));
-  }
-  // The joined prefix must precede the phrase: MySQL 8.4 boolean mode drops rows matching only the wildcard when a phrase comes first.
-  if (parts.length > 1) return sql`MATCH(ci.text, ci.text_joined) AGAINST (${`${parts.join('')}* "${parts.join(' ')}"`} IN BOOLEAN MODE)`;
-  return w.length >= 3 ? sql`MATCH(ci.text, ci.text_joined) AGAINST (${`+${w}*`} IN BOOLEAN MODE)` : sql`LOCATE(${w}, ci.text) > 0`;
+  // shortcut: lower() folds ASCII only; upgrade if short non-ASCII search words matter.
+  if (parts.every(part => part.length < 3)) return sql`instr(lower(ci.text), ${w}) > 0`;
+  return ftsAny(sql, parts.length > 1 ? [prefixTerm(parts.join('')), `"${parts.join(' ')}"`] : [prefixTerm(w)], ['text', 'text_joined']).must;
  };
  return sql.and(words.map(word));
 };
@@ -433,7 +425,7 @@ const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by
  'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'what', 'when', 'where', 'who', 'will', 'with',
  'which', 'whom', 'whose', 'why', 'do', 'does', 'did', 'has', 'have', 'had', 'were', 'been', 'any', 'many', 'much', 'there',
  'we', 'our', 'us', 'you', 'your', 'they', 'their', 'can', 'could', 'would', 'should', 'and', 'its', 'not', 's']);
-/** Words a question never matches on: its question and helper words plus the rest of MySQL's default InnoDB FULLTEXT stopwords, which are never indexed. */
+/** Words a question never matches on: its question and helper words plus the rest of the stopwords the former MySQL index skipped. */
 const SKIPPED_WORDS = new Set([...QUESTION_WORDS, 'com', 'de', 'en', 'la', 'und', 'www']);
 /** Time words and clock times ("as of T0+04:00") ask for an order or a window; `from`, `to` and newest-first carry those. */
 const TIME_WORDS = new Set(['current', 'currently', 'now', 'latest', 'newest', 'recent', 'before', 'after', 'since', 'until', 'between']);
@@ -461,10 +453,10 @@ Return in relevant the refs of every item that states the answer to the question
 Leave out items about a different subject, even when they share words with the question. Return an empty list when no item answers the question.
 Return only refs that appear in the list.`;
 
-/** Items matching any content word, best FULLTEXT relevance first: `must` selects them and `relevance` ranks them. */
+/** Items matching any content word, best full-text relevance first: `must` selects them and `relevance` ranks them. */
 const candidateMatch = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
  const plain = words.filter(word => word.length >= 3 && !word.includes('-'));
- const fulltext = plain.length === 0 ? null : anyPrefix(sql, plain, 'ci.text, ci.text_joined');
+ const fulltext = plain.length === 0 ? null : anyPrefix(sql, plain, ['text', 'text_joined']);
  const other = words.filter(word => !plain.includes(word)).map(word => termFilter(sql, [word]));
  return { must: sql.or([...(fulltext === null ? [] : [fulltext.must]), ...other]), relevance: fulltext?.relevance ?? sql`0` };
 };
