@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SqlClient } from '@effect/sql';
@@ -14,6 +14,7 @@ import { createLocalJWKSet, type CryptoKey, exportJWK, generateKeyPair, SignJWT 
 import { type JsonSchema, deref, operations } from '../../scripts/generate-sdks.ts';
 import { MCP_SESSION_IDLE_MS, MCP_TOOL_NAMES, McpAuthorizationFromEnv, McpAuthorizationServer, mcpTools } from '../src/mcp.ts';
 import { addMember, linkWorkspaceOrg } from '../src/store.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { HOLD_SOURCE_ID } from './support/fake-domain.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
@@ -37,7 +38,7 @@ const identify = (access: AccessScope, issuer = ISSUER) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const subject = `sub-${access.principal.id}`;
-    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${issuer}, ${subject}, ${access.principal.id}, UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${issuer}, ${subject}, ${access.principal.id}, ${now})`;
     return subject;
   });
 
@@ -244,7 +245,7 @@ describe('MCP over Streamable HTTP', () => {
       const send = Effect.flatMap(Effect.promise(() => sign(subject, 'context:read')), token => Effect.promise(() => post(url, token, initialize(LATEST_PROTOCOL_VERSION))));
       expect((yield* send).status).toBe(403);
       yield* Effect.provide(
-        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${owner!.workspace_id}`),
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspaces SET deleted_at = ${now}, purge_after = ${addSeconds(now, 7 * 86_400)} WHERE id = ${owner!.workspace_id}`),
         db,
       );
       expect((yield* send).status).toBe(200);
@@ -329,7 +330,7 @@ describe('MCP over Streamable HTTP', () => {
       // Agent members authenticate only while they hold an active credential.
       yield* Effect.provide(
         Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
-          VALUES (${randomUUID()}, ${agent!.workspace_id}, ${agent!.principal.id}, ${owner!.principal.id}, UNHEX(SHA2(${randomUUID()}, 256)), '["context:read"]', UTC_TIMESTAMP(6))`),
+          VALUES (${randomUUID()}, ${agent!.workspace_id}, ${agent!.principal.id}, ${owner!.principal.id}, ${createHash('sha256').update(randomUUID()).digest()}, '["context:read"]', ${now})`),
         db,
       );
       const token = (access: AccessScope, scope: string) =>
@@ -391,7 +392,7 @@ describe('MCP over Streamable HTTP', () => {
 
       // Revoking the membership refuses the very next call on the open session.
       yield* Effect.provide(
-        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`),
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspace_members SET revoked_at = ${now} WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`),
         db,
       );
       const revoked = yield* Effect.promise(() => reader.client.callTool({ name: 'get_context', arguments: { meeting_id: meeting.id } }).then(() => 'allowed', (e: Error) => e.message));
