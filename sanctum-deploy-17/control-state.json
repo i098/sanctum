@@ -1,0 +1,46 @@
+{
+  "runs": [
+    {
+      "run": 1,
+      "tag": "a",
+      "id": "user_01M886Q9ZKX26GR9CZBZBZRA4J",
+      "membership": "om_01M886QA38M141RSHYG8KX4F4A",
+      "box": "6b06406c4448d852c40cfd42"
+    },
+    {
+      "run": 1,
+      "tag": "b",
+      "id": "user_01M886QAN0V2BVW26YRDJ4375C",
+      "membership": "om_01M886QARHEWNF5QD7SFY5NE0B",
+      "box": "6b06406c6181a99afb0a71fa"
+    },
+    {
+      "result": {
+        "run": 1,
+        "mode": "null",
+        "sessions": [
+          200,
+          200
+        ],
+        "bodies": [
+          "{\"workspace_id\":\"951bf075-6e5f-4622-88ef-eaa6fe073958\",\"principal\":{\"id\":\"db91284f-4ff7-4252-939d-1167d3aad444\",\"kind\":\"human\",\"display_name\":\"sd17a\",\"email\":\"sd17r1a360367@euploading.com\"},\"role\":\"me",
+          "{\"workspace_id\":\"951bf075-6e5f-4622-88ef-eaa6fe073958\",\"principal\":{\"id\":\"41c99f7b-8210-483c-b1b2-31135019866b\",\"kind\":\"human\",\"display_name\":\"sd17b\",\"email\":\"sd17r1b871532@euploading.com\"},\"role\":\"me"
+        ],
+        "test_users_seated": 2,
+        "active_seats": 3,
+        "limit": null
+      }
+    }
+  ],
+  "boxes": [
+    {
+      "id": "6b06406c4448d852c40cfd42",
+      "address": "sd17r1a360367@euploading.com"
+    },
+    {
+      "id": "6b06406c6181a99afb0a71fa",
+      "address": "sd17r1b871532@euploading.com"
+    }
+  ],
+  "prior": null
+}

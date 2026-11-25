@@ -1,0 +1,54 @@
+{
+  "users": [
+    {
+      "role": "control",
+      "id": "user_01M886Q9ZKX26GR9CZBZBZRA4J",
+      "membership": "om_01M886QA38M141RSHYG8KX4F4A",
+      "box": "6b06406c4448d852c40cfd42"
+    },
+    {
+      "role": "control",
+      "id": "user_01M886QAN0V2BVW26YRDJ4375C",
+      "membership": "om_01M886QARHEWNF5QD7SFY5NE0B",
+      "box": "6b06406c6181a99afb0a71fa"
+    },
+    {
+      "role": "seated",
+      "id": "user_01M886VNDG4PN0VGE6KYES9TPR",
+      "membership": "om_01M886VNH8TV17Q7J1RYJB2CVT",
+      "box": "sd17bs974607@euploading.com",
+      "result": {
+        "status": 200,
+        "body": "{\"workspace_id\":\"951bf075-6e5f-4622-88ef-eaa6fe073958\",\"principal\":{\"id\":\"e4618c43-1278-4540-bcf3-c569a8ba2692\",\"kind\":\"human\",\"display_name\":\"sd17s\",\"email\":\"sd17bs974607@euploading.com\"},\"role\":\"member\",\"scopes\":[\"context:read\",\"context:write\",\"recordings:read\",\"actions:request\",\"actions:execute\","
+      }
+    },
+    {
+      "role": "third",
+      "id": "user_01M886WTQYG6BQTZ5RZMHDFS87",
+      "membership": "om_01M886WTVT1E8V3G7JBV6YKF0Q",
+      "box": "sd17bt804626@euploading.com",
+      "result": {
+        "status": 401,
+        "body": "{\"code\":\"unauthenticated\",\"retryable\":false,\"message\":\"No credentials\",\"_tag\":\"Unauthenticated\"}"
+      }
+    }
+  ],
+  "boxes": [
+    {
+      "id": "6b06406c4448d852c40cfd42",
+      "address": "sd17r1a360367@euploading.com"
+    },
+    {
+      "id": "6b06406c6181a99afb0a71fa",
+      "address": "sd17r1b871532@euploading.com"
+    },
+    {
+      "id": "6b0640faf9394390ce0d44f8",
+      "address": "sd17bs974607@euploading.com"
+    },
+    {
+      "id": "6b064121e51e751ca0029a22",
+      "address": "sd17bt804626@euploading.com"
+    }
+  ]
+}

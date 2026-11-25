@@ -1,0 +1,41 @@
+{
+  "runs": [
+    {
+      "run": 1,
+      "tag": "a",
+      "id": "user_01M886EJGH22HDJ0NCE1GQ89T0",
+      "membership": "om_01M886EJKS6NZP2JES1XFXHHK1",
+      "box": "6b063f4dd3c755bd2a0d20d4"
+    },
+    {
+      "run": 1,
+      "tag": "b",
+      "id": "user_01M886FGVMXDQSKP7T2K7K6QS8",
+      "membership": "om_01M886FGYFM7P7HZ0V5S0DY1DV",
+      "box": "6b063f6d702cb4159109afe8"
+    },
+    {
+      "result": {
+        "run": 1,
+        "sessions": [
+          200,
+          401
+        ],
+        "test_users_seated": 1,
+        "active_seats": 2,
+        "limit": 2
+      }
+    }
+  ],
+  "boxes": [
+    {
+      "id": "6b063f4dd3c755bd2a0d20d4",
+      "address": "sd17r1a534051@euploading.com"
+    },
+    {
+      "id": "6b063f6d702cb4159109afe8",
+      "address": "sd17r1b521873@euploading.com"
+    }
+  ],
+  "prior": null
+}
