@@ -26,21 +26,21 @@ Behavior is defined by [docs/build/tasks/plan.md](build/tasks/plan.md); this fil
 | Listener device API | [capture.ts](../packages/contracts/src/capture.ts) | `ListenersApi` (register, heartbeat, `putChunk`), `LISTENER_STREAM_PATH`. |
 | Test audio | [fixtures.ts](../packages/contracts/src/fixtures.ts) | `syntheticPcm` from `@sanctum/contracts/fixtures`. |
 | Config | [server/src/config.ts](../server/src/config.ts) | `serverConfig`, `engineeringDefaults` (plan 02), `mcpAuthorizationConfig`, `requireActivation` (rules in [operations.md](operations.md#processes)). |
-| Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `mysqlErrno`. |
-| Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Ledger, named lock, per-step resume; `npm run migrate --workspace server`. |
+| Database | [server/src/db.ts](../server/src/db.ts) | `dbLayer`, column schemas `DbUtc`, `DbSafeInt`, `DbBool`, `DbJson`, `DbSha256`, `isDuplicate`, `increment`. |
+| Migrations | [server/src/migrate.ts](../server/src/migrate.ts) | Applies `server/migrations-d1` to `file:` databases, one transaction per file; D1 uses `wrangler d1 migrations apply`; `npm run migrate --workspace server`. |
 | Authorization seam | [server/src/auth.ts](../server/src/auth.ts) | `Authenticator` tag, `AuthenticatedLive`; `Authenticated` middleware and `CurrentAccess` live in contracts. |
 | Object storage | [server/src/providers/object-store.ts](../server/src/providers/object-store.ts) | `ObjectStore` tag (`put`, `head`, `get`, `presignGet`, `list`, `delete`), `ObjectStoreError.ambiguous` and `.unconfigured`. |
 | Job types | [server/src/job-types.ts](../server/src/job-types.ts) | `ClaimedJob`, `JobOutcome`, `JobHandler<R>`, `JobHandlers<R>`; imports no application module, so handler modules and jobs.ts never import the registry. |
 | Job registry | [server/src/job-handlers.ts](../server/src/job-handlers.ts) | `jobHandlers`; only worker.ts imports it. `JobFailure` is in contracts. |
 | Capture seam | [web-app/src/lib/capture/view.ts](../web-app/src/lib/capture/view.ts) | `CaptureView`, `CaptureSnapshot`, `LevelSource`, `createCaptureStore`. |
 | Analyser levels | [levels.ts](../web-app/src/lib/capture/levels.ts) | `createAnalyserLevels(analyser, bandCount)` for the waveform. |
-| Server tests | [server/tests/support](../server/tests/support/database.ts) | `withDatabase`, `seedWorkspace`, `fixtureAccess`, `memoryObjectStore`; one MySQL 8.4 per run. |
+| Server tests | [server/tests/support](../server/tests/support/database.ts) | `withDatabase`, `seedWorkspace`, `fixtureAccess`, `memoryObjectStore`; one in-memory SQLite database per suite. |
 
 Conventions:
 
-- IDs are UUID `CHAR(36) ascii_bin`; wall clock is `DATETIME(6)` UTC written with `UTC_TIMESTAMP(6)`; samples are `BIGINT UNSIGNED`.
+- IDs are UUID `TEXT`; wall clock is `TEXT` UTC `YYYY-MM-DD HH:MM:SS.ffffff` written with `now` from `sql-dialect.ts`; samples are `INTEGER` with `CHECK (col >= 0)`.
 - Owned rows reference each other through `(workspace_id, id)` foreign keys, so a row cannot point into another workspace.
-- Decode rows only through `SqlSchema` plus the `db.ts` column schemas; never read `Date` or `Number` BIGINTs from mysql2.
+- Decode rows only through `SqlSchema` plus the `db.ts` column schemas; never read raw INTEGER or TEXT timestamp columns in domain code.
 - Domain functions take `access: AccessScope` first and never read credentials; unauthorized reads fail as `NotFound`.
 - Tests use synthetic fixtures and fakes; no live provider, R2 or Pipedream call from any test.
 - `server/src/providers/` never imports application modules; providers take options, and application code imports providers, never the reverse (a two-way directory dependency tripled Sentrux coupling).
@@ -179,7 +179,7 @@ Owns `server/src/actions.ts`, `server/src/executor.ts`, `server/src/research.ts`
 - `playback.ts` (web): `createPlayback(context: AudioContext)` registered by engine.ts; drops chunks of cancelled generations.
 - Handles job kinds `action.execute`, `action.reconcile`, `research.run`.
 - `actions.ts`: `listenerFeed(access, listener_id)` returns the listener's open meeting and its agent-work feed rows (newest `ACTION_FEED_ROWS`, oldest first) with the readable title chosen in one place: the request's optional `title`, else a label made from `action_key`.
-- Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from MySQL every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
+- Media's session sends them as `action_update` on the listener stream: a snapshot after each `accepted`, then changes, read from the database every `liveLimits.actionFeedMs` because the job worker that changes most states runs in another process.
 - `speech-gate.ts`: `speechController(...)` per live socket and the `SpeechReplies` tag; media's session creates the controller only when the process provides `SpeechSynthesizer` (media/providers.ts `SpeechSynthesizerLive`) and `SpeechReplies` (speech-requests.ts `SpeechRepliesLive`), so a process without them stays silent.
 - `speech-requests.ts`: the API provides `SpeechWorkRequestsLive`; session.ts passes this optional service to the controller, which runs it in its own daemon fiber before speaking.
   It resolves `true` when research was enqueued or already exists for the request; the controller then speaks `WORK_ACKNOWLEDGEMENT` instead of the reply.
