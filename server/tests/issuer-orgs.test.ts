@@ -8,6 +8,7 @@ import type { CustomFetch } from 'openid-client';
 import { registerSanctumClient } from '../src/issuer.ts';
 import { serverLayer } from '../src/main.ts';
 import { McpAuthorizationServer } from '../src/mcp.ts';
+import { now } from '../src/sql-dialect.ts';
 import { SignInSettings } from '../src/signin.ts';
 import { freshDatabase, migrateDatabase, runSql } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -28,13 +29,13 @@ const selfHosted = Effect.gen(function* () {
   const database = yield* freshDatabase;
   yield* migrateDatabase(database);
   const settings = { issuer: new URL(ISSUER), resource: new URL(RESOURCE), secret: Redacted.make(SECRET) };
-  const clientId = yield* registerSanctumClient(settings, database.mysql, CALLBACK);
+  const clientId = yield* registerSanctumClient(settings, database.db, CALLBACK);
   const served = { base: '' };
   // openid-client's options are a RequestInit whose optional fields also admit `undefined`.
   const toServer: CustomFetch = (url, options) => fetch(url.replace(ORIGIN, served.base), options as RequestInit);
   const keys: JWTVerifyGetKey = (header, token) => createRemoteJWKSet(new URL(`${served.base}/idp/jwks`))(header, token);
   const signIn = { issuer: new URL(ISSUER), clientId, clientSecret: Option.none(), redirectUri: CALLBACK, scopes: 'openid profile email', fetch: toServer };
-  const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, undefined, {
+  const layer = serverLayer({ apiPort: 0, db: database.db }, undefined, {
     signIn: Layer.succeed(SignInSettings, { client: Option.some(signIn), embeddedIssuer: 'better-auth' }),
     mcp: Layer.succeed(McpAuthorizationServer, Option.some({ resource: RESOURCE, issuer: ISSUER, keys, defaultScopes: [] })),
   });
@@ -117,7 +118,7 @@ const mcpStatus = (server: Server, token: string) =>
 
 /** Gives the issuer account `userId` the identity of a Sanctum principal. */
 const linkIdentity = (server: Server, userId: string, principalId: string) =>
-  server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${userId}, ${principalId}, UTC_TIMESTAMP(6))`));
+  server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${userId}, ${principalId}, ${now})`));
 
 /** An owner with a Sanctum workspace and its organization, ready to invite. */
 async function ownerWithTeam(server: Server) {
@@ -271,8 +272,8 @@ describe('self-hosted organizations', () => {
         await server.sql(
           Effect.flatMap(SqlClient.SqlClient, sql =>
             Effect.zipRight(
-              sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal}, 'human', 'Boris', UTC_TIMESTAMP(6))`,
-              sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${team.workspace_id}, ${principal}, 'owner', UTC_TIMESTAMP(6))`,
+              sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal}, 'human', 'Boris', ${now})`,
+              sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${team.workspace_id}, ${principal}, 'owner', ${now})`,
             ),
           ),
         );
@@ -331,7 +332,7 @@ describe('self-hosted organizations', () => {
         const team = await ownerWithTeam(server);
         const { invitee } = await join(server, team, 'Ada');
         // As if the hook after the accept had failed: Better Auth has the member, Sanctum does not.
-        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${team.workspace_id} AND role = 'member'`));
+        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE workspace_members SET revoked_at = ${now} WHERE workspace_id = ${team.workspace_id} AND role = 'member'`));
         const signedIn = await signIn(server, invitee.cookie);
         expect(signedIn.location).toBe('/');
         expect((await session(server, signedIn.cookie)).body).toMatchObject({ workspace_id: team.workspace_id, role: 'member' });
@@ -339,7 +340,7 @@ describe('self-hosted organizations', () => {
         // A second membership: only the token's `org_id` (the accept made the organization active) picks one.
         const principal = (await session(server, signedIn.cookie)).body['principal'].id;
         const [other] = await server.sql(seedWorkspace('Other', ['owner']));
-        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${other!.workspace_id}, ${principal}, 'member', UTC_TIMESTAMP(6))`));
+        await server.sql(Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${other!.workspace_id}, ${principal}, 'member', ${now})`));
         const selected = await mcpToken(server, invitee.cookie);
         expect(decodeJwt(selected)['org_id']).toBe(team.workspace_id);
         expect(await mcpStatus(server, selected)).toBe(200);

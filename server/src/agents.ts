@@ -22,7 +22,8 @@ import { Effect, Schema } from 'effect';
 import { authorizeMeeting, hashToken, newToken, requireScope } from './auth.ts';
 import { DbJson, DbUtc } from './db.ts';
 import { closeCredentialSockets } from './media/open-sockets.ts';
-import { addMember, bumpPermissionRevision, write } from './store.ts';
+import { now } from './sql-dialect.ts';
+import { addMember, bumpPermissionRevision } from './store.ts';
 
 const CredentialRow = Schema.Struct({
   id: AgentCredentialId,
@@ -78,11 +79,11 @@ export const createAgent = (access: AccessScope, input: CreateAgent) =>
     const expires = input.expires_at === null ? null : Schema.encodeSync(DbUtc)(input.expires_at);
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${agent_id}, 'agent', ${input.display_name}, UTC_TIMESTAMP(6))`;
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${agent_id}, 'agent', ${input.display_name}, ${now})`;
         yield* addMember({ workspace_id: access.workspace_id, principal_id: agent_id, role: 'agent' });
         yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, meeting_allowlist, expires_at, created_at)
           VALUES (${id}, ${access.workspace_id}, ${agent_id}, ${access.principal.id}, ${hashToken(token)}, ${JSON.stringify([...new Set(input.scopes)])},
-            ${allowlist}, ${expires}, UTC_TIMESTAMP(6))`;
+            ${allowlist}, ${expires}, ${now})`;
       }),
     ).pipe(Effect.orDie);
     const [created] = yield* credentials(access, sql => sql`c.id = ${id}`, 1);
@@ -106,9 +107,12 @@ const revokeCredential = (access: AccessScope, agent_id: PrincipalId, key_id: Ag
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const revoked = yield* write(sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6)
-            WHERE workspace_id = ${access.workspace_id} AND id = ${key_id} AND revoked_at IS NULL`);
-          if (revoked.affectedRows === 1) yield* bumpPermissionRevision(access.workspace_id);
+          // Read first: a write in a transaction reports no row count. The commit guard reruns a concurrent revoke.
+          const [active] = yield* sql`SELECT 1 FROM agent_credentials WHERE workspace_id = ${access.workspace_id} AND id = ${key_id} AND revoked_at IS NULL`;
+          if (active === undefined) return;
+          yield* sql`UPDATE agent_credentials SET revoked_at = ${now}
+            WHERE workspace_id = ${access.workspace_id} AND id = ${key_id} AND revoked_at IS NULL`;
+          yield* bumpPermissionRevision(access.workspace_id);
         }),
       )
       .pipe(Effect.orDie);
