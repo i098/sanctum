@@ -15,21 +15,6 @@ jobs:
     name: Device client
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      mysql:
-        image: mirror.gcr.io/library/mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: sanctum-ci-test
-          TZ: UTC
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 30
-    env:
-      SANCTUM_TEST_MYSQL_URL: mysql://root:sanctum-ci-test@127.0.0.1:3306
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
