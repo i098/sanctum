@@ -12,6 +12,7 @@ import { Effect, Schema } from 'effect';
 import { ObjectStore } from '../providers/object-store.ts';
 import { SpeechToText } from '../providers/whisper.ts';
 import { DbSafeInt } from '../db.ts';
+import { now } from '../sql-dialect.ts';
 import { REQUESTER_REFUSED } from '../jobs.ts';
 import { onCaptureEnded } from '../meetings.ts';
 import { listCommittedChunks } from '../recordings.ts';
@@ -93,7 +94,7 @@ export const reconcileTranscript = (job: { readonly workspace_id: WorkspaceId; r
         yield* sql`
           INSERT INTO provider_connections (id, workspace_id, epoch_id, track, purpose, provider, model, anchor_sample, sample_rate, opened_at, closed_at, close_reason)
           VALUES (${provider_connection_id}, ${workspace_id}, ${epoch_id}, ${track}, 'batch_asr', ${stt.provider}, ${stt.model}, ${gap.sample_start},
-                  ${chunk.sample_rate}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), 'batch_complete')`;
+                  ${chunk.sample_rate}, ${now}, ${now}, 'batch_complete')`;
         const toSample = (seconds: number) => Math.min(gap.sample_start + Math.round(seconds * chunk.sample_rate), gap.sample_end);
         yield* publishFinalWindow({
           workspace_id,
