@@ -8,7 +8,7 @@ import type { ExtractionInput } from '../src/extraction.ts';
 import { serverLayer } from '../src/main.ts';
 import { diffMicros, now } from '../src/sql-dialect.ts';
 import { claimed, meetingsOf } from './support/capture.ts';
-import { api, claimListener, eventually, fakeSpeech, MigratedDatabase, newEpochId, openSocket, pcmFrame, seedDevice, serveApi, startMessage } from './support/media.ts';
+import { api, claimListener, eventually, fakeSpeech, MigratedDatabase, newEpochId, openSocket, pcmFrame, seedDevice, serveMediaApi, startMessage } from './support/media.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
 const RATE = 16_000;
@@ -19,7 +19,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       const sql = yield* SqlClient.SqlClient;
       const tokens = new Map<string, AccessScope>();
       const speech = fakeSpeech();
-      const host = yield* serveApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
+      const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
       const access = yield* seedDevice('Room A');
       tokens.set('device', access);
       const reader = { ...access, scopes: ['context:read' as const] };

@@ -187,7 +187,7 @@ export const newEpochId = () => CaptureEpochId.make(randomUUID());
 const liveClock = Clock.make();
 
 /** Starts the real API server (`serverLayer` from main.ts, port 0) on the suite database; resolves to `host:port`. */
-export const serveApi = (server: typeof serverLayer, tokens: Map<string, AccessScope>, media: Layer.Layer<ObjectStore | SpeechToText>) =>
+export const serveMediaApi = (server: typeof serverLayer, tokens: Map<string, AccessScope>, media: Layer.Layer<ObjectStore | SpeechToText>) =>
   Effect.gen(function* () {
     const db = yield* TestDb;
     const context = yield* Effect.withClock(Layer.build(server({ apiPort: 0, db }, tokenAuthenticator(tokens), { media })), liveClock);
