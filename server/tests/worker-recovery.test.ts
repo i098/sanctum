@@ -132,8 +132,8 @@ describe('worker recovery', () => {
         yield* whenState(agent, action_id, 'running');
         yield* expireLeases;
         yield* worker; // B: reclaims the expired lease.
-        expect(yield* whenState(agent, action_id, 'unknown')).toMatchObject({ reconciliation: 'pending', last_error: { code: 'interrupted' } });
-        expect(yield* eventually(Effect.map(jobFor(action_id), job => (job.status === 'succeeded' ? job : undefined)))).toMatchObject({ attempts: 2, lease_generation: '2' });
+        expect(yield* whenState(agent, action_id, 'unknown')).toMatchObject({ reconciliation: 'pending', last_error: expect.stringContaining('"code":"interrupted"') });
+        expect(yield* eventually(Effect.map(jobFor(action_id), job => (job.status === 'succeeded' ? job : undefined)))).toMatchObject({ attempts: 2, lease_generation: 2 });
 
         provider.release!(); // A's upstream answer finally arrives.
         expect(yield* whenState(agent, action_id, 'succeeded')).toMatchObject({ reconciliation: 'reconciled', attempts: 1 });
@@ -194,7 +194,7 @@ describe('worker recovery', () => {
         const { action_id } = yield* send(agent, 'revoked');
         yield* sql`UPDATE agent_credentials SET revoked_at = ${now} WHERE principal_id = ${agent.principal.id}`;
         yield* worker;
-        expect(yield* whenState(agent, action_id, 'cancelled')).toMatchObject({ attempts: 0, last_error: { code: 'forbidden' } });
+        expect(yield* whenState(agent, action_id, 'cancelled')).toMatchObject({ attempts: 0, last_error: expect.stringContaining('"code":"forbidden"') });
         expect(provider.sent).toHaveLength(0);
       }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));

@@ -24,11 +24,11 @@ describe('Onboarding over HTTP', () => {
       const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
       const [owner, admin, member] = yield* Effect.provide(
         Effect.zipRight(migrate(loadMigrations()), seedWorkspace('Pilot', ['owner', 'admin', 'member'])),
-        dbLayer(database.mysql),
+        dbLayer(database.db),
       );
       // A member's session carries no workspace:admin (auth.ts ROLE_SCOPES); the fixture grants every scope.
       const plainMember = { ...member!, scopes: member!.scopes.filter(scope => scope !== 'workspace:admin') };
-      const layer = serverLayer({ apiPort: 0, mysql: database.mysql }, authenticator({ owner: owner!, admin: admin!, member: plainMember }));
+      const layer = serverLayer({ apiPort: 0, db: database.db }, authenticator({ owner: owner!, admin: admin!, member: plainMember }));
       const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
       if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
       const call = (token: string, method: string, path: string, body?: unknown) =>
