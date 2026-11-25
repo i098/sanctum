@@ -17,7 +17,7 @@ Reference links are historical evidence and product context, not implementation 
 - Fullscreen listening view with the approved irregular waveform; no permanent dashboard/sidebar.
 - Silent unless directly requested; background task completion must not speak.
 - Keep full transcripts and R2 audio independently of selective memory.
-- MySQL is the structured store; no Postgres/pgvector runtime dependency.
+- SQLite dialect is the structured store (Cloudflare D1 in production, `node:sqlite` locally and in CI); no MySQL, Postgres or pgvector runtime dependency.
 - Context is versioned, time-aware, source-linked, and scoped to authorized teams/meetings.
 - SDK, MCP, UI, and workers use the same authorization and domain behavior.
 - Pipedream catalog stays server-side; only search, selected-action inspection, and action-request gateways enter prompts.
