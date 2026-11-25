@@ -73,10 +73,10 @@ export const SpeechWorkRequestsLive = Layer.effect(
         );
         if (!value.work) return false;
         const work_key = `spoken:${listener_id}:${window.epoch_id}:${window.request_id}`;
-        // Lock before consistent reads so waiters see authorization changes and work committed by the prior lock holder.
+        // Reads first, then the enqueue write: the commit guard makes a concurrent revocation or duplicate request conflict and rerun.
         // Check completed rows too: enqueueJob otherwise re-arms active work.
         return yield* sql.withTransaction(Effect.gen(function* () {
-          yield* ownedListener(current, listener_id, true);
+          yield* ownedListener(current, listener_id);
           const latest = yield* refreshAccess;
           if ((yield* activeActionGrants(latest)).length === 0) return yield* skipped('No active integration grant for listener owner');
           const existing = yield* sql`SELECT id FROM jobs WHERE workspace_id = ${latest.workspace_id}
