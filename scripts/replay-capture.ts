@@ -1,11 +1,11 @@
 /**
  * Accelerated capture replay (plan section 18): feeds a synthetic 24-hour trace of final
- * transcript windows through the live path's `publishFinalWindow` against a disposable MySQL
+ * transcript windows through the live path's `publishFinalWindow` against a disposable in-memory SQLite
  * database, then checks meeting boundaries and one owner per segment. RSS growth is reported,
  * not gated. It proves behavior over a day of source time in seconds of wall time; it is not a
  * 24-hour uptime soak.
  *
- * Usage: node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated [--mysql-url mysql://...]
+ * Usage: node scripts/replay-capture.ts --fixture server/tests/fixtures/day.json --accelerated
  */
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -28,8 +28,8 @@ function windows(trace: DayTrace) {
   );
 }
 
-async function replay(trace: DayTrace, mysqlUrl: string) {
-  const db = await database(mysqlUrl);
+async function replay(trace: DayTrace) {
+  const db = await database();
   try {
     const rssBefore = process.memoryUsage().rss;
     const started = performance.now();
@@ -55,11 +55,10 @@ async function replay(trace: DayTrace, mysqlUrl: string) {
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { fixture: { type: 'string' }, accelerated: { type: 'boolean', default: false }, 'mysql-url': { type: 'string' } } });
-  const url = values['mysql-url'] ?? process.env['SANCTUM_TEST_MYSQL_URL'];
-  if (!values.fixture || !values.accelerated || !url) throw new Error('Usage: --fixture <day.json> --accelerated and --mysql-url or SANCTUM_TEST_MYSQL_URL');
+  const { values } = parseArgs({ options: { fixture: { type: 'string' }, accelerated: { type: 'boolean', default: false } } });
+  if (!values.fixture || !values.accelerated) throw new Error('Usage: --fixture <day.json> --accelerated');
   const trace: DayTrace = JSON.parse(readFileSync(values.fixture, 'utf8'));
-  const result = await replay(trace, url);
+  const result = await replay(trace);
   console.log(JSON.stringify(result));
   const failures = [
     result.meetings !== trace.expected.meetings && `meetings ${result.meetings}, expected ${trace.expected.meetings}`,
