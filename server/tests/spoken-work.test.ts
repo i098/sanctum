@@ -1,14 +1,15 @@
 import { describe, expect, it } from '@effect/vitest';
 import { SqlClient } from '@effect/sql';
 import { type AccessScope, ListenerId } from '@sanctum/contracts';
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Logger, Stream, TestClock } from 'effect';
+import { ConfigProvider, Deferred, Effect, Layer, Logger, Stream, TestClock } from 'effect';
 import { afterEach, vi } from 'vitest';
 import { createActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
 import { LlmClient, LlmLive } from '../src/llm.ts';
-import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests, WORK_ACKNOWLEDGEMENT } from '../src/media/speech-gate.ts';
+import { makeSpeechGate, SpeechGate, speechController, SpeechWorkRequests, type SpeechWindow, WORK_ACKNOWLEDGEMENT } from '../src/media/speech-gate.ts';
 import { SpeechWorkRequestsLive } from '../src/speech-requests.ts';
 import { SpeechSynthesizer } from '../src/providers/speech.ts';
+import { now } from '../src/sql-dialect.ts';
 import { setMembership } from '../src/store.ts';
 import { seedAccount, seedMeeting } from './support/actions.ts';
 import { seedEpoch, seedListener, speak } from './support/capture.ts';
@@ -25,9 +26,10 @@ afterEach(() => vi.restoreAllMocks());
 
 const ANSWER = 'The answer.';
 
+type Change = 'membership removed' | 'grant revoked' | 'grant expired' | 'account disconnected';
+
 const scenario = (text: string, answer: unknown, options: {
-  meeting?: boolean; env?: Record<string, string>; grant?: boolean; revokeDuringClassification?: boolean;
-  removeMembershipDuringClassification?: boolean;
+  meeting?: boolean; env?: Record<string, string>; grant?: boolean; changeDuringClassification?: Change;
   classifierFailure?: boolean; classifierAnswer?: unknown;
 } = {}) =>
   Effect.gen(function* () {
@@ -69,15 +71,16 @@ const scenario = (text: string, answer: unknown, options: {
       Layer.provide(Layer.succeed(LlmClient, LlmClient.of({
         ...llm,
         generate: (role, input) => llm.generate(role, input).pipe(Effect.tap(() => Effect.gen(function* () {
-          if (options.revokeDuringClassification) {
-            yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${grant!.id}`.pipe(Effect.orDie);
-          }
-          if (options.removeMembershipDuringClassification) {
+          const change = options.changeDuringClassification;
+          if (change === 'membership removed') {
             yield* setMembership('fixture-issuer', access.workspace_id, access.principal.id, access.role).pipe(
               Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
             yield* setMembership('fixture-issuer', access.workspace_id, access.principal.id, null).pipe(
               Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
           }
+          if (change === 'grant revoked') yield* sql`UPDATE action_grants SET revoked_at = ${now} WHERE id = ${grant!.id}`.pipe(Effect.orDie);
+          if (change === 'grant expired') yield* sql`UPDATE action_grants SET expires_at = ${now} WHERE id = ${grant!.id}`.pipe(Effect.orDie);
+          if (change === 'account disconnected') yield* sql`UPDATE integration_accounts SET status = 'disconnected' WHERE id = ${account}`.pipe(Effect.orDie);
         }))),
       }))),
       Layer.provide(config),
@@ -99,32 +102,6 @@ const scenario = (text: string, answer: unknown, options: {
       yield* Effect.repeatN(Effect.yieldNow(), 20); // the speaking fiber follows the work decision
     });
     return { controller, finished, segment, requests, replies, spoken, jobs, access, other: other!, account, grant, listener_id, epoch_id, meeting_id, service, complete };
-  });
-
-const holdListener = (access: AccessScope, listener_id: ListenerId) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const acquired = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const holder = yield* Effect.forkScoped(sql.withTransaction(Effect.gen(function* () {
-      yield* sql`SELECT id FROM listeners WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id} FOR UPDATE`;
-      yield* Deferred.succeed(acquired, undefined);
-      yield* Deferred.await(release);
-    })));
-    yield* Deferred.await(acquired);
-    return Effect.zipRight(Deferred.succeed(release, undefined), Fiber.join(holder));
-  });
-
-const waitForListenerLocks = (count: number) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* Effect.promise(() => expect.poll(async () => {
-      const [row] = await Effect.runPromise(sql<{ n: number }>`
-        SELECT COUNT(*) AS n FROM information_schema.INNODB_TRX t
-        JOIN information_schema.PROCESSLIST p ON p.ID = t.trx_mysql_thread_id
-        WHERE p.DB = DATABASE() AND t.trx_state = 'LOCK WAIT' AND p.INFO LIKE '%FROM listeners%'`);
-      return Number(row!.n);
-    }, { timeout: 5_000, interval: 200 }).toBe(count));
   });
 
 
@@ -274,14 +251,14 @@ describe('spoken work', () => {
         const sql = yield* SqlClient.SqlClient;
         const test = yield* scenario('Sanctum, send the notes', { work: true },
           { grant: invalid !== 'other workspace' });
-        if (invalid === 'revoked') yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
-        if (invalid === 'expired') yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
+        if (invalid === 'revoked') yield* sql`UPDATE action_grants SET revoked_at = ${now} WHERE id = ${test.grant!.id}`;
+        if (invalid === 'expired') yield* sql`UPDATE action_grants SET expires_at = ${now} WHERE id = ${test.grant!.id}`;
         if (invalid === 'disconnected') yield* sql`UPDATE integration_accounts SET status = 'disconnected' WHERE id = ${test.account}`;
         if (invalid === 'other principal') yield* sql`UPDATE action_grants SET grantee_principal_id = ${test.other.principal.id} WHERE id = ${test.grant!.id}`;
         if (invalid === 'other workspace') {
           const [foreign] = yield* seedWorkspace('Foreign grant');
           yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at)
-            VALUES (${foreign!.workspace_id}, ${test.access.principal.id}, 'member', UTC_TIMESTAMP(6))`;
+            VALUES (${foreign!.workspace_id}, ${test.access.principal.id}, 'member', ${now})`;
           const owner = { ...test.access, workspace_id: foreign!.workspace_id };
           yield* createActionGrant(owner, {
             grantee: owner.principal.id, action_key: 'gmail-send-email', account_id: yield* seedAccount(owner),
@@ -296,17 +273,6 @@ describe('spoken work', () => {
       }), { migrated: true }));
   }
 
-  it.effect('does not enqueue if the grant is revoked during classification', () =>
-    withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', { work: true },
-        { revokeDuringClassification: true });
-      yield* test.complete;
-      expect(test.requests).toHaveLength(1);
-      expect(yield* test.jobs).toEqual([]);
-      expect(test.replies).toEqual(['send the notes']);
-      yield* test.controller.onEnd('disconnect');
-    }), { migrated: true }));
-
   it.effect('does not classify or enqueue after membership removal on an existing listener connection', () =>
     withDatabase(Effect.gen(function* () {
       const test = yield* scenario('Sanctum, send the notes', { work: true });
@@ -318,65 +284,45 @@ describe('spoken work', () => {
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
-  it.effect('does not enqueue if membership is removed during classification', () =>
+  for (const change of ['membership removed', 'grant revoked', 'grant expired', 'account disconnected'] as const) {
+    it.effect(`does not enqueue when ${change} during classification`, () =>
+      withDatabase(Effect.gen(function* () {
+        const test = yield* scenario('Sanctum, send the notes', { work: true }, { changeDuringClassification: change });
+        yield* test.complete;
+        expect(test.requests).toHaveLength(1);
+        expect(yield* test.jobs).toEqual([]);
+        expect(test.replies).toEqual(['send the notes']);
+        yield* test.controller.onEnd('disconnect');
+      }), { migrated: true }));
+  }
+
+  const windowOf = (test: Pick<SpeechWindow, 'listener_id' | 'epoch_id'> & { segment: { id: string; source: { sample_end: number } } }): SpeechWindow =>
+    ({ listener_id: test.listener_id, epoch_id: test.epoch_id, request_id: test.segment.id, generation: 1, sample_end: test.segment.source.sample_end, expires_at: Date.now() + 30_000 });
+
+  it.effect('keeps the first accepted request when a retry of the same window arrives', () =>
     withDatabase(Effect.gen(function* () {
-      const test = yield* scenario('Sanctum, send the notes', { work: true },
-        { removeMembershipDuringClassification: true });
-      yield* test.complete;
-      expect(test.requests).toHaveLength(1);
-      expect(yield* test.jobs).toEqual([]);
+      const test = yield* scenario('Sanctum, send the meeting notes', { work: true });
+      const request = test.service(test.access, test.listener_id);
+      const window = windowOf(test);
+      expect(yield* request('send the meeting notes', window)).toBe(true);
+      expect(yield* request('send the notes', window)).toBe(true);
+      const rows = yield* test.jobs;
+      expect(rows).toHaveLength(1);
+      const payload = rows[0]!.payload;
+      expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({ meeting_id: test.meeting_id, request: 'send the meeting notes' });
+      expect(rows[0]!.rearmed).toBe(0);
       yield* test.controller.onEnd('disconnect');
     }), { migrated: true }));
 
-  it.live('keeps the first accepted request when first-time retries wait for the listener lock', () =>
-    withDatabase(Effect.scoped(Effect.gen(function* () {
+  it.effect('enqueues one job when two requests of the same window race', () =>
+    withDatabase(Effect.gen(function* () {
       const test = yield* scenario('Sanctum, send the meeting notes', { work: true });
-      const release = yield* holdListener(test.access, test.listener_id);
-      yield* Effect.gen(function* () {
-        const window = { listener_id: test.listener_id, epoch_id: test.epoch_id, request_id: test.segment.id,
-          generation: 1, sample_end: test.segment.source.sample_end, expires_at: Date.now() + 30_000 };
-        const first = yield* Effect.forkScoped(test.service(test.access, test.listener_id)('send the meeting notes', window));
-        yield* waitForListenerLocks(1);
-        const second = yield* Effect.forkScoped(test.service(test.access, test.listener_id)('send the notes', window));
-        yield* waitForListenerLocks(2);
-        yield* release;
-        yield* Fiber.join(first);
-        yield* Fiber.join(second);
-        const rows = yield* test.jobs;
-        expect(rows).toHaveLength(1);
-        const payload = rows[0]!.payload;
-        expect(typeof payload === 'string' ? JSON.parse(payload) : payload).toEqual({
-          meeting_id: test.meeting_id, request: 'send the meeting notes',
-        });
-        expect(rows[0]!.rearmed).toBe(0);
-        yield* test.controller.onEnd('disconnect');
-      }).pipe(Effect.ensuring(release.pipe(Effect.orDie)));
-    })), { migrated: true }));
-
-  for (const change of ['membership removed', 'grant revoked', 'grant expired', 'account disconnected'] as const) {
-    it.live(`does not enqueue when ${change} while waiting for the listener lock`, () =>
-      withDatabase(Effect.scoped(Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const test = yield* scenario('Sanctum, send the notes', { work: true });
-        if (change === 'membership removed') {
-          yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, test.access.role);
-        }
-        const release = yield* holdListener(test.access, test.listener_id);
-        yield* Effect.gen(function* () {
-          const window = { listener_id: test.listener_id, epoch_id: test.epoch_id, request_id: test.segment.id,
-            generation: 1, sample_end: test.segment.source.sample_end, expires_at: Date.now() + 30_000 };
-          const pending = yield* Effect.forkScoped(test.service(test.access, test.listener_id)('send the notes', window));
-          yield* waitForListenerLocks(1);
-          if (change === 'membership removed') yield* setMembership('fixture-issuer', test.access.workspace_id, test.access.principal.id, null);
-          if (change === 'grant revoked') yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
-          if (change === 'grant expired') yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) WHERE id = ${test.grant!.id}`;
-          if (change === 'account disconnected') yield* sql`UPDATE integration_accounts SET status = 'disconnected' WHERE id = ${test.account}`;
-          yield* release;
-          yield* Fiber.join(pending);
-          expect(test.requests).toHaveLength(1);
-          expect(yield* test.jobs).toEqual([]);
-          yield* test.controller.onEnd('disconnect');
-        }).pipe(Effect.ensuring(release.pipe(Effect.orDie)));
-      })), { migrated: true }));
-  }
+      const request = test.service(test.access, test.listener_id);
+      const window = windowOf(test);
+      yield* Effect.all([request('send the meeting notes', window), request('send the notes', window)], { concurrency: 2 });
+      const rows = yield* test.jobs;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.rearmed).toBe(0);
+      yield* test.controller.onEnd('disconnect');
+    }), { migrated: true }));
 });
