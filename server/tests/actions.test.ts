@@ -8,6 +8,7 @@ import { createActionGrant, getActionReceipt, listenerFeed, listMeetingActions, 
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { withDatabase } from './support/database.ts';
 import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -90,8 +91,8 @@ describe('action gateway', () => {
         const artifact_id = receipt.provider_receipt?.['artifact_id'];
         expect(artifact_id).toEqual(expect.any(String));
         const sql = yield* SqlClient.SqlClient;
-        const [row] = yield* sql<{ kind: string; content: string; provenance: unknown }>`SELECT kind, content, provenance FROM artifacts WHERE id = ${String(artifact_id)}`;
-        expect(row).toMatchObject({ kind: 'action_output', provenance: { action_id: queued.action_id, attempt: 1 } });
+        const [row] = yield* sql<{ kind: string; content: string; provenance: string }>`SELECT kind, content, provenance FROM artifacts WHERE id = ${String(artifact_id)}`;
+        expect({ ...row, provenance: JSON.parse(row!.provenance) }).toMatchObject({ kind: 'action_output', provenance: { action_id: queued.action_id, attempt: 1 } });
         expect(JSON.parse(row!.content)).toEqual({ rows: ['é'.repeat(20_000)] });
       }),
       { migrated: true },
@@ -110,9 +111,9 @@ describe('action gateway', () => {
         expect(conflict._tag).toBe('HashConflict');
         const receipt = yield* getActionReceipt(agent, first.action_id);
         expect(conflict).toMatchObject({ existing_sha256: receipt.args_sha256 });
-        const [counts] = yield* sql<{ actions: string; jobs: string }>`
+        const [counts] = yield* sql<{ actions: number; jobs: number }>`
           SELECT (SELECT COUNT(*) FROM actions) AS actions, (SELECT COUNT(*) FROM jobs WHERE kind = 'action.execute') AS jobs`;
-        expect(counts).toEqual({ actions: '1', jobs: '1' });
+        expect(counts).toEqual({ actions: 1, jobs: 1 });
       }),
       { migrated: true },
     ));
@@ -138,7 +139,7 @@ describe('action gateway', () => {
         const sql = yield* SqlClient.SqlClient;
         const listener_id = randomUUID() as ListenerId;
         yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
-          VALUES (${listener_id}, ${owner.workspace_id}, ${owner.principal.id}, 'Room', 'room', '{}', UTC_TIMESTAMP(6))`;
+          VALUES (${listener_id}, ${owner.workspace_id}, ${owner.principal.id}, 'Room', 'room', '{}', ${now})`;
         yield* sql`UPDATE meetings SET listener_id = ${listener_id} WHERE id = ${meeting_id}`;
         const feed = yield* listenerFeed(owner, listener_id);
         expect(feed.meeting_id).toBe(meeting_id);
@@ -169,7 +170,7 @@ describe('action gateway', () => {
         expect((yield* requestAction(member, request({ meeting_id: meetingA }))).state).toBe('queued');
         expect(scoped.meeting_id).toBe(meetingA);
 
-        yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${grant.id}`;
+        yield* sql`UPDATE action_grants SET expires_at = ${addSeconds(now, -1)} WHERE id = ${grant.id}`;
         expect(yield* refused(agent, request({ idempotency_key: 'expired' }))).toBe('Forbidden');
         yield* sql`UPDATE action_grants SET expires_at = NULL WHERE id = ${grant.id}`;
         expect((yield* requestAction(agent, request({ idempotency_key: 'valid-again' }))).state).toBe('queued');
@@ -191,7 +192,7 @@ describe('action gateway', () => {
         expect(revoked).toMatchObject({ version: 2, revoked_at: expect.any(String) });
         yield* execute(agent, queued.action_id);
         expect(provider.sent).toHaveLength(0);
-        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
+        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: expect.stringContaining('"code":"forbidden"') });
       }),
       { migrated: true },
     ));
@@ -203,7 +204,7 @@ describe('action gateway', () => {
         provider.mode = 'ambiguous_after_send';
         const queued = yield* requestAction(agent, request());
         yield* execute(agent, queued.action_id);
-        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'unknown', reconciliation: 'pending', last_error: { code: 'ambiguous' } });
+        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'unknown', reconciliation: 'pending', last_error: expect.stringContaining('"code":"ambiguous"') });
         provider.mode = 'ok';
         yield* execute(agent, queued.action_id);
         expect(provider.sent).toHaveLength(1);
@@ -234,7 +235,7 @@ describe('action gateway', () => {
         while (provider.release === null) yield* realDelay;
         yield* TestClock.adjust(`${engineeringDefaults.actionSubmitTimeoutMs} millis`);
         yield* Fiber.join(attempt);
-        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'unknown', reconciliation: 'pending', last_error: { code: 'ambiguous' } });
+        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'unknown', reconciliation: 'pending', last_error: expect.stringContaining('"code":"ambiguous"') });
         provider.release!();
         let row = yield* actionRow(agent.workspace_id, queued.action_id);
         for (let tries = 0; row.state === 'unknown' && tries < 200; tries++) row = yield* Effect.zipRight(realDelay, actionRow(agent.workspace_id, queued.action_id));
@@ -258,7 +259,7 @@ describe('action gateway', () => {
         const poll = <A>(check: Effect.Effect<A, unknown, SqlClient.SqlClient>, done: (value: A) => boolean) =>
           check.pipe(Effect.filterOrFail(done, () => 'not yet'), Effect.retry(Schedule.spaced('50 millis')), Effect.timeout('10 seconds'));
         const row = yield* poll(actionRow(agent.workspace_id, queued.action_id), current => current.state === 'unknown');
-        expect(row).toMatchObject({ state: 'unknown', reconciliation: 'pending', attempts: 1, last_error: { code: 'ambiguous' } });
+        expect(row).toMatchObject({ state: 'unknown', reconciliation: 'pending', attempts: 1, last_error: expect.stringContaining('"code":"ambiguous"') });
         // The ceiling failed the job retryably; its retry (after a 1 s backoff) finds the row settled and submits nothing.
         const jobRow = sql<{ status: string; attempts: number }>`SELECT status, attempts FROM jobs WHERE kind = 'action.execute' AND work_key = ${queued.action_id}`;
         expect(yield* poll(jobRow, ([current]) => current?.status === 'succeeded')).toEqual([{ status: 'succeeded', attempts: 2 }]);
@@ -279,7 +280,7 @@ describe('action gateway', () => {
         const queued = yield* requestAction(agent, request());
         yield* execute(agent, queued.action_id);
         yield* execute(agent, queued.action_id);
-        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'failed', attempts: 1, reconciliation: 'none', last_error: { code: 'provider_failed' } });
+        expect(yield* actionRow(agent.workspace_id, queued.action_id)).toMatchObject({ state: 'failed', attempts: 1, reconciliation: 'none', last_error: expect.stringContaining('"code":"provider_failed"') });
       }),
       { migrated: true },
     ));

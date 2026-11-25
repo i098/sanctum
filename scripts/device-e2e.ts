@@ -1,4 +1,4 @@
-/** V1–V7 against the real API, a disposable MySQL database and synthetic audio only. */
+/** V1–V7 against the real API, a disposable in-memory SQLite database and synthetic audio only. */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -19,12 +19,10 @@ import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import { KernelAuthenticatorLive, openSession } from '../server/src/auth.ts';
 import { dbLayer } from '../server/src/db.ts';
 import { serverLayer } from '../server/src/main.ts';
-import { loadMigrations, migrate } from '../server/src/migrate.ts';
 import { SpeechToText } from '../server/src/providers/whisper.ts';
-import { createDatabaseOn } from '../server/tests/support/database.ts';
+import { createTestDatabase } from '../server/tests/support/database.ts';
 import { seedWorkspace } from '../server/tests/support/fixtures.ts';
 import { chunk, claimListener, fakeSpeech, newEpochId, openSocket, startMessage } from '../server/tests/support/media.ts';
-import type {} from '../server/tests/support/mysql-server.ts';
 import { memoryObjectStore } from '../server/tests/support/object-store.ts';
 import { openMenu } from '../web-app/e2e/menu.ts';
 import { childEnv } from './check-app.ts';
@@ -281,20 +279,19 @@ function checkInvalidConfig(binary: string, scratch: string, origin: string, wav
   }
 }
 
-async function runSuite(admin: string, binary: string, screenshots: string | undefined) {
+async function runSuite(binary: string, screenshots: string | undefined) {
   const scratch = mkdtempSync(join(tmpdir(), 'sanctum-device-e2e-'));
   const scope = Effect.runSync(Scope.make());
   const cleanup: Array<() => void | Promise<void>> = [() => rmSync(scratch, { force: true, recursive: true })];
   const devices: DeviceProcess[] = [];
   const inScope = <R, E>(layer: Layer.Layer<R, E>) => Effect.runPromise(Scope.extend(Layer.build(layer), scope));
   try {
-    const database = await createDatabaseOn(admin);
+    const database = await createTestDatabase();
     cleanup.push(database.drop, () => Effect.runPromise(Scope.close(scope, Exit.void)));
-    const db = await inScope(dbLayer(database.mysql));
+    const db = await inScope(dbLayer(database.db));
     const sql = Context.get(db, SqlClient.SqlClient);
     const query = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.runPromise(Effect.provide(effect, db));
     const seed = await query(Effect.gen(function* () {
-      yield* migrate(loadMigrations());
       const [approver, other] = yield* seedWorkspace('Fixture workspace', ['member', 'member']);
       yield* sql`UPDATE principals SET display_name = 'Fixture approver' WHERE id = ${approver.principal.id}`;
       return { approver, session: yield* openSession({ workspace_id: approver.workspace_id, principal_id: approver.principal.id }),
@@ -311,7 +308,7 @@ async function runSuite(admin: string, binary: string, screenshots: string | und
       }),
     }))).pipe(Layer.provide(speech.layer));
     const media = Layer.merge(observedSpeech, objects.layer);
-    const service = await inScope(serverLayer({ apiPort: 0, mysql: database.mysql, webRoot }, KernelAuthenticatorLive, { media }));
+    const service = await inScope(serverLayer({ apiPort: 0, db: database.db, webRoot }, KernelAuthenticatorLive, { media }));
     const address = Context.get(service, HttpServer.HttpServer).address;
     assert(address._tag === 'TcpAddress');
     const host = `127.0.0.1:${address.port}`;
@@ -446,12 +443,10 @@ async function runSuite(admin: string, binary: string, screenshots: string | und
 const env = childEnv(process.env);
 for (const name of Object.keys(process.env)) if (!(name in env)) delete process.env[name];
 Object.assign(process.env, env);
-const admin = env['SANCTUM_TEST_MYSQL_URL'];
-assert(admin, 'Set SANCTUM_TEST_MYSQL_URL to a test MySQL server.');
 const screenshots = env['SANCTUM_DEVICE_EVIDENCE_DIR'];
 if (screenshots !== undefined) mkdirSync(screenshots, { recursive: true });
 const binary = env['SANCTUM_DEVICE_BIN'] ?? join(deviceRoot, 'target/debug/sanctum-listener');
 // Blaze checks this workspace but cannot emit the listener binary.
 if (!env['SANCTUM_DEVICE_BIN']) build('cargo', ['build', '--locked', '-p', 'sanctum-listener'], deviceRoot);
 build('npm', ['run', 'build', '-w', 'web-app'], root);
-await runSuite(admin, binary, screenshots);
+await runSuite(binary, screenshots);

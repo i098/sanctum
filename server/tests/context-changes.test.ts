@@ -20,6 +20,7 @@ import { type ExtractionInput, extractCandidates } from '../src/extraction.ts';
 import { enqueueJob } from '../src/jobs.ts';
 import { requestContextRefresh, requestMemoryCommit } from '../src/context-schedule.ts';
 import { appendContextEvent } from '../src/context-events.ts';
+import { now } from '../src/sql-dialect.ts';
 import { addContextItem, getContextSnapshot, reviseContextItem } from '../src/context.ts';
 import { jobHandlers } from '../src/job-handlers.ts';
 import { fixtureLlm, LlmClient } from '../src/llm.ts';
@@ -72,7 +73,7 @@ layer(migratedDatabase, { timeout: 120_000 })('context change feed', it => {
       const secret = yield* seedSegment(restricted, 1, 2, 'Secret.');
       const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-        VALUES (${owner!.workspace_id}, ${restricted.meeting_id}, ${owner!.principal.id}, 'owner', ${owner!.principal.id}, UTC_TIMESTAMP(6))`;
+        VALUES (${owner!.workspace_id}, ${restricted.meeting_id}, ${owner!.principal.id}, 'owner', ${owner!.principal.id}, ${now})`;
       const first = yield* add(agent!, open, segment, 'a', 0);
       yield* add(owner!, restricted, secret, 'hidden', 0);
       yield* reviseContextItem(owner!, first.id, { expected_revision: 1, idempotency_key: 'b', text: 'Revised' });
@@ -105,9 +106,9 @@ layer(migratedDatabase, { timeout: 120_000 })('context change feed', it => {
       const seqs = yield* Effect.all(Array.from({ length: 8 }, () => sql.withTransaction(append)), { concurrency: 8 });
       expect([...seqs].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       yield* Effect.either(sql.withTransaction(Effect.zipRight(append, Effect.fail('rolled back'))));
-      const [row] = yield* sql<{ seq: string; revision: string }>`SELECT w.context_seq AS seq, m.context_revision AS revision FROM workspaces w
+      const [row] = yield* sql<{ seq: number; revision: number }>`SELECT w.context_seq AS seq, m.context_revision AS revision FROM workspaces w
         JOIN meetings m ON m.workspace_id = w.id WHERE m.id = ${meeting.meeting_id}`;
-      expect(row).toEqual({ seq: '8', revision: '8' });
+      expect(row).toEqual({ seq: 8, revision: 8 });
       expect((yield* getContextChanges(owner!, {})).events.map(event => event.change)).toEqual(Array(8).fill('meeting_boundary_changed'));
     }));
 });
@@ -152,8 +153,8 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
         state: 'provisional',
         derivation: 'spoken',
         author: { type: 'system', id: owner!.principal.id },
-        event_at: '2026-09-30T06:59:50Z',
-        time: { phrase: 'tomorrow', normalized: '2026-09-30T07:00:00.000Z', anchor: '2026-09-30T06:59:50Z', timezone: 'America/Los_Angeles', ambiguous: true },
+        event_at: '2026-09-30T06:59:50.000000Z',
+        time: { phrase: 'tomorrow', normalized: '2026-09-30T07:00:00.000Z', anchor: '2026-09-30T06:59:50.000000Z', timezone: 'America/Los_Angeles', ambiguous: true },
         sources: [{ segment_id: said, start_ms: 0, end_ms: 5000 }],
       });
       expect(question).toMatchObject({ derivation: 'inferred', time: null, text: 'Who reviews the plan?' });
@@ -362,18 +363,17 @@ layer(Layer.merge(migratedDatabase, UnconfiguredLlm), { timeout: 120_000 })('con
       const [owner, device] = yield* seedWorkspace('Coalesce', ['owner', 'device']);
       const meeting = yield* seedMeeting(device!, { started_at: '2026-09-26 17:00:00' });
       const request = { workspace_id: meeting.workspace_id, meeting_id: meeting.meeting_id, requested_by: owner!.principal.id };
-      const ids = yield* Effect.all([1, 1, 4].map(new_turns => requestContextRefresh({ ...request, new_turns })));
-      expect(new Set(ids).size).toBe(1);
+      yield* Effect.all([1, 1, 4].map(new_turns => requestContextRefresh({ ...request, new_turns })));
       const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{ kind: string; due: string }>`SELECT kind, CAST(available_at <= UTC_TIMESTAMP(6) AS CHAR) AS due FROM jobs WHERE workspace_id = ${meeting.workspace_id}`;
-      expect(rows).toEqual([{ kind: 'context.refresh', due: '1' }]);
-      yield* sql`UPDATE jobs SET status = 'running' WHERE id = ${ids[0]!}`;
+      const rows = yield* sql<{ kind: string; due: number }>`SELECT kind, available_at <= ${now} AS due FROM jobs WHERE workspace_id = ${meeting.workspace_id}`;
+      expect(rows).toEqual([{ kind: 'context.refresh', due: 1 }]);
+      yield* sql`UPDATE jobs SET status = 'running' WHERE workspace_id = ${meeting.workspace_id} AND kind = 'context.refresh'`;
       yield* requestContextRefresh({ ...request, new_turns: 1 });
       yield* requestMemoryCommit(request);
       const after = yield* sql<{ kind: string; status: string }>`SELECT kind, status FROM jobs WHERE workspace_id = ${meeting.workspace_id} ORDER BY kind`;
       expect(after).toEqual([{ kind: 'context.refresh', status: 'running' }, { kind: 'memory.commit', status: 'pending' }]);
-      const both = yield* Effect.all([requestMemoryCommit(request), requestMemoryCommit(request)], { concurrency: 2 }).pipe(Effect.either);
-      expect(Either.isRight(both) && new Set(both.right).size).toBe(1);
+      yield* Effect.all([requestMemoryCommit(request), requestMemoryCommit(request)], { concurrency: 2 });
+      expect(yield* sql`SELECT kind FROM jobs WHERE workspace_id = ${meeting.workspace_id} AND kind = 'memory.commit'`).toHaveLength(1);
     }));
 
   it.effect('lets model-bound jobs retry for over an hour while other kinds keep five attempts', () =>

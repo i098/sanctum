@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateResult } from '../benchmarks/result-format.ts';
-import { aggregateProblems, longRunVerdict, matchProblems, pairFingerprints, saturated, summaryRows, sweepRates } from '../scripts/benchmark-compare.ts';
+import { longRunVerdict, matchProblems, saturated, summaryRows, sweepRates } from '../scripts/benchmark-compare.ts';
 import { runJob } from '../scripts/benchmark.ts';
 
 const job = { git_sha: 'e'.repeat(40), started_at: '2026-09-29T00:00:00.000Z' };
@@ -52,26 +52,4 @@ test('records at different concurrency are never paired', () => {
   assert.deepEqual(summaryRows([record('typescript'), record('rust', twoClients)]), []);
   assert.deepEqual(matchProblems([record('typescript'), record('rust', { ...twoClients, fixture_sha256: 'c'.repeat(64) })]), []);
   assert.equal(summaryRows([record('typescript', twoClients), record('rust', twoClients)]).length, 1);
-});
-
-const scale = { chunks: 3, chunk_seconds: 2, segments: 40, operations: 100 };
-const databaseRecords = (clients: number, overrides: Record<string, unknown> = {}) =>
-  ([['archive_streaming', scale.chunks], ['transcript_ingest', scale.segments], ['context_read_write', scale.operations]] as const).map(([workload_id, count]) =>
-    record('rust', { workload_id, repetitions: clients * count, offered_load: { per_second: 0, concurrency: clients }, ...overrides }));
-
-test('a database job yields one aggregate record per workload pooling every client', () => {
-  assert.deepEqual(aggregateProblems(databaseRecords(1), 1, scale), []);
-  assert.deepEqual(aggregateProblems(databaseRecords(2), 2, scale), []);
-  // One client's operations missing from the pool, or a per-client record, is not an aggregate.
-  assert.deepEqual(aggregateProblems(databaseRecords(1, { offered_load: { per_second: 0, concurrency: 2 } }), 2, scale), [
-    'rust archive_streaming: 3 operations, expected 6', 'rust transcript_ingest: 40 operations, expected 80', 'rust context_read_write: 100 operations, expected 200',
-  ]);
-  assert.deepEqual(aggregateProblems(databaseRecords(2).slice(1), 1, scale)[0], 'database job records context_read_write, transcript_ingest, expected one each of archive_streaming, transcript_ingest, context_read_write');
-  assert.match(aggregateProblems(databaseRecords(1), 2, scale)[0]!, /^rust archive_streaming: concurrency 1, ran 2 clients$/);
-});
-
-test('client fingerprints pair by index and a differing pair stops the run naming it', () => {
-  assert.match(pairFingerprints(['a'], ['a']), /every client pair \(SHA-256 client 0 [0-9a-f]{64}\)$/);
-  assert.match(pairFingerprints(['a', 'b'], ['a', 'b']), /client 0 [0-9a-f]{64}, client 1 [0-9a-f]{64}\)$/);
-  assert.throws(() => pairFingerprints(['a', 'b'], ['a', 'c']), { message: 'MySQL end state differs for client pair 1: typescript b rust c' });
 });

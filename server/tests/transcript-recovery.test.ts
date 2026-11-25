@@ -7,6 +7,7 @@ import { REQUESTER_REFUSED } from '../src/jobs.ts';
 import { heartbeat, registerListener, startEpoch, stopEpoch } from '../src/listeners.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { putChunk } from '../src/recordings.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { finalSegments, getSegments, publishFinalWindow, recordFinalWindow } from '../src/transcripts.ts';
 import { jobsOf } from './support/capture.ts';
 import { chunk, fakeSpeech, MigratedDatabase, newEpochId, seedDevice } from './support/media.ts';
@@ -126,7 +127,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       expect(yield* recoverArchive('close')).toMatchObject({ before: ['provisional'], after: ['closing'] });
       expect(yield* recoverArchive('interrupted')).toMatchObject({ before: ['provisional'], after: ['interrupted'] });
       // A takeover mid-epoch: audio after it is refused, and the meeting seals once the held audio is reconciled.
-      expect(yield* recoverArchive('close', '2026-09-26 17:00:03')).toEqual({ before: ['closing'], after: ['closing'], uploaded: [true, true, true, false, false] });
+      expect(yield* recoverArchive('close', '2026-09-26 17:00:03.000000')).toEqual({ before: ['closing'], after: ['closing'], uploaded: [true, true, true, false, false] });
       // A pause is not an end of the meeting: it stays open for the next capture.
       expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));
@@ -218,7 +219,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       const { access, epoch_id, speech, reconcile } = yield* setup(1);
       speech.controls.batch = (samples, rate) =>
         Effect.zipRight(
-          sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${access.workspace_id}`,
+          sql`UPDATE workspaces SET deleted_at = ${now}, purge_after = ${addSeconds(now, 7 * 86_400)} WHERE id = ${access.workspace_id}`,
           Effect.succeed([{ start_s: 0, end_s: samples.length / rate, is_final: true, text: 'too late', confidence: 0.9, speaker: null }]),
         ).pipe(Effect.orDie);
       expect(yield* Effect.flip(reconcile(0, RATE))).toMatchObject({ _tag: 'JobFailure', message: REQUESTER_REFUSED, retryable: false });
@@ -285,7 +286,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       const sql = yield* SqlClient.SqlClient;
       const { access, listener_id, epoch_id, providers, store } = yield* setup(1);
       yield* liveFinal(access, epoch_id, 0, 8_000, 'before the delete');
-      yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL 7 DAY WHERE id = ${access.workspace_id}`;
+      yield* sql`UPDATE workspaces SET deleted_at = ${now}, purge_after = ${addSeconds(now, 7 * 86_400)} WHERE id = ${access.workspace_id}`;
       const objects = store.objects.size;
 
       expect(yield* liveFinal(access, epoch_id, 8_000, 16_000, 'after the delete')).toEqual([]);

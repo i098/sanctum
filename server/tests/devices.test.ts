@@ -4,6 +4,7 @@ import { expect, it } from '@effect/vitest';
 import type { DeviceAuthorization, DeviceToken } from '@sanctum/contracts';
 import { ConfigProvider, Effect } from 'effect';
 import { hashToken, openSession } from '../src/auth.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { MCP_TOOL_NAMES } from '../src/mcp.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -56,7 +57,7 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect(yield* http.pending(user_code, approver!)).toMatchObject({ status: 200, body: { name: listenerName, capabilities } });
   expect(yield* http.poll(device_code)).toMatchObject({ status: 400, body: { error: 'authorization_pending' } });
   expect(yield* http.poll(device_code)).toMatchObject({ status: 400, body: { error: 'slow_down' } });
-  yield* sql`UPDATE devices SET last_polled_at = UTC_TIMESTAMP(6) - INTERVAL 9 SECOND WHERE device_code_hash = ${hashToken(device_code)}`;
+  yield* sql`UPDATE devices SET last_polled_at = ${addSeconds(now, -9)} WHERE device_code_hash = ${hashToken(device_code)}`;
   expect(yield* http.poll(device_code)).toMatchObject({ status: 400, body: { error: 'slow_down' } });
   expect(yield* http.approve(`${digits.slice(0, 4)} ${digits.slice(4)}`, approver!)).toMatchObject({
     status: 200, body: { status: 'approved', approved_by: { id: member!.principal.id } },
@@ -64,11 +65,11 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   const [reserved] = yield* sql`SELECT c.scopes, c.principal_id, c.owner_principal_id, c.expires_at FROM devices d
     JOIN agent_credentials c ON c.id = d.credential_id WHERE d.device_code_hash = ${hashToken(device_code)}`;
   expect(reserved).toMatchObject({
-    scopes: ['capture:ingest'], principal_id: member!.principal.id, owner_principal_id: member!.principal.id, expires_at: null,
+    scopes: '["capture:ingest"]', principal_id: member!.principal.id, owner_principal_id: member!.principal.id, expires_at: null,
   });
   expect((yield* http.pending(user_code, approver!)).status).toBe(404);
-  yield* sql`UPDATE devices SET last_polled_at = UTC_TIMESTAMP(6) - INTERVAL 16 SECOND WHERE device_code_hash = ${hashToken(device_code)}`;
-  yield* sql`UPDATE devices SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE device_code_hash = ${hashToken(device_code)}`;
+  yield* sql`UPDATE devices SET last_polled_at = ${addSeconds(now, -16)} WHERE device_code_hash = ${hashToken(device_code)}`;
+  yield* sql`UPDATE devices SET expires_at = ${addSeconds(now, -1)} WHERE device_code_hash = ${hashToken(device_code)}`;
   const polls = yield* Effect.all([http.poll(device_code), http.poll(device_code)], { concurrency: 2 });
   const issued = polls.find(result => result.status === 200)!;
   expect(issued).toMatchObject({ status: 200, cache: 'no-store', body: { token_type: 'Bearer', workspace_id: member!.workspace_id, workspace_name: 'Room team' } });
@@ -117,7 +118,7 @@ it.scoped('pairs a new capture-only listener once and revokes it within its work
   expect((yield* http.revoke(device_id, outside!)).status).toBe(404);
   expect(yield* http.list(approver!)).toMatchObject({ body: { items: [{ id: device_id, last_used_at: expect.any(String) }] } });
   const [hashes] = yield* sql`SELECT d.device_code_hash, d.user_code_hash, c.token_hash FROM devices d JOIN agent_credentials c ON c.id = d.credential_id WHERE d.id = ${device_id}`;
-  expect(hashes).toEqual({ device_code_hash: hashToken(device_code), user_code_hash: hashToken(digits), token_hash: hashToken(access_token) });
+  expect(hashes).toEqual({ device_code_hash: new Uint8Array(hashToken(device_code)), user_code_hash: new Uint8Array(hashToken(digits)), token_hash: new Uint8Array(hashToken(access_token)) });
   expect((yield* http.revoke(device_id, admin!)).status).toBe(204);
   expect((yield* heartbeat()).status).toBe(401);
   expect(yield* http.list(approver!)).toMatchObject({ body: { items: [{ id: device_id, status: 'revoked', revoked_at: expect.any(String) }] } });
@@ -134,7 +135,7 @@ it.scoped('rejects denied, expired and unknown codes and locks a principal after
   expect(yield* http.approve(first.user_code, person!, false)).toMatchObject({ status: 200, body: { status: 'denied' } });
   expect(yield* http.poll(first.device_code)).toMatchObject({ status: 400, body: { error: 'access_denied' } });
   const expired = (yield* http.authorize()).body;
-  yield* sql`UPDATE devices SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE device_code_hash = ${hashToken(expired.device_code)}`;
+  yield* sql`UPDATE devices SET expires_at = ${addSeconds(now, -1)} WHERE device_code_hash = ${hashToken(expired.device_code)}`;
   expect(yield* http.poll(expired.device_code)).toMatchObject({ status: 400, body: { error: 'expired_token' } });
   expect((yield* http.pending(expired.user_code, person!)).status).toBe(404);
   expect(yield* http.poll('unknown')).toMatchObject({ status: 400, body: { error: 'invalid_grant' } });
@@ -168,11 +169,11 @@ it.scoped('enforces the global grant cap and frees capacity when a grant expires
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO devices (id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, created_at, expires_at)
     WITH RECURSIVE sequence AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM sequence WHERE n < 1000)
-    SELECT UUID(), ${listenerName}, ${JSON.stringify(capabilities)}, UNHEX(SHA2(CONCAT('device ', n), 256)),
-      UNHEX(SHA2(CONCAT('user ', n), 256)), ${hashToken('fixture-address')}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL 10 MINUTE
+    SELECT lower(hex(randomblob(16))), ${listenerName}, ${JSON.stringify(capabilities)}, randomblob(32),
+      randomblob(32), ${hashToken('fixture-address')}, ${now}, ${addSeconds(now, 600)}
     FROM sequence`;
   const http = api(base);
   expect((yield* http.authorize()).status).toBe(503);
-  yield* sql`UPDATE devices SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE user_code_hash = ${hashToken('user 1')}`;
+  yield* sql`UPDATE devices SET expires_at = ${addSeconds(now, -1)} WHERE id = (SELECT min(id) FROM devices)`;
   expect((yield* http.authorize()).status).toBe(200);
 })));
