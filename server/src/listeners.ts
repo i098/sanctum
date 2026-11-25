@@ -27,11 +27,12 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
 import type { CaptureAccess } from './auth.ts';
-import { claimGroupLease, holdsGroupLease } from './capture-groups.ts';
+import { applyGroupLease, holdsGroupLease, planGroupLease } from './capture-groups.ts';
 import { engineeringDefaults } from './config.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
 import { heldUntil, recordClaim } from './lease-claims.ts';
 import { onCaptureEnded } from './meetings.ts';
+import { addSeconds, now } from './sql-dialect.ts';
 
 const ListenerRow = Schema.Struct({
   id: ListenerId,
@@ -61,8 +62,8 @@ type StartVerdict = typeof AcceptedMessage.Type | typeof RejectedMessage.Type;
 
 const rejected = (reason: (typeof RejectedMessage.Type)['reason'], message: string): StartVerdict => RejectedMessage.make({ reason, message });
 
-/** The caller's own listener (optionally row-locked); other principals' and workspaces' listeners are NotFound. */
-export const ownedListener = (access: CaptureAccess, listener_id: ListenerId, lock = false) =>
+/** The caller's own listener; other principals' and workspaces' listeners are NotFound. */
+export const ownedListener = (access: CaptureAccess, listener_id: ListenerId) =>
   Effect.gen(function* () {
     if (!access.scopes.includes('capture:ingest')) {
       return yield* new Forbidden({ message: 'The capture:ingest scope is required', required_scope: 'capture:ingest' });
@@ -73,11 +74,10 @@ export const ownedListener = (access: CaptureAccess, listener_id: ListenerId, lo
       Result: ListenerRow,
       execute: id => sql`
         SELECT id, workspace_id, capture_group_id, name, mode, state, lease_generation, lease_expires_at, current_epoch_id,
-               last_heartbeat_at, COALESCE(lease_expires_at > UTC_TIMESTAMP(6), 0) AS lease_active
+               last_heartbeat_at, COALESCE(lease_expires_at > ${now}, 0) AS lease_active
         FROM listeners
         WHERE workspace_id = ${access.workspace_id} AND id = ${id} AND principal_id = ${access.principal.id}
-          AND (${access.device_id ?? null} IS NULL OR device_id = ${access.device_id ?? null})
-        ${lock ? sql.unsafe('FOR UPDATE') : sql.unsafe('')}`,
+          AND (${access.device_id ?? null} IS NULL OR device_id = ${access.device_id ?? null})`,
     });
     const row = yield* find(listener_id).pipe(Effect.catchTag('ParseError', Effect.die));
     return Option.isSome(row) ? row.value : yield* new NotFound({ message: 'Listener not found' });
@@ -108,20 +108,30 @@ export const registerListener = (access: CaptureAccess, input: typeof RegisterLi
     const id = ListenerId.make(randomUUID());
     yield* sql`
       INSERT INTO listeners (id, workspace_id, principal_id, device_id, name, mode, capabilities, created_at)
-      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${access.device_id ?? null}, ${input.name}, ${input.mode}, ${JSON.stringify(input.capabilities)}, UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${access.device_id ?? null}, ${input.name}, ${input.mode}, ${JSON.stringify(input.capabilities)}, ${now})`;
     return toListener(yield* ownedListener(access, id));
   });
 
-/** Ends an open epoch once and tells meetings; a no-op when it already ended. */
+/**
+ * Ends an open epoch once and tells meetings; a no-op when it already ended. It reads, then writes:
+ * a transaction cannot read after it buffered a write, so meetings run before this epoch's own writes.
+ */
 const endEpoch = (workspace_id: WorkspaceId, listener_id: ListenerId, epoch_id: CaptureEpochId, reason: typeof EpochEndReason.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const epoch = yield* findEpoch(workspace_id, epoch_id);
     if (Option.isNone(epoch) || epoch.value.ended === 1) return;
-    yield* sql`UPDATE capture_epochs SET ended_at = UTC_TIMESTAMP(6), end_reason = ${reason} WHERE workspace_id = ${workspace_id} AND id = ${epoch_id}`;
-    yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE workspace_id = ${workspace_id} AND id = ${listener_id} AND current_epoch_id = ${epoch_id}`;
     yield* onCaptureEnded({ workspace_id, listener_id, epoch_id, track: 0, sample_end: epoch.value.live_sample_end, reason });
+    yield* sql`UPDATE capture_epochs SET ended_at = ${now}, end_reason = ${reason} WHERE workspace_id = ${workspace_id} AND id = ${epoch_id} AND ended_at IS NULL`;
+    yield* sql`UPDATE listeners SET current_epoch_id = NULL WHERE workspace_id = ${workspace_id} AND id = ${listener_id} AND current_epoch_id = ${epoch_id}`;
   });
+
+/** The expiry a lease renewed now gets, read first so the heartbeat's writes can follow it. */
+const leaseDeadline = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ deadline: string }>`SELECT ${addSeconds(now, engineeringDefaults.ownershipLeaseMs / 1000)} AS deadline`;
+  return Schema.decodeSync(DbUtc)(row!.deadline);
+});
 
 /**
  * Renews the caller's lease, or takes it over when the previous owner's lease lapsed. Generation 0
@@ -135,25 +145,27 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const listener = yield* ownedListener(access, listener_id, true);
+        const listener = yield* ownedListener(access, listener_id);
         const renew = input.lease_generation === listener.lease_generation && listener.lease_generation > 0;
         if (!renew && listener.lease_active === 1) {
           // The caller keeps its own generation: handing it the holder's would let it act as the holder.
           return { lease_generation: input.lease_generation, lease_expires_at: listener.lease_expires_at!, owner: false } satisfies typeof HeartbeatReceipt.Type;
         }
-        if (listener.lease_active !== 1 && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
         const generation = renew ? listener.lease_generation : listener.lease_generation + 1;
         const health = JSON.stringify({ buffered_chunks: input.buffered_chunks, storage_bytes_free: input.storage_bytes_free, epoch_id: input.epoch_id });
+        // Every read comes before the first write: a transaction cannot read after it buffered one.
+        const deadline = yield* leaseDeadline;
+        const group = listener.capture_group_id === null ? null : { workspace_id: access.workspace_id, capture_group_id: listener.capture_group_id, listener_id };
+        const grant = group === null ? null : yield* planGroupLease(group);
+        if (listener.lease_active !== 1 && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
         yield* sql`
           UPDATE listeners
-          SET lease_generation = ${generation}, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL ${engineeringDefaults.ownershipLeaseMs * 1000} MICROSECOND,
-              state = ${input.state}, health = ${health}, last_heartbeat_at = UTC_TIMESTAMP(6)
+          SET lease_generation = ${generation}, lease_expires_at = ${Schema.encodeSync(DbUtc)(deadline)},
+              state = ${input.state}, health = ${health}, last_heartbeat_at = ${now}
           WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id}`;
         if (!renew) yield* recordClaim(access.workspace_id, listener_id, generation);
-        const renewed = yield* ownedListener(access, listener_id);
-        const { capture_group_id } = renewed;
-        const owner = capture_group_id === null || (yield* claimGroupLease({ workspace_id: access.workspace_id, capture_group_id, listener_id }));
-        return { lease_generation: generation, lease_expires_at: renewed.lease_expires_at!, owner } satisfies typeof HeartbeatReceipt.Type;
+        if (group !== null && grant !== null) yield* applyGroupLease(group, grant);
+        return { lease_generation: generation, lease_expires_at: deadline, owner: group === null || grant !== null } satisfies typeof HeartbeatReceipt.Type;
       }),
     );
   });
@@ -164,13 +176,13 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
  */
 export const sweepLapsedListeners = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const lapsed = sql`current_epoch_id IS NOT NULL AND COALESCE(lease_expires_at > UTC_TIMESTAMP(6), 0) = 0`;
+  const lapsed = sql`current_epoch_id IS NOT NULL AND COALESCE(lease_expires_at > ${now}, 0) = 0`;
   const listeners = yield* sql<{ workspace_id: WorkspaceId; id: ListenerId }>`SELECT workspace_id, id FROM listeners WHERE ${lapsed}`;
   for (const { workspace_id, id } of listeners) {
     yield* sql.withTransaction(
       Effect.gen(function* () {
         const [open] = yield* sql<{ epoch_id: CaptureEpochId }>`SELECT current_epoch_id AS epoch_id FROM listeners
-          WHERE workspace_id = ${workspace_id} AND id = ${id} AND ${lapsed} FOR UPDATE`;
+          WHERE workspace_id = ${workspace_id} AND id = ${id} AND ${lapsed}`;
         if (open === undefined) return;
         yield* endEpoch(workspace_id, id, open.epoch_id, 'interrupted');
         yield* sql`UPDATE listeners SET state = 'stopped' WHERE workspace_id = ${workspace_id} AND id = ${id}`;
@@ -190,8 +202,8 @@ const insertEpoch = (access: AccessScope, start: typeof StartMessage.Type, ended
       INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at,
                                   timezone, start_reason, started_at, live_sample_end, ended_at, end_reason, archive_sample_end)
       VALUES (${start.epoch_id}, ${access.workspace_id}, ${start.listener_id}, ${start.lease_generation}, ${clock.sample_rate}, ${clock.channels},
-              ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, UTC_TIMESTAMP(6),
-              ${clock.sample_start}, IF(${ended !== null}, UTC_TIMESTAMP(6), NULL), ${ended}, ${ended === null ? null : (start.sample_end ?? null)})`;
+              ${clock.encoding}, ${clock.sample_start}, ${Schema.encodeSync(DbUtc)(clock.captured_at)}, ${clock.timezone}, ${start.start_reason}, ${now},
+              ${clock.sample_start}, ${ended === null ? sql`NULL` : now}, ${ended}, ${ended === null ? null : (start.sample_end ?? null)})`;
   });
 
 /** An existing epoch must belong to this listener and clock. */
@@ -240,14 +252,14 @@ export const startEpoch = (access: AccessScope, start: typeof StartMessage.Type)
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const listener = yield* ownedListener(access, start.listener_id, true);
+        const listener = yield* ownedListener(access, start.listener_id);
         if (!start.archive_only && (listener.lease_active !== 1 || listener.lease_generation !== start.lease_generation || !(yield* holdsGroupLease(access.workspace_id, listener)))) {
           return rejected('stale_generation', `Ownership generation ${start.lease_generation} is not the current lease`);
         }
         const verdict = yield* (start.archive_only ? registerArchive(access, listener, start) : startLive(access, listener, start));
         if (verdict._tag === 'accepted' && !start.archive_only && start.capabilities !== undefined) {
           yield* sql`UPDATE listeners
-            SET capabilities = JSON_SET(capabilities, '$.device', CAST(${JSON.stringify(start.capabilities)} AS JSON))
+            SET capabilities = json_set(capabilities, '$.device', json(${JSON.stringify(start.capabilities)}))
             WHERE workspace_id = ${access.workspace_id} AND id = ${listener.id}`;
         }
         return verdict;
@@ -261,7 +273,7 @@ export const credentialActive = (access: CaptureAccess) =>
     if (access.credential_id === undefined) return true;
     const sql = yield* SqlClient.SqlClient;
     const rows = yield* sql`SELECT 1 FROM agent_credentials
-      WHERE workspace_id = ${access.workspace_id} AND id = ${access.credential_id} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))`;
+      WHERE workspace_id = ${access.workspace_id} AND id = ${access.credential_id} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ${now})`;
     return rows.length > 0;
   });
 
@@ -274,10 +286,10 @@ export const advanceLiveWatermark = (access: AccessScope, listener_id: ListenerI
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const listener = yield* ownedListener(access, listener_id, true);
+        const listener = yield* ownedListener(access, listener_id);
         if (listener.lease_generation !== lease_generation || listener.current_epoch_id !== epoch_id || !(yield* holdsGroupLease(access.workspace_id, listener))) return false;
         yield* sql`
-          UPDATE capture_epochs SET live_sample_end = GREATEST(live_sample_end, ${sample_end})
+          UPDATE capture_epochs SET live_sample_end = max(live_sample_end, ${sample_end})
           WHERE workspace_id = ${access.workspace_id} AND id = ${epoch_id} AND ended_at IS NULL`;
         return true;
       }),
@@ -290,7 +302,7 @@ export const stopEpoch = (access: AccessScope, listener_id: ListenerId, epoch_id
     const sql = yield* SqlClient.SqlClient;
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        const listener = yield* ownedListener(access, listener_id, true);
+        const listener = yield* ownedListener(access, listener_id);
         if (listener.lease_generation !== lease_generation) return;
         yield* endEpoch(access.workspace_id, listener_id, epoch_id, reason);
         yield* sql`UPDATE listeners SET state = ${reason === 'pause' ? 'paused' : 'stopped'} WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id}`;

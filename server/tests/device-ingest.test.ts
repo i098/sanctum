@@ -12,6 +12,7 @@ import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { meetingsOf } from './support/capture.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { api, chunk, eventually, fakeSpeech, MigratedDatabase, openSocket, serveApi, uploadChunk } from './support/media.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
 const work = vi.hoisted(() => vi.fn());
@@ -60,10 +61,10 @@ const setupWith = (authenticator = KernelAuthenticatorLive) => Effect.gen(functi
   const credential_id = randomUUID();
   const device_id = randomUUID();
   yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
-    VALUES (${credential_id}, ${workspace_id}, ${principal.id}, ${principal.id}, ${hashToken(token)}, '["capture:ingest"]', UTC_TIMESTAMP(6))`;
+    VALUES (${credential_id}, ${workspace_id}, ${principal.id}, ${principal.id}, ${hashToken(token)}, '["capture:ingest"]', ${now})`;
   yield* sql`INSERT INTO devices (id, workspace_id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, status, approved_by, credential_id, expires_at, created_at, approved_at)
     VALUES (${device_id}, ${workspace_id}, 'Fixture device', ${JSON.stringify(lightOnly)}, ${hashToken(randomUUID())}, ${hashToken(randomUUID())}, ${hashToken(randomUUID())}, 'approved',
-      ${principal.id}, ${credential_id}, UTC_TIMESTAMP(6) + INTERVAL 1 DAY, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      ${principal.id}, ${credential_id}, ${addSeconds(now, 86_400)}, ${now}, ${now})`;
   const speech = fakeSpeech();
   const media = Layer.merge(speech.layer, memoryObjectStore().layer);
   const host = yield* serveApi((config, _fixtureAuth, overrides) => serverLayer(config, authenticator, overrides), new Map(), media);
@@ -180,7 +181,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('hardware listener ingest', it => 
       socket.send(JSON.stringify({ ...start, capabilities: lightOnly }));
       yield* socket.take('accepted');
       // The revoking process holds no socket of this one, so only the stored revocation can end it.
-      yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE token_hash = ${hashToken(token)}`;
+      yield* sql`UPDATE agent_credentials SET revoked_at = ${now} WHERE token_hash = ${hashToken(token)}`;
       expect(yield* socket.take('rejected')).toMatchObject({ reason: 'unauthorized' });
       expect((yield* socket.closed).code).toBe(1008);
     }),
