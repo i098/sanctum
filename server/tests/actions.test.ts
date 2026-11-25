@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, type ActionId, ActionReceipt, type IntegrationAccountId, type ListenerId, type MeetingId } from '@sanctum/contracts';
-import { Effect, Fiber, Schedule, Schema, TestClock } from 'effect';
+import { Deferred, Effect, Fiber, Schedule, Schema, TestClock } from 'effect';
 import { beforeEach, vi } from 'vitest';
 import { createActionGrant, getActionReceipt, listenerFeed, listMeetingActions, requestAction, resolveAction, revokeActionGrant } from '../src/actions.ts';
 import { engineeringDefaults } from '../src/config.ts';
@@ -57,17 +57,29 @@ const execute = (access: AccessScope, action_id: ActionId) =>
   Effect.flatMap(queuedJob(access.workspace_id, 'action.execute', action_id), executeAction).pipe(Effect.provide(actionServices));
 
 describe('action gateway', () => {
-  it.effect('concurrent executions cannot overshoot the per-window action budget', () =>
+  it.effect('pauses when another execution fills the action budget after the snapshot', () =>
     withDatabase(
       Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const { agent } = yield* setup();
+        const { workspace_id } = agent;
+        const first = yield* requestAction(agent, request({ idempotency_key: 'last-slot' }));
+        const waiting = yield* requestAction(agent, request({ idempotency_key: 'over-budget' }));
+        const snapshotReady = yield* Deferred.make<void>();
+        const competing = yield* Effect.fork(Effect.zipRight(Deferred.await(snapshotReady), execute(agent, first.action_id)));
         const budget: { perWindow: number } = engineeringDefaults.actionBudget;
         const original = budget.perWindow;
-        budget.perWindow = 2;
-        const queued = yield* Effect.all([1, 2, 3, 4].map(n => requestAction(agent, request({ idempotency_key: `burst-${n}` }))));
-        const results = yield* Effect.all(queued.map(action => execute(agent, action.action_id)), { concurrency: 4 }).pipe(Effect.ensuring(Effect.sync(() => { budget.perWindow = original; })));
-        expect(results.filter(result => result.status === 'paused')).toHaveLength(2);
-        expect(provider.sent).toHaveLength(2);
+        budget.perWindow = 1;
+        const result = yield* sql.withTransaction(Effect.gen(function* () {
+          yield* actionRow(workspace_id, first.action_id);
+          yield* Deferred.succeed(snapshotReady, undefined);
+          expect(yield* Fiber.join(competing)).toMatchObject({ status: 'succeeded', result: { state: 'succeeded' } });
+          expect(yield* actionRow(workspace_id, first.action_id)).toMatchObject({ state: 'queued' });
+          return yield* execute(agent, waiting.action_id);
+        })).pipe(Effect.ensuring(Effect.sync(() => { budget.perWindow = original; })));
+        expect(result.status).toBe('paused');
+        expect(yield* actionRow(workspace_id, waiting.action_id)).toMatchObject({ state: 'queued', attempts: 0 });
+        expect(provider.sent.map(input => input.provider_idempotency_key)).toEqual([`sanctum:${first.action_id}`]);
       }),
       { migrated: true },
     ));
