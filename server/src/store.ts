@@ -26,7 +26,7 @@ import { now } from './sql-dialect.ts';
  * Runs DML and returns the rows it changed. Inside a transaction the write only joins the commit
  * buffer and reports 0: count first, or put the expected state in `WHERE`.
  */
-export const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
+const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
   Effect.map(statement.raw, result => ({ affectedRows: (result as DbResult).changes }));
 
 /** Invalidates every access-derived cache entry of the workspace; returns the new revision. */
