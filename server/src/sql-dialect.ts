@@ -11,8 +11,13 @@ type Expression = string | Statement.Fragment;
 
 /** Joins expressions and literal text into one fragment, keeping bound parameters in order. */
 const compose = (parts: ReadonlyArray<Expression>): Statement.Fragment => {
-  const literals: Array<Statement.Literal> = parts.flatMap((part): Array<Statement.Literal> =>
-    typeof part === 'string' ? [{ _tag: 'Literal', value: part }] : part.segments.filter(segment => segment._tag === 'Literal'));
+  const literals: Array<Statement.Literal> = parts.flatMap((part): Array<Statement.Literal> => {
+    if (typeof part === 'string') return [{ _tag: 'Literal', value: part }];
+    return part.segments.map(segment => {
+      if (segment._tag !== 'Literal') throw new Error(`SQL fragments passed to the time helpers must be plain literals, got ${segment._tag}`);
+      return segment;
+    });
+  });
   return Statement.unsafeFragment(literals.map(literal => literal.value).join(''), literals.flatMap(literal => literal.params ?? []));
 };
 

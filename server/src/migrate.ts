@@ -7,6 +7,7 @@
  *
  * Run explicitly (`npm run migrate --workspace server`); API and worker only check status.
  */
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { SqlClient } from '@effect/sql';
 import { NodeRuntime } from '@effect/platform-node';
@@ -19,6 +20,8 @@ export class MigrationError extends Data.TaggedError('MigrationError')<{ readonl
 export interface Migration {
   readonly name: string;
   readonly statements: ReadonlyArray<string>;
+  readonly checksum: string;
+  readonly foreignKeysOff: boolean;
 }
 
 /**
@@ -41,9 +44,10 @@ const splitStatements = (text: string) => {
   return statements;
 };
 
+/** A file whose first line is `-- sanctum:foreign-keys-off` runs with foreign keys off (table rebuilds); on D1 use `PRAGMA defer_foreign_keys = on` in the file instead. */
 export function parseMigration(file: string, text: string): Migration {
   if (!/^\d{4}_\w+\.sql$/.test(file)) throw new MigrationError({ message: `Invalid migration file name: ${file}` });
-  return { name: file, statements: splitStatements(text) };
+  return { name: file, statements: splitStatements(text), checksum: createHash('sha256').update(text).digest('hex'), foreignKeysOff: text.startsWith('-- sanctum:foreign-keys-off\n') };
 }
 
 const MIGRATIONS_DIR = new URL('../migrations-d1/', import.meta.url);
@@ -55,8 +59,12 @@ export function loadMigrations(dir: URL = MIGRATIONS_DIR): Migration[] {
     .map(file => parseMigration(file, readFileSync(new URL(file, dir), 'utf8')));
 }
 
-const ensureLedger = Effect.flatMap(SqlClient.SqlClient, sql =>
-  sql`CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+const ensureLedger = Effect.gen(function*() {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`;
+  // wrangler does not write checksums: files it applied are recorded on the first run here.
+  yield* sql`CREATE TABLE IF NOT EXISTS migration_checksums (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL)`;
+});
 
 const appliedNames = Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
@@ -67,19 +75,32 @@ const appliedNames = Effect.gen(function*() {
 const applyFile = (migration: Migration) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
+    // PRAGMA foreign_keys is a no-op inside a transaction, so it is set around the whole file.
+    if (migration.foreignKeysOff) yield* sql.unsafe('PRAGMA foreign_keys = OFF');
     yield* sql.unsafe('BEGIN');
     yield* Effect.gen(function*() {
       for (const statement of migration.statements) yield* sql.unsafe(statement);
+      if (migration.foreignKeysOff && (yield* sql.unsafe('PRAGMA foreign_key_check')).length > 0) {
+        return yield* new MigrationError({ message: `Migration ${migration.name} left foreign key violations` });
+      }
       yield* sql`INSERT INTO d1_migrations (name) VALUES (${migration.name})`;
+      yield* sql`INSERT INTO migration_checksums (name, sha256) VALUES (${migration.name}, ${migration.checksum})`;
       yield* sql.unsafe('COMMIT');
     }).pipe(Effect.tapErrorCause(() => Effect.ignore(sql.unsafe('ROLLBACK'))));
-  });
+  }).pipe(Effect.ensuring(migration.foreignKeysOff ? Effect.ignore(Effect.flatMap(SqlClient.SqlClient, sql => sql.unsafe('PRAGMA foreign_keys = ON'))) : Effect.void));
 
-/** Applies pending migrations in name order; rerunning applies nothing. */
+/** Applies pending migrations in name order; rerunning applies nothing. An applied file edited since fails the run. */
 export const migrate = (migrations: ReadonlyArray<Migration>) =>
   Effect.gen(function*() {
+    const sql = yield* SqlClient.SqlClient;
     yield* ensureLedger;
     const done = yield* appliedNames;
+    const stored = new Map((yield* sql<{ name: string; sha256: string }>`SELECT name, sha256 FROM migration_checksums`).map(row => [row.name, row.sha256]));
+    for (const migration of migrations.filter(candidate => done.has(candidate.name))) {
+      const known = stored.get(migration.name);
+      if (known === undefined) yield* sql`INSERT INTO migration_checksums (name, sha256) VALUES (${migration.name}, ${migration.checksum})`;
+      else if (known !== migration.checksum) return yield* new MigrationError({ message: `Migration ${migration.name} changed after it was applied` });
+    }
     const applied: string[] = [];
     for (const migration of migrations.filter(candidate => !done.has(candidate.name))) {
       yield* applyFile(migration);

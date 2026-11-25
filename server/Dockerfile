@@ -30,9 +30,11 @@ COPY sdk/typescript/package.json sdk/typescript/
 RUN npm ci --omit=dev --workspace server --no-audit --no-fund && npm cache clean --force
 COPY packages/contracts/src packages/contracts/src
 COPY sdk/typescript/src sdk/typescript/src
-COPY server/migrations server/migrations
+COPY server/migrations-d1 server/migrations-d1
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/web-app/dist web-app/dist
+# `file:` databases (compose, local runs) live here; on Cloudflare the container reaches D1 through the gateway instead.
+RUN mkdir /data && chown node /data
 USER node
 EXPOSE 7102
 CMD ["node", "server/dist/main.js"]

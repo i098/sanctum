@@ -19,6 +19,7 @@ import {
 import { Effect, Option, ParseResult, Schema } from 'effect';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
+import { chunked, now } from './sql-dialect.ts';
 
 /** Column list decoded by `MeetingRow`; `prefix` is a table alias such as `m.`. */
 export const meetingColumns = (prefix = '') =>
@@ -47,13 +48,13 @@ export type MeetingRow = typeof MeetingRow.Type;
 
 export const toMeeting = ({ listener_id: _listener, capture_group_id: _group, ...meeting }: MeetingRow): Meeting => meeting;
 
-/** One meeting row, optionally locked for the rest of the caller's transaction. */
-export const selectMeeting = (workspace_id: WorkspaceId, id: MeetingId, lock = false) =>
+/** One meeting row. */
+export const selectMeeting = (workspace_id: WorkspaceId, id: MeetingId) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     SqlSchema.findOne({
       Request: MeetingId,
       Result: MeetingRow,
-      execute: meeting => sql`SELECT ${sql.literal(meetingColumns())} FROM meetings WHERE workspace_id = ${workspace_id} AND id = ${meeting} ${lock ? sql`FOR UPDATE` : sql``}`,
+      execute: meeting => sql`SELECT ${sql.literal(meetingColumns())} FROM meetings WHERE workspace_id = ${workspace_id} AND id = ${meeting}`,
     })(id),
   );
 
@@ -85,8 +86,8 @@ export const sampleMs = (epoch: EpochClock, sample: number) => Date.parse(epoch.
 
 export const msToSample = (epoch: EpochClock, ms: number) => epoch.sample_start + Math.round(((ms - Date.parse(epoch.captured_at)) * epoch.sample_rate) / 1000);
 
-/** DATETIME(6) parameter for a millisecond instant. */
-export const dbTime = (ms: number) => new Date(ms).toISOString().slice(0, -1).replace('T', ' ');
+/** Datetime TEXT parameter for a millisecond instant. */
+export const dbTime = (ms: number) => `${new Date(ms).toISOString().slice(0, -1).replace('T', ' ')}000`;
 
 export const loadEpochs = (workspace_id: WorkspaceId, ids: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -139,11 +140,14 @@ export const currentRanges = (workspace_id: WorkspaceId, meeting_id: MeetingId) 
       .sort((a, b) => a.start_ms - b.start_ms || a.track - b.track);
   });
 
+/** One INSERT per `chunked` group: seven bound values a row, and D1 binds at most 100 a statement. */
 export const insertRanges = (workspace_id: WorkspaceId, meeting_id: MeetingId, revision: number, ranges: ReadonlyArray<SourceRange>) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
-    ranges.length === 0
-      ? Effect.void
-      : sql`INSERT INTO meeting_ranges ${sql.insert(ranges.map(range => ({ workspace_id, meeting_id, boundary_revision: revision, ...range })))}`.pipe(Effect.asVoid),
+    Effect.forEach(
+      chunked(ranges, 7),
+      chunk => sql`INSERT INTO meeting_ranges ${sql.insert(chunk.map(range => ({ workspace_id, meeting_id, boundary_revision: revision, ...range })))}`,
+      { discard: true },
+    ),
   );
 
 /** Start of the next range any meeting currently owns on this epoch/track after `sample`, so a new range never overlaps one. */
@@ -165,7 +169,7 @@ export const recordBoundary = (input: {
 }) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     sql`INSERT INTO boundary_events (id, workspace_id, meeting_id, boundary_revision, operation, decision, actor_principal_id, created_at)
-      VALUES (${randomUUID()}, ${input.meeting.workspace_id}, ${input.meeting.id}, ${input.revision}, ${input.operation}, ${JSON.stringify(input.decision)}, ${input.actor}, UTC_TIMESTAMP(6))`,
+      VALUES (${randomUUID()}, ${input.meeting.workspace_id}, ${input.meeting.id}, ${input.revision}, ${input.operation}, ${JSON.stringify(input.decision)}, ${input.actor}, ${now})`,
   );
 
 /** Sealed meetings get their final work as durable jobs; nothing waits on actions or on the listener. */

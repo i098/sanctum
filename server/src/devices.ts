@@ -10,8 +10,9 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Config, Effect, Layer, Option, Schema } from 'effect';
 import { AgentsLive } from './agents.ts';
 import { hashToken, newToken, requireScope } from './auth.ts';
-import { DbJson, DbSafeInt, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
+import { DbJson, DbSafeInt, DbUtc, isDuplicate } from './db.ts';
 import { closeCredentialSockets } from './media/open-sockets.ts';
+import { addSeconds, diffMicros, now } from './sql-dialect.ts';
 import { bumpPermissionRevision } from './store.ts';
 
 const EXPIRES_IN = 600;
@@ -70,29 +71,31 @@ const pairingRequest = (ingress: Config.Config.Success<typeof pairingIngress>) =
 const authorizeDevice = (ingress: Config.Config.Success<typeof pairingIngress>, input: { name: string; capabilities: DeviceCapabilities }) => Effect.gen(function* () {
   const { client, origin } = yield* pairingRequest(ingress);
   const sql = yield* SqlClient.SqlClient;
+  // Every read comes before the first write: a transaction cannot read after it buffered one.
+  // A code collision shows at commit, so the whole transaction reruns with fresh codes.
   const grant = yield* sql.withTransaction(Effect.gen(function* () {
-    yield* sql`INSERT INTO device_pair_capacity (id) VALUES (1) ON DUPLICATE KEY UPDATE id = id`;
-    yield* sql`DELETE FROM devices WHERE status IN ('pending', 'denied') AND expires_at <= UTC_TIMESTAMP(6)`;
     const [pending] = yield* find(PendingCounts, sql`SELECT COUNT(*) AS total,
-      COUNT(CASE WHEN client_address_hash = ${client} THEN 1 END) AS by_address FROM devices WHERE status = 'pending'`);
+      COUNT(CASE WHEN client_address_hash = ${client} THEN 1 END) AS by_address FROM devices WHERE status = 'pending' AND expires_at > ${now}`);
     if (pending!.total >= PAIRING_CAPACITY || pending!.by_address >= ADDRESS_CAPACITY) return Option.none<DeviceAuthorization>();
 
-    const insert = Effect.suspend(() => {
-      const device_code = newToken();
-      const digits = String(randomInt(100_000_000)).padStart(8, '0');
-      const verification_uri = `${origin}/pair`;
-      return sql`INSERT INTO devices (id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, expires_at, created_at)
-        VALUES (${crypto.randomUUID()}, ${input.name}, ${JSON.stringify(input.capabilities)}, ${hashToken(device_code)}, ${hashToken(digits)}, ${client},
-          TIMESTAMPADD(SECOND, ${EXPIRES_IN}, UTC_TIMESTAMP(6)), UTC_TIMESTAMP(6))`.pipe(Effect.as({
-        device_code, user_code: `${digits.slice(0, 4)}-${digits.slice(4)}`, verification_uri, verification_uri_complete: `${verification_uri}?code=${digits}`,
-        expires_in: EXPIRES_IN, interval: POLL_INTERVAL,
-      } satisfies DeviceAuthorization));
-    });
-    return yield* insert.pipe(Effect.retry({ times: 3, while: error => mysqlErrno(error) === ER_DUP_ENTRY }), Effect.map(Option.some));
-  })).pipe(Effect.catchTags({
-    SqlError: error => Effect.logError('Device pairing database request failed', { errno: mysqlErrno(error) }).pipe(Effect.zipRight(unavailable())),
-    ParseError: Effect.die,
-  }));
+    const device_code = newToken();
+    const digits = String(randomInt(100_000_000)).padStart(8, '0');
+    const verification_uri = `${origin}/pair`;
+    yield* sql`DELETE FROM devices WHERE status IN ('pending', 'denied') AND expires_at <= ${now}`;
+    yield* sql`INSERT INTO devices (id, name, capabilities, device_code_hash, user_code_hash, client_address_hash, expires_at, created_at)
+      VALUES (${crypto.randomUUID()}, ${input.name}, ${JSON.stringify(input.capabilities)}, ${hashToken(device_code)}, ${hashToken(digits)}, ${client},
+        ${addSeconds(now, EXPIRES_IN)}, ${now})`;
+    return Option.some({
+      device_code, user_code: `${digits.slice(0, 4)}-${digits.slice(4)}`, verification_uri, verification_uri_complete: `${verification_uri}?code=${digits}`,
+      expires_in: EXPIRES_IN, interval: POLL_INTERVAL,
+    } satisfies DeviceAuthorization);
+  })).pipe(
+    Effect.retry({ times: 3, while: error => error._tag === 'SqlError' && isDuplicate(error) }),
+    Effect.catchTags({
+      SqlError: error => Effect.logError('Device pairing database request failed', { message: error.message }).pipe(Effect.zipRight(unavailable())),
+      ParseError: Effect.die,
+    }),
+  );
   return yield* Option.match(grant, { onNone: () => Effect.fail(unavailable()), onSome: Effect.succeed });
 });
 
@@ -116,7 +119,7 @@ const redeemDeviceToken = (sql: SqlClient.SqlClient, grant: typeof Grant.Type) =
   if (!owner || grant.workspace_id === null) return pollError('access_denied');
   const access_token = newToken();
   yield* sql`UPDATE agent_credentials SET token_hash = ${hashToken(access_token)} WHERE id = ${grant.credential_id}`;
-  yield* sql`UPDATE devices SET token_delivered_at = UTC_TIMESTAMP(6) WHERE id = ${grant.id}`;
+  yield* sql`UPDATE devices SET token_delivered_at = ${now} WHERE id = ${grant.id}`;
   return { access_token, token_type: 'Bearer', device_id: grant.id, workspace_id: grant.workspace_id, ...owner } satisfies DeviceToken;
 });
 
@@ -124,14 +127,14 @@ const deviceToken = (code: string) => Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(Effect.gen(function* () {
     const [grant] = yield* find(Grant, sql`SELECT id, status, workspace_id, credential_id, token_delivered_at IS NOT NULL AS delivered,
-        TIMESTAMPADD(SECOND, IF(status = 'approved', 60, 0), expires_at) <= UTC_TIMESTAMP(6) AS expired,
-        COALESCE(TIMESTAMPADD(SECOND, poll_interval_seconds, last_polled_at) > UTC_TIMESTAMP(6), FALSE) AS early
-      FROM devices WHERE device_code_hash = ${hashToken(code)} FOR UPDATE`);
+        ${diffMicros('expires_at', now)} >= iif(status = 'approved', 60, 0) * 1000000 AS expired,
+        COALESCE(${diffMicros('last_polled_at', now)} < poll_interval_seconds * 1000000, 0) AS early
+      FROM devices WHERE device_code_hash = ${hashToken(code)}`);
     if (!grant || grant.delivered) return pollError('invalid_grant');
     if (grant.status === 'denied' || grant.status === 'revoked') return pollError('access_denied');
     if (grant.expired) return pollError('expired_token');
     if (grant.status === 'pending' || grant.early) {
-      yield* sql`UPDATE devices SET last_polled_at = UTC_TIMESTAMP(6),
+      yield* sql`UPDATE devices SET last_polled_at = ${now},
         poll_interval_seconds = poll_interval_seconds + ${grant.early * POLL_INTERVAL} WHERE id = ${grant.id}`;
       return pollError(grant.early ? 'slow_down' : 'authorization_pending');
     }
@@ -149,26 +152,26 @@ const Pending = Schema.Struct({ id: DeviceId, name: Schema.String, capabilities:
 const AttemptTimes = Schema.Struct({ attempts: DbJson(Schema.Array(Schema.Number)) });
 const PairingClock = Schema.Struct({ now_ms: DbSafeInt });
 
-// A principal lock serializes both endpoints. Keep misses in a rolling 10-minute window.
+// Concurrent misses of one principal conflict at commit and rerun, so none escapes the count. Keep misses in a rolling 10-minute window.
 const withPending = <A>(access: AccessScope, code: string, use: (pending: typeof Pending.Type) => Effect.Effect<A, never, SqlClient.SqlClient>) =>
   Effect.gen(function* () {
     yield* checkManager(access);
     const sql = yield* SqlClient.SqlClient;
     const result = yield* sql.withTransaction(Effect.gen(function* () {
       const principal = access.principal.id;
-      const [clock] = yield* find(PairingClock, sql`SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS UNSIGNED) AS now_ms FROM principals WHERE id = ${principal} FOR UPDATE`);
-      const now = clock!.now_ms;
+      const [clock] = yield* find(PairingClock, sql`SELECT CAST(unixepoch(${now}, 'subsec') * 1000 AS INTEGER) AS now_ms FROM principals WHERE id = ${principal}`);
+      const nowMs = clock!.now_ms;
       const [row] = yield* find(AttemptTimes, sql`SELECT attempts FROM device_pair_attempts WHERE principal_id = ${principal}`);
-      const attempts = row?.attempts.filter(time => time > now - 600_000) ?? [];
+      const attempts = row?.attempts.filter(time => time > nowMs - 600_000) ?? [];
       if (attempts.length >= MAX_MISSES) return yield* new Forbidden({ message: DEVICE_PAIR_LOCKOUT });
       const digits = code.replace(/[-\s]/g, '');
       if (/^\d{8}$/.test(digits)) {
         const [pending] = yield* find(Pending, sql`SELECT id, name, capabilities, expires_at FROM devices
-          WHERE pending_code_hash = ${hashToken(digits)} AND expires_at > UTC_TIMESTAMP(6) FOR UPDATE`);
+          WHERE pending_code_hash = ${hashToken(digits)} AND expires_at > ${now}`);
         if (pending) return Option.some(yield* use(pending));
       }
-      yield* sql`INSERT INTO device_pair_attempts (principal_id, attempts) VALUES (${principal}, ${JSON.stringify([...attempts, now])}) AS incoming
-        ON DUPLICATE KEY UPDATE attempts = incoming.attempts`;
+      yield* sql`INSERT INTO device_pair_attempts (principal_id, attempts) VALUES (${principal}, ${JSON.stringify([...attempts, nowMs])})
+        ON CONFLICT (principal_id) DO UPDATE SET attempts = excluded.attempts`;
       return Option.none<A>();
     })).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
     return yield* Option.match(result, { onNone: () => Effect.fail(missing()), onSome: Effect.succeed });
@@ -203,18 +206,26 @@ const readDevices = (sql: SqlClient.SqlClient, where: Statement.Fragment) =>
 const approveDevice = (access: AccessScope, code: string, approve: boolean) =>
   withPending(access, code, ({ id }) => Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    if (approve) {
-      const credential = crypto.randomUUID();
-      // Reserve the credential now. Its random hash has no known token until redemption.
-      yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
-        VALUES (${credential}, ${access.workspace_id}, ${access.principal.id}, ${access.principal.id}, ${randomBytes(32)}, '["capture:ingest"]', UTC_TIMESTAMP(6))`;
-      yield* sql`UPDATE devices SET status = 'approved', workspace_id = ${access.workspace_id}, approved_by = ${access.principal.id},
-        credential_id = ${credential}, approved_at = UTC_TIMESTAMP(6) WHERE id = ${id}`;
-    } else {
-      yield* sql`UPDATE devices SET status = 'denied' WHERE id = ${id}`;
-    }
+    // Read the row and the clock before the writes, then answer from them: a transaction cannot read after it buffered a write.
     const [device] = yield* readDevices(sql, sql`d.id = ${id}`);
-    return device!;
+    const [clock] = yield* sql<{ stamp: string }>`SELECT ${now} AS stamp`;
+    const stamp = clock!.stamp;
+    if (!approve) {
+      yield* sql`UPDATE devices SET status = 'denied' WHERE id = ${id}`;
+      return { ...device!, status: 'denied' } satisfies Device;
+    }
+    const credential = crypto.randomUUID();
+    // Reserve the credential now. Its random hash has no known token until redemption.
+    yield* sql`INSERT INTO agent_credentials (id, workspace_id, principal_id, owner_principal_id, token_hash, scopes, created_at)
+      VALUES (${credential}, ${access.workspace_id}, ${access.principal.id}, ${access.principal.id}, ${randomBytes(32)}, '["capture:ingest"]', ${stamp})`;
+    yield* sql`UPDATE devices SET status = 'approved', workspace_id = ${access.workspace_id}, approved_by = ${access.principal.id},
+      credential_id = ${credential}, approved_at = ${stamp} WHERE id = ${id}`;
+    return {
+      ...device!,
+      status: 'approved',
+      approved_by: { id: access.principal.id, kind: 'human', display_name: access.principal.display_name },
+      approved_at: Schema.decodeSync(DbUtc)(stamp),
+    } satisfies Device;
   }).pipe(Effect.orDie));
 
 const listDevices = (access: AccessScope) => Effect.gen(function* () {
@@ -228,11 +239,11 @@ const revokeDevice = (access: AccessScope, id: DeviceId) => Effect.gen(function*
   const sql = yield* SqlClient.SqlClient;
   const revoked = yield* sql.withTransaction(Effect.gen(function* () {
     const [device] = yield* find(Schema.Struct({ credential_id: AgentCredentialId, status: Device.fields.status }), sql`
-      SELECT d.credential_id, d.status FROM devices d WHERE d.id = ${id} AND ${ownedDevices(access, sql)} FOR UPDATE`).pipe(Effect.orDie);
+      SELECT d.credential_id, d.status FROM devices d WHERE d.id = ${id} AND ${ownedDevices(access, sql)}`).pipe(Effect.orDie);
     if (!device) return yield* missing();
     if (device.status === 'revoked') return device.credential_id;
-    yield* sql`UPDATE devices SET status = 'revoked', revoked_at = UTC_TIMESTAMP(6) WHERE id = ${id}`.pipe(Effect.orDie);
-    yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${device.credential_id}`.pipe(Effect.orDie);
+    yield* sql`UPDATE devices SET status = 'revoked', revoked_at = ${now} WHERE id = ${id}`.pipe(Effect.orDie);
+    yield* sql`UPDATE agent_credentials SET revoked_at = ${now} WHERE id = ${device.credential_id}`.pipe(Effect.orDie);
     yield* bumpPermissionRevision(access.workspace_id).pipe(Effect.orDie);
     return device.credential_id;
   })).pipe(Effect.catchTag('SqlError', Effect.die));

@@ -6,6 +6,7 @@ import { type AccessScope, type CaptureEpochId, ContextItemId, encodePcmFrame, t
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults } from '../src/config.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { reconcileTranscript } from '../src/media/reconcile.ts';
 import { liveLimits } from '../src/media/session.ts';
 import { writeItem } from '../src/context.ts';
@@ -271,9 +272,9 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const second = yield* eventually(Effect.sync(() => speech.streams[1]), stream => stream?.received === 1_600);
       second!.emit({ start_s: 0, end_s: 0.05, is_final: true, text: 'after reconnect', confidence: 0.8, speaker: '1' });
       expect(yield* eventually(finals(access, epoch_id), rows => rows.length === 1)).toEqual([[3_200, 4_000, 'after reconnect', 'live']]);
-      const anchors = yield* sql<{ anchor_sample: string; closed: number }>`
+      const anchors = yield* sql<{ anchor_sample: number; closed: number }>`
         SELECT anchor_sample, closed_at IS NOT NULL AS closed FROM provider_connections WHERE epoch_id = ${epoch_id} ORDER BY opened_at`;
-      expect(anchors.map(row => [row.anchor_sample, Number(row.closed)])).toEqual([['0', 1], ['3200', 0]]);
+      expect(anchors.map(row => [row.anchor_sample, Number(row.closed)])).toEqual([[0, 1], [3200, 0]]);
     }),
   );
 
@@ -416,12 +417,12 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       const { listener_id, lease_generation } = yield* claimListener(host, 'owner');
       const meeting_id = randomUUID() as MeetingId;
       yield* sql`INSERT INTO meetings (id, workspace_id, listener_id, state, visibility, timezone, started_at, processing, created_at, updated_at)
-        VALUES (${meeting_id}, ${owner!.workspace_id}, ${listener_id}, 'active', 'workspace', 'UTC', UTC_TIMESTAMP(6),
-          ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+        VALUES (${meeting_id}, ${owner!.workspace_id}, ${listener_id}, 'active', 'workspace', 'UTC', ${now},
+          ${JSON.stringify({ transcript: 'pending', notes: 'pending', memory: 'pending', recording: 'pending' })}, ${now}, ${now})`;
       const addAction = (id: string, action_key: string, title: string | null, age: number) =>
         sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, title, created_at, updated_at)
           VALUES (${id}, ${owner!.workspace_id}, ${meeting_id}, ${owner!.principal.id}, ${action_key}, ${id}, '{}', ${Buffer.alloc(32)}, '1', 'queued', ${title},
-            UTC_TIMESTAMP(6) - INTERVAL ${age} SECOND, UTC_TIMESTAMP(6))`;
+            ${addSeconds(now, -age)}, ${now})`;
       const [first, second, third] = [randomUUID(), randomUUID(), randomUUID()];
       yield* addAction(first, 'gmail-send-email', null, 30);
       yield* addAction(second, 'google_calendar-create-event', 'Book the rollout review', 20);
@@ -443,7 +444,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
       });
 
       // The job worker changes states in its own process; the socket learns of it from the database.
-      yield* sql`UPDATE actions SET state = 'succeeded', updated_at = UTC_TIMESTAMP(6) WHERE id = ${second}`;
+      yield* sql`UPDATE actions SET state = 'succeeded', updated_at = ${now} WHERE id = ${second}`;
       expect(yield* socket.take('action_update')).toEqual({
         _tag: 'action_update',
         meeting_id,
@@ -460,7 +461,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
         [third, 'queued', 'Post the latency numbers'],
       ]);
 
-      yield* sql`UPDATE meetings SET state = 'closed', ended_at = UTC_TIMESTAMP(6) WHERE id = ${meeting_id}`;
+      yield* sql`UPDATE meetings SET state = 'closed', ended_at = ${now} WHERE id = ${meeting_id}`;
       expect(yield* again.take('action_update')).toEqual({ _tag: 'action_update', meeting_id: null, actions: [] });
     }),
   );

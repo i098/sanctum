@@ -14,6 +14,7 @@ import { DbJson } from './db.ts';
 import { executeIntegrationAction, IntegrationFailure } from './integrations.ts';
 import { type Plan, type PlanInput, planWork } from './planner.ts';
 import { offeredActions, storedResearch, type WebResearch, webResearch } from './research.ts';
+import { addSeconds, diffMicros, now } from './sql-dialect.ts';
 
 /** The claimed-job fields these handlers read; stated here so this module does not import the registry. */
 interface Job {
@@ -30,7 +31,7 @@ const grantStillValid = (row: ActionRow) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [grant] = yield* sql<{ usable: number }>`
-      SELECT (g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND g.version = ${row.grant_version}
+      SELECT (g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > ${now}) AND g.version = ${row.grant_version}
         AND a.status = 'active' AND m.revoked_at IS NULL) AS usable
       FROM action_grants g
       JOIN integration_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.account_id
@@ -44,9 +45,9 @@ const budgetPause = (job: Job) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { perWindow, windowMs } = engineeringDefaults.actionBudget;
-    const [budget] = yield* sql<{ used: number; oldest_age_us: string | null }>`
-      SELECT COUNT(*) AS used, TIMESTAMPDIFF(MICROSECOND, MIN(started_at), UTC_TIMESTAMP(6)) AS oldest_age_us FROM actions
-      WHERE workspace_id = ${job.workspace_id} AND started_at > UTC_TIMESTAMP(6) - INTERVAL ${windowMs * 1000} MICROSECOND`;
+    const [budget] = yield* sql<{ used: number; oldest_age_us: number | null }>`
+      SELECT COUNT(*) AS used, ${diffMicros('MIN(started_at)', now)} AS oldest_age_us FROM actions
+      WHERE workspace_id = ${job.workspace_id} AND started_at > ${addSeconds(now, -windowMs / 1000)}`;
     if (Number(budget!.used) < perWindow) return null;
     const resume_after_ms = Math.max(1, windowMs - Math.floor(Number(budget!.oldest_age_us) / 1000));
     return { status: 'paused', resume_after_ms, reason: `Action budget of ${perWindow} per ${windowMs} ms reached` } as const;
@@ -59,12 +60,10 @@ const startAttempt = (job: Job, action_id: ActionId) =>
     const settle = (state: 'unknown' | 'cancelled', error: { code: string; message: string }) =>
       Effect.as(
         sql`UPDATE actions SET state = ${state}, reconciliation = ${state === 'unknown' ? 'pending' : 'none'}, last_error = ${JSON.stringify(error)},
-          updated_at = UTC_TIMESTAMP(6) WHERE ${where}`,
+          updated_at = ${now} WHERE ${where}`,
         { status: 'done', state } as const,
       );
-    // Serializes budget accounting per workspace.
-    yield* sql`SELECT id FROM workspaces WHERE id = ${job.workspace_id} FOR UPDATE`;
-    const found = yield* loadAction(job.workspace_id, action_id, true);
+    const found = yield* loadAction(job.workspace_id, action_id);
     if (Option.isNone(found)) return { status: 'done', state: 'missing' } as const;
     const row = found.value;
     if (row.state === 'running') return yield* settle('unknown', { code: 'interrupted', message: 'A previous attempt stopped after submission began; outcome unknown' });
@@ -78,7 +77,7 @@ const startAttempt = (job: Job, action_id: ActionId) =>
     if (Option.isNone(access)) return yield* settle('cancelled', { code: 'forbidden', message: 'Requester no longer has action access' });
     const pause = yield* budgetPause(job);
     if (pause) return pause;
-    yield* sql`UPDATE actions SET state = 'running', attempts = attempts + 1, started_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6) WHERE ${where}`;
+    yield* sql`UPDATE actions SET state = 'running', attempts = attempts + 1, started_at = ${now}, updated_at = ${now} WHERE ${where}`;
     return { status: 'submit', row, access: access.value, attempt: row.attempts + 1 } as const;
   })));
 
@@ -93,7 +92,7 @@ const storeArtifact = (row: ActionRow, attempt: number, bytes: Uint8Array) =>
     yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)
       VALUES (${id}, ${row.workspace_id}, ${row.meeting_id}, 'action_output', ${`${row.action_key} result`}, 'application/json',
         ${new TextDecoder().decode(bytes)}, ${createHash('sha256').update(bytes).digest()}, ${JSON.stringify({ action_id: row.id, attempt })},
-        ${row.requested_by}, UTC_TIMESTAMP(6))`;
+        ${row.requested_by}, ${now})`;
     return id;
   });
 
@@ -108,16 +107,16 @@ const recordOutcome = (row: ActionRow, attempt: number, outcome: Either.Either<{
       const { artifact } = outcome.right;
       const artifact_id = artifact === null ? null : yield* storeArtifact(row, attempt, artifact);
       const receipt = artifact_id === null ? outcome.right.receipt : { ...outcome.right.receipt, artifact_id };
-      yield* sql`UPDATE actions SET reconciliation = IF(state = 'unknown', 'reconciled', reconciliation), state = 'succeeded',
-        provider_receipt = ${JSON.stringify(receipt)}, last_error = NULL, updated_at = UTC_TIMESTAMP(6)
+      yield* sql`UPDATE actions SET reconciliation = iif(state = 'unknown', 'reconciled', reconciliation), state = 'succeeded',
+        provider_receipt = ${JSON.stringify(receipt)}, last_error = NULL, updated_at = ${now}
         WHERE ${fence} AND state IN ('running', 'unknown')`;
       return;
     }
     const error = JSON.stringify({ code: outcome.left.ambiguous ? 'ambiguous' : 'provider_failed', message: outcome.left.message });
     yield* outcome.left.ambiguous
-      ? sql`UPDATE actions SET state = 'unknown', reconciliation = 'pending', last_error = ${error}, updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state = 'running'`
-      : sql`UPDATE actions SET reconciliation = IF(state = 'unknown', 'reconciled', reconciliation), state = 'failed', last_error = ${error},
-          updated_at = UTC_TIMESTAMP(6) WHERE ${fence} AND state IN ('running', 'unknown')`;
+      ? sql`UPDATE actions SET state = 'unknown', reconciliation = 'pending', last_error = ${error}, updated_at = ${now} WHERE ${fence} AND state = 'running'`
+      : sql`UPDATE actions SET reconciliation = iif(state = 'unknown', 'reconciled', reconciliation), state = 'failed', last_error = ${error},
+          updated_at = ${now} WHERE ${fence} AND state IN ('running', 'unknown')`;
   })));
 
 /**
@@ -227,7 +226,7 @@ const plannedRequests = (job: Job) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const [row] = yield* sql<{ payload: unknown }>`SELECT payload FROM jobs
-      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND JSON_EXTRACT(payload, '$.planned_requests') IS NOT NULL`;
+      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND json_extract(payload, '$.planned_requests') IS NOT NULL`;
     return row ? yield* Schema.decodeUnknown(DbJson(PlannedResearch))(row.payload) : null;
   });
 
@@ -235,10 +234,10 @@ const plannedRequests = (job: Job) =>
 const savePlannedRequests = (job: Job, planned: typeof PlannedResearch.Type) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* sql`UPDATE jobs SET payload = JSON_SET(payload,
-        '$.planned_requests', JSON_EXTRACT(${JSON.stringify(planned.planned_requests)}, '$'),
-        '$.research_result', JSON_EXTRACT(${JSON.stringify(planned.research_result)}, '$'))
-      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND JSON_EXTRACT(payload, '$.planned_requests') IS NULL`;
+    yield* sql`UPDATE jobs SET payload = json_set(payload,
+        '$.planned_requests', json(${JSON.stringify(planned.planned_requests)}),
+        '$.research_result', json(${JSON.stringify(planned.research_result)}))
+      WHERE workspace_id = ${job.workspace_id} AND id = ${job.id} AND json_extract(payload, '$.planned_requests') IS NULL`;
     return (yield* plannedRequests(job))!;
   });
 /** Resume the saved plan without calling the planner, preserving receipts for actions already requested. */

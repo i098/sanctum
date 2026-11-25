@@ -92,3 +92,31 @@ describe('migrate', () => {
     }
   });
 });
+
+describe('migrate safety', () => {
+  const rebuild = (header: string) => [
+    parseMigration('0001_a.sql', 'CREATE TABLE parent (id INTEGER PRIMARY KEY);\nCREATE TABLE child (parent_id INTEGER REFERENCES parent (id) ON DELETE CASCADE);\nINSERT INTO parent VALUES (1);\nINSERT INTO child VALUES (1);\n'),
+    parseMigration('0002_b.sql', `${header}CREATE TABLE parent_new (id INTEGER PRIMARY KEY, extra TEXT);\nINSERT INTO parent_new (id) SELECT id FROM parent;\nDROP TABLE parent;\nALTER TABLE parent_new RENAME TO parent;\n`),
+  ];
+  const children = Effect.flatMap(SqlClient.SqlClient, sql => sql<{ n: number }>`SELECT count(*) AS n FROM child`.pipe(Effect.map(rows => rows[0]!.n)));
+
+  it.effect('a table rebuild loses child rows by cascade unless the file turns foreign keys off', () =>
+    withDatabase(Effect.gen(function* () {
+      yield* migrate(rebuild(''));
+      expect(yield* children).toBe(0);
+    })).pipe(Effect.zipRight(withDatabase(Effect.gen(function* () {
+      yield* migrate(rebuild('-- sanctum:foreign-keys-off\n'));
+      expect(yield* children).toBe(1);
+      const [pragma] = yield* (yield* SqlClient.SqlClient).unsafe<{ foreign_keys: number }>('PRAGMA foreign_keys');
+      expect(pragma!.foreign_keys).toBe(1);
+    })))),
+  );
+
+  it.effect('an applied file that was edited fails the next run', () =>
+    withDatabase(Effect.gen(function* () {
+      yield* migrate([parseMigration('0001_a.sql', 'CREATE TABLE a (id INTEGER);\n')]);
+      const exit = yield* Effect.exit(migrate([parseMigration('0001_a.sql', 'CREATE TABLE a (id INTEGER, extra TEXT);\n')]));
+      expect(Exit.isFailure(exit) && String(exit.cause)).toMatch(/0001_a.sql changed after it was applied/);
+    })),
+  );
+});

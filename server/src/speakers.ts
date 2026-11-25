@@ -29,6 +29,7 @@ import { DbJson, DbSafeInt } from './db.ts';
 import { asJobResult, currentRanges, dbFailures, MeetingJobPayload, type MeetingJob, OPEN_STATES, scheduleFinalize, selectMeeting } from './meeting-store.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { type DiarizedTurn, PyannoteClient, type VoiceMatch } from './providers/pyannote.ts';
+import { chunked, now } from './sql-dialect.ts';
 
 /** An enrolled voice names a label only when it clearly beats every other enrolled voice; otherwise the speaker stays unknown. */
 const MATCH_THRESHOLD = 70;
@@ -71,10 +72,10 @@ export const openDiarizationConnection = (input: {
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const id = ProviderConnectionId.make(randomUUID());
-    const closed = input.closed_reason === undefined ? sql`NULL` : sql`UTC_TIMESTAMP(6)`;
+    const closed = input.closed_reason === undefined ? sql`NULL` : now;
     yield* sql`INSERT INTO provider_connections (id, workspace_id, epoch_id, track, purpose, provider, model, anchor_sample, sample_rate, opened_at, closed_at, close_reason)
       VALUES (${id}, ${input.workspace_id}, ${input.source.epoch_id}, ${input.source.track}, ${input.purpose}, 'pyannote', ${input.model}, ${input.anchor_sample},
-        ${input.sample_rate}, UTC_TIMESTAMP(6), ${closed}, ${input.closed_reason ?? null})`;
+        ${input.sample_rate}, ${now}, ${closed}, ${input.closed_reason ?? null})`;
     return id;
   });
 
@@ -106,6 +107,62 @@ const labelAttributions = (connection_id: ProviderConnectionId) =>
     return new Map([...rows, ...latest].map(row => [row.provider_label, row]));
   });
 
+type Attributions = ReadonlyMap<string, typeof Attribution.Type>;
+
+interface NewTrack {
+  readonly id: string;
+  readonly workspace_id: WorkspaceId;
+  readonly epoch_id: string;
+  readonly track: number;
+  readonly provider_connection_id: ProviderConnectionId;
+  readonly provider: string;
+  readonly provider_label: string;
+  readonly sample_start: number;
+  readonly sample_end: number;
+  readonly profile_id: ProfileId | null;
+  readonly mapping_source: 'enrollment' | 'user_confirmed' | null;
+  readonly attribution_revision: number;
+  readonly confidence: number | null;
+}
+
+/** Source-sample track rows for provider turns (seconds from the connection's anchor); a label already mapped keeps its mapping. */
+const trackRows = (input: { readonly workspace_id: WorkspaceId; readonly connection_id: ProviderConnectionId; readonly connection: typeof Connection.Type; readonly turns: ReadonlyArray<DiarizedTurn>; readonly attributions: Attributions }): ReadonlyArray<NewTrack> =>
+  input.turns
+    .map(turn => {
+      const known = input.attributions.get(turn.label);
+      return {
+        id: randomUUID(),
+        workspace_id: input.workspace_id,
+        epoch_id: input.connection.epoch_id,
+        track: input.connection.track,
+        provider_connection_id: input.connection_id,
+        provider: input.connection.provider,
+        provider_label: turn.label,
+        sample_start: input.connection.anchor_sample + Math.round(turn.start_s * input.connection.sample_rate),
+        sample_end: input.connection.anchor_sample + Math.round(turn.end_s * input.connection.sample_rate),
+        profile_id: known?.profile_id ?? null,
+        mapping_source: known?.mapping_source ?? null,
+        attribution_revision: known?.attribution_revision ?? 1,
+        confidence: turn.confidence,
+      };
+    })
+    .filter(row => row.sample_end > row.sample_start);
+
+/** Writes only: chunks keep each statement within the database's bound-parameter limit, one transaction keeps them atomic. */
+const insertTrackRows = (rows: ReadonlyArray<NewTrack>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.withTransaction(
+      Effect.forEach(chunked(rows, 13), chunk => {
+        const values = chunk.map(row => sql`(${row.id}, ${row.workspace_id}, ${row.epoch_id}, ${row.track}, ${row.provider_connection_id}, ${row.provider}, ${row.provider_label},
+          ${row.sample_start}, ${row.sample_end}, ${row.profile_id}, ${row.mapping_source}, ${row.attribution_revision}, ${row.confidence}, ${now})`);
+        return sql`INSERT INTO speaker_tracks (id, workspace_id, epoch_id, track, provider_connection_id, provider, provider_label, sample_start, sample_end, profile_id,
+          mapping_source, attribution_revision, confidence, created_at) VALUES ${sql.csv(values)}
+          ON CONFLICT (provider_connection_id, provider_label, sample_start) DO UPDATE SET sample_end = max(speaker_tracks.sample_end, excluded.sample_end)`;
+      }),
+    );
+  });
+
 /**
  * Persists provider turns (seconds from the connection's anchor) as source-sample speaker tracks.
  * New turns of an already mapped label inherit its mapping; a repeated turn is a no-op.
@@ -119,32 +176,9 @@ export const recordSpeakerTurns = (input: { readonly workspace_id: WorkspaceId; 
       execute: () => sql`SELECT epoch_id, track, provider, anchor_sample, sample_rate FROM provider_connections WHERE workspace_id = ${input.workspace_id} AND id = ${input.provider_connection_id}`,
     })(undefined);
     const attributions = yield* labelAttributions(input.provider_connection_id);
-    const rows = input.turns
-      .map(turn => {
-        const known = attributions.get(turn.label);
-        return {
-          id: randomUUID(),
-          workspace_id: input.workspace_id,
-          epoch_id: connection.epoch_id,
-          track: connection.track,
-          provider_connection_id: input.provider_connection_id,
-          provider: connection.provider,
-          provider_label: turn.label,
-          sample_start: connection.anchor_sample + Math.round(turn.start_s * connection.sample_rate),
-          sample_end: connection.anchor_sample + Math.round(turn.end_s * connection.sample_rate),
-          profile_id: known?.profile_id ?? null,
-          mapping_source: known?.mapping_source ?? null,
-          attribution_revision: known?.attribution_revision ?? 1,
-          confidence: turn.confidence,
-        };
-      })
-      .filter(row => row.sample_end > row.sample_start);
+    const rows = trackRows({ workspace_id: input.workspace_id, connection_id: input.provider_connection_id, connection, turns: input.turns, attributions });
     if (rows.length === 0) return 0;
-    const values = rows.map(row => sql`(${row.id}, ${row.workspace_id}, ${row.epoch_id}, ${row.track}, ${row.provider_connection_id}, ${row.provider}, ${row.provider_label},
-      ${row.sample_start}, ${row.sample_end}, ${row.profile_id}, ${row.mapping_source}, ${row.attribution_revision}, ${row.confidence}, UTC_TIMESTAMP(6))`);
-    yield* sql`INSERT INTO speaker_tracks (id, workspace_id, epoch_id, track, provider_connection_id, provider, provider_label, sample_start, sample_end, profile_id,
-      mapping_source, attribution_revision, confidence, created_at) VALUES ${sql.csv(values)}
-      AS fresh ON DUPLICATE KEY UPDATE sample_end = GREATEST(speaker_tracks.sample_end, fresh.sample_end)`;
+    yield* insertTrackRows(rows);
     return rows.length;
   });
 
@@ -164,17 +198,16 @@ const setAttribution = (input: {
     yield* sql`UPDATE speaker_tracks SET profile_id = ${input.profile_id}, mapping_source = ${input.source}, confidence = ${input.confidence}, attribution_revision = ${input.revision}
       WHERE provider_connection_id = ${input.connection_id} AND provider_label = ${input.label}`;
     yield* sql`INSERT INTO speaker_attributions (workspace_id, provider_connection_id, provider_label, attribution_revision, profile_id, mapping_source, confidence, actor_principal_id, created_at)
-      VALUES (${input.workspace_id}, ${input.connection_id}, ${input.label}, ${input.revision}, ${input.profile_id}, ${input.source}, ${input.confidence}, ${input.actor}, UTC_TIMESTAMP(6))`;
+      VALUES (${input.workspace_id}, ${input.connection_id}, ${input.label}, ${input.revision}, ${input.profile_id}, ${input.source}, ${input.confidence}, ${input.actor}, ${now})`;
   });
 
 /**
- * Applies voice-match scores from an identification job: a label is named only when its best
- * enrolled voice passes the threshold and clearly beats the runner-up. Similar voices stay unknown,
- * and a person's own confirmation is never overridden by a model.
+ * Writes the voice-match attributions for `attributions` (the labels' current state): a label is named
+ * only when its best enrolled voice passes the threshold and clearly beats the runner-up. Similar
+ * voices stay unknown, and a person's own confirmation is never overridden by a model. Writes only.
  */
-export const applyVoiceMatches = (workspace_id: WorkspaceId, connection_id: ProviderConnectionId, matches: ReadonlyArray<VoiceMatch>, enrolled: ReadonlyMap<string, ProfileId>) =>
+const writeVoiceMatches = (workspace_id: WorkspaceId, connection_id: ProviderConnectionId, attributions: Attributions, matches: ReadonlyArray<VoiceMatch>, enrolled: ReadonlyMap<string, ProfileId>) =>
   Effect.gen(function* () {
-    const attributions = yield* labelAttributions(connection_id);
     let count = 0;
     for (const match of matches) {
       const current = attributions.get(match.label);
@@ -184,6 +217,19 @@ export const applyVoiceMatches = (workspace_id: WorkspaceId, connection_id: Prov
       count++;
     }
     return count;
+  });
+
+/** Applies voice-match scores from an identification job to the connection's current labels. */
+export const applyVoiceMatches = (workspace_id: WorkspaceId, connection_id: ProviderConnectionId, matches: ReadonlyArray<VoiceMatch>, enrolled: ReadonlyMap<string, ProfileId>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // One transaction: a user correction committed after the read conflicts and reruns, so a model never overrides it.
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const attributions = yield* labelAttributions(connection_id);
+        return yield* writeVoiceMatches(workspace_id, connection_id, attributions, matches, enrolled);
+      }),
+    );
   });
 
 /** Tracks overlapping any of the given sources. */
@@ -222,9 +268,12 @@ export const mapSpeaker = (access: AccessScope, meeting_id: MeetingId, input: Ma
     yield* sql.withTransaction(
       Effect.gen(function* () {
         const [current] = yield* sql<{ revision: number }>`SELECT MAX(attribution_revision) AS revision FROM speaker_tracks
-          WHERE provider_connection_id = ${track.provider_connection_id} AND provider_label = ${track.provider_label} FOR UPDATE`;
+          WHERE provider_connection_id = ${track.provider_connection_id} AND provider_label = ${track.provider_label}`;
         const revision = Number(current?.revision ?? 1);
         if (revision !== input.expected_revision) return yield* new RevisionConflict({ message: `Speaker attribution is at revision ${revision}`, current_revision: revision });
+        // Reads and scheduling first: nothing may be read after the attribution writes join the commit.
+        const meeting = yield* selectMeeting(access.workspace_id, meeting_id);
+        if (meeting._tag === 'Some' && !OPEN_STATES.includes(meeting.value.state)) yield* scheduleFinalize(meeting.value, access.principal.id);
         yield* setAttribution({
           workspace_id: access.workspace_id,
           connection_id: track.provider_connection_id,
@@ -235,8 +284,6 @@ export const mapSpeaker = (access: AccessScope, meeting_id: MeetingId, input: Ma
           confidence: null,
           actor: access.principal.id,
         });
-        const meeting = yield* selectMeeting(access.workspace_id, meeting_id);
-        if (meeting._tag === 'Some' && !OPEN_STATES.includes(meeting.value.state)) yield* scheduleFinalize(meeting.value, access.principal.id);
       }),
     );
     const rows = yield* SqlSchema.findAll({
@@ -258,7 +305,7 @@ export const enrollVoice = (access: AccessScope, input: { readonly profile_id: P
     }
     const id = randomUUID();
     yield* sql`INSERT INTO voice_enrollments (id, workspace_id, principal_id, profile_id, provider, voiceprint, consent_version, consented_at, created_at)
-      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${input.profile_id}, 'pyannote', ${input.voiceprint}, ${input.consent_version}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${input.profile_id}, 'pyannote', ${input.voiceprint}, ${input.consent_version}, ${now}, ${now})`;
     return id;
   }).pipe(dbFailures);
 
@@ -267,7 +314,7 @@ export const revokeEnrollment = (access: AccessScope, enrollment_id: string) =>
     const sql = yield* SqlClient.SqlClient;
     const [row] = yield* sql`SELECT id FROM voice_enrollments WHERE workspace_id = ${access.workspace_id} AND id = ${enrollment_id} AND principal_id = ${access.principal.id} AND revoked_at IS NULL`;
     if (row === undefined) return yield* new NotFound({ message: 'Enrollment not found' });
-    yield* sql`UPDATE voice_enrollments SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${enrollment_id}`;
+    yield* sql`UPDATE voice_enrollments SET revoked_at = ${now} WHERE id = ${enrollment_id}`;
   }).pipe(dbFailures);
 
 /** Maps a turn in the assembled cut (seconds from its start) back to source ranges through the cut's pieces. */
@@ -329,8 +376,18 @@ export const refineSpeakers = (job: MeetingJob) =>
                 .filter(source => source.epoch_id === piece.epoch_id && source.track === piece.track)
                 .map(source => ({ ...turn, start_s: source.sample_start / recording.sample_rate, end_s: source.sample_end / recording.sample_rate })),
             );
-            turns += yield* recordSpeakerTurns({ workspace_id: job.workspace_id, provider_connection_id: connection, turns: mine });
-            named += yield* applyVoiceMatches(job.workspace_id, connection, result.matches, enrolled);
+            // A fresh connection has nothing to read back: build its rows and label state in memory so the transaction only writes.
+            const rows = trackRows({
+              workspace_id: job.workspace_id,
+              connection_id: connection,
+              connection: { epoch_id: piece.epoch_id, track: piece.track, provider: 'pyannote', anchor_sample: 0, sample_rate: recording.sample_rate },
+              turns: mine,
+              attributions: new Map(),
+            });
+            if (rows.length > 0) yield* insertTrackRows(rows);
+            turns += rows.length;
+            const labels: Attributions = new Map(rows.map(row => [row.provider_label, { provider_label: row.provider_label, attribution_revision: 1, profile_id: null, mapping_source: null }]));
+            named += yield* writeVoiceMatches(job.workspace_id, connection, labels, result.matches, enrolled);
           }
           return { boundary_revision: revision, turns, named };
         }),

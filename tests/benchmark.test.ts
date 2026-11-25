@@ -3,12 +3,11 @@ import { test } from 'node:test';
 import { sample, toRecord } from '../benchmarks/measure.ts';
 import { createDatabase, runBenchmarks, runJob, type FixtureIds, type Job } from '../scripts/benchmark.ts';
 
-test('smoke benchmarks emit valid unverified records with correct results and name unrun MySQL workloads', async () => {
-  const { records, unrun, problems } = await runBenchmarks({ smoke: true, mysqlUrl: undefined }, 'd'.repeat(40));
+test('smoke benchmarks emit valid unverified records with correct results for every workload', async () => {
+  const { records, problems } = await runBenchmarks({ smoke: true }, 'd'.repeat(40));
   assert.deepEqual(problems, []);
-  assert.deepEqual(records.map(record => `${record.workload_id}:${record.phase}`), ['pcm_ingest:steady', 'cosine_ranking:cold', 'cosine_ranking:steady']);
+  assert.deepEqual(records.map(record => `${record.workload_id}:${record.phase}`), ['pcm_ingest:steady', 'cosine_ranking:cold', 'cosine_ranking:steady', 'archive_streaming:steady', 'transcript_ingest:steady', 'context_read_write:steady']);
   assert(records.every(record => record.verified === false && record.correctness.errors === 0 && record.fixture_sha256.length === 64));
-  assert.deepEqual(unrun, ['archive_streaming', 'transcript_ingest', 'context_read_write']);
 });
 
 // A serial runner never lets the second client arrive, so the barrier never opens and the test timeout fails it.
@@ -54,11 +53,9 @@ test('records pool latencies and divide total operations by phase wall time', ()
   assert.equal(record.offered_load.concurrency, 2);
 });
 
-const mysqlUrl = process.env['SANCTUM_TEST_MYSQL_URL'];
-
-test('database job aggregates one and two disposable-database clients', { skip: mysqlUrl === undefined && 'SANCTUM_TEST_MYSQL_URL is not set' }, async () => {
+test('database job aggregates one and two disposable-database clients', async () => {
   // Every run needs fresh databases: a second archive pass would collide with the first pass's chunk sequences.
-  const databases = await Promise.all([1, 2, 3, 4, 5].map(() => createDatabase(mysqlUrl!)));
+  const databases = await Promise.all([1, 2, 3, 4, 5].map(() => createDatabase()));
   const counts = { chunks: 2, chunk_seconds: 1, segments: 4, operations: 10 };
   const job = (clients: ReadonlyArray<{ url: string; ids: FixtureIds }>): Job => ({ git_sha: 'd'.repeat(40), started_at: '2026-10-21T00:00:00Z', workload: 'database', archive_seed: 0, ...counts, clients: clients.map(db => ({ database_url: db.url, ids: db.ids })) });
   try {

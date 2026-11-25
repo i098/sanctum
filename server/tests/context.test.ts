@@ -19,7 +19,7 @@ import { type FixtureMeeting, migratedDatabase, grantMeeting, seedMeeting, seedS
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { dbLayer } from '../src/db.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
+import { now } from '../src/sql-dialect.ts';
 
 const STARTED = '2026-09-26 17:00:00';
 
@@ -37,7 +37,7 @@ const seedArtifact = (access: AccessScope, meeting_id: MeetingId | null) =>
     const sql = yield* SqlClient.SqlClient;
     const id = ArtifactId.make(randomUUID());
     yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)
-      VALUES (${id}, ${access.workspace_id}, ${meeting_id}, 'research', 'Vendor pricing', 'text/plain', 'Tier two costs 40 per seat.', ${Buffer.alloc(32, 7)}, '{}', ${access.principal.id}, UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, ${meeting_id}, 'research', 'Vendor pricing', 'text/plain', 'Tier two costs 40 per seat.', ${Buffer.alloc(32, 7)}, '{}', ${access.principal.id}, ${now})`;
     return id;
   });
 
@@ -55,7 +55,7 @@ layer(Layer.merge(migratedDatabase, fixtureLlm([])), { timeout: 120_000 })('cont
         state: 'provisional',
         derivation: 'inferred',
         author: { type: 'agent', id: agent!.principal.id },
-        event_at: '2026-09-26T17:08:16Z',
+        event_at: '2026-09-26T17:08:16.000000Z',
         sources: [{ segment_id: segment, start_ms: 496_000, end_ms: 501_000 }],
         supersedes: null,
       });
@@ -187,8 +187,8 @@ layer(Layer.merge(migratedDatabase, fixtureLlm([])), { timeout: 120_000 })('cont
       expect(yield* ids('off site')).toEqual([hyphen.id, spaced.id].sort());
       expect(yield* ids('plan')).toEqual([spaced.id]);
       const sql = yield* SqlClient.SqlClient;
-      const plan = yield* sql<{ type: string; key: string | null }>`EXPLAIN SELECT ci.id FROM context_items ci WHERE ${termFilter(sql, ['team', 'off-site'])}`;
-      expect(plan[0]).toMatchObject({ type: 'fulltext', key: 'context_items_text_joined' });
+      const plan = yield* sql<{ detail: string }>`EXPLAIN QUERY PLAN SELECT ci.id FROM context_items ci WHERE ${termFilter(sql, ['team', 'off-site'])}`;
+      expect(plan.map(step => step.detail).join('\n')).toMatch(/context_items_fts VIRTUAL TABLE INDEX/);
     }));
 
   it.effect('filters search by time range and kind and pages it newest first without gaps', () =>
@@ -244,15 +244,14 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
   it.scoped('serves the context routes with the shared error envelope', () =>
     Effect.gen(function*() {
       const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-      const db = dbLayer(database.mysql);
-      yield* Effect.provide(migrate(loadMigrations()), db);
+      const db = dbLayer(database.db);
       const [owner, device] = yield* Effect.provide(seedWorkspace('Http', ['owner', 'device']), db);
       const meeting = yield* Effect.provide(seedMeeting(device!, { started_at: STARTED }), db);
       const segment = yield* Effect.provide(seedSegment(meeting, 496, 501, 'Keep pilot access limited.'), db);
       const auth = Layer.succeed(Authenticator, {
         authenticate: request => (request.headers.authorization === 'Bearer owner' ? Effect.succeed(owner!) : Effect.fail(new Unauthenticated({ message: 'no credentials' }))),
       });
-      const server = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth));
+      const server = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db }, auth));
       const address = Context.get(server, HttpServer.HttpServer).address;
       const base = `http://127.0.0.1:${address._tag === 'TcpAddress' ? address.port : 0}/api/v1`;
       const call = (method: string, path: string, body?: unknown) =>
@@ -283,8 +282,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
     it.scoped(`answers questions with ${provider} and role effort ${effort} without a fallback`, () =>
       Effect.gen(function*() {
         const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-        const db = dbLayer(database.mysql);
-        yield* Effect.provide(migrate(loadMigrations()), db);
+        const db = dbLayer(database.db);
         const [owner, device] = yield* Effect.provide(seedWorkspace('Reasoning', ['owner', 'device']), db);
         const meeting = yield* Effect.provide(seedMeeting(device!, { started_at: STARTED }), db);
         const segment = yield* Effect.provide(seedSegment(meeting, 1, 3, 'Peter owns Falcon.'), db);
@@ -318,7 +316,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
           'workers-ai': workersAi({ apiToken: 'fixture', baseUrl }),
         }));
         const auth = Layer.succeed(Authenticator, { authenticate: () => Effect.succeed(owner!) });
-        const server = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth, { llm }));
+        const server = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db }, auth, { llm }));
         const api = Context.get(server, HttpServer.HttpServer).address;
         const response = yield* Effect.promise(() => fetch(`http://127.0.0.1:${api._tag === 'TcpAddress' ? api.port : 0}/api/v1/context/search?q=Who%20owns%20Falcon%3F`));
         expect(response.status).toBe(200);
@@ -330,8 +328,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
   it.scoped('grounds full questions in authorized candidates, newest first, over stable pages', () =>
     Effect.gen(function*() {
       const database = yield* Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
-      const db = dbLayer(database.mysql);
-      yield* Effect.provide(migrate(loadMigrations()), db);
+      const db = dbLayer(database.db);
       const [owner, device] = yield* Effect.provide(seedWorkspace('Questions', ['owner', 'device']), db);
       const [venueOwner, venueDevice] = yield* Effect.provide(seedWorkspace('Venue', ['owner', 'device']), db);
       const [stranger] = yield* Effect.provide(seedWorkspace('Stranger', ['owner']), db);
@@ -361,7 +358,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
         },
       };
       const llm = Layer.succeed(LlmClient, makeLlm(engineeringDefaults.modelRoles, { 'workers-ai': judge, anthropic: judge, openai: judge, cerebras: judge }));
-      const server = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth, { llm }));
+      const server = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db }, auth, { llm }));
       const address = Context.get(server, HttpServer.HttpServer).address;
       const base = `http://127.0.0.1:${address._tag === 'TcpAddress' ? address.port : 0}/api/v1`;
       const request = (token: string, path: string, body?: unknown) =>

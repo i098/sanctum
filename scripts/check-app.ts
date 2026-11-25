@@ -33,7 +33,7 @@ const STEPS: Step[] = [
   { name: 'Benchmark manifest', run: manifestIsValid },
   // Correctness and record shape only: timings on shared runners are reported, never gated.
   command('Performance smoke', 'npm', ['run', 'benchmark', '--', '--smoke']),
-  // A day of synthetic source time through the live transcript path; needs SANCTUM_TEST_MYSQL_URL (CI provides it).
+  // A day of synthetic source time through the live transcript path.
   command('Accelerated day replay', 'npm', ['run', 'replay:capture', '--', '--fixture', 'server/tests/fixtures/day.json', '--accelerated']),
 ];
 
