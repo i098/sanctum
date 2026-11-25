@@ -37,7 +37,7 @@ export const diffMicros = (from: Expression, to: Expression) =>
   compose(["CAST(ROUND((unixepoch(", to, ", 'subsec') - unixepoch(", from, ", 'subsec')) * 1000000) AS INTEGER)"]);
 
 /** Most bound parameters per statement D1 accepts. */
-export const MAX_PARAMS = 100;
+const MAX_PARAMS = 100;
 
 /** Splits `rows` so that a statement binding `paramsPerRow` values per row stays within D1's limit. */
 export const chunked = <A>(rows: ReadonlyArray<A>, paramsPerRow = 1): ReadonlyArray<ReadonlyArray<A>> => {

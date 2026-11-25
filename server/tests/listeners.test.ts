@@ -19,7 +19,7 @@ import {
   pause,
   pcmFrame,
   seedDevice,
-  serveApi,
+  serveMediaApi,
   startMessage,
   upgradeStatus,
   uploadChunk,
@@ -32,7 +32,7 @@ const heartbeatBody = (lease_generation: number) => ({ lease_generation, state: 
 const setup = Effect.gen(function* () {
   const tokens = new Map<string, AccessScope>();
   const speech = fakeSpeech();
-  const host = yield* serveApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
+  const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
   tokens.set('device', yield* seedDevice('Room A'));
   return { tokens, speech, host };
 });

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Effect, Layer } from 'effect';
 import { ObjectStore } from '../src/providers/object-store.ts';
 import { listCommittedChunks } from '../src/recordings.ts';
-import { api, chunk, claimListener, fakeSpeech, MigratedDatabase, newEpochId, openSocket, seedDevice, uploadChunk, serveApi, startMessage } from './support/media.ts';
+import { api, chunk, claimListener, fakeSpeech, MigratedDatabase, newEpochId, openSocket, seedDevice, uploadChunk, serveMediaApi, startMessage } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -33,7 +33,7 @@ function instrumentedStore() {
 const setup = Effect.gen(function* () {
   const tokens = new Map<string, AccessScope>();
   const store = instrumentedStore();
-  const host = yield* serveApi(serverLayer, tokens, Layer.merge(store.layer, fakeSpeech().layer));
+  const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(store.layer, fakeSpeech().layer));
   const device = yield* seedDevice('Room A');
   tokens.set('device', device);
   const { listener_id, lease_generation } = yield* claimListener(host, 'device');

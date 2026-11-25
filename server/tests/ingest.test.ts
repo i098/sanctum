@@ -25,7 +25,7 @@ import {
   pcmFrame,
   uploadChunk,
   seedDevice,
-  serveApi,
+  serveMediaApi,
   startMessage,
   workersAiWhisper,
 } from './support/media.ts';
@@ -49,7 +49,7 @@ const setup = Effect.gen(function* () {
   const speech = fakeSpeech();
   const store = memoryObjectStore();
   const providers = Layer.merge(store.layer, speech.layer);
-  const host = yield* serveApi(serverLayer, tokens, providers);
+  const host = yield* serveMediaApi(serverLayer, tokens, providers);
   const access = yield* seedDevice('Room A');
   tokens.set('device', access);
   const { listener_id, lease_generation } = yield* claimListener(host, 'device');
@@ -411,7 +411,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const tokens = new Map<string, AccessScope>();
-      const host = yield* serveApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, fakeSpeech().layer));
+      const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, fakeSpeech().layer));
       const [owner] = yield* seedWorkspace('Feed room', ['owner']);
       tokens.set('owner', { ...owner!, scopes: [...owner!.scopes, 'capture:ingest'] });
       const { listener_id, lease_generation } = yield* claimListener(host, 'owner');
@@ -530,7 +530,7 @@ const listen = (baseUrl: string) =>
     const liveAsr = { ...engineeringDefaults.liveAsr, hedgeMs: engineeringDefaults.liveAsr.hedgeMs / SPEED };
     const media = Layer.merge(memoryObjectStore().layer, workersAiWhisper(baseUrl, liveAsr));
     const tokens = new Map<string, AccessScope>();
-    const host = yield* serveApi(serverLayer, tokens, media);
+    const host = yield* serveMediaApi(serverLayer, tokens, media);
     const [owner] = yield* seedWorkspace('Room', ['owner']);
     tokens.set('owner', { ...owner!, scopes: [...owner!.scopes, 'capture:ingest'] });
     const { listener_id, lease_generation } = yield* claimListener(host, 'owner');
