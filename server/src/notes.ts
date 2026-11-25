@@ -24,7 +24,7 @@ export const getMeetingNotes = (access: AccessScope, meeting_id: MeetingId) =>
     yield* requireScope(access, 'context:read');
     yield* authorizeMeeting(access, meeting_id, 'read');
     const sql = yield* SqlClient.SqlClient;
-    const [row] = yield* SqlSchema.findAll({ Request: Schema.Void, Result: NotesRow, execute: () => sql`SELECT notes, notes_revision, processing, title, timezone, DATE_FORMAT(started_at, '%Y-%m-%dT%H:%i:%sZ') AS started_at
+    const [row] = yield* SqlSchema.findAll({ Request: Schema.Void, Result: NotesRow, execute: () => sql`SELECT notes, notes_revision, processing, title, timezone, strftime('%Y-%m-%dT%H:%M:%SZ', started_at) AS started_at
         FROM meetings WHERE workspace_id = ${access.workspace_id} AND id = ${meeting_id}` })(undefined);
     if (row === undefined || row.notes === null) {
       const failed = row?.processing.notes === 'failed';
