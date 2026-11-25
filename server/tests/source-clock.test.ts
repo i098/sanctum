@@ -6,6 +6,7 @@ import { refreshContext } from '../src/context-jobs.ts';
 import { getContextSnapshot } from '../src/context.ts';
 import type { ExtractionInput } from '../src/extraction.ts';
 import { serverLayer } from '../src/main.ts';
+import { diffMicros, now } from '../src/sql-dialect.ts';
 import { claimed, meetingsOf } from './support/capture.ts';
 import { api, claimListener, eventually, fakeSpeech, MigratedDatabase, newEpochId, openSocket, pcmFrame, seedDevice, serveApi, startMessage } from './support/media.ts';
 import { memoryObjectStore } from './support/object-store.ts';
@@ -24,7 +25,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       const reader = { ...access, scopes: ['context:read' as const] };
       tokens.set('reader', reader);
       const { listener_id, lease_generation } = yield* claimListener(host, 'device');
-      // 01:30:00.123 PDT on Friday 14 March 2031, years after the server's UTC_TIMESTAMP(6).
+      // 01:30:00.123 PDT on Friday 14 March 2031, years after the server's clock.
       const anchor = '2031-03-14T08:30:00.123Z';
       const epoch_id = newEpochId();
       const socket = yield* openSocket(host, listener_id, 'device');
@@ -32,8 +33,8 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       yield* socket.take('accepted');
 
       const [epoch] = yield* sql<{ captured_at: string; server_gap_ms: number }>`
-        SELECT CAST(captured_at AS CHAR) AS captured_at, ABS(TIMESTAMPDIFF(MICROSECOND, started_at, UTC_TIMESTAMP(6))) DIV 1000 AS server_gap_ms FROM capture_epochs WHERE id = ${epoch_id}`;
-      expect(epoch!.captured_at).toBe('2031-03-14 08:30:00.123000');
+        SELECT captured_at, ABS(${diffMicros('started_at', now)}) / 1000 AS server_gap_ms FROM capture_epochs WHERE id = ${epoch_id}`;
+      expect(epoch!.captured_at).toBe('2031-03-14 08:30:00.123');
       expect(Number(epoch!.server_gap_ms)).toBeLessThan(60_000);
 
       for (let sequence = 0; sequence < 40; sequence++) {
@@ -48,7 +49,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('client clock source time', it => 
       yield* socket.take('transcript');
 
       const [meeting] = yield* meetingsOf(access.workspace_id);
-      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123000');
+      expect(meeting!.started_at).toBe('2031-03-14 08:30:01.123');
       const transcript = yield* api(host, 'reader', 'GET', `/meetings/${meeting!.id}/transcript`);
       expect(transcript.body.segments.map((segment: { text: string }) => segment.text)).toEqual(['I will send the pilot plan tomorrow.', 'Sounds good.']);
 
