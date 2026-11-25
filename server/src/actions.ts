@@ -34,8 +34,9 @@ import {
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Option, Schema } from 'effect';
 import { authorizeMeeting, requireScope } from './auth.ts';
-import { DbJson, DbSafeInt, DbSha256, DbUtc, ER_DUP_ENTRY, mysqlErrno } from './db.ts';
+import { DbJson, DbSafeInt, DbSha256, DbUtc, isDuplicate } from './db.ts';
 import { enqueueJob } from './jobs.ts';
+import { now } from './sql-dialect.ts';
 import { listenerMeeting } from './meeting-store.ts';
 
 type ActionRequest = typeof RequestActionInput.Type;
@@ -137,14 +138,14 @@ const toReceipt = (row: ActionRow): ActionReceipt => ({
 const ACTION_COLUMNS = 'id, workspace_id, meeting_id, requested_by, action_key, account_id, args, args_sha256, configuration_ref, version, grant_id, grant_version, state, provider_idempotency_key, provider_receipt, attempts, reconciliation, resolved_by, resolved_at, updated_at, title';
 const GRANT_COLUMNS = 'g.id, g.owner_principal_id, g.grantee_principal_id, g.action_key, g.app_slug, g.account_id, g.meeting_id, g.restrictions, g.expires_at, g.revoked_at, g.version';
 
-/** Loads one action row; `lock` takes a row lock inside the caller's transaction. */
-export const loadAction = (workspace_id: WorkspaceId, id: ActionId, lock = false) =>
+/** Loads one action row. */
+export const loadAction = (workspace_id: WorkspaceId, id: ActionId) =>
   Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient;
     return yield* SqlSchema.findOne({
       Request: Schema.Void,
       Result: ActionRow,
-      execute: () => sql`SELECT ${sql.literal(ACTION_COLUMNS)} FROM actions WHERE workspace_id = ${workspace_id} AND id = ${id} ${sql.literal(lock ? 'FOR UPDATE' : '')}`,
+      execute: () => sql`SELECT ${sql.literal(ACTION_COLUMNS)} FROM actions WHERE workspace_id = ${workspace_id} AND id = ${id}`,
     })(undefined);
   });
 
@@ -175,7 +176,7 @@ export const activeActionGrants = (access: AccessScope, input?: Pick<ActionReque
                 SELECT ${sql.literal(GRANT_COLUMNS)} FROM action_grants g
                 JOIN integration_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.account_id
                 WHERE g.workspace_id = ${access.workspace_id} AND g.grantee_principal_id = ${access.principal.id}
-                    AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND a.status = 'active'
+                    AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > ${now}) AND a.status = 'active'
                     ${input ? sql`AND g.action_key = ${input.action_key} AND (g.meeting_id IS NULL OR g.meeting_id = ${input.meeting_id})` : sql``}
                 ORDER BY g.meeting_id IS NULL, g.created_at DESC`,
     })(undefined);
@@ -211,18 +212,19 @@ export const requestAction = (
     const inserted = yield* sql
       .withTransaction(
         Effect.gen(function*() {
+          // The job joins first: a transaction cannot read after it has buffered a write.
+          yield* enqueueJob({ workspace_id: access.workspace_id, kind: 'action.execute', work_key: id, payload: { action_id: id }, requested_by: access.principal.id });
           yield* sql`
                         INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, account_id, idempotency_key, args, args_sha256, configuration_ref,
                             version, grant_id, grant_version, state, provider_idempotency_key, title, research_job_id, created_at, updated_at)
                         VALUES (${id}, ${access.workspace_id}, ${input.meeting_id}, ${access.principal.id}, ${input.action_key}, ${grant.account_id}, ${input.idempotency_key},
                             ${JSON.stringify(input.arguments)}, ${Buffer.from(sha256, 'hex')}, ${input.configuration_ref}, ${input.version}, ${grant.id}, ${grant.version},
-                            'queued', ${`sanctum:${id}`}, ${input.title ?? null}, ${research_job_id}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
-          yield* enqueueJob({ workspace_id: access.workspace_id, kind: 'action.execute', work_key: id, payload: { action_id: id }, requested_by: access.principal.id });
+                            'queued', ${`sanctum:${id}`}, ${input.title ?? null}, ${research_job_id}, ${now}, ${now})`;
         }),
       )
       .pipe(
         Effect.as(true),
-        Effect.catchIf(error => error._tag === 'SqlError' && mysqlErrno(error) === ER_DUP_ENTRY, () => Effect.succeed(false)),
+        Effect.catchIf(error => error._tag === 'SqlError' && isDuplicate(error), () => Effect.succeed(false)),
       );
     if (inserted) return { action_id: id, state: 'queued' as const };
     const raced = yield* findByIdempotencyKey(access, input.idempotency_key);
@@ -320,7 +322,7 @@ export const resolveAction = (access: AccessScope, action_id: ActionId, input: R
     if (row.state !== 'unknown') return yield* new Forbidden({ message: `Only unknown actions can be resolved; this one is ${row.state}` });
     yield* sql`
             UPDATE actions SET state = ${input.outcome}, provider_receipt = ${input.provider_receipt === null ? null : JSON.stringify(input.provider_receipt)},
-                reconciliation = 'resolved_by_human', resolved_by = ${access.principal.id}, resolved_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6)
+                reconciliation = 'resolved_by_human', resolved_by = ${access.principal.id}, resolved_at = ${now}, updated_at = ${now}
             WHERE workspace_id = ${access.workspace_id} AND id = ${action_id} AND state = 'unknown'`;
     return toReceipt(Option.getOrThrow(yield* loadAction(access.workspace_id, action_id)));
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
@@ -352,7 +354,7 @@ export const createActionGrant = (access: AccessScope, input: CreateActionGrantI
     yield* sql`
             INSERT INTO action_grants (id, workspace_id, owner_principal_id, grantee_principal_id, action_key, app_slug, account_id, meeting_id, restrictions, expires_at, created_at)
             VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, ${input.grantee}, ${input.action_key}, ${account.app_slug}, ${input.account_id},
-                ${input.meeting_id}, ${JSON.stringify(input.restrictions)}, ${input.expires_at === null ? null : Schema.encodeSync(DbUtc)(input.expires_at)}, UTC_TIMESTAMP(6))`;
+                ${input.meeting_id}, ${JSON.stringify(input.restrictions)}, ${input.expires_at === null ? null : Schema.encodeSync(DbUtc)(input.expires_at)}, ${now})`;
     return toGrant(Option.getOrThrow(yield* loadGrant(access.workspace_id, id)));
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));
 
@@ -365,7 +367,7 @@ export const revokeActionGrant = (access: AccessScope, grant_id: ActionGrantId):
       return yield* new NotFound({ message: 'Grant not found' });
     }
     yield* sql`
-            UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6), version = version + 1
+            UPDATE action_grants SET revoked_at = ${now}, version = version + 1
             WHERE workspace_id = ${access.workspace_id} AND id = ${grant_id} AND revoked_at IS NULL`;
     return toGrant(Option.getOrThrow(yield* loadGrant(access.workspace_id, grant_id)));
   }).pipe(Effect.catchTags({ SqlError: Effect.die, ParseError: Effect.die }));

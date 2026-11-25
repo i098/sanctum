@@ -21,8 +21,8 @@ import { dbLayer } from '../src/db.ts';
 import { executeAction } from '../src/executor.ts';
 import { executeIntegrationAction, getIntegrationAction, IntegrationFailure, searchIntegrationActions, uploadDriveFile } from '../src/integrations.ts';
 import { serverLayer } from '../src/main.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
 import { type ActionProp, makePipedreamClient, type PipedreamClient } from '../src/providers/pipedream.ts';
+import { now } from '../src/sql-dialect.ts';
 import { actionRow, queuedJob, seedCredential, seedMeeting } from './support/actions.ts';
 import { type FixtureAction, fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 import { createTestDatabase, type TestDatabase } from './support/database.ts';
@@ -67,7 +67,7 @@ const connect = (owner: AccessScope, app: string) =>
     const sql = yield* SqlClient.SqlClient;
     const id = IntegrationAccountId.make(randomUUID());
     yield* sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
-      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`ext-${owner.principal.id}`}, ${`apn_${id.slice(0, 8)}`}, ${app}, 'active', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${`ext-${owner.principal.id}`}, ${`apn_${id.slice(0, 8)}`}, ${app}, 'active', ${now}, ${now})`;
     return id;
   });
 
@@ -76,7 +76,7 @@ const grant = (owner: AccessScope, grantee: AccessScope, account: IntegrationAcc
     const sql = yield* SqlClient.SqlClient;
     const id = randomUUID();
     yield* sql`INSERT INTO action_grants (id, workspace_id, owner_principal_id, grantee_principal_id, action_key, app_slug, account_id, meeting_id, restrictions, created_at)
-      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${grantee.principal.id}, ${sendEmail.key}, 'gmail', ${account}, ${meeting}, '{}', UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${owner.workspace_id}, ${owner.principal.id}, ${grantee.principal.id}, ${sendEmail.key}, 'gmail', ${account}, ${meeting}, '{}', ${now})`;
     return id;
   });
 
@@ -89,14 +89,13 @@ const providerCalls = (fake: PipedreamFixture, operation: string) => fake.calls.
 let database: TestDatabase & { drop: () => Promise<void> };
 beforeAll(async () => {
   database = await createTestDatabase();
-  await Effect.runPromise(Effect.provide(migrate(loadMigrations()), dbLayer(database.mysql)));
 });
 afterAll(() => database?.drop());
 
 /** Runs `use` against the migrated database with the fixture catalog. */
 const scenario = <A, E>(catalog: ReadonlyArray<FixtureAction>, use: (fake: PipedreamFixture) => Effect.Effect<A, E, SqlClient.SqlClient | PipedreamClient>) => {
   const fake = fixturePipedream(catalog);
-  return use(fake).pipe(Effect.provide(fake.layer), Effect.provide(dbLayer(database.mysql)));
+  return use(fake).pipe(Effect.provide(fake.layer), Effect.provide(dbLayer(database.db)));
 };
 
 describe('integration discovery', () => {
@@ -160,12 +159,12 @@ describe('integration discovery', () => {
         const grantId = yield* grant(owner!, agent!, account);
         const granted = yield* getIntegrationAction(agent!, { action_key: sendEmail.key });
         expect(granted.missing).toEqual(['to', 'subject']);
-        yield* sql`UPDATE action_grants SET revoked_at = UTC_TIMESTAMP(6) WHERE id = ${grantId}`;
+        yield* sql`UPDATE action_grants SET revoked_at = ${now} WHERE id = ${grantId}`;
         expect((yield* getIntegrationAction(agent!, { action_key: sendEmail.key })).missing).toEqual(['gmail', 'to', 'subject']);
 
         const meeting = MeetingId.make(randomUUID());
         yield* sql`INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
-          VALUES (${meeting}, ${owner!.workspace_id}, 'active', 'UTC', UTC_TIMESTAMP(6), '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+          VALUES (${meeting}, ${owner!.workspace_id}, 'active', 'UTC', ${now}, '{}', ${now}, ${now})`;
         yield* grant(owner!, agent!, account, meeting);
         expect((yield* search({ ...agent!, meetings: { kind: 'allowlist', meeting_ids: [] } }, gmail)).matches[0]?.connection).toBe('not_permitted');
         expect((yield* search({ ...agent!, meetings: { kind: 'allowlist', meeting_ids: [meeting] } }, gmail)).matches[0]?.connection).toBe('connected');
@@ -313,10 +312,10 @@ describe('integration configuration', () => {
         // A new member who is given one meeting: each change bumps the workspace permission revision.
         const person = randomUUID();
         const bump = sql`UPDATE workspaces SET permission_revision = permission_revision + 1 WHERE id = ${owner!.workspace_id}`;
-        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${person}, 'human', 'New member', UTC_TIMESTAMP(6))`;
-        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${owner!.workspace_id}, ${person}, 'member', UTC_TIMESTAMP(6))`.pipe(Effect.zipRight(bump));
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${person}, 'human', 'New member', ${now})`;
+        yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, created_at) VALUES (${owner!.workspace_id}, ${person}, 'member', ${now})`.pipe(Effect.zipRight(bump));
         yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-          VALUES (${owner!.workspace_id}, ${meeting}, ${person}, 'read', ${owner!.principal.id}, UTC_TIMESTAMP(6))`.pipe(Effect.zipRight(bump));
+          VALUES (${owner!.workspace_id}, ${meeting}, ${person}, 'read', ${owner!.principal.id}, ${now})`.pipe(Effect.zipRight(bump));
         expect((yield* current()).permission_revision).toBeGreaterThan(unaffected.revision);
         expect(yield* run(unaffected.id)).toMatchObject({ state: 'succeeded', attempts: 1 });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
@@ -327,7 +326,7 @@ describe('integration configuration', () => {
 
         yield* grant(owner!, agent!, account);
         const removed = yield* queue('member-removed');
-        yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`;
+        yield* sql`UPDATE workspace_members SET revoked_at = ${now} WHERE workspace_id = ${agent!.workspace_id} AND principal_id = ${agent!.principal.id}`;
         yield* sql`UPDATE workspaces SET permission_revision = permission_revision + 1 WHERE id = ${agent!.workspace_id}`;
         expect(yield* run(removed.id)).toMatchObject({ state: 'cancelled', attempts: 0, last_error: { code: 'forbidden' } });
         expect(providerCalls(fake, 'runAction')).toHaveLength(1);
@@ -564,11 +563,11 @@ describe('Pipedream Connect client', () => {
 describe('integrations HTTP API', () => {
   it.scoped('serves discovery for the authenticated caller and reports an unconfigured provider as unavailable', () =>
     Effect.gen(function*() {
-      const [owner] = yield* Effect.provide(seedWorkspace('HTTP'), dbLayer(database.mysql));
+      const [owner] = yield* Effect.provide(seedWorkspace('HTTP'), dbLayer(database.db));
       const auth = Layer.succeed(Authenticator, {
         authenticate: request => (request.headers.authorization === 'Bearer fixture' ? Effect.succeed(owner!) : Effect.fail(new Unauthenticated({ message: 'no credentials' }))),
       });
-      const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql }, auth));
+      const context = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db }, auth));
       const address = Context.get(context, HttpServer.HttpServer).address;
       const base = `http://127.0.0.1:${address._tag === 'TcpAddress' ? address.port : 0}/api/v1/integrations/actions`;
       const call = (path: string, init: RequestInit = {}) =>
@@ -592,7 +591,7 @@ describe('integrations HTTP API', () => {
 describe('integration connect flow', () => {
   it.scoped('issues a Connect Link for the session principal only, syncs accounts idempotently and disconnects them', () =>
     Effect.gen(function*() {
-      const db = dbLayer(database.mysql);
+      const db = dbLayer(database.db);
       const [owner, member] = yield* Effect.provide(seedWorkspace('Connect', ['owner', 'member']), db);
       const session = yield* Effect.provide(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }), db);
       const external = `${owner!.workspace_id}.${owner!.principal.id}`;
@@ -607,7 +606,7 @@ describe('integration connect flow', () => {
         return { status: 500, body: {} };
       });
       const env = new Map([['PIPEDREAM_API_URL', pipedream.url], ['PIPEDREAM_PROJECT_ID', 'proj_test'], ['PIPEDREAM_CLIENT_ID', 'cid'], ['PIPEDREAM_CLIENT_SECRET', 'client-secret']]);
-      const context = yield* Layer.build(serverLayer({ apiPort: 0, mysql: database.mysql })).pipe(
+      const context = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db })).pipe(
         Effect.withConfigProvider(ConfigProvider.fromMap(env).pipe(ConfigProvider.orElse(ConfigProvider.fromEnv))),
       );
       const address = Context.get(context, HttpServer.HttpServer).address;

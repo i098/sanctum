@@ -13,6 +13,7 @@ import { paidResearchAllowance } from './config.ts';
 import { lockMeeting, writeItem } from './context.ts';
 import { getIntegrationAction, searchIntegrationActions } from './integrations.ts';
 import { LlmClient } from './llm.ts';
+import { now } from './sql-dialect.ts';
 
 /** The claimed `research.run` fields used here, for a run someone asked for. */
 interface ResearchJob {
@@ -56,14 +57,14 @@ const reservePaidCall = (job: ResearchJob, call_id: string, model: string) =>
     const sql = yield* SqlClient.SqlClient;
     yield* sql.withTransaction(Effect.gen(function* () {
       const [today] = yield* sql<{ used: number; workspace: number }>`SELECT COUNT(*) AS used, COALESCE(SUM(workspace_id = ${job.workspace_id}), 0) AS workspace
-        FROM paid_model_calls WHERE started_at >= UTC_DATE() FOR UPDATE`;
+        FROM paid_model_calls WHERE started_at >= date('now')`;
       if (Number(today!.workspace) >= perWorkspace) {
         return yield* new AllowanceSpent({ message: `Paid web research allowance of ${perWorkspace} calls per workspace per day (UTC) is spent` });
       }
       if (Number(today!.used) >= total) {
         return yield* new AllowanceSpent({ message: `Paid web research allowance of ${total} calls per day (UTC) across all workspaces is spent` });
       }
-      yield* sql`INSERT INTO paid_model_calls (id, workspace_id, job_id, model, started_at) VALUES (${call_id}, ${job.workspace_id}, ${job.id}, ${model}, UTC_TIMESTAMP(6))`;
+      yield* sql`INSERT INTO paid_model_calls (id, workspace_id, job_id, model, started_at) VALUES (${call_id}, ${job.workspace_id}, ${job.id}, ${model}, ${now})`;
     }));
   });
 
@@ -99,7 +100,7 @@ const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
       { system: RESEARCH_SYSTEM, prompt },
       model => reservePaidCall(job, call_id, model),
       usage => Effect.gen(function* () {
-        yield* sql`UPDATE paid_model_calls SET finished_at = UTC_TIMESTAMP(6), input_tokens = ${usage.input_tokens}, output_tokens = ${usage.output_tokens},
+        yield* sql`UPDATE paid_model_calls SET finished_at = ${now}, input_tokens = ${usage.input_tokens}, output_tokens = ${usage.output_tokens},
           web_searches = ${usage.web_searches} WHERE workspace_id = ${job.workspace_id} AND id = ${call_id}`;
         yield* Effect.logInfo('paid web research call', { workspace_id: job.workspace_id, job_id: job.id, ...usage });
       }),
@@ -108,7 +109,7 @@ const research = (job: ResearchJob, meeting_id: MeetingId, request: string) =>
     const artifact_id = ArtifactId.make(randomUUID());
     yield* sql`INSERT INTO artifacts (id, workspace_id, meeting_id, kind, title, content_type, content, sha256, provenance, created_by, created_at)
       VALUES (${artifact_id}, ${job.workspace_id}, ${meeting_id}, 'research', ${`Research: ${request.slice(0, 200)}`}, 'application/json',
-        ${content}, ${createHash('sha256').update(content).digest()}, ${JSON.stringify({ job_id: job.id, model, request })}, ${job.requested_by}, UTC_TIMESTAMP(6))`;
+        ${content}, ${createHash('sha256').update(content).digest()}, ${JSON.stringify({ job_id: job.id, model, request })}, ${job.requested_by}, ${now})`;
     return { artifact_id, text: value.text, sources: value.sources };
   });
 
