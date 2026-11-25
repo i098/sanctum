@@ -57,6 +57,21 @@ const execute = (access: AccessScope, action_id: ActionId) =>
   Effect.flatMap(queuedJob(access.workspace_id, 'action.execute', action_id), executeAction).pipe(Effect.provide(actionServices));
 
 describe('action gateway', () => {
+  it.effect('concurrent executions cannot overshoot the per-window action budget', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const { agent } = yield* setup();
+        const budget: { perWindow: number } = engineeringDefaults.actionBudget;
+        const original = budget.perWindow;
+        budget.perWindow = 2;
+        const queued = yield* Effect.all([1, 2, 3, 4].map(n => requestAction(agent, request({ idempotency_key: `burst-${n}` }))));
+        const results = yield* Effect.all(queued.map(action => execute(agent, action.action_id)), { concurrency: 4 }).pipe(Effect.ensuring(Effect.sync(() => { budget.perWindow = original; })));
+        expect(results.filter(result => result.status === 'paused')).toHaveLength(2);
+        expect(provider.sent).toHaveLength(2);
+      }),
+      { migrated: true },
+    ));
+
   it.effect('executes a granted action once with a truthful receipt and a stable provider key', () =>
     withDatabase(
       Effect.gen(function* () {

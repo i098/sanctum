@@ -44,11 +44,12 @@ const budgetPause = (job: Job) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { perWindow, windowMs } = engineeringDefaults.actionBudget;
-    const [budget] = yield* sql<{ used: number; oldest_age_us: string | null }>`
-      SELECT COUNT(*) AS used, TIMESTAMPDIFF(MICROSECOND, MIN(started_at), UTC_TIMESTAMP(6)) AS oldest_age_us FROM actions
-      WHERE workspace_id = ${job.workspace_id} AND started_at > UTC_TIMESTAMP(6) - INTERVAL ${windowMs * 1000} MICROSECOND`;
-    if (Number(budget!.used) < perWindow) return null;
-    const resume_after_ms = Math.max(1, windowMs - Math.floor(Number(budget!.oldest_age_us) / 1000));
+    // Locking read: TiDB serves a plain COUNT from the transaction snapshot, which misses submissions committed while we waited for the workspace lock.
+    const recent = yield* sql<{ age_us: string }>`
+      SELECT TIMESTAMPDIFF(MICROSECOND, started_at, UTC_TIMESTAMP(6)) AS age_us FROM actions
+      WHERE workspace_id = ${job.workspace_id} AND started_at > UTC_TIMESTAMP(6) - INTERVAL ${windowMs * 1000} MICROSECOND FOR UPDATE`;
+    if (recent.length < perWindow) return null;
+    const resume_after_ms = Math.max(1, windowMs - Math.floor(Math.max(...recent.map(row => Number(row.age_us))) / 1000));
     return { status: 'paused', resume_after_ms, reason: `Action budget of ${perWindow} per ${windowMs} ms reached` } as const;
   });
 
