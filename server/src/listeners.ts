@@ -133,6 +133,15 @@ const leaseDeadline = Effect.gen(function* () {
   return Schema.decodeSync(DbUtc)(row!.deadline);
 });
 
+/** Reads the group lease before the heartbeat's writes; `apply` writes it afterwards. A listener outside a group owns live writes. */
+const planGroup = (workspace_id: WorkspaceId, listener_id: ListenerId, capture_group_id: string | null) =>
+  Effect.gen(function* () {
+    if (capture_group_id === null) return { owner: true, apply: Effect.void };
+    const group = { workspace_id, capture_group_id, listener_id };
+    const grant = yield* planGroupLease(group);
+    return { owner: grant !== null, apply: grant === null ? Effect.void : applyGroupLease(group, grant) };
+  });
+
 /**
  * Renews the caller's lease, or takes it over when the previous owner's lease lapsed. Generation 0
  * means never claimed, so the first claim always increments. A lapsed lease, renewed or taken over,
@@ -155,8 +164,7 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
         const health = JSON.stringify({ buffered_chunks: input.buffered_chunks, storage_bytes_free: input.storage_bytes_free, epoch_id: input.epoch_id });
         // Every read comes before the first write: a transaction cannot read after it buffered one.
         const deadline = yield* leaseDeadline;
-        const group = listener.capture_group_id === null ? null : { workspace_id: access.workspace_id, capture_group_id: listener.capture_group_id, listener_id };
-        const grant = group === null ? null : yield* planGroupLease(group);
+        const group = yield* planGroup(access.workspace_id, listener_id, listener.capture_group_id);
         if (listener.lease_active !== 1 && listener.current_epoch_id !== null) yield* endEpoch(access.workspace_id, listener_id, listener.current_epoch_id, 'interrupted');
         yield* sql`
           UPDATE listeners
@@ -164,8 +172,8 @@ export const heartbeat = (access: AccessScope, listener_id: ListenerId, input: t
               state = ${input.state}, health = ${health}, last_heartbeat_at = ${now}
           WHERE workspace_id = ${access.workspace_id} AND id = ${listener_id}`;
         if (!renew) yield* recordClaim(access.workspace_id, listener_id, generation);
-        if (group !== null && grant !== null) yield* applyGroupLease(group, grant);
-        return { lease_generation: generation, lease_expires_at: deadline, owner: group === null || grant !== null } satisfies typeof HeartbeatReceipt.Type;
+        yield* group.apply;
+        return { lease_generation: generation, lease_expires_at: deadline, owner: group.owner } satisfies typeof HeartbeatReceipt.Type;
       }),
     );
   });
