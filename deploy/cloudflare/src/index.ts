@@ -3,15 +3,17 @@
  * including the listener WebSocket, to the API container; the apex serves the
  * landing page and sends every other request to the app host.
  * A second container from the same image runs the job worker; the cron restarts it after a crash or
- * rollout, so jobs keep running while nobody has the site open. State lives in MySQL and R2, never
- * on container disk.
+ * rollout, so jobs keep running while nobody has the site open. State lives in D1 and R2, never
+ * on container disk; the containers reach D1 only through the gateway at `d1.internal` (src/d1-gate.ts).
  */
 import { Container, getContainer } from '@cloudflare/containers';
+import { d1Gate } from './d1-gate.ts';
 import { type AppSettings, containerEnv, retireStaleContainer } from './settings.ts';
 
 interface Env extends AppSettings {
   readonly API: DurableObjectNamespace<SanctumApi>;
   readonly JOBS: DurableObjectNamespace<SanctumJobs>;
+  readonly DB: D1Database;
   /** The landing page build (web-app/landing); 404 for any path it does not contain. */
   readonly LANDING: Fetcher;
 }
@@ -41,7 +43,9 @@ async function landing(request: Request, env: Env): Promise<Response | undefined
 
 /** Both processes run the same image with the same settings, restarted when those settings change. */
 class SanctumContainer extends Container<Env> {
-  override envVars = { ...containerEnv(this.env), SANCTUM_DEVICE_PROXY: 'cloudflare' };
+  override envVars = { ...containerEnv(this.env), SANCTUM_DEVICE_PROXY: 'cloudflare', SANCTUM_DB_URL: 'http://d1.internal' };
+  /** Requests to `d1.internal` never leave Cloudflare: the Worker answers them with the D1 binding, so the container holds no token. */
+  static outboundByHost = { 'd1.internal': (request: Request, env: Env) => d1Gate(request, env.DB) };
   #envChecked = false;
 
   /** Once per object instance: a deploy or secret change starts a new instance with no open socket. */
