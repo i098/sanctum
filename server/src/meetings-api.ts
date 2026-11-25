@@ -25,6 +25,7 @@ import { authorizeMeeting, requireScope } from './auth.ts';
 import { DbSafeInt, DbUtc } from './db.ts';
 import { mergeMeetings, splitMeeting } from './meeting-corrections.ts';
 import { currentRanges, dbFailures, readMeeting, selectMeeting } from './meeting-store.ts';
+import { now } from './sql-dialect.ts';
 import { closeMeeting, getMeeting, listMeetings } from './meetings.ts';
 import { exportMeeting, getMeetingNotes } from './notes.ts';
 import { ObjectStore } from './providers/object-store.ts';
@@ -119,7 +120,7 @@ const shareMeeting = (access: AccessScope, meeting_id: MeetingId, { visibility }
       const [grant] = yield* sql<{ access: string }>`SELECT access FROM meeting_access WHERE workspace_id = ${access.workspace_id} AND meeting_id = ${meeting_id} AND principal_id = ${access.principal.id}`;
       if (grant?.access !== 'owner') return yield* new Forbidden({ message: 'Only the meeting owner or a workspace admin can change who reads it' });
     }
-    yield* sql`UPDATE meetings SET visibility = ${visibility}, updated_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${access.workspace_id} AND id = ${meeting_id}`;
+    yield* sql`UPDATE meetings SET visibility = ${visibility}, updated_at = ${now} WHERE workspace_id = ${access.workspace_id} AND id = ${meeting_id}`;
     return yield* readMeeting(access.workspace_id, meeting_id);
   }).pipe(dbFailures);
 
