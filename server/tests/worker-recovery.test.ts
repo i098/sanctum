@@ -3,6 +3,7 @@
  * kill the API or a worker at any point and accepted work still finishes exactly once, or
  * truthfully becomes `unknown` when a submission may have reached the provider.
  */
+import { createHash, randomUUID } from 'node:crypto';
 import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
@@ -16,7 +17,7 @@ import { dbLayer } from '../src/db.ts';
 import { executeAction } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
 import { serverLayer } from '../src/main.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { actionRow, actionServices, provider, seedAccount, seedCredential } from './support/actions.ts';
 import { createTestDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -30,10 +31,8 @@ beforeEach(() => provider.reset());
 
 const SEND = 'gmail-send-email';
 
-/** Migrated disposable database; `mysql` lets tests start API servers against it. */
-const database = Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop)).pipe(
-  Effect.tap(db => Effect.provide(migrate(loadMigrations()), dbLayer(db.mysql))),
-);
+/** Migrated disposable database; `db` lets tests start API servers against it. */
+const database = Effect.acquireRelease(Effect.promise(createTestDatabase), db => Effect.promise(db.drop));
 
 const seed = Effect.gen(function* () {
   const [owner, agent] = yield* seedWorkspace('Recovery', ['owner', 'agent']);
@@ -57,10 +56,10 @@ const whenState = (agent: AccessScope, id: ActionId, state: string) =>
   eventually(Effect.map(actionRow(agent.workspace_id, id), row => (row.state === state ? row : undefined)));
 
 const jobFor = (id: ActionId) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ status: string; attempts: number; lease_generation: string }>`
+  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ status: string; attempts: number; lease_generation: number }>`
     SELECT status, attempts, lease_generation FROM jobs WHERE kind = 'action.execute' AND work_key = ${id}`).pipe(Effect.map(rows => rows[0]!));
 
-const expireLeases = Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE status = 'running'`);
+const expireLeases = Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE jobs SET lease_until = ${addSeconds(now, -1)} WHERE status = 'running'`);
 
 /** Only the handler these tests exercise, so the worker needs no media or model providers. */
 const worker = Effect.fork(runWorker({ 'action.execute': executeAction }).pipe(Effect.provide(actionServices)));
@@ -69,7 +68,7 @@ describe('worker recovery', () => {
   it.live('finishes work accepted over HTTP after the API process is gone', () =>
     Effect.gen(function* () {
       const db = yield* database;
-      const { owner, agent } = yield* Effect.provide(seed, dbLayer(db.mysql));
+      const { owner, agent } = yield* Effect.provide(seed, dbLayer(db.db));
       const auth = Layer.succeed(Authenticator, {
         authenticate: request =>
           request.headers.authorization === 'Bearer agent' ? Effect.succeed(agent)
@@ -78,7 +77,7 @@ describe('worker recovery', () => {
       });
       const api = Effect.gen(function* () {
         const scope = yield* Scope.make();
-        const context = yield* Layer.buildWithScope(serverLayer({ apiPort: 0, mysql: db.mysql }, auth), scope);
+        const context = yield* Layer.buildWithScope(serverLayer({ apiPort: 0, db: db.db }, auth), scope);
         const address = Context.get(context, HttpServer.HttpServer).address;
         return { base: address._tag === 'TcpAddress' ? `http://127.0.0.1:${address.port}` : '', close: Scope.close(scope, Exit.void) };
       });
@@ -100,7 +99,7 @@ describe('worker recovery', () => {
       yield* first.close; // API killed before any worker ran.
 
       const action_id = accepted.body.action_id as ActionId;
-      yield* Effect.provide(Effect.zipRight(worker, whenState(agent, action_id, 'succeeded')), dbLayer(db.mysql));
+      yield* Effect.provide(Effect.zipRight(worker, whenState(agent, action_id, 'succeeded')), dbLayer(db.db));
 
       const second = yield* api;
       expect(yield* call(second.base, 'agent', `/actions/${action_id}`)).toMatchObject({ status: 200, body: { state: 'succeeded', attempts: 1 } });
@@ -119,7 +118,7 @@ describe('worker recovery', () => {
         yield* Effect.forEach(queued, ({ action_id }) => whenState(agent, action_id, 'succeeded'));
         expect(new Set(provider.sent.map(input => input.provider_idempotency_key)).size).toBe(12);
         expect(provider.sent).toHaveLength(12);
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 
   it.live('recovers a stale lease as unknown and keeps the late completion of the original attempt', () =>
@@ -139,8 +138,8 @@ describe('worker recovery', () => {
         provider.release!(); // A's upstream answer finally arrives.
         expect(yield* whenState(agent, action_id, 'succeeded')).toMatchObject({ reconciliation: 'reconciled', attempts: 1 });
         expect(provider.sent).toHaveLength(1);
-        expect(yield* jobFor(action_id)).toMatchObject({ status: 'succeeded', lease_generation: '2' });
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+        expect(yield* jobFor(action_id)).toMatchObject({ status: 'succeeded', lease_generation: 2 });
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 
   it.live('never resubmits after a worker is killed mid-submission', () =>
@@ -158,7 +157,7 @@ describe('worker recovery', () => {
         yield* worker;
         expect(yield* whenState(agent, action_id, 'unknown')).toMatchObject({ reconciliation: 'pending', attempts: 1 });
         expect(provider.sent).toHaveLength(1);
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 
   it.live('pauses at the action budget and resumes when the window frees up', () =>
@@ -172,8 +171,8 @@ describe('worker recovery', () => {
         for (let index = 0; index < perWindow; index++) {
           yield* sql`
             INSERT INTO actions (id, workspace_id, requested_by, action_key, idempotency_key, args, args_sha256, version, state, attempts, started_at, created_at, updated_at)
-            VALUES (UUID(), ${agent.workspace_id}, ${agent.principal.id}, ${SEND}, ${`earlier-${index}`}, '{}', UNHEX(SHA2('x', 256)), '1', 'succeeded', 1,
-              UTC_TIMESTAMP(6) - INTERVAL ${(windowMs - 2_000) * 1000} MICROSECOND, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+            VALUES (${randomUUID()}, ${agent.workspace_id}, ${agent.principal.id}, ${SEND}, ${`earlier-${index}`}, '{}', ${createHash('sha256').update('x').digest()}, '1', 'succeeded', 1,
+              ${addSeconds(now, -(windowMs - 2_000) / 1000)}, ${now}, ${now})`;
         }
         const { action_id } = yield* send(agent, 'over-budget');
         yield* worker;
@@ -183,7 +182,7 @@ describe('worker recovery', () => {
         expect(provider.sent).toHaveLength(0);
         yield* whenState(agent, action_id, 'succeeded');
         expect(provider.sent).toHaveLength(1);
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 
   it.live('cancels a queued action whose requester lost access before a worker ran it', () =>
@@ -193,11 +192,11 @@ describe('worker recovery', () => {
         const sql = yield* SqlClient.SqlClient;
         const { agent } = yield* seed;
         const { action_id } = yield* send(agent, 'revoked');
-        yield* sql`UPDATE agent_credentials SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${agent.principal.id}`;
+        yield* sql`UPDATE agent_credentials SET revoked_at = ${now} WHERE principal_id = ${agent.principal.id}`;
         yield* worker;
         expect(yield* whenState(agent, action_id, 'cancelled')).toMatchObject({ attempts: 0, last_error: { code: 'forbidden' } });
         expect(provider.sent).toHaveLength(0);
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 
   it.live('records the answer of a submission whose worker lost its lease meanwhile', () =>
@@ -216,6 +215,6 @@ describe('worker recovery', () => {
         provider.release!();
         expect(yield* whenState(agent, action_id, 'succeeded')).toMatchObject({ reconciliation: 'reconciled', attempts: 1 });
         expect(provider.sent).toHaveLength(1);
-      }).pipe(Effect.provide(dbLayer(db.mysql)));
+      }).pipe(Effect.provide(dbLayer(db.db)));
     }).pipe(Effect.scoped));
 });
