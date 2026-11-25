@@ -10,6 +10,7 @@ import { closeMeeting, getMeeting } from '../src/meetings.ts';
 import { issueRecordingAccess } from '../src/playback.ts';
 import { LiveDiarization, makePyannote, PyannoteClient, pyannoteLimits, type BatchDiarization } from '../src/providers/pyannote.ts';
 import { applyVoiceMatches, enrollVoice, mapSpeaker, openDiarizationConnection, recordSpeakerTurns, refineSpeakers, revokeEnrollment } from '../src/speakers.ts';
+import { now } from '../src/sql-dialect.ts';
 import { claimed, hear, meetingsOf, RATE, seedEpoch, seedListener } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -20,7 +21,7 @@ const seedProfile = (access: AccessScope, name: string) =>
     const sql = yield* SqlClient.SqlClient;
     const id = ProfileId.make(randomUUID());
     yield* sql`INSERT INTO profiles (id, workspace_id, principal_id, kind, display_name, details, created_at, updated_at)
-      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, 'person', ${name}, '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, ${access.principal.id}, 'person', ${name}, '{}', ${now}, ${now})`;
     return id;
   });
 
@@ -45,7 +46,7 @@ const meetingWithPeople = Effect.gen(function* () {
   const pieces = [{ epoch_id: epoch, track: 0, sample_start: 0, sample_end: 60 * RATE }];
   yield* sql`INSERT INTO meeting_recordings (id, workspace_id, meeting_id, boundary_revision, object_key, sha256, byte_length, sample_rate, sample_count, pieces, created_at)
     VALUES (${randomUUID()}, ${listener.workspace_id}, ${meeting}, 1, ${`meetings/${meeting}/r1.wav`}, ${Buffer.alloc(32)}, ${44 + 120 * RATE}, ${RATE}, ${60 * RATE},
-      ${JSON.stringify(pieces)}, UTC_TIMESTAMP(6))`;
+      ${JSON.stringify(pieces)}, ${now})`;
   const people = { alice: yield* seedProfile(owner!, 'Alice'), bob: yield* seedProfile(member!, 'Bob'), carol: yield* seedProfile(admin!, 'Carol') };
   return { owner: owner!, member: member!, admin: admin!, listener, epoch, meeting, people };
 });

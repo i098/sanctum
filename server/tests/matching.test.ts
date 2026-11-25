@@ -5,6 +5,7 @@ import { type AccessScope, JobId, ProfileId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { storeEmbedding } from '../src/matcher.ts';
 import { matchesFor, rankMatchesJob } from '../src/matching.ts';
+import { now } from '../src/sql-dialect.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -13,7 +14,7 @@ const addProfile = (access: AccessScope, name: string, kind: 'needs' | 'offers',
     const sql = yield* SqlClient.SqlClient;
     const id = ProfileId.make(randomUUID());
     yield* sql`INSERT INTO profiles (id, workspace_id, kind, display_name, details, created_at, updated_at)
-      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', ${now}, ${now})`;
     yield* storeEmbedding(access, { profile_id: id, kind, vector, model: 'fixture-embed-v1', source_revision: 1 });
     return id;
   });
