@@ -10,6 +10,7 @@ import { dbLayer } from '../src/db.ts';
 import { fixtureLlm } from '../src/llm.ts';
 import { serverLayer } from '../src/main.ts';
 import { storeEmbedding } from '../src/matcher.ts';
+import { now } from '../src/sql-dialect.ts';
 import { summarizeNotes } from '../src/notes-job.ts';
 import { seedMeeting, seedSegment } from './support/context.ts';
 import { loadMigrations, migrate, pendingMigrations, requireCurrentSchema } from '../src/migrate.ts';
@@ -71,28 +72,28 @@ describe('capabilities under the served application', () => {
         const action = randomUUID();
         const receipt = { provider: 'fixture', message_id: 'fixture-receipt-1' };
         yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
-          VALUES (${listener}, ${workspace}, ${device!.principal.id}, 'Room', 'room', '{}', UTC_TIMESTAMP(6))`;
+          VALUES (${listener}, ${workspace}, ${device!.principal.id}, 'Room', 'room', '{}', ${now})`;
         yield* sql`INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start,
             captured_at, timezone, start_reason, started_at, live_sample_end)
-          VALUES (${epoch}, ${workspace}, ${listener}, 1, 48000, 1, 'pcm_s16le', 0, UTC_TIMESTAMP(6), 'America/Los_Angeles', 'start', UTC_TIMESTAMP(6), 1440000)`;
+          VALUES (${epoch}, ${workspace}, ${listener}, 1, 48000, 1, 'pcm_s16le', 0, ${now}, 'America/Los_Angeles', 'start', ${now}, 1440000)`;
         yield* sql`INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate,
             captured_at, byte_length, sha256, object_key, upload_state, created_at, committed_at)
-          VALUES (${chunk}, ${workspace}, ${listener}, ${epoch}, 0, 0, 0, 1440000, 48000, UTC_TIMESTAMP(6), ${44 + 1440000 * 2},
-            ${createHash('sha256').update('chunk').digest()}, ${`recordings/${chunk}.wav`}, 'committed', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+          VALUES (${chunk}, ${workspace}, ${listener}, ${epoch}, 0, 0, 0, 1440000, 48000, ${now}, ${44 + 1440000 * 2},
+            ${createHash('sha256').update('chunk').digest()}, ${`recordings/${chunk}.wav`}, 'committed', ${now}, ${now})`;
         yield* sql`INSERT INTO actions (id, workspace_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, created_at, updated_at, version)
           VALUES (${action}, ${workspace}, ${owner!.principal.id}, 'gmail-send-email', 'rehearsal-1', '{}', ${createHash('sha256').update('{}').digest()},
-            'succeeded', ${JSON.stringify(receipt)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
+            'succeeded', ${JSON.stringify(receipt)}, ${now}, ${now}, '0.1.0')`;
 
         // The previous release runs against the current schema: nothing pending, nothing dropped.
         expect(yield* pendingMigrations(previousRelease)).toEqual([]);
         yield* requireCurrentSchema(previousRelease);
         // Rolling forward again is a no-op on the ledger.
-        expect(yield* migrate(migrations)).toEqual({ applied: [], adopted: [] });
+        expect(yield* migrate(migrations)).toEqual({ applied: [] });
 
         const [chunkRow] = yield* sql<{ upload_state: string; object_key: string }>`SELECT upload_state, object_key FROM recording_chunks WHERE id = ${chunk}`;
         expect(chunkRow).toEqual({ upload_state: 'committed', object_key: `recordings/${chunk}.wav` });
         const [actionRow] = yield* sql<{ state: string; provider_receipt: unknown }>`SELECT state, provider_receipt FROM actions WHERE id = ${action}`;
-        expect(actionRow).toEqual({ state: 'succeeded', provider_receipt: receipt });
+        expect(actionRow).toEqual({ state: 'succeeded', provider_receipt: JSON.stringify(receipt) });
       }),
       { migrated: true },
     ),
@@ -127,7 +128,7 @@ const profile = (access: AccessScope, name: string, kind: 'needs' | 'offers', ve
     const sql = yield* SqlClient.SqlClient;
     const id = ProfileId.make(randomUUID());
     yield* sql`INSERT INTO profiles (id, workspace_id, kind, display_name, details, created_at, updated_at)
-      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', ${now}, ${now})`;
     yield* storeEmbedding(access, { profile_id: id, kind, vector, model: 'fixture-embed-v1', source_revision: 1 });
     return id;
   });
@@ -144,15 +145,15 @@ describe('T25 capabilities under the new access model', () => {
           const [outsider] = yield* seedWorkspace('Rival', ['owner']);
           const meeting = yield* seedMeeting(device!, { started_at: '2026-09-28 16:00:00' });
           yield* seedSegment(meeting, 0, 4, 'We move the launch to Friday.');
-          yield* sql`UPDATE meetings SET state = 'closed', ended_at = UTC_TIMESTAMP(6) WHERE id = ${meeting.meeting_id}`;
+          yield* sql`UPDATE meetings SET state = 'closed', ended_at = ${now} WHERE id = ${meeting.meeting_id}`;
           yield* Effect.provide(summarizeNotes({ workspace_id: meeting.workspace_id, payload: { meeting_id: meeting.meeting_id } }), fixtureLlm([notesAnswer]));
           const seeker = yield* profile(owner!, 'Seeker', 'needs', [1, 0]);
           const helper = yield* profile(owner!, 'Helper', 'offers', [1, 0.1]);
           return { owner: owner!, outsider: outsider!, meeting: meeting.meeting_id, seeker, helper };
         }),
-        dbLayer(database.mysql),
+        dbLayer(database.db),
       );
-      const server = serverLayer({ apiPort: 0, mysql: database.mysql }, tokens({ owner: fixture.owner, outsider: fixture.outsider }));
+      const server = serverLayer({ apiPort: 0, db: database.db }, tokens({ owner: fixture.owner, outsider: fixture.outsider }));
       const address = Context.get(yield* Layer.build(server), HttpServer.HttpServer).address;
       if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
       const base = `http://127.0.0.1:${address.port}`;

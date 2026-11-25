@@ -7,7 +7,7 @@
  * Nothing else starts a purge: retention is still open (docs/DECISIONS.md).
  */
 import { HttpApiBuilder } from '@effect/platform';
-import { SqlClient, SqlSchema } from '@effect/sql';
+import { SqlClient, SqlSchema, type Statement } from '@effect/sql';
 import { type AccessScope, CurrentAccess, Forbidden, JobFailure, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Schema } from 'effect';
@@ -18,7 +18,8 @@ import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { closeWorkspaceSockets } from './media/open-sockets.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { PipedreamClient } from './providers/pipedream.ts';
-import { bumpPermissionRevision, write } from './store.ts';
+import { now, addSeconds, chunked } from './sql-dialect.ts';
+import { bumpPermissionRevision } from './store.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -75,12 +76,11 @@ export const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const [row] = yield* sql<{ name: string; deleted_at: unknown }>`SELECT name, deleted_at FROM workspaces WHERE id = ${access.workspace_id} FOR UPDATE`;
-          // Compared in code: the column collation ignores case and accents.
+          const [row] = yield* sql<{ name: string; deleted_at: unknown }>`SELECT name, deleted_at FROM workspaces WHERE id = ${access.workspace_id}`;
+          // Compared in code, byte for byte.
           if (row!.name !== confirm_name) return yield* new Forbidden({ message: 'Type the workspace name exactly to confirm deletion' });
           if (row!.deleted_at !== null) return;
-          yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6), purge_after = UTC_TIMESTAMP(6) + INTERVAL ${days} DAY WHERE id = ${access.workspace_id}`;
-          yield* bumpPermissionRevision(access.workspace_id);
+          // First: enqueueJob reads before it writes, and a read after a buffered write fails.
           // No requester: the worker would re-check it against the deleted workspace and refuse the job.
           yield* enqueueJob({
             workspace_id: access.workspace_id,
@@ -91,6 +91,8 @@ export const deleteWorkspace = (access: AccessScope, confirm_name: string) =>
             delay_ms: days * DAY_MS,
             max_attempts: engineeringDefaults.jobs.purgeMaxAttempts,
           });
+          yield* sql`UPDATE workspaces SET deleted_at = ${now}, purge_after = ${addSeconds(now, days * DAY_MS / 1000)} WHERE id = ${access.workspace_id}`;
+          yield* bumpPermissionRevision(access.workspace_id);
         }),
       )
       .pipe(Effect.catchTag('SqlError', Effect.die));
@@ -110,15 +112,15 @@ const restoreWorkspace = (access: AccessScope) =>
       .withTransaction(
         Effect.gen(function* () {
           const [due] = yield* sql`SELECT id FROM workspaces
-            WHERE id = ${access.workspace_id} AND deleted_at IS NOT NULL AND purge_after > UTC_TIMESTAMP(6) FOR UPDATE`;
+            WHERE id = ${access.workspace_id} AND deleted_at IS NOT NULL AND purge_after > ${now}`;
           if (due === undefined) return;
-          // IGNORE: a newer active job with the same work key already covers the work.
-          yield* sql`UPDATE IGNORE jobs SET status = 'pending', attempts = 0, available_at = UTC_TIMESTAMP(6), last_error = NULL, updated_at = UTC_TIMESTAMP(6)
-            WHERE workspace_id = ${access.workspace_id} AND status = 'failed' AND last_error->>'$.message' = ${REQUESTER_REFUSED}
+          // OR IGNORE: a newer active job with the same work key already covers the work.
+          yield* sql`UPDATE OR IGNORE jobs SET status = 'pending', attempts = 0, available_at = ${now}, last_error = NULL, updated_at = ${now}
+            WHERE workspace_id = ${access.workspace_id} AND status = 'failed' AND last_error ->> '$.message' = ${REQUESTER_REFUSED}
               AND updated_at >= (SELECT deleted_at FROM workspaces WHERE id = ${access.workspace_id})`;
           yield* sql`UPDATE workspaces SET deleted_at = NULL, purge_after = NULL WHERE id = ${access.workspace_id}`;
           yield* bumpPermissionRevision(access.workspace_id);
-          yield* sql`UPDATE jobs SET status = 'cancelled', updated_at = UTC_TIMESTAMP(6)
+          yield* sql`UPDATE jobs SET status = 'cancelled', updated_at = ${now}
             WHERE workspace_id = ${access.workspace_id} AND kind = 'workspace.purge' AND status = 'pending'`;
         }),
       )
@@ -197,39 +199,58 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | Pipe
     const [finished] = yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: Schema.Struct({ result: DbJson(PurgeReceipt) }),
-      execute: () => sql`SELECT result FROM jobs WHERE id = ${job.id} AND result->>'$.purged' = 'true'`,
+      execute: () => sql`SELECT result FROM jobs WHERE id = ${job.id} AND result ->> '$.purged' = 'true'`,
     })(undefined).pipe(Effect.orDie);
     if (finished !== undefined) return { status: 'succeeded' as const, result: finished.result };
-    // Locking read: a restore committing at the deadline is seen here, and none can start after it.
-    const due = yield* sql.withTransaction(sql`SELECT id FROM workspaces
-      WHERE id = ${workspace_id} AND deleted_at IS NOT NULL AND purge_after <= UTC_TIMESTAMP(6) FOR UPDATE`);
-    if (due.length === 0) return { status: 'succeeded' as const, result: { purged: false, reason: 'Workspace is not deleted or not yet due' } };
+    // A restore can no longer start once the deadline passed; one that started before it is caught again inside the final transaction.
+    const due = sql`SELECT id FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NOT NULL AND purge_after <= ${now}`;
+    const notDue = { status: 'succeeded' as const, result: { purged: false, reason: 'Workspace is not deleted or not yet due' } };
+    if ((yield* due).length === 0) return notDue;
 
     const disconnected = yield* disconnectAccounts(workspace_id);
     const prefixes = [`workspaces/${workspace_id}/`, `meetings/${workspace_id}/`];
     yield* Effect.forEach(prefixes, deletePrefix, { discard: true });
 
+    // Reads first (a write in a transaction reports no row count, and a read after one fails), then the deletes.
     const receipt = yield* sql.withTransaction(
       Effect.gen(function* () {
-        const members = yield* sql<{ principal_id: string }>`SELECT principal_id FROM workspace_members WHERE workspace_id = ${workspace_id}`;
+        if ((yield* due).length === 0) return undefined;
+        const byWorkspace = sql`workspace_id = ${workspace_id}`;
+        // Children before the rows they reference; the embedded issuer's organization of this workspace has its id, and its tables hold no `workspace_id`.
+        const targets: ReadonlyArray<readonly [string, Statement.Fragment]> = [
+          ...PURGED_TABLES.map(table => [table, byWorkspace] as const),
+          ['jobs', sql`workspace_id = ${workspace_id} AND id <> ${job.id} AND kind <> 'workos.sync'`],
+          ['workspace_members', byWorkspace],
+          ['auth_invitation', sql`organizationId = ${workspace_id}`],
+          ['auth_member', sql`organizationId = ${workspace_id}`],
+          ['auth_organization', sql`id = ${workspace_id}`],
+        ];
         const rows_deleted: Record<string, number> = {};
-        const purge = (table: string, extra = sql`TRUE`) =>
-          Effect.map(write(sql`DELETE FROM ${sql(table)} WHERE workspace_id = ${workspace_id} AND ${extra}`), result => void (rows_deleted[table] = result.affectedRows));
+        const counted = yield* sql<{ t: string; n: number }>`${sql.join(' UNION ALL ', false)(
+          targets.map(([table, where]) => sql`SELECT ${table} AS t, COUNT(*) AS n FROM ${sql(table)} WHERE ${where}`),
+        )}`;
+        for (const { t, n } of counted) rows_deleted[t] = n;
+        // Principals left with no membership in any other workspace (agents, devices, people only here) go with it.
+        const orphans = (yield* sql<{ id: string }>`SELECT m.principal_id AS id FROM workspace_members m WHERE m.workspace_id = ${workspace_id}
+          AND NOT EXISTS (SELECT 1 FROM workspace_members o WHERE o.principal_id = m.principal_id AND o.workspace_id <> ${workspace_id})`).map(row => row.id);
+        const orphanChunks = chunked(orphans);
+        if (rows_deleted['workspace_members']! > 0) {
+          let identities = 0;
+          for (const ids of orphanChunks) {
+            const [row] = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM principal_identities WHERE principal_id IN ${sql.in(ids)}`;
+            identities += row!.n;
+          }
+          rows_deleted['principal_identities'] = identities;
+          rows_deleted['principals'] = orphans.length;
+        }
+
         // Revisions supersede earlier revisions of the same table; unlink them so one DELETE can remove all.
         yield* sql`UPDATE context_items SET supersedes_id = NULL, supersedes_revision = NULL WHERE workspace_id = ${workspace_id}`;
-        for (const table of PURGED_TABLES) yield* purge(table);
-        yield* purge('jobs', sql`id <> ${job.id} AND kind <> 'workos.sync'`);
-        yield* purge('workspace_members');
-        // The embedded issuer's organization of this workspace has its id; its tables hold no `workspace_id`.
-        for (const [table, column] of [['auth_invitation', 'organizationId'], ['auth_member', 'organizationId'], ['auth_organization', 'id']] as const) {
-          rows_deleted[table] = (yield* write(sql`DELETE FROM ${sql(table)} WHERE ${sql(column)} = ${workspace_id}`)).affectedRows;
-        }
+        for (const [table, where] of targets) yield* sql`DELETE FROM ${sql(table)} WHERE ${where}`;
         yield* sql`UPDATE auth_session SET activeOrganizationId = NULL WHERE activeOrganizationId = ${workspace_id}`;
-        // Principals left with no membership in any workspace (agents, devices, people only here) go with it.
-        if (members.length > 0) {
-          const orphaned = sql`IN ${sql.in(members.map(member => member.principal_id))} AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.principal_id = x.id)`;
-          rows_deleted['principal_identities'] = (yield* write(sql`DELETE i FROM principal_identities i JOIN principals x ON x.id = i.principal_id WHERE x.id ${orphaned}`)).affectedRows;
-          rows_deleted['principals'] = (yield* write(sql`DELETE x FROM principals x WHERE x.id ${orphaned}`)).affectedRows;
+        for (const ids of orphanChunks) {
+          yield* sql`DELETE FROM principal_identities WHERE principal_id IN ${sql.in(ids)}`;
+          yield* sql`DELETE FROM principals WHERE id IN ${sql.in(ids)}`;
         }
         yield* sql`UPDATE workspaces SET name = '' WHERE id = ${workspace_id}`;
         const receipt: PurgeReceipt = { purged: true, deleted_by, prefixes, ...disconnected, rows_deleted };
@@ -237,5 +258,6 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | Pipe
         return receipt;
       }),
     );
+    if (receipt === undefined) return notDue;
     return { status: 'succeeded' as const, result: receipt };
   }).pipe(Effect.catchTag('SqlError', error => new JobFailure({ message: `Database error: ${error.message}`, retryable: true })));

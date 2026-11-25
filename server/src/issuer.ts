@@ -1,11 +1,13 @@
 /**
  * Embedded OIDC issuer and MCP authorization server for self-hosting (docs/DECISIONS.md, sign-in):
- * Better Auth at `/idp` when `SANCTUM_EMBEDDED_ISSUER=better-auth`. It keeps its own small mysql2
- * pool and the `auth_*` tables of migrations 011 and 013; Sanctum never runs Better Auth's migrator. Login
+ * Better Auth at `/idp` when `SANCTUM_EMBEDDED_ISSUER=better-auth`. It keeps its own `node:sqlite`
+ * connection to the same `file:` database and the `auth_*` tables of `migrations-d1/0002`; Sanctum never runs Better Auth's migrator.
+ * It does not run on D1 (production uses WorkOS AuthKit), and refuses a gateway URL at startup. Login
  * ID tokens and MCP access tokens carry the same `iss` and `sub`, so one `principal_identities`
  * row serves both, and mcp.ts verifies these tokens like any other authorization server's.
  * Its organizations are the teams of Sanctum workspaces (issuer-orgs.ts).
  */
+import { DatabaseSync } from 'node:sqlite';
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { type ClientMetadataResourceFetch, oauthProvider } from '@better-auth/oauth-provider';
@@ -17,9 +19,8 @@ import { type BetterAuthPlugin, betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from '#better-auth-api';
 import { jwt, organization } from 'better-auth/plugins';
 import { Config, Effect, Either, Option, Redacted } from 'effect';
-import { createPool } from 'mysql2/promise';
 import { serverConfig } from './config.ts';
-import type { MysqlOptions } from './db.ts';
+import type { DbOptions } from './db.ts';
 import { applyMember, requireSeat, workspaceOrganization } from './issuer-orgs.ts';
 import { MCP_SCOPES } from './mcp.ts';
 
@@ -127,25 +128,30 @@ const invitationsOnlyForManagers = {
 } satisfies BetterAuthPlugin;
 
 /**
+ * The issuer's own connection to the API's database file. The gateway URL and `:memory:` are refused:
+ * D1 has no connection to hand Better Auth, and a private memory database would hold none of the tables.
+ */
+const openIssuerDatabase = ({ url }: DbOptions) => {
+  if (url === ':memory:' || /^https?:\/\//.test(url)) {
+    throw new Error(`The embedded issuer needs a file: SANCTUM_DB_URL, not ${url} (it does not run on D1; use WorkOS AuthKit there)`);
+  }
+  // Same path rule as sqliteBackend: a `file:` URI with a query is opened as a URI, anything else as a path.
+  const database = new DatabaseSync(url.includes('?') ? url : url.replace(/^file:/, ''));
+  database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL');
+  return database;
+};
+
+/**
  * Shared by the server, `issuer:client` and the schema test so all three see the same tables. `fetchMetadata` is the SSRF-safe CIMD transport; tests substitute it.
  * `sql` is the API's database client, which organization changes need for Sanctum's side; without it they fail.
  */
 export const createIssuer = (
   settings: IssuerSettings,
-  mysql: MysqlOptions,
+  db: DbOptions,
   fetchMetadata: ClientMetadataResourceFetch = fetchClientMetadataResource,
   sql?: SqlClient.SqlClient,
 ) => {
-  const pool = createPool({
-    host: mysql.host,
-    port: mysql.port,
-    database: mysql.database,
-    user: mysql.username,
-    password: Redacted.value(mysql.password),
-    timezone: 'Z',
-    connectionLimit: 2,
-    ...(mysql.caCert === undefined ? {} : { ssl: { ca: mysql.caCert, verifyIdentity: true } }),
-  });
+  const database = openIssuerDatabase(db);
   const resource = settings.resource.href;
   const issuer = settings.issuer.href;
   /** Makes the hook of one organization change that runs Sanctum's side: a refusal answers 403 with its message and stops the change; a database error answers 500. */
@@ -191,7 +197,7 @@ export const createIssuer = (
     baseURL: settings.issuer.origin,
     basePath: ISSUER_PATH,
     secret: Redacted.value(settings.secret),
-    database: pool,
+    database,
     emailAndPassword: { enabled: true },
     user: { modelName: 'auth_user' },
     session: { modelName: 'auth_session' },
@@ -231,19 +237,19 @@ export const createIssuer = (
       }),
     ],
   });
-  return { auth, pool };
+  return { auth, database };
 };
 
-/** Mounts `/idp/*` and its RFC 8414 alias when configured; the pool closes with the server scope. */
-export const embeddedIssuerLive = (mysql: MysqlOptions) =>
+/** Mounts `/idp/*` and its RFC 8414 alias when configured; the connection closes with the server scope. */
+export const embeddedIssuerLive = (db: DbOptions) =>
   HttpApiBuilder.Router.use(router =>
     Effect.gen(function* () {
       const settings = yield* issuerSettings;
       if (Option.isNone(settings)) return;
       const sql = yield* SqlClient.SqlClient;
       const { auth } = yield* Effect.acquireRelease(
-        Effect.sync(() => createIssuer(settings.value, mysql, undefined, sql)),
-        ({ pool }) => Effect.promise(() => pool.end()),
+        Effect.sync(() => createIssuer(settings.value, db, undefined, sql)),
+        ({ database }) => Effect.sync(() => database.close()),
       );
       const app = HttpApp.fromWebHandler(auth.handler);
       yield* router.all(`${ISSUER_PATH}/*`, app);
@@ -256,9 +262,9 @@ export const embeddedIssuerLive = (mysql: MysqlOptions) =>
  * returns its id. Better Auth's admin create endpoint needs a signed-in user, so this registers
  * through the validated DCR path and then sets the one restricted flag, `skipConsent`, on the stored row.
  */
-export const registerSanctumClient = (settings: IssuerSettings, mysql: MysqlOptions, redirect: URL) =>
+export const registerSanctumClient = (settings: IssuerSettings, db: DbOptions, redirect: URL) =>
   Effect.acquireUseRelease(
-    Effect.sync(() => createIssuer(settings, mysql)),
+    Effect.sync(() => createIssuer(settings, db)),
     ({ auth }) =>
       Effect.promise(async () => {
         // Present at runtime; the typing workaround in createIssuer makes every endpoint optional.
@@ -269,7 +275,7 @@ export const registerSanctumClient = (settings: IssuerSettings, mysql: MysqlOpti
         await adapter.update({ model: 'oauthClient', where: [{ field: 'clientId', value: client_id }], update: { skipConsent: true } });
         return client_id;
       }),
-    ({ pool }) => Effect.promise(() => pool.end()),
+    ({ database }) => Effect.sync(() => database.close()),
   );
 
 /** `npm run issuer:client -w server`: prints the id of a new client for `SANCTUM_OIDC_CLIENT_ID`; redirect is `SANCTUM_OIDC_REDIRECT_URI`. */
@@ -278,7 +284,7 @@ if (import.meta.main) {
     const settings = yield* issuerSettings;
     if (Option.isNone(settings)) return yield* Effect.dieMessage('Set SANCTUM_EMBEDDED_ISSUER=better-auth first');
     const redirect = yield* Config.url('SANCTUM_OIDC_REDIRECT_URI');
-    const { mysql } = yield* serverConfig;
-    console.log(yield* registerSanctumClient(settings.value, mysql, redirect));
+    const { db } = yield* serverConfig;
+    console.log(yield* registerSanctumClient(settings.value, db, redirect));
   }).pipe(NodeRuntime.runMain);
 }
