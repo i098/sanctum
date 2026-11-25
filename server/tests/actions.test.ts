@@ -8,6 +8,7 @@ import { createActionGrant, getActionReceipt, listenerFeed, listMeetingActions, 
 import { engineeringDefaults } from '../src/config.ts';
 import { executeAction } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { withDatabase } from './support/database.ts';
 import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
@@ -138,7 +139,7 @@ describe('action gateway', () => {
         const sql = yield* SqlClient.SqlClient;
         const listener_id = randomUUID() as ListenerId;
         yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
-          VALUES (${listener_id}, ${owner.workspace_id}, ${owner.principal.id}, 'Room', 'room', '{}', UTC_TIMESTAMP(6))`;
+          VALUES (${listener_id}, ${owner.workspace_id}, ${owner.principal.id}, 'Room', 'room', '{}', ${now})`;
         yield* sql`UPDATE meetings SET listener_id = ${listener_id} WHERE id = ${meeting_id}`;
         const feed = yield* listenerFeed(owner, listener_id);
         expect(feed.meeting_id).toBe(meeting_id);
@@ -169,7 +170,7 @@ describe('action gateway', () => {
         expect((yield* requestAction(member, request({ meeting_id: meetingA }))).state).toBe('queued');
         expect(scoped.meeting_id).toBe(meetingA);
 
-        yield* sql`UPDATE action_grants SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${grant.id}`;
+        yield* sql`UPDATE action_grants SET expires_at = ${addSeconds(now, -1)} WHERE id = ${grant.id}`;
         expect(yield* refused(agent, request({ idempotency_key: 'expired' }))).toBe('Forbidden');
         yield* sql`UPDATE action_grants SET expires_at = NULL WHERE id = ${grant.id}`;
         expect((yield* requestAction(agent, request({ idempotency_key: 'valid-again' }))).state).toBe('queued');

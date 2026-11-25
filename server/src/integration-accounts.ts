@@ -13,6 +13,7 @@ import { Effect, Layer, Schema } from 'effect';
 import { requireHuman } from './actions.ts';
 import { PipedreamLive } from './integrations.ts';
 import { type IntegrationFailure, PipedreamClient } from './providers/pipedream.ts';
+import { now } from './sql-dialect.ts';
 
 /** The Pipedream external user of one person in one workspace; an operator finds a workspace's accounts by this prefix. */
 const externalUserId = (access: AccessScope) => `${access.workspace_id}.${access.principal.id}`;
@@ -40,7 +41,7 @@ const listAccounts = (access: AccessScope) =>
       execute: () => sql`SELECT g.id, g.account_id, g.action_key, COALESCE(p.display_name, p.email) AS grantee_name
         FROM action_grants g JOIN principals p ON p.id = g.grantee_principal_id
         WHERE g.workspace_id = ${access.workspace_id} AND g.owner_principal_id = ${access.principal.id}
-          AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6))
+          AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > ${now})
         ORDER BY g.created_at, g.id`,
     })(undefined);
     return {
@@ -81,12 +82,13 @@ const syncAccounts = (access: AccessScope) =>
       for (const account of listed) {
         yield* sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
           VALUES (${randomUUID()}, ${access.workspace_id}, ${access.principal.id}, ${external}, ${account.id}, ${account.app},
-            ${account.dead ? 'disconnected' : 'active'}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) AS incoming
-          ON DUPLICATE KEY UPDATE
-            updated_at = IF(integration_accounts.status = incoming.status, integration_accounts.updated_at, UTC_TIMESTAMP(6)),
-            status = incoming.status`;
+            ${account.dead ? 'disconnected' : 'active'}, ${now}, ${now})
+          ON CONFLICT (workspace_id, provider_account_id) DO UPDATE SET
+            updated_at = iif(integration_accounts.status = excluded.status, integration_accounts.updated_at, ${now}),
+            status = excluded.status`;
       }
-      yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = UTC_TIMESTAMP(6)
+      // shortcut: one bound parameter per listed account, so more than ~95 accounts overflow D1's 100-parameter limit; chunk the list if a person ever connects that many.
+      yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = ${now}
         WHERE workspace_id = ${access.workspace_id} AND external_user_id = ${external} AND status = 'active'
           ${listed.length === 0 ? sql`` : sql`AND provider_account_id NOT IN ${sql.in(listed.map(account => account.id))}`}`;
     }
@@ -103,7 +105,7 @@ const disconnectAccount = (access: AccessScope, account_id: IntegrationAccountId
       WHERE workspace_id = ${access.workspace_id} AND id = ${account_id} AND owner_principal_id = ${access.principal.id} AND status = 'active'`;
     if (!account) return yield* new NotFound({ message: 'Connected account not found' });
     yield* client.deleteAccount(account.provider_account_id).pipe(Effect.mapError(unavailable));
-    yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${access.workspace_id} AND id = ${account_id}`;
+    yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = ${now} WHERE workspace_id = ${access.workspace_id} AND id = ${account_id}`;
     return yield* listAccounts(access);
   });
 
