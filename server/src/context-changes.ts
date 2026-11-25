@@ -30,6 +30,7 @@ import {
 import { Effect, Schema } from 'effect';
 import { listVisibleMeetingIds, requireScope } from './auth.ts';
 import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
+import { diffMicros } from './sql-dialect.ts';
 
 /** Runs `statement` and decodes its rows; an undecodable row is schema drift (a defect), SQL errors stay typed. */
 export const decodeRows = <A, I>(schema: Schema.Schema<A, I>, statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
@@ -66,14 +67,15 @@ export type SegmentRow = typeof SegmentColumns.Type;
 export const segmentRows = (workspace_id: string, filter: Statement.Fragment, limit = 1000) =>
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
-  const at = (sample: string) => sql.literal(`DATE_ADD(e.captured_at, INTERVAL (CAST(${sample} AS SIGNED) - CAST(e.sample_start AS SIGNED)) * 1000000 DIV e.sample_rate MICROSECOND)`);
+  // `* 1.0` keeps the division real: SQLite would truncate integer / integer.
+  const at = (sample: string) => sql.literal(`strftime('%Y-%m-%d %H:%M:%f000', unixepoch(e.captured_at, 'subsec') + (${sample} - e.sample_start) * 1.0 / e.sample_rate, 'unixepoch')`);
   return yield* decodeRows(
    SegmentColumns,
    sql`SELECT s.id, m.id AS meeting_id, s.epoch_id, s.track, s.sample_start, s.sample_end, s.text, s.status, s.revision,
           s.origin, s.provider, s.model, s.provider_connection_id, s.speaker_label, s.speaker_track_id, s.confidence, s.created_at,
           ${at('s.sample_start')} AS event_at,
-          GREATEST(0, TIMESTAMPDIFF(MICROSECOND, m.started_at, ${at('s.sample_start')}) DIV 1000) AS start_ms,
-          GREATEST(0, TIMESTAMPDIFF(MICROSECOND, m.started_at, ${at('s.sample_end')}) DIV 1000) AS end_ms
+          max(0, ${diffMicros('m.started_at', at('s.sample_start'))} / 1000) AS start_ms,
+          max(0, ${diffMicros('m.started_at', at('s.sample_end'))} / 1000) AS end_ms
         FROM transcript_segments s
         JOIN capture_epochs e ON e.workspace_id = s.workspace_id AND e.id = s.epoch_id
         JOIN meeting_ranges r ON r.workspace_id = s.workspace_id AND r.epoch_id = s.epoch_id AND r.track = s.track
