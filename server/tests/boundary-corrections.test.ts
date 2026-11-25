@@ -7,6 +7,7 @@ import { mergeMeetings, splitMeeting } from '../src/meeting-corrections.ts';
 import { closeMeeting, getMeeting, listMeetings, onFinalSegments } from '../src/meetings.ts';
 import { hear, jobsOf, meetingsOf, RATE, rangesOf, seedEpoch, seedListener, speak } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
+import { now } from '../src/sql-dialect.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
 const MIN = 60;
@@ -33,8 +34,8 @@ describe('split and merge', () => {
         const { owner, listener, epoch, second } = yield* twoMeetings;
         const before = yield* rangesOf(second);
         const { earlier, later } = yield* splitMeeting(owner, second, { expected_revision: 1, at: { epoch_id: epoch, sample: (130 + 6 * MIN) * RATE } });
-        expect(earlier).toMatchObject({ id: second, boundary_revision: 2, state: 'closing', ended_at: '2026-09-28T16:08:10Z' });
-        expect(later).toMatchObject({ boundary_revision: 1, state: 'active', started_at: '2026-09-28T16:08:10Z', ended_at: null });
+        expect(earlier).toMatchObject({ id: second, boundary_revision: 2, state: 'closing', ended_at: '2026-09-28T16:08:10.000000Z' });
+        expect(later).toMatchObject({ boundary_revision: 1, state: 'active', started_at: '2026-09-28T16:08:10.000000Z', ended_at: null });
         const [a, b] = [yield* rangesOf(earlier.id), yield* rangesOf(later.id)];
         expect(a).toEqual([{ epoch_id: epoch, sample_start: (100 + 6 * MIN) * RATE, sample_end: (130 + 6 * MIN) * RATE }]);
         expect(b).toEqual([{ epoch_id: epoch, sample_start: (130 + 6 * MIN) * RATE, sample_end: (160 + 6 * MIN) * RATE }]);
@@ -85,7 +86,7 @@ describe('split and merge', () => {
         expect(yield* rangesOf(earlier.id)).toEqual(before);
         expect((yield* rangesOf(later.id)).at(-1)!.sample_end).toBe((175 + 6 * MIN) * RATE);
         expect(yield* meetingsOf(listener.workspace_id)).toHaveLength(3);
-        expect(yield* getMeeting(owner, earlier.id)).toMatchObject({ ended_at: '2026-09-28T16:08:10Z' });
+        expect(yield* getMeeting(owner, earlier.id)).toMatchObject({ ended_at: '2026-09-28T16:08:10.000000Z' });
       }),
       { migrated: true },
     ),
@@ -135,11 +136,11 @@ describe('split and merge', () => {
         const action = randomUUID();
         yield* sql`INSERT INTO actions (id, workspace_id, meeting_id, requested_by, action_key, idempotency_key, args, args_sha256, state, provider_receipt, attempts, created_at, updated_at, version)
           VALUES (${action}, ${listener.workspace_id}, ${second}, ${owner.principal.id}, 'gmail-send', 'send-1', '{}', ${Buffer.alloc(32)}, 'succeeded', '{"message_id":"m-1"}', 1,
-            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), '0.1.0')`;
+            ${now}, ${now}, '0.1.0')`;
         const before = totalSamples(yield* rangesOf(first)) + totalSamples(yield* rangesOf(second));
         yield* closeMeeting(owner, second);
         const merged = yield* mergeMeetings(owner, { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } });
-        expect(merged).toMatchObject({ id: first, boundary_revision: 2, state: 'closing', started_at: '2026-09-28T16:00:00Z' });
+        expect(merged).toMatchObject({ id: first, boundary_revision: 2, state: 'closing', started_at: '2026-09-28T16:00:00.000000Z' });
         const ranges = yield* rangesOf(first);
         expect(totalSamples(ranges)).toBe(before);
         expect(ranges).toHaveLength(2);
@@ -147,9 +148,9 @@ describe('split and merge', () => {
         expect(yield* getMeeting(owner, second)).toMatchObject({ state: 'closed', boundary_revision: 2 });
         expect((yield* listMeetings(owner, {})).meetings.map(meeting => meeting.id)).toEqual([first]);
         const [receipt] = yield* sql<{ meeting_id: string; state: string; attempts: number; provider_receipt: unknown }>`SELECT meeting_id, state, attempts, provider_receipt FROM actions WHERE id = ${action}`;
-        expect(receipt).toEqual({ meeting_id: second, state: 'succeeded', attempts: 1, provider_receipt: { message_id: 'm-1' } });
-        const [audit] = yield* sql<{ decision: { linked_actions: Array<string> } }>`SELECT decision FROM boundary_events WHERE meeting_id = ${first} AND operation = 'merge'`;
-        expect(audit!.decision.linked_actions).toEqual([action]);
+        expect(receipt).toEqual({ meeting_id: second, state: 'succeeded', attempts: 1, provider_receipt: '{"message_id":"m-1"}' });
+        const [audit] = yield* sql<{ decision: string }>`SELECT decision FROM boundary_events WHERE meeting_id = ${first} AND operation = 'merge'`;
+        expect(JSON.parse(audit!.decision).linked_actions).toEqual([action]);
         expect((yield* jobsOf(listener.workspace_id)).filter(job => job.kind.startsWith('action'))).toEqual([]);
         // A split back out of the merge restores the original ownership without touching the receipt.
         yield* splitMeeting(owner, first, { expected_revision: 2, at: { epoch_id: epoch, sample: (100 + 6 * MIN) * RATE } });
@@ -166,7 +167,7 @@ describe('split and merge', () => {
         const { owner, member, first, second } = yield* twoMeetings;
         const grant = (meeting: MeetingId, access: 'read' | 'write') =>
           sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-            VALUES (${owner.workspace_id}, ${meeting}, ${member.principal.id}, ${access}, ${owner.principal.id}, UTC_TIMESTAMP(6))`;
+            VALUES (${owner.workspace_id}, ${meeting}, ${member.principal.id}, ${access}, ${owner.principal.id}, ${now})`;
         yield* grant(first, 'write');
         const input = { target: { meeting_id: first, expected_revision: 1 }, source: { meeting_id: second, expected_revision: 1 } };
         expect(yield* Effect.flip(mergeMeetings(member, input))).toMatchObject({ _tag: 'NotFound' });
