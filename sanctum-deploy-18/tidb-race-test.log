@@ -1,0 +1,24 @@
+
+ RUN  v3.2.7 /sdc-disk/host-data/administrator/.treehouse/sanctum-703900/1/sanctum/server
+
+ ✓ |server| tests/actions.test.ts > action gateway > pauses when another execution fills the action budget after the snapshot 58517ms
+ ↓ |server| tests/actions.test.ts > action gateway > executes a granted action once with a truthful receipt and a stable provider key
+ ↓ |server| tests/actions.test.ts > action gateway > keeps an over-budget provider result as an artifact the receipt references
+ ↓ |server| tests/actions.test.ts > action gateway > deduplicates repeated requests and rejects a reused key with different content
+ ↓ |server| tests/actions.test.ts > action gateway > lists one meeting's receipts oldest first, only to their requester and admins, in offset pages
+ ↓ |server| tests/actions.test.ts > action gateway > refuses requests no active grant covers
+ ↓ |server| tests/actions.test.ts > action gateway > cancels a queued action whose grant is revoked before the worker submits it
+ ↓ |server| tests/actions.test.ts > action gateway > records a timeout after upstream success as unknown, never replays it, and lets a person resolve it
+ ↓ |server| tests/actions.test.ts > action gateway > records unknown when the provider does not answer in time, then settles from the late answer
+ ↓ |server| tests/actions.test.ts > action gateway > records unknown when the job ceiling cuts off a submission and never resubmits it
+ ↓ |server| tests/actions.test.ts > action gateway > marks a definite provider rejection failed without retrying
+ ↓ |server| tests/actions.test.ts > action gateway > lets only the human account owner grant, and hides receipts across principals and workspaces
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 11 skipped (12)
+   Start at  04:38:06
+   Duration  62.36s (transform 717ms, setup 0ms, collect 2.50s, tests 58.52s, environment 0ms, prepare 130ms)
+
+
+
+exit 0

@@ -1,0 +1,96 @@
+ules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                 7.95 kB │ gzip: 2.68 kB
+dist/assets/index-BzQZo4hp.css  6.02 kB │ gzip: 1.93 kB
+dist/assets/index-BnoKP_uA.js   4.94 kB │ gzip: 2.43 kB
+✓ built in 189ms
+
+> build:kiosk
+> vite build kiosk
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 30 modules transformed.
+rendering chunks...
+computing gzip size...
+../dist/kiosk/index.html                                              0.44 kB │ gzip:  0.28 kB
+../dist/kiosk/assets/inter-vietnamese-wght-normal-CBcvBZtf.woff2     10.25 kB
+../dist/kiosk/assets/inter-greek-ext-wght-normal-DlzME5K_.woff2      11.23 kB
+../dist/kiosk/assets/inter-cyrillic-wght-normal-DqGufNeO.woff2       18.75 kB
+../dist/kiosk/assets/inter-greek-wght-normal-CkhJZR-_.woff2          19.00 kB
+../dist/kiosk/assets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2   25.96 kB
+../dist/kiosk/assets/inter-latin-wght-normal-Dx4kXJAl.woff2          48.26 kB
+../dist/kiosk/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2      85.07 kB
+../dist/kiosk/assets/index-DqXhqHta.css                               3.25 kB │ gzip:  1.12 kB
+../dist/kiosk/assets/index-e_xVNo6f.js                              229.49 kB │ gzip: 72.39 kB
+✓ built in 1.64s
+
+> build
+> tsc -p tsconfig.build.json
+
+ ---> Removed intermediate container 6c87c6c6a1f1
+ ---> a43e01f92151
+Step 14/30 : FROM mirror.gcr.io/library/node:24.19.0-bookworm-slim
+ ---> a9f5f7c91a43
+Step 15/30 : ENV NODE_ENV=production
+ ---> Running in adbf75b1c8cf
+ ---> Removed intermediate container adbf75b1c8cf
+ ---> 06392aa5df27
+Step 16/30 : WORKDIR /app
+ ---> Running in a1f2dd4b23ae
+ ---> Removed intermediate container a1f2dd4b23ae
+ ---> 4bba8f134b64
+Step 17/30 : COPY package.json package-lock.json ./
+ ---> 0034450e5b32
+Step 18/30 : COPY packages/contracts/package.json packages/contracts/
+ ---> 6275eafe673e
+Step 19/30 : COPY server/package.json server/
+ ---> 2b83d0da7ad4
+Step 20/30 : COPY web-app/package.json web-app/
+ ---> 3909cc75dcd0
+Step 21/30 : COPY sdk/typescript/package.json sdk/typescript/
+ ---> ae41ed989d2d
+Step 22/30 : RUN npm ci --omit=dev --workspace server --no-audit --no-fund && npm cache clean --force
+ ---> Running in 17c22fd43599
+
+added 224 packages in 8s
+[91mnpm warn allow-scripts 3 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   @parcel/watcher@2.6.0 (install: node scripts/build-from-source.js)
+npm warn allow-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn allow-scripts   msgpackr-extract@3.0.4 (install: node-gyp-build-optional-packages)
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+[0m[91mnpm notice
+npm notice New major version of npm available! 11.17.0 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice
+[0m[91mnpm warn using --force Recommended protections disabled.
+[0m ---> Removed intermediate container 17c22fd43599
+ ---> dcf56a726f01
+Step 23/30 : COPY packages/contracts/src packages/contracts/src
+ ---> d111b990785a
+Step 24/30 : COPY sdk/typescript/src sdk/typescript/src
+ ---> aa0b05ac4f41
+Step 25/30 : COPY server/migrations server/migrations
+ ---> 0e203b0ff7f8
+Step 26/30 : COPY --from=build /app/server/dist server/dist
+ ---> 43461c5d35d8
+Step 27/30 : COPY --from=build /app/web-app/dist web-app/dist
+ ---> 71e76f3c2181
+Step 28/30 : USER node
+ ---> Running in 4378e7f59e3d
+ ---> Removed intermediate container 4378e7f59e3d
+ ---> 8e9c79a1055d
+Step 29/30 : EXPOSE 7102
+ ---> Running in 2818ea006ae2
+ ---> Removed intermediate container 2818ea006ae2
+ ---> 337a5918edf1
+Step 30/30 : CMD ["node", "server/dist/main.js"]
+ ---> Running in 765dbb974161
+ ---> Removed intermediate container 765dbb974161
+ ---> bba4d2642af8
+Successfully built bba4d2642af8
+Successfully tagged sanctum-deploy18:00890dc
+BUILD_OK
