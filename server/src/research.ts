@@ -49,7 +49,7 @@ class AllowanceSpent extends Data.TaggedError('AllowanceSpent')<{ readonly messa
 
 /**
  * Claims one of today's (UTC) paid calls when neither the workspace's nor the install-wide allowance
- * is spent; the locking read over today's calls serializes reservations from every workspace.
+ * is spent; the commit guard reruns a reservation that raced another, from any workspace.
  */
 const reservePaidCall = (job: ResearchJob, call_id: string, model: string) =>
   Effect.gen(function* () {
