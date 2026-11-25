@@ -10,6 +10,7 @@ import { scopedCacheKey } from '../src/cache.ts';
 import { claimJob, runJob } from '../src/job-runner.ts';
 import { enqueueJob } from '../src/jobs.ts';
 import { grantMeetingAccess } from '../src/store.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { serveApiWithDb } from './http-server.ts';
 import { withDatabase } from './support/database.ts';
 import { fixtureAccess, seedWorkspace } from './support/fixtures.ts';
@@ -41,7 +42,7 @@ const meeting = (workspace_id: WorkspaceId, visibility: 'restricted' | 'workspac
     const sql = yield* SqlClient.SqlClient;
     const id = randomUUID() as MeetingId;
     yield* sql`INSERT INTO meetings (id, workspace_id, state, timezone, started_at, visibility, processing, created_at, updated_at)
-      VALUES (${id}, ${workspace_id}, 'active', 'UTC', UTC_TIMESTAMP(6), ${visibility}, '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${workspace_id}, 'active', 'UTC', ${now}, ${visibility}, '{}', ${now}, ${now})`;
     return id;
   });
 
@@ -131,12 +132,12 @@ describe('authorization boundary', () => {
         expect(yield* tagOf(openSession({ workspace_id: owner!.workspace_id, principal_id: expired.agent.id }))).toBe('Forbidden');
 
         yield* openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id });
-        yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${member!.principal.id}`;
+        yield* sql`UPDATE workspace_members SET revoked_at = ${now} WHERE principal_id = ${member!.principal.id}`;
         expect(yield* tagOf(resolveAccess({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
         expect(yield* tagOf(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
         const [other] = yield* seedWorkspace('Other');
         expect(yield* tagOf(openSession({ workspace_id: other!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
-        yield* sql`UPDATE principals SET disabled_at = UTC_TIMESTAMP(6) WHERE id = ${owner!.principal.id}`;
+        yield* sql`UPDATE principals SET disabled_at = ${now} WHERE id = ${owner!.principal.id}`;
         expect(yield* tagOf(resolveAccess({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
       }),
       { migrated: true },
@@ -151,9 +152,9 @@ describe('authorization boundary', () => {
         const ownerHeaders = yield* sessionHeaders(owner!);
         const memberHeaders = yield* sessionHeaders(member!);
         expect((yield* call(`${base}/api/v1/session`, { headers: memberHeaders })).status).toBe(200);
-        yield* sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE principal_id = ${member!.principal.id}`;
+        yield* sql`UPDATE workspace_members SET revoked_at = ${now} WHERE principal_id = ${member!.principal.id}`;
         expect((yield* call(`${base}/api/v1/session`, { headers: memberHeaders })).status).toBe(401);
-        yield* sql`UPDATE browser_sessions SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE principal_id = ${owner!.principal.id}`;
+        yield* sql`UPDATE browser_sessions SET expires_at = ${addSeconds(now, -1)} WHERE principal_id = ${owner!.principal.id}`;
         expect((yield* call(`${base}/api/v1/session`, { headers: ownerHeaders })).status).toBe(401);
         expect((yield* call(`${base}/api/v1/session`, { headers: { cookie: 'sanctum_session=forged' } })).status).toBe(401);
         expect((yield* call(`${base}/api/v1/session`)).status).toBe(401);
@@ -214,8 +215,8 @@ describe('authorization boundary', () => {
 
         // Day 3 of the grace period, after the deleting session expired: the owner signs in again, a member cannot, and only undo and the status read accept that session.
         yield* call(workspace, { method: 'DELETE', headers: ownerHeaders, body: { confirm_name: 'Acme Studio' } });
-        yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6) - INTERVAL 3 DAY, purge_after = UTC_TIMESTAMP(6) + INTERVAL 4 DAY WHERE id = ${owner!.workspace_id}`;
-        yield* sql`UPDATE browser_sessions SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE principal_id = ${owner!.principal.id}`;
+        yield* sql`UPDATE workspaces SET deleted_at = ${addSeconds(now, -3 * 86400)}, purge_after = ${addSeconds(now, 4 * 86400)} WHERE id = ${owner!.workspace_id}`;
+        yield* sql`UPDATE browser_sessions SET expires_at = ${addSeconds(now, -1)} WHERE principal_id = ${owner!.principal.id}`;
         expect(yield* status(ownerHeaders)).toBe(401);
         expect(yield* tagOf(openSession({ workspace_id: member!.workspace_id, principal_id: member!.principal.id }))).toBe('Forbidden');
         const signedIn = yield* sessionHeaders(owner!);
@@ -227,7 +228,7 @@ describe('authorization boundary', () => {
 
         // Once the grace period is over, the purge owns the workspace: not even the owner gets back in.
         yield* call(workspace, { method: 'DELETE', headers: signedIn, body: { confirm_name: 'Acme Studio' } });
-        yield* sql`UPDATE workspaces SET purge_after = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${owner!.workspace_id}`;
+        yield* sql`UPDATE workspaces SET purge_after = ${addSeconds(now, -1)} WHERE id = ${owner!.workspace_id}`;
         expect((yield* call(`${workspace}/restore`, { method: 'POST', headers: signedIn })).status).toBe(401);
         expect(yield* tagOf(openSession({ workspace_id: owner!.workspace_id, principal_id: owner!.principal.id }))).toBe('Forbidden');
       }),
@@ -326,11 +327,11 @@ describe('authorization boundary', () => {
         const [ana, other] = yield* seedWorkspace('Acme', ['owner', 'member']);
         const identity = (subject: string, principal_id: string) =>
           sql`INSERT INTO principal_identities (issuer, subject, principal_id, email, verified_at)
-            VALUES ('https://issuer.test', ${subject}, ${principal_id}, 'ana@acme.test', UTC_TIMESTAMP(6))`;
+            VALUES ('https://issuer.test', ${subject}, ${principal_id}, 'ana@acme.test', ${now})`;
         yield* identity('Ana', ana!.principal.id);
         yield* identity('ana', other!.principal.id);
         yield* sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
-          VALUES (${randomUUID()}, ${ana!.workspace_id}, ${ana!.principal.id}, 'pd-user', 'apn_1', 'google_drive', 'active', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+          VALUES (${randomUUID()}, ${ana!.workspace_id}, ${ana!.principal.id}, 'pd-user', 'apn_1', 'google_drive', 'active', ${now}, ${now})`;
         const lookup = (issuer: string, subject: string) => identityPrincipal({ issuer, subject }).pipe(Effect.map(Option.getOrNull));
 
         expect(yield* lookup('https://issuer.test', 'Ana')).toBe(ana!.principal.id);
