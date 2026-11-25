@@ -166,7 +166,7 @@ describe('speaker attribution', () => {
         yield* recordSpeakerTurns({ workspace_id: listener.workspace_id, provider_connection_id: after, turns: [turn] });
         yield* recordSpeakerTurns({ workspace_id: listener.workspace_id, provider_connection_id: before, turns: [{ ...turn, start_s: 10, end_s: 12 }] });
         const [rotated] = yield* tracksOf(after);
-        expect(rotated).toMatchObject({ provider_label: 'SPEAKER_00', sample_start: String(30 * RATE), profile_id: null, attribution_revision: 1 });
+        expect(rotated).toMatchObject({ provider_label: 'SPEAKER_00', sample_start: 30 * RATE, profile_id: null, attribution_revision: 1 });
         expect((yield* tracksOf(before)).map(row => [row.profile_id, row.attribution_revision])).toEqual([[people.alice, 2], [people.alice, 2]]);
         expect(yield* tracksOf(before)).toHaveLength(2);
         expect(LiveDiarization.mustRotate(pyannoteLimits.rotateAfterMs - 1)).toBe(false);

@@ -176,7 +176,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('live WebSocket ingest', it => {
           { text: 'the earlier sentence', meeting_id: meeting!.id },
           { text: 'yes', meeting_id: meeting!.id },
         ]);
-      expect((yield* meetingsOf(access.workspace_id)).map(row => [row.id, row.started_at])).toEqual([[meeting!.id, '2026-09-26 17:00:00.000']]);
+      expect((yield* meetingsOf(access.workspace_id)).map(row => [row.id, row.started_at])).toEqual([[meeting!.id, '2026-09-26 17:00:00.000000']]);
     }),
   );
 

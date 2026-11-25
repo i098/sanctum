@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { SqlClient } from '@effect/sql';
-import { JobId, type JobKind, type PrincipalId, type WorkspaceId } from '@sanctum/contracts';
+import type { JobKind, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { engineeringDefaults } from './config.ts';
 import { addSeconds, now } from './sql-dialect.ts';
@@ -32,18 +32,15 @@ export const later = (ms: number) => addSeconds(now, ms / 1000);
 /**
  * Joins the caller's transaction. An active row with the same key is re-armed: latest payload
  * wins, the timer restarts (or, with `expedite`, moves no later than this request), and a running row returns to pending once its current run completes.
- * The active row's id is read first, so call this before the transaction's own writes.
+ * It reads nothing, so it may follow the transaction's own writes; a coalesced request keeps the existing row's id.
  */
 export const enqueueJob = (input: EnqueueJob) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const [active] = yield* sql<{ id: JobId }>`SELECT id FROM jobs
-          WHERE workspace_id = ${input.workspace_id} AND kind = ${input.kind} AND active_work_key = ${input.work_key}`;
-        const id = active?.id ?? JobId.make(randomUUID());
         yield* sql`INSERT INTO jobs (id, workspace_id, kind, work_key, requested_by, source_revision, status, payload, available_at, max_attempts, created_at, updated_at)
-          VALUES (${id}, ${input.workspace_id}, ${input.kind}, ${input.work_key}, ${input.requested_by}, ${input.source_revision ?? null}, 'pending',
+          VALUES (${randomUUID()}, ${input.workspace_id}, ${input.kind}, ${input.work_key}, ${input.requested_by}, ${input.source_revision ?? null}, 'pending',
             ${JSON.stringify(input.payload)}, ${later(input.delay_ms ?? 0)}, ${input.max_attempts ?? engineeringDefaults.jobs.maxAttemptsByKind[input.kind] ?? 5}, ${now}, ${now})
           ON CONFLICT (workspace_id, kind, active_work_key) DO UPDATE SET
             rearmed = iif(jobs.status = 'running', 1, jobs.rearmed),
@@ -54,7 +51,6 @@ export const enqueueJob = (input: EnqueueJob) =>
             source_revision = coalesce(excluded.source_revision, jobs.source_revision),
             max_attempts = excluded.max_attempts,
             updated_at = excluded.updated_at`;
-        return id;
       }),
     );
   });

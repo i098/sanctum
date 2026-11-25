@@ -7,8 +7,7 @@ import { HttpServer } from '@effect/platform';
 import { Context, Effect, Layer } from 'effect';
 import { dbLayer } from '../src/db.ts';
 import { serverLayer } from '../src/main.ts';
-import { loadMigrations, migrate } from '../src/migrate.ts';
-import { createTestDatabase } from './support/database.ts';
+import { createEmptyDatabase, createTestDatabase } from './support/database.ts';
 
 export const SHELL = '<!doctype html><title>Sanctum</title><script type="module" src="/assets/index-abc123.js"></script>';
 
@@ -36,9 +35,8 @@ export const serveApiWithDb = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(Effect.promise(() => createTestDatabase()), db => Effect.promise(db.drop));
+    const database = yield* Effect.acquireRelease(Effect.promise(options.migrated === false ? createEmptyDatabase : createTestDatabase), db => Effect.promise(db.drop));
     const db = dbLayer(database.db);
-    if (options.migrated !== false) yield* Effect.provide(migrate(loadMigrations()), db);
     const context = yield* Layer.build(serverLayer({ apiPort: 0, db: database.db, webRoot: options.webRoot }, options.auth, options.overrides));
     const address = Context.get(context, HttpServer.HttpServer).address;
     if (address._tag !== 'TcpAddress') throw new Error('expected TCP');

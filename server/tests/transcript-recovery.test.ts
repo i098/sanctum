@@ -127,7 +127,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('offline transcript reconciliation
       expect(yield* recoverArchive('close')).toMatchObject({ before: ['provisional'], after: ['closing'] });
       expect(yield* recoverArchive('interrupted')).toMatchObject({ before: ['provisional'], after: ['interrupted'] });
       // A takeover mid-epoch: audio after it is refused, and the meeting seals once the held audio is reconciled.
-      expect(yield* recoverArchive('close', '2026-09-26 17:00:03')).toEqual({ before: ['closing'], after: ['closing'], uploaded: [true, true, true, false, false] });
+      expect(yield* recoverArchive('close', '2026-09-26 17:00:03.000000')).toEqual({ before: ['closing'], after: ['closing'], uploaded: [true, true, true, false, false] });
       // A pause is not an end of the meeting: it stays open for the next capture.
       expect((yield* recoverArchive('pause')).after).toEqual(['provisional']);
     }));

@@ -8,13 +8,13 @@ import { openSession } from '../src/auth.ts';
 import { addContextItem, reviseContextItem } from '../src/context.ts';
 import { claimJob, completeJob, type Lease, sweepJobs } from '../src/job-runner.ts';
 import type { ClaimedJob } from '../src/job-types.ts';
-import { enqueueJob } from '../src/jobs.ts';
 import { IntegrationFailure } from '../src/providers/pipedream.ts';
 import { addMember } from '../src/store.ts';
 import { addSeconds, now } from '../src/sql-dialect.ts';
 import { PURGED_TABLES, purgeWorkspace } from '../src/workspaces.ts';
 import { migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { enqueuedId } from './support/jobs.ts';
 import { type MemoryObjectStore, memoryObjectStore } from './support/object-store.ts';
 import { fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 
@@ -53,7 +53,7 @@ const deleteNow = (owner: AccessScope) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`UPDATE workspaces SET deleted_at = ${addSeconds(now, -8 * 86_400)}, purge_after = ${addSeconds(now, -86_400)} WHERE id = ${owner.workspace_id}`;
-    return yield* enqueueJob({ workspace_id: owner.workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: owner.principal.id }, requested_by: null });
+    return yield* enqueuedId({ workspace_id: owner.workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: owner.principal.id }, requested_by: null });
   });
 
 const counts = (workspace_id: WorkspaceId) =>
@@ -134,7 +134,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const sql = yield* SqlClient.SqlClient;
       const store = memoryObjectStore();
       const a = yield* seed('Anchor', store);
-      const sync = yield* enqueueJob({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
+      const sync = yield* enqueuedId({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
       yield* deleteNow(a.owner);
       const lease = yield* claim;
       expect(yield* purge(lease.job, store)).toMatchObject({ status: 'succeeded', result: { purged: true } });
