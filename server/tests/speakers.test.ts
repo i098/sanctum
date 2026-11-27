@@ -150,6 +150,26 @@ describe('speaker attribution', () => {
     ),
   );
 
+  it.effect('attributes every segment of a transcript page longer than D1 binds in one statement', () =>
+    withDatabase(
+      Effect.gen(function* () {
+        const [owner, device] = yield* seedWorkspace('LongPage', ['owner', 'device']);
+        const listener = yield* seedListener(device!);
+        const epoch = yield* seedEpoch(listener);
+        const count = 30;
+        for (let i = 0; i < count; i++) yield* hear(listener, epoch, 2 * i, 2 * i + 1, `segment number ${i}`);
+        const meeting = MeetingId.make((yield* meetingsOf(listener.workspace_id))[0]!.id);
+        const connection = yield* openDiarizationConnection({ workspace_id: listener.workspace_id, source: { epoch_id: epoch, track: 0 }, anchor_sample: 0, sample_rate: RATE, purpose: 'diarization', model: 'live-1' });
+        const turns = Array.from({ length: count }, (_, i) => ({ label: `SPEAKER_${i}`, start_s: 2 * i, end_s: 2 * i + 1, confidence: null }));
+        yield* recordSpeakerTurns({ workspace_id: listener.workspace_id, provider_connection_id: connection, turns });
+        const transcript = yield* getTranscript(owner!, meeting, {});
+        const labels = transcript.segments.map(segment => transcript.speakers.find(track => track.id === segment.speaker_track_id)?.provider_label);
+        expect(labels).toEqual(turns.map(turn => turn.label));
+      }),
+      { migrated: true },
+    ),
+  );
+
   it.effect('stream rotation and reconnect never carry a label across provider connections', () =>
     withDatabase(
       Effect.gen(function* () {

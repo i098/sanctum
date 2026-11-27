@@ -7,6 +7,7 @@ import { CaptureEpochId, Meeting, type MeetingId, MeetingProcessing, type Transc
 import { Effect, Schema } from 'effect';
 import { decodeRows, type SegmentRow, segmentRows } from './context-changes.ts';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
+import { inList } from './sql-dialect.ts';
 
 export const EpochAnchorRow = Schema.Struct({ epoch_id: CaptureEpochId, sample_rate: Schema.Number, sample_start: DbSafeInt, captured_at: DbUtc });
 
@@ -47,7 +48,7 @@ export const meetingEvidence = (workspace_id: WorkspaceId, meeting_id: MeetingId
   const epochIds = [...new Set(rows.map(segment => segment.epoch_id))];
   const epochs = epochIds.length === 0 ? [] : yield* decodeRows(
    EpochAnchorRow,
-   sql`SELECT id AS epoch_id, sample_rate, sample_start, captured_at FROM capture_epochs WHERE workspace_id = ${workspace_id} AND ${sql.in('id', epochIds)}`,
+   sql`SELECT id AS epoch_id, sample_rate, sample_start, captured_at FROM capture_epochs WHERE workspace_id = ${workspace_id} AND ${inList(sql, 'id', epochIds)}`,
   );
   return { segments: rows.map(toSegment), epochs };
  });

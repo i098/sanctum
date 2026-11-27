@@ -87,10 +87,9 @@ const syncAccounts = (access: AccessScope) =>
             updated_at = iif(integration_accounts.status = excluded.status, integration_accounts.updated_at, ${now}),
             status = excluded.status`;
       }
-      // shortcut: one bound parameter per listed account, so more than ~95 accounts overflow D1's 100-parameter limit; chunk the list if a person ever connects that many.
       yield* sql`UPDATE integration_accounts SET status = 'disconnected', updated_at = ${now}
         WHERE workspace_id = ${access.workspace_id} AND external_user_id = ${external} AND status = 'active'
-          ${listed.length === 0 ? sql`` : sql`AND provider_account_id NOT IN ${sql.in(listed.map(account => account.id))}`}`;
+          AND provider_account_id NOT IN (SELECT value FROM json_each(${JSON.stringify(listed.map(account => account.id))}))`;
     }
     return yield* listAccounts(access);
   });

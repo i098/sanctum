@@ -25,7 +25,7 @@ import {
 } from '@sanctum/contracts';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { DbJson, DbSafeInt } from './db.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 
 export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId; readonly credential_id?: string };
 
@@ -311,7 +311,7 @@ export const listVisibleMeetingIds = (access: AccessScope) =>
     if (meetings.kind === 'allowlist' && meetings.meeting_ids.length === 0) return [];
     const visible =
       meetings.kind === 'allowlist'
-        ? sql`m.id IN ${sql.in(meetings.meeting_ids)}`
+        ? inList(sql, 'm.id', meetings.meeting_ids)
         : sql`(m.visibility = 'workspace' OR EXISTS (SELECT 1 FROM meeting_access a
             WHERE a.workspace_id = m.workspace_id AND a.meeting_id = m.id AND a.principal_id = ${access.principal.id}))`;
     const rows = yield* sql<{ id: MeetingId }>`SELECT m.id FROM meetings m WHERE m.workspace_id = ${access.workspace_id} AND ${visible} ORDER BY m.id`;

@@ -9,7 +9,7 @@
     "os": null
   },
   "runtime": {
-    "node_engine": ">=24.12.0",
+    "node_engine": ">=24.15.0",
     "node": null,
     "v8": null,
     "rust_toolchain": null,

@@ -230,8 +230,9 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
   it.effect('covers every table holding workspace rows', () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      // D1 refuses `pragma_table_info` on its own `_cf_*` tables with SQLITE_AUTH.
       const tables = yield* sql<{ name: string }>`SELECT t.name FROM sqlite_master t, pragma_table_info(t.name) c
-        WHERE t.type = 'table' AND c.name = 'workspace_id' ORDER BY t.name`;
+        WHERE t.type = 'table' AND t.name NOT GLOB '_cf_*' AND c.name = 'workspace_id' ORDER BY t.name`;
       expect(tables.map(table => table.name).sort()).toEqual([...PURGED_TABLES, 'jobs', 'workspace_members'].sort());
     }),
   );
