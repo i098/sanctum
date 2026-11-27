@@ -359,6 +359,7 @@ This selects no sign-in issuer or any other decision; the deployment runs in dev
 
 Accepted on the D1 branch: the structured store is Cloudflare D1, reached through `SqlClient` over a SQLite-dialect layer in `server/src/db.ts`; local runs and CI use `node:sqlite`, so no database service is needed.
 D1 has no interactive transaction, so a transaction reads at once, buffers its writes and commits them in one batch behind a guard on `tx_clock`; a lost race reruns the body, which therefore has no external side effect.
+Each client runs one transaction attempt at a time, so its own transactions queue instead of racing, and a body never waits on another top-level transaction of the same client. Only rivals in other processes cause reruns, up to 24 per transaction.
 This supersedes the MySQL 8.4 and Aiven lines above for this branch. `main` keeps MySQL (TiDB) until the switch-over in [d1-switchover.md](d1-switchover.md).
 
 ## Hardware listener decision

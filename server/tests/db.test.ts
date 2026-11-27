@@ -1,6 +1,8 @@
+import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { SqlClient, type SqlError, SqlSchema } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Deferred, Effect, Exit, Fiber, Schema } from 'effect';
+import { Context, Deferred, Effect, Either, Exit, Fiber, type Layer, Schema } from 'effect';
 import type { WorkspaceId } from '@sanctum/contracts';
 import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, dbLayer, increment, isCheckViolation, isDuplicate, isMissingReference } from '../src/db.ts';
 import { d1Backend } from '../src/db-d1.ts';
@@ -22,7 +24,13 @@ const schema = Effect.gen(function* () {
   ]) yield* sql.unsafe(statement);
 });
 
-const withDb = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.provide(Effect.zipRight(schema, use), dbLayer({ url: ':memory:' }));
+const withRival = <A, E>(use: (rival: Layer.Layer<SqlClient.SqlClient, SqlError.SqlError>) => Effect.Effect<A, E, SqlClient.SqlClient>) => {
+  // One shared-cache memory database, so a second client is a rival process: it has its own transaction lane.
+  const db = { url: `file:db_t_${randomBytes(6).toString('hex')}?mode=memory&cache=shared` };
+  return Effect.provide(Effect.zipRight(schema, Effect.suspend(() => use(dbLayer(db)))), dbLayer(db));
+};
+const withDb = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>) => withRival(() => use);
+const writeNote = (flag?: number) => Effect.flatMap(SqlClient.SqlClient, sql => sql.withTransaction(sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, ${flag ?? null})`));
 const count = (table: string) => SqlClient.SqlClient.pipe(Effect.flatMap(sql => sql.unsafe<{ n: number }>(`SELECT count(*) AS n FROM ${table}`)), Effect.map(rows => rows[0]!.n));
 const failureOf = <A>(effect: Effect.Effect<A, SqlError.SqlError, SqlClient.SqlClient>) => Effect.flip(effect);
 
@@ -78,7 +86,7 @@ describe('transactions', () => {
     })));
 
   it.live('a transaction that lost the race reruns and commits once', () =>
-    withDb(Effect.gen(function* () {
+    withRival(rivalClient => Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const started = yield* Deferred.make<void>();
       const rival = yield* Deferred.make<void>();
@@ -92,7 +100,7 @@ describe('transactions', () => {
         yield* sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 1)`;
       })));
       yield* Deferred.await(started);
-      yield* sql.withTransaction(sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 2)`);
+      yield* Effect.provide(writeNote(2), rivalClient);
       yield* Deferred.succeed(rival, undefined);
       yield* Fiber.join(slow);
       expect(attempts).toBe(2);
@@ -229,17 +237,17 @@ describe('review fixes', () => {
     })));
 
   it.live('conflicts that never clear end in a readable error after the retries', () =>
-    withDb(Effect.gen(function* () {
+    withRival(rivalClient => Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       let attempts = 0;
       const error = yield* failureOf(sql.withTransaction(Effect.gen(function* () {
         attempts++;
         // Outside the transaction, so it commits and moves tx_clock under this attempt.
-        yield* Effect.mapInputContext(sql.withTransaction(sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`), (context: Context.Context<SqlClient.SqlClient>) => Context.omit(SqlClient.TransactionConnection)(context));
+        yield* Effect.provide(Effect.mapInputContext(writeNote(), (context: Context.Context<SqlClient.SqlClient>) => Context.omit(SqlClient.TransactionConnection)(context)), rivalClient);
         yield* sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`;
       })));
       expect(error.message).toBe('Transaction conflict: retries exhausted, try again');
-      expect(attempts).toBe(9);
+      expect(attempts).toBe(25);
     })), 15_000);
 
   it.effect('time helpers refuse fragments that carry values or identifiers', () =>
@@ -266,4 +274,37 @@ describe('review fixes', () => {
       const error = yield* Effect.flip(backend.batch([{ sql: 'ROLLBACK', params: [] }, { sql: 'SELECT * FROM missing_table', params: [] }]));
       expect(error.message).toMatch(/no such table/);
     })));
+});
+
+/** The flow 9 acceptance load. Each gateway call takes 15 to 60 ms of real time, because the overlap of transactions is what a conflict needs; fake timers cannot overlap them. */
+describe('contention over a D1 gateway', () => {
+  const gateway = Effect.gen(function* () {
+    const backend = yield* sqliteBackend(':memory:');
+    const original = globalThis.fetch;
+    let calls = 0;
+    yield* Effect.addFinalizer(() => Effect.sync(() => { globalThis.fetch = original; }));
+    globalThis.fetch = (async (url: URL, init: RequestInit) => {
+      await sleep(15 + (calls++ * 7) % 46);
+      const body = JSON.parse(String(init.body)) as { sql: string; params: unknown[]; statements: Array<{ sql: string; params: unknown[] }> };
+      const answer: Effect.Effect<unknown, SqlError.SqlError> = String(url).endsWith('/run') ? backend.run(body) : Effect.map(backend.batch(body.statements), results => ({ results }));
+      const result = await Effect.runPromise(Effect.either(answer));
+      return Either.isRight(result) ? Response.json(result.right) : Response.json({ error: result.left.message }, { status: 400 });
+    }) as typeof fetch;
+  });
+
+  /** `clients` independent clients, each running `per` parallel sequence allocations, as `clients` processes would. */
+  const allocateAll = (clients: number, per: number) =>
+    Effect.scoped(Effect.gen(function* () {
+      yield* gateway;
+      const db = { url: 'http://d1.internal' };
+      yield* Effect.provide(schema, dbLayer(db));
+      const perClient = Effect.flatMap(SqlClient.SqlClient, sql => Effect.all(Array.from({ length: per }, () => sql.withTransaction(increment('context_seq')(workspace))), { concurrency: 'unbounded' }));
+      const numbers = (yield* Effect.all(Array.from({ length: clients }, () => Effect.provide(perClient, dbLayer(db))), { concurrency: 'unbounded' })).flat();
+      expect(new Set(numbers).size).toBe(clients * per);
+      expect(Math.max(...numbers)).toBe(clients * per);
+    }));
+
+  it.live('one client commits twenty parallel transactions', () => allocateAll(1, 20), 30_000);
+  it.live('four clients commit five parallel transactions each', () => allocateAll(4, 5), 30_000);
+  it.live('twenty clients commit one transaction each', () => allocateAll(20, 1), 30_000);
 });

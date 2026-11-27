@@ -41,6 +41,9 @@ const isRead = (sql: string) => {
 
 const backoff = Schedule.exponential('10 millis').pipe(Schedule.modifyDelay((_, delay) => Duration.min(delay, Duration.millis(200))), Schedule.jittered);
 
+/** Each lost race lets one rival commit, so N processes writing at once can cost one transaction N - 1 reruns; 24 covers 20 with slack. */
+const MAX_RERUNS = 24;
+
 /** A nested transaction joins its parent's buffer; when its body fails, its writes and counters are dropped. */
 const rollbackOnError = <A, E, R>(connection: SqlConnection.Connection, effect: Effect.Effect<A, E, R>) =>
   Effect.suspend(() => {
@@ -116,11 +119,18 @@ const makeClient = (backend: DbBackend) =>
         }
         return result;
       });
+    /**
+     * D1 has one writer, so a client runs one attempt at a time: its own transactions queue instead of
+     * racing and burning retries. Only rivals in other processes can still win a race; the backoff and
+     * the retry limit cover those. A body must not wait on another top-level transaction of the same
+     * client, because that one waits for this one.
+     */
+    const lane = Effect.unsafeMakeSemaphore(1);
     const withTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError.SqlError, R> =>
       Effect.flatMap(Effect.serviceOption(SqlClient.TransactionConnection), nested =>
         Option.isSome(nested)
           ? rollbackOnError(nested.value[0], effect)
-          : Effect.retry(attempt(effect), { schedule: backoff, times: 8, while: isConflict }).pipe(
+          : Effect.retry(lane.withPermits(1)(attempt(effect)), { schedule: backoff, times: MAX_RERUNS, while: isConflict }).pipe(
               Effect.mapError(error => (isConflict(error) ? fail('Transaction conflict: retries exhausted, try again') : error)),
             ),
       );
