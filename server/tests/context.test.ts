@@ -424,7 +424,7 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(prompts).toEqual([]);
       expect(yield* search('Who owns the Falcon project?')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
       // A question with more content words than D1 binds in one statement still searches; the extra words match nothing.
-      const long = `Who owns the Falcon project? ${Array.from({ length: 99 }, (_, i) => `z${i + 1}`).join(' ')}`;
+      const long = `Who owns the Falcon project? ${Array.from({ length: 100 }, (_, i) => String(i).padStart(2, "0")).join(' ')}`;
       judged[long] = judged['Who owns the Falcon project?']!;
       expect(yield* search(long)).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
       // The candidates hold both owners; the judge, not a word rule, leaves Harbor out.
