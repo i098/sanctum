@@ -1,0 +1,1 @@
+Speaker lookup for a transcript page of 25 or more segments and a keyword search of many words no longer exceed D1's 100-parameter limit; both bind their lists as one parameter. The local SQLite backend now also refuses a string, BLOB or row over D1's 2,000,000 bytes, and the minimum Node.js version is 24.15, the first release that supports the `limits` option.

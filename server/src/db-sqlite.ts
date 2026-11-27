@@ -6,8 +6,8 @@ import type { DbBackend, DbResult, DbStatement } from './db-types.ts';
 
 const sqlError = (cause: unknown) => new SqlError.SqlError({ cause, message: cause instanceof Error ? cause.message : String(cause) });
 
-/** D1's statement limits (developers.cloudflare.com/d1/platform/limits), so local runs and CI fail where production would. */
-const D1_LIMITS = { sqlLength: 100_000, column: 100, functionArg: 32, likePatternLength: 50, variableNumber: 100, compoundSelect: 5 };
+/** D1's statement limits (developers.cloudflare.com/d1/platform/limits), so local runs and CI fail where production would. The `limits` option needs Node 24.15 (`engines`). */
+const D1_LIMITS = { length: 2_000_000, sqlLength: 100_000, column: 100, functionArg: 32, likePatternLength: 50, variableNumber: 100, compoundSelect: 5 };
 
 const bind = (params: ReadonlyArray<unknown>) => params.map(value => (typeof value === 'boolean' ? Number(value) : value === undefined ? null : value) as SQLInputValue);
 

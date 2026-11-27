@@ -42,7 +42,7 @@ Server-side work continues after the tab closes.
 
 <a id="self-host"></a>
 
-**Self-host:** you need Docker, a MySQL password, and Node.js 24.12 or later. The stack runs MySQL, the API, the worker, and Caddy from one image.
+**Self-host:** you need Docker, a MySQL password, and Node.js 24.15 or later. The stack runs MySQL, the API, the worker, and Caddy from one image.
 
 ```bash
 git clone https://github.com/i098/sanctum.git

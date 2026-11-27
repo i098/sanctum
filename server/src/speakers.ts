@@ -232,17 +232,19 @@ export const applyVoiceMatches = (workspace_id: WorkspaceId, connection_id: Prov
     );
   });
 
-/** Tracks overlapping any of the given sources. */
+/** Tracks overlapping any of the given sources. The sources bind as one JSON parameter: one clause per source bound four values each and overflowed D1's 100-parameter limit at 25 sources. */
 export const tracksOverlapping = (workspace_id: WorkspaceId, sources: ReadonlyArray<SourceRange>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     if (sources.length === 0) return [];
+    const ranges = JSON.stringify(sources.map(({ epoch_id, track, sample_start, sample_end }) => ({ epoch_id, track, sample_start, sample_end })));
     const rows = yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: TrackRow,
-      execute: () => sql`SELECT ${sql.literal(TRACK_COLUMNS)} FROM speaker_tracks WHERE workspace_id = ${workspace_id} AND (${sql.or(
-        sources.map(source => sql`(epoch_id = ${source.epoch_id} AND track = ${source.track} AND sample_start < ${source.sample_end} AND sample_end > ${source.sample_start})`),
-      )}) ORDER BY epoch_id, sample_start`,
+      execute: () => sql`SELECT ${sql.literal(TRACK_COLUMNS)} FROM speaker_tracks WHERE workspace_id = ${workspace_id} AND id IN (
+        SELECT t.id FROM json_each(${ranges}) s JOIN speaker_tracks t ON t.epoch_id = s.value ->> '$.epoch_id' AND t.track = s.value ->> '$.track'
+          AND t.sample_start < s.value ->> '$.sample_end' AND t.sample_end > s.value ->> '$.sample_start'
+      ) ORDER BY epoch_id, sample_start`,
     })(undefined);
     return rows.map(row => SpeakerTrack.make(row));
   });
