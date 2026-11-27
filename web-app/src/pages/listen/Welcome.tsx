@@ -88,7 +88,7 @@ function LevelCheck({ deviceId }: { deviceId: string | null }) {
   const input = useInputLevel(deviceId);
   return (
     <>
-      <Meter value={input.level > 0 ? Math.max(0, 1 + Math.log10(input.level) / 3) : 0} />
+      <Meter value={input.level > 0 ? Math.min(1, Math.max(0, 1 + Math.log10(input.level) / 3)) : 0} />
       <InputCheckText input={input} />
     </>
   );
