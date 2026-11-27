@@ -120,11 +120,15 @@ test('the microphone step asks for the microphone, then shows the picker and a l
   await expect(welcome.getByRole('combobox', { name: 'Microphone' })).toHaveCount(0);
   await welcome.getByRole('button', { name: 'Allow microphone' }).click();
   await expect(welcome.getByRole('combobox', { name: 'Microphone' })).toBeVisible();
-  // The synthetic input beeps: the meter rises with each beep and falls between them.
-  const seen = new Set<number>();
+  // The synthetic input beeps full scale for ~0.1 s every 0.5 s: the meter jumps to the top with each beep and drops to 0 between them.
+  let rose = false;
+  let fell = false;
   await expect.poll(async () => {
-    seen.add(Number(await meter.getAttribute('aria-valuenow')));
-    return Math.max(...seen) > 30 && seen.size > 3;
+    const level = Number(await meter.getAttribute('aria-valuenow'));
+    expect(level).toBeLessThanOrEqual(100);
+    if (level > 30) rose = true;
+    else if (rose && level === 0) fell = true;
+    return fell;
   }, { timeout: 10_000, intervals: [50] }).toBe(true);
   await expect(welcome).toContainText('This input is sending sound.');
   expect(await page.evaluate(() => window.__capture.calls)).toEqual([]);
