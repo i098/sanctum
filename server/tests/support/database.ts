@@ -1,8 +1,8 @@
 /** Per-suite disposable in-memory SQLite database plus the application layer for it. */
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { SqlClient } from '@effect/sql';
-import { Effect } from 'effect';
+import type { SqlClient, SqlError } from '@effect/sql';
+import { Effect, type Layer } from 'effect';
 import { type DbOptions, dbLayer } from '../../src/db.ts';
 import { loadMigrations, migrate } from '../../src/migrate.ts';
 
@@ -39,10 +39,19 @@ export const migrateDatabase = (database: TestDatabase) => Effect.provide(migrat
 /** Runs `effect` against `database` and resolves with its result. */
 export const runSql = <A, E>(database: TestDatabase, effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.runPromise(Effect.provide(effect, dbLayer(database.db)));
 
-/** Runs `use` against a fresh database (empty unless `migrated`) and drops it afterwards. */
-export const withDatabase = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>, options: { readonly migrated?: boolean } = {}) =>
+/**
+ * Runs `use` against a fresh database (empty unless `migrated`) and drops it afterwards. `use` gets a layer for a second
+ * client on the same data: a rival process, whose transactions do not queue behind the first client's.
+ */
+export const withRivalDatabase = <A, E>(
+  use: (rival: Layer.Layer<SqlClient.SqlClient, SqlError.SqlError>) => Effect.Effect<A, E, SqlClient.SqlClient>,
+  options: { readonly migrated?: boolean } = {},
+) =>
   Effect.acquireUseRelease(
     Effect.promise(options.migrated === true ? createTestDatabase : createEmptyDatabase),
-    database => Effect.provide(use, dbLayer(database.db)),
+    database => Effect.provide(use(dbLayer(database.db)), dbLayer(database.db)),
     database => Effect.promise(database.drop),
   );
+
+/** Runs `use` against a fresh database (empty unless `migrated`) and drops it afterwards. */
+export const withDatabase = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>, options: { readonly migrated?: boolean } = {}) => withRivalDatabase(() => use, options);

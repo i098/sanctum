@@ -9,7 +9,7 @@ import { engineeringDefaults } from '../src/config.ts';
 import { executeAction } from '../src/executor.ts';
 import { runWorker } from '../src/job-runner.ts';
 import { addSeconds, now } from '../src/sql-dialect.ts';
-import { withDatabase } from './support/database.ts';
+import { withDatabase, withRivalDatabase } from './support/database.ts';
 import { actionRow, actionServices, provider, queuedJob, seedAccount, seedCredential, seedMeeting } from './support/actions.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -59,15 +59,16 @@ const execute = (access: AccessScope, action_id: ActionId) =>
 
 describe('action gateway', () => {
   it.effect('pauses when another execution fills the action budget during the transaction', () =>
-    withDatabase(
-      Effect.gen(function* () {
+    withRivalDatabase(
+      rival => Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { agent } = yield* setup();
         const { workspace_id } = agent;
         const first = yield* requestAction(agent, request({ idempotency_key: 'last-slot' }));
         const waiting = yield* requestAction(agent, request({ idempotency_key: 'over-budget' }));
         const snapshotReady = yield* Deferred.make<void>();
-        const competing = yield* Effect.fork(Effect.zipRight(Deferred.await(snapshotReady), execute(agent, first.action_id)));
+        // Its own client: a rival process, so its transactions do not queue behind the open transaction below.
+        const competing = yield* Effect.fork(Effect.zipRight(Deferred.await(snapshotReady), Effect.provide(execute(agent, first.action_id), rival)));
         const budget: { perWindow: number } = engineeringDefaults.actionBudget;
         const original = budget.perWindow;
         budget.perWindow = 1;
