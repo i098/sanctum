@@ -1,0 +1,1 @@
+Statements that Cloudflare D1 refuses (more than 100 bound parameters, more than 5 `SELECT` terms in a compound statement) now fail on the local SQLite backend too; id lists bind as one JSON parameter and the workspace purge counts rows in groups of 5 terms.

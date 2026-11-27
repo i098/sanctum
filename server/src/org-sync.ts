@@ -17,7 +17,7 @@ import { engineeringDefaults, serverConfig } from './config.ts';
 import type { JobHandler } from './job-types.ts';
 import { enqueueJob } from './jobs.ts';
 import { makeWorkosClient, type OrganizationMembership, PAGE_LIMIT, type WorkosClient, type WorkosEvent, type WorkosOptions } from './providers/workos.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 import { roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 interface WorkosOrganizationSettings {
@@ -107,7 +107,7 @@ const reconcileMemberships = ({ client, issuer }: WorkosOrganizationSettings, id
     const memberships = yield* client.listMemberships(identity.subject);
     const orgIds = memberships.map(membership => membership.organization_id);
     const links = orgIds.length === 0 ? [] : yield* sql<{ org_id: string; workspace_id: WorkspaceId }>`SELECT org_id, workspace_id FROM workspace_orgs
-      WHERE issuer = ${issuer} AND org_id IN ${sql.in(orgIds)}`;
+      WHERE issuer = ${issuer} AND ${inList(sql, 'org_id', orgIds)}`;
     const desired = new Map(links.map(link => [link.workspace_id, roleOf(memberships.find(membership => membership.organization_id === link.org_id)!)]));
     let principal = yield* identityPrincipal(identity);
     if (Option.isSome(principal)) {

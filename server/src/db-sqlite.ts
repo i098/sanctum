@@ -6,6 +6,9 @@ import type { DbBackend, DbResult, DbStatement } from './db-types.ts';
 
 const sqlError = (cause: unknown) => new SqlError.SqlError({ cause, message: cause instanceof Error ? cause.message : String(cause) });
 
+/** D1's statement limits (developers.cloudflare.com/d1/platform/limits), so local runs and CI fail where production would. */
+const D1_LIMITS = { sqlLength: 100_000, column: 100, functionArg: 32, likePatternLength: 50, variableNumber: 100, compoundSelect: 5 };
+
 const bind = (params: ReadonlyArray<unknown>) => params.map(value => (typeof value === 'boolean' ? Number(value) : value === undefined ? null : value) as SQLInputValue);
 
 const execute = (database: DatabaseSync, { sql, params }: DbStatement): DbResult => {
@@ -22,7 +25,7 @@ export const sqliteBackend = (path: string): Effect.Effect<DbBackend, SqlError.S
   Effect.acquireRelease(
     Effect.try({
       try: () => {
-        const database = new DatabaseSync(path.includes('?') ? path : path.replace(/^file:/, ''));
+        const database = new DatabaseSync(path.includes('?') ? path : path.replace(/^file:/, ''), { limits: D1_LIMITS });
         database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL');
         return database;
       },

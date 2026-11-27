@@ -30,7 +30,7 @@ import {
 import { Effect, Schema } from 'effect';
 import { listVisibleMeetingIds, requireScope } from './auth.ts';
 import { DbSafeInt, DbSha256, DbUtc } from './db.ts';
-import { diffMicros } from './sql-dialect.ts';
+import { diffMicros, inList } from './sql-dialect.ts';
 
 /** Runs `statement` and decodes its rows; an undecodable row is schema drift (a defect), SQL errors stay typed. */
 export const decodeRows = <A, I>(schema: Schema.Schema<A, I>, statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>) =>
@@ -99,7 +99,7 @@ export const visibleScope = (access: AccessScope) =>
 
 /** SQL condition: `column` names a visible meeting, or is NULL when workspace-level rows are visible. */
 export const visibleWhere = (sql: SqlClient.SqlClient, scope: VisibleScope, column: string) =>
- sql.or([sql.in(column, scope.meetings), ...(scope.workspaceLevel ? [sql`${sql(column)} IS NULL`] : [])]);
+ sql.or([inList(sql, column, scope.meetings), ...(scope.workspaceLevel ? [sql`${sql(column)} IS NULL`] : [])]);
 
 const ArtifactRow = Schema.Struct({ id: Schema.String, meeting_id: Schema.NullOr(Schema.String) });
 const ArtifactView = Schema.Struct({
@@ -143,10 +143,10 @@ export const resolveSources = (access: AccessScope, sources: ReadonlyArray<Sourc
   const segmentIds = sources.flatMap(source => ('segment_id' in source ? [source.segment_id] : []));
   const artifactIds = sources.flatMap(source => ('artifact_id' in source ? [source.artifact_id] : []));
   const scope = yield* visibleScope(access);
-  const segments = segmentIds.length === 0 ? [] : yield* segmentRows(access.workspace_id, sql`s.status = 'final' AND ${sql.in('s.id', segmentIds)}`);
+  const segments = segmentIds.length === 0 ? [] : yield* segmentRows(access.workspace_id, sql`s.status = 'final' AND ${inList(sql, 's.id', segmentIds)}`);
   const artifacts = artifactIds.length === 0
    ? []
-   : yield* decodeRows(ArtifactRow, sql`SELECT id, meeting_id FROM artifacts WHERE workspace_id = ${access.workspace_id} AND ${sql.in('id', artifactIds)}`);
+   : yield* decodeRows(ArtifactRow, sql`SELECT id, meeting_id FROM artifacts WHERE workspace_id = ${access.workspace_id} AND ${inList(sql, 'id', artifactIds)}`);
   const readable = new Set<string>([
    ...segments.filter(row => scope.meetings.includes(row.meeting_id)).map(row => row.id),
    ...artifacts.filter(row => (row.meeting_id === null ? scope.workspaceLevel : scope.meetings.includes(MeetingId.make(row.meeting_id)))).map(row => row.id),

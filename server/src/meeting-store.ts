@@ -19,7 +19,7 @@ import {
 import { Effect, Option, ParseResult, Schema } from 'effect';
 import { DbJson, DbSafeInt, DbUtc } from './db.ts';
 import { enqueueJob } from './jobs.ts';
-import { chunked, now } from './sql-dialect.ts';
+import { chunked, inList, now } from './sql-dialect.ts';
 
 /** Column list decoded by `MeetingRow`; `prefix` is a table alias such as `m.`. */
 export const meetingColumns = (prefix = '') =>
@@ -96,7 +96,7 @@ export const loadEpochs = (workspace_id: WorkspaceId, ids: ReadonlyArray<string>
     const rows = yield* SqlSchema.findAll({
       Request: Schema.Array(Schema.String),
       Result: EpochClock,
-      execute: keys => sql`SELECT id, sample_start, sample_rate, captured_at, timezone FROM capture_epochs WHERE workspace_id = ${workspace_id} AND id IN ${sql.in(keys)}`,
+      execute: keys => sql`SELECT id, sample_start, sample_rate, captured_at, timezone FROM capture_epochs WHERE workspace_id = ${workspace_id} AND ${inList(sql, 'id', keys)}`,
     })(ids);
     return new Map(rows.map(row => [row.id, row]));
   });

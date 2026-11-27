@@ -18,7 +18,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbUtc } from './db.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 import { onFinalSegments, refinalizeSealed } from './meetings.ts';
 import { workspaceIsLive } from './store.ts';
 
@@ -89,7 +89,7 @@ export const finalSegments = (access: AccessScope, source: SourceRange) =>
 
 /** Exact segment revisions by ID, for source validation; IDs outside the workspace are omitted. */
 export const getSegments = (access: AccessScope, ids: ReadonlyArray<TranscriptSegmentId>) =>
-  ids.length === 0 ? Effect.succeed([]) : segmentsWhere(sql => sql`workspace_id = ${access.workspace_id} AND ${sql.in('id', ids)}`);
+  ids.length === 0 ? Effect.succeed([]) : segmentsWhere(sql => sql`workspace_id = ${access.workspace_id} AND ${inList(sql, 'id', ids)}`);
 
 const CoverageRow = Schema.Struct({ sample_start: DbSafeInt, sample_end: DbSafeInt, origin: Schema.Literal('live', 'batch') });
 
@@ -178,7 +178,7 @@ export const recordFinalWindow = (input: FinalWindow) =>
     if (recorded === null) return [];
     // After the commit: scheduling reads meetings, and a transaction cannot read after its own writes. A replay of the window schedules again.
     yield* refinalizeSealed(workspace_id, epoch_id, track, input.window);
-    return recorded.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${sql.in('id', recorded)}`);
+    return recorded.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${inList(sql, 'id', recorded)}`);
   });
 
 /** Records a final window and hands any new segments to meeting assignment. */

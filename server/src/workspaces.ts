@@ -18,7 +18,7 @@ import { enqueueJob, REQUESTER_REFUSED } from './jobs.ts';
 import { closeWorkspaceSockets } from './media/open-sockets.ts';
 import { ObjectStore } from './providers/object-store.ts';
 import { PipedreamClient } from './providers/pipedream.ts';
-import { now, addSeconds, chunked } from './sql-dialect.ts';
+import { now, addSeconds, compoundGroups, inList } from './sql-dialect.ts';
 import { bumpPermissionRevision } from './store.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -225,21 +225,18 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | Pipe
           ['auth_organization', sql`id = ${workspace_id}`],
         ];
         const rows_deleted: Record<string, number> = {};
-        const counted = yield* sql<{ t: string; n: number }>`${sql.join(' UNION ALL ', false)(
-          targets.map(([table, where]) => sql`SELECT ${table} AS t, COUNT(*) AS n FROM ${sql(table)} WHERE ${where}`),
-        )}`;
-        for (const { t, n } of counted) rows_deleted[t] = n;
+        const counted = yield* Effect.forEach(compoundGroups(targets), group =>
+          sql<{ t: string; n: number }>`${sql.join(' UNION ALL ', false)(
+            group.map(([table, where]) => sql`SELECT ${table} AS t, COUNT(*) AS n FROM ${sql(table)} WHERE ${where}`),
+          )}`,
+        );
+        for (const { t, n } of counted.flat()) rows_deleted[t] = n;
         // Principals left with no membership in any other workspace (agents, devices, people only here) go with it.
         const orphans = (yield* sql<{ id: string }>`SELECT m.principal_id AS id FROM workspace_members m WHERE m.workspace_id = ${workspace_id}
           AND NOT EXISTS (SELECT 1 FROM workspace_members o WHERE o.principal_id = m.principal_id AND o.workspace_id <> ${workspace_id})`).map(row => row.id);
-        const orphanChunks = chunked(orphans);
         if (rows_deleted['workspace_members']! > 0) {
-          let identities = 0;
-          for (const ids of orphanChunks) {
-            const [row] = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM principal_identities WHERE principal_id IN ${sql.in(ids)}`;
-            identities += row!.n;
-          }
-          rows_deleted['principal_identities'] = identities;
+          const [row] = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM principal_identities WHERE ${inList(sql, 'principal_id', orphans)}`;
+          rows_deleted['principal_identities'] = row!.n;
           rows_deleted['principals'] = orphans.length;
         }
 
@@ -247,10 +244,8 @@ export const purgeWorkspace: JobHandler<SqlClient.SqlClient | ObjectStore | Pipe
         yield* sql`UPDATE context_items SET supersedes_id = NULL, supersedes_revision = NULL WHERE workspace_id = ${workspace_id}`;
         for (const [table, where] of targets) yield* sql`DELETE FROM ${sql(table)} WHERE ${where}`;
         yield* sql`UPDATE auth_session SET activeOrganizationId = NULL WHERE activeOrganizationId = ${workspace_id}`;
-        for (const ids of orphanChunks) {
-          yield* sql`DELETE FROM principal_identities WHERE principal_id IN ${sql.in(ids)}`;
-          yield* sql`DELETE FROM principals WHERE id IN ${sql.in(ids)}`;
-        }
+        yield* sql`DELETE FROM principal_identities WHERE ${inList(sql, 'principal_id', orphans)}`;
+        yield* sql`DELETE FROM principals WHERE ${inList(sql, 'id', orphans)}`;
         yield* sql`UPDATE workspaces SET name = '' WHERE id = ${workspace_id}`;
         const receipt: PurgeReceipt = { purged: true, deleted_by, prefixes, ...disconnected, rows_deleted };
         yield* sql`UPDATE jobs SET result = ${JSON.stringify(receipt)} WHERE id = ${job.id}`;

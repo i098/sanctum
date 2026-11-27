@@ -45,7 +45,7 @@ import { decodeRows, encodeCursor, getContextChanges, getSource, resolveSources,
 import { appendContextEvent } from './context-events.ts';
 import { DbJson, DbSafeInt, DbSha256, DbUtc } from './db.ts';
 import { LlmClient } from './llm.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 
 /** Most items one snapshot or search returns; `truncated` reports the rest. */
 const ITEM_LIMIT = 200;
@@ -571,7 +571,7 @@ const questionPage = (access: AccessScope, input: SearchContextParams, scoped: R
  Effect.gen(function*() {
   const sql = yield* SqlClient.SqlClient;
   const { page, chosen } = yield* questionChoice(access, input, scoped);
-  const rows = chosen.size === 0 ? [] : yield* latestItems(access.workspace_id, sql.and([...scoped, sql`ci.id IN ${sql.in([...chosen])}`]), CANDIDATE_LIMIT);
+  const rows = chosen.size === 0 ? [] : yield* latestItems(access.workspace_id, sql.and([...scoped, inList(sql, 'ci.id', [...chosen])]), CANDIDATE_LIMIT);
   const rest = new Set(rows.slice(limit).map(item => item.id));
   const held = page.items.reduce((mask, item, i) => (rest.has(item.id) ? mask | (1n << BigInt(i)) : mask), 0n);
   const next_cursor = held === 0n && !page.more ? null : Buffer.from(Schema.encodeSync(QuestionCursor)([access.workspace_id, access.principal.id,

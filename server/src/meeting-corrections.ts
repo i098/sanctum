@@ -34,7 +34,7 @@ import {
   selectMeeting,
   type TimedRange,
 } from './meeting-store.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 
 const atRevision = (access: AccessScope, meeting_id: MeetingId, expected: number) =>
   Effect.gen(function* () {
@@ -50,7 +50,7 @@ const atRevision = (access: AccessScope, meeting_id: MeetingId, expected: number
 const linkedActions = (access: AccessScope, meeting_ids: ReadonlyArray<MeetingId>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ id: string }>`SELECT id FROM actions WHERE workspace_id = ${access.workspace_id} AND meeting_id IN ${sql.in(meeting_ids)} ORDER BY id`;
+    const rows = yield* sql<{ id: string }>`SELECT id FROM actions WHERE workspace_id = ${access.workspace_id} AND ${inList(sql, 'meeting_id', meeting_ids)} ORDER BY id`;
     return rows.map(row => row.id);
   });
 

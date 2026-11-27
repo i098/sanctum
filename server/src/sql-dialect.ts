@@ -2,7 +2,7 @@
  * SQLite spellings of the MySQL time functions the domain code used. Timestamps are TEXT
  * `YYYY-MM-DD HH:MM:SS.ffffff` UTC; SQLite keeps milliseconds, so the last three digits are always 000.
  */
-import { Statement } from '@effect/sql';
+import { type SqlClient, Statement } from '@effect/sql';
 
 const FORMAT = "'%Y-%m-%d %H:%M:%f000'";
 
@@ -39,8 +39,21 @@ export const diffMicros = (from: Expression, to: Expression) =>
 /** Most bound parameters per statement D1 accepts. */
 const MAX_PARAMS = 100;
 
+const slices = <A>(rows: ReadonlyArray<A>, size: number): ReadonlyArray<ReadonlyArray<A>> =>
+  Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
+
 /** Splits `rows` so that a statement binding `paramsPerRow` values per row stays within D1's limit. */
-export const chunked = <A>(rows: ReadonlyArray<A>, paramsPerRow = 1): ReadonlyArray<ReadonlyArray<A>> => {
-  const size = Math.max(1, Math.floor(MAX_PARAMS / paramsPerRow));
-  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
-};
+export const chunked = <A>(rows: ReadonlyArray<A>, paramsPerRow = 1) => slices(rows, Math.max(1, Math.floor(MAX_PARAMS / paramsPerRow)));
+
+/** Most `SELECT` terms D1 accepts in one `UNION ALL`. */
+const MAX_COMPOUND_TERMS = 5;
+
+/** Splits the terms of a `UNION ALL` into groups that each run as one statement. */
+export const compoundGroups = <A>(terms: ReadonlyArray<A>) => slices(terms, MAX_COMPOUND_TERMS);
+
+/**
+ * `column IN (values)` with the list bound as one JSON parameter. `sql.in` binds one parameter per value, so a list
+ * as long as a workspace's meetings overflows D1's 100-parameter limit; this one never does. `column` is trusted.
+ */
+export const inList = (sql: SqlClient.SqlClient, column: string, values: ReadonlyArray<string>) =>
+  sql`${sql(column)} IN (SELECT value FROM json_each(${JSON.stringify(values)}))`;

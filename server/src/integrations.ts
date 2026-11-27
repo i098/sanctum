@@ -23,7 +23,7 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults, serverConfig } from './config.ts';
 import { DbSafeInt } from './db.ts';
-import { now } from './sql-dialect.ts';
+import { inList, now } from './sql-dialect.ts';
 import { type ActionComponent, type ActionProp, IntegrationFailure, PipedreamClient, makePipedreamClient } from './providers/pipedream.ts';
 
 export { IntegrationFailure };
@@ -53,7 +53,7 @@ const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string;
         ? sql`TRUE`
         : meetings.meeting_ids.length === 0
           ? sql`g.meeting_id IS NULL`
-          : sql`(g.meeting_id IS NULL OR ${sql.in('g.meeting_id', meetings.meeting_ids)})`;
+          : sql`(g.meeting_id IS NULL OR ${inList(sql, 'g.meeting_id', meetings.meeting_ids)})`;
     return yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: AccountRow,
