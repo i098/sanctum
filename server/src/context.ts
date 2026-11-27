@@ -393,9 +393,9 @@ const decodeSearchCursor = (cursor: string) =>
 /** A quoted FTS5 word prefix; words come from `TOKEN`, so they hold no quote. */
 const prefixTerm = (word: string) => `"${word}"*`;
 
-/** Items whose `context_items_fts` row matches any of `terms` in `columns`; `relevance` is the BM25 score, higher is better, 0 for a row that matched elsewhere. */
-const ftsAny = (sql: SqlClient.SqlClient, terms: ReadonlyArray<string>, columns: ReadonlyArray<'text' | 'text_joined'>) => {
- const query = `{${columns.join(' ')}} : (${terms.join(' OR ')})`;
+/** Items whose `context_items_fts` row matches the FTS5 `expression` in `columns`; `relevance` is the BM25 score, higher is better, 0 for a row that matched elsewhere. */
+const ftsMatch = (sql: SqlClient.SqlClient, expression: string, columns: ReadonlyArray<'text' | 'text_joined'>) => {
+ const query = `{${columns.join(' ')}} : (${expression})`;
  return {
   must: sql`ci.rowid IN (SELECT rowid FROM context_items_fts WHERE context_items_fts MATCH ${query})`,
   relevance: sql`COALESCE((SELECT -bm25(context_items_fts) FROM context_items_fts WHERE context_items_fts MATCH ${query} AND rowid = ci.rowid), 0)`,
@@ -403,22 +403,41 @@ const ftsAny = (sql: SqlClient.SqlClient, terms: ReadonlyArray<string>, columns:
 };
 
 /** Items matching any word as a prefix in `columns`: `must` selects them and `relevance` ranks them. */
-const anyPrefix = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, columns: ReadonlyArray<'text' | 'text_joined'>) => ftsAny(sql, words.map(prefixTerm), columns);
+const anyPrefix = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, columns: ReadonlyArray<'text' | 'text_joined'>) => ftsMatch(sql, words.map(prefixTerm).join(' OR '), columns);
+
+/** A word whose parts are all shorter than three characters is too short for the full-text index and matches as a substring. */
+const isSubstringWord = (word: string) => word.split('-').every(part => part.length < 3);
+
+/** A hyphenated word matches its joined form as a word prefix and its spaced form as a phrase. */
+const wordExpression = (word: string) => {
+ const parts = word.split('-');
+ return parts.length > 1 ? `(${prefixTerm(parts.join(''))} OR "${parts.join(' ')}")` : prefixTerm(word);
+};
+
+/**
+ * Conditions that together match all (`AND`) or any (`OR`) of `words`. However many words there are, they cost at most two bound
+ * parameters: the full-text words share one `MATCH` query and the substring words bind as one JSON list, to stay inside D1's
+ * 100-parameter limit.
+ */
+const wordMatches = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>, join: 'AND' | 'OR') => {
+ const substrings = words.filter(isSubstringWord);
+ const fulltext = words.filter(word => !isSubstringWord(word));
+ // shortcut: lower() folds ASCII only; upgrade if short non-ASCII search words matter.
+ const list = JSON.stringify(substrings);
+ return [
+  ...(fulltext.length === 0 ? [] : [ftsMatch(sql, fulltext.map(wordExpression).join(` ${join} `), ['text', 'text_joined']).must]),
+  ...(substrings.length === 0 ? []
+   : join === 'AND' ? [sql`NOT EXISTS (SELECT 1 FROM json_each(${list}) WHERE instr(lower(ci.text), value) = 0)`]
+   : [sql`EXISTS (SELECT 1 FROM json_each(${list}) WHERE instr(lower(ci.text), value) > 0)`]),
+ ];
+};
 
 /**
  * Every word is required: a full-text prefix match for three or more characters, a substring match for shorter ones. A hyphenated
  * word matches its spaced form as a phrase and its joined form as a word prefix; `text_joined` (text without hyphens) lets "offsite"
  * find "off-site". Hyphenated words whose parts are all shorter than three characters use the substring match.
  */
-export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
- const word = (w: string) => {
-  const parts = w.split('-');
-  // shortcut: lower() folds ASCII only; upgrade if short non-ASCII search words matter.
-  if (parts.every(part => part.length < 3)) return sql`instr(lower(ci.text), ${w}) > 0`;
-  return ftsAny(sql, parts.length > 1 ? [prefixTerm(parts.join('')), `"${parts.join(' ')}"`] : [prefixTerm(w)], ['text', 'text_joined']).must;
- };
- return sql.and(words.map(word));
-};
+export const termFilter = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => sql.and(wordMatches(sql, words, 'AND'));
 
 /** The question and helper words of a spoken question that rarely appear in the fact that answers it; one of them makes `q` a question. */
 const QUESTION_WORDS = new Set(['a', 'about', 'an', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'how', 'i', 'in', 'is', 'it',
@@ -457,7 +476,7 @@ Return only refs that appear in the list.`;
 const candidateMatch = (sql: SqlClient.SqlClient, words: ReadonlyArray<string>) => {
  const plain = words.filter(word => word.length >= 3 && !word.includes('-'));
  const fulltext = plain.length === 0 ? null : anyPrefix(sql, plain, ['text', 'text_joined']);
- const other = words.filter(word => !plain.includes(word)).map(word => termFilter(sql, [word]));
+ const other = wordMatches(sql, words.filter(word => !plain.includes(word)), 'OR');
  return { must: sql.or([...(fulltext === null ? [] : [fulltext.must]), ...other]), relevance: fulltext?.relevance ?? sql`0` };
 };
 

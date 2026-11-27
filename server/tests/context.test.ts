@@ -191,6 +191,24 @@ layer(Layer.merge(migratedDatabase, fixtureLlm([])), { timeout: 120_000 })('cont
       expect(plan.map(step => step.detail).join('\n')).toMatch(/context_items_fts VIRTUAL TABLE INDEX/);
     }));
 
+  it.effect('keyword search of more words than D1 binds in one statement still requires every word', () =>
+    Effect.gen(function*() {
+      const [, agent, device] = yield* seedWorkspace('SearchMany', ['owner', 'agent', 'device']);
+      const open = yield* seedMeeting(device!, { started_at: STARTED });
+      const segment = yield* seedSegment(open, 1, 3, 'Planning.');
+      const full = Array.from({ length: 60 }, (_, i) => `word${i}z`);
+      const short = Array.from({ length: 60 }, (_, i) => `n${i}`);
+      const all = [...full, ...short, 'off-site'];
+      const without = (skip: string) => all.filter(word => word !== skip).join(' ');
+      const add = (text: string, n: number) => addContextItem(agent!, { ...decision(open.meeting_id, segment, `many-${n}`, n), text });
+      const complete = yield* add(all.join(' '), 0);
+      yield* add(without('word30z'), 1);
+      yield* add(without('n30'), 2);
+      yield* add(without('off-site'), 3);
+      const page = yield* searchContext(agent!, { q: all.join(' '), limit: 10 });
+      expect(page.items.map(item => item.id)).toEqual([complete.id]);
+    }));
+
   it.effect('filters search by time range and kind and pages it newest first without gaps', () =>
     Effect.gen(function*() {
       const [owner, agent, device] = yield* seedWorkspace('SearchRange', ['owner', 'agent', 'device']);
@@ -405,6 +423,10 @@ layer(Layer.empty, { timeout: 120_000 })('context HTTP API', it => {
       expect(yield* search('Falcon owner')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
       expect(prompts).toEqual([]);
       expect(yield* search('Who owns the Falcon project?')).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
+      // A question with more content words than D1 binds in one statement still searches; the extra words match nothing.
+      const long = `Who owns the Falcon project? ${Array.from({ length: 99 }, (_, i) => `z${i + 1}`).join(' ')}`;
+      judged[long] = judged['Who owns the Falcon project?']!;
+      expect(yield* search(long)).toEqual({ status: 200, texts: ['The Falcon project owner is Peter.'] });
       // The candidates hold both owners; the judge, not a word rule, leaves Harbor out.
       expect(prompts.at(-1)).toContain('The Harbor project owner is Anna.');
       expect(yield* search('Who owns onboarding now?')).toEqual({ status: 200, texts: onboarding });

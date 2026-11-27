@@ -38,4 +38,14 @@ describe('D1 statement limits', () => {
     expect(groups.every(group => group.length <= 5)).toBe(true);
     expect(groups.flat()).toEqual(Array.from({ length: 47 }, (_, index) => index));
   });
+
+  it.effect('refuse a string over 2,000,000 bytes and accept one of exactly that size', () =>
+    withDb(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        expect(yield* sql<{ n: number }>`SELECT length(${'x'.repeat(2_000_000)}) AS n`).toEqual([{ n: 2_000_000 }]);
+        expect((yield* Effect.flip(sql`SELECT length(${'x'.repeat(2_000_001)})`)).message).toMatch(/string or blob too big/);
+      }),
+    ),
+  );
 });
