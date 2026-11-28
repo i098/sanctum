@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { BASELINE, digest, loadSchema, snapshot, sqliteRows, verify, type Row, type Table } from '../scripts/d1-sync.ts';
+import { BASELINE, d1Select, digest, loadSchema, snapshot, sqliteRows, verify, type Row, type Table } from '../scripts/d1-sync.ts';
 
 const baseline = readFileSync(BASELINE, 'utf8');
 const schema = loadSchema(baseline);
@@ -79,4 +79,11 @@ test('verify names the table whose rows differ', async () => {
   const { target } = await load(data);
   target.exec("UPDATE principals SET display_name = 'changed'");
   assert.deepEqual(await verify(schema, source(data), sqliteRows(target)), ['principals: TiDB 1 rows, D1 1 rows (checksums differ)']);
+});
+
+test('d1Select keeps a NULL BLOB NULL and hex-encodes a present one', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE t (a BLOB, b BLOB); INSERT INTO t VALUES (NULL, x\'0aff\')');
+  const table: Table = { name: 't', selfReference: false, columns: [{ name: 'a', type: 'BLOB' }, { name: 'b', type: 'BLOB' }] };
+  assert.deepEqual({ ...db.prepare(`SELECT ${d1Select(table)} FROM t`).get() }, { a: null, b: '0AFF' });
 });
