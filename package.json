@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Sanctum application workspaces and handoff documentation tools",
   "engines": {
-    "node": ">=24.12.0"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

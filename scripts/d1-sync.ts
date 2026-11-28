@@ -133,7 +133,7 @@ async function mysqlRows(url: string): Promise<{ read: ReadRows; close: () => Pr
     dateStrings: true,
     supportBigNumbers: true,
     bigNumberStrings: true,
-    typeCast: (field, next) => (field.type === 'JSON' ? field.string() : next()),
+    typeCast: (field, next) => (field.type === 'JSON' ? field.string('utf8') : next()),
   });
   const read: ReadRows = async table => {
     const order = table.selfReference ? ' ORDER BY created_at' : '';
@@ -143,6 +143,11 @@ async function mysqlRows(url: string): Promise<{ read: ReadRows; close: () => Pr
   return { read, close: () => connection.end() };
 }
 
+/** Column list for reading D1: BLOBs as hex; hex(NULL) is '' in SQLite, so NULL stays NULL explicitly. */
+export function d1Select(table: Table): string {
+  return table.columns.map(c => (c.type === 'BLOB' ? `CASE WHEN ${c.name} IS NULL THEN NULL ELSE hex(${c.name}) END AS ${c.name}` : c.name)).join(', ');
+}
+
 /** Rows of the remote D1 database through `wrangler d1 execute`, paged by rowid. */
 function d1Rows(config: string, database: string): ReadRows {
   const query = (sql: string) => {
@@ -150,7 +155,7 @@ function d1Rows(config: string, database: string): ReadRows {
     return (JSON.parse(out) as Array<{ results: Row[] }>)[0]!.results;
   };
   return async table => {
-    const select = table.columns.map(c => (c.type === 'BLOB' ? `hex(${c.name}) AS ${c.name}` : c.name)).join(', ');
+    const select = d1Select(table);
     const rows: Row[] = [];
     for (let after = 0; ; ) {
       const page = query(`SELECT rowid AS _rowid, ${select} FROM ${table.name} WHERE rowid > ${after} ORDER BY rowid LIMIT 2000`);

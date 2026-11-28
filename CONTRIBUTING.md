@@ -22,7 +22,7 @@ npm run docs:build
 Commit regenerated docs/build/blueprint.html, docs/build/EXECUTE.txt, and docs/build/snippets when changing their source documents.
 The sources are docs/build/HANDOFF.md, docs/build/tasks/plan.md, docs/build/tasks/todo.md, and scripts/handoff.ts and scripts/handoff-template.html.
 Do not hand-edit generated output.
-Node.js 24.12+ runs the TypeScript tools directly; `npm run check` separately typechecks them and runs behavior tests.
+Node.js 24.15+ runs the TypeScript tools directly; `npm run check` separately typechecks them and runs behavior tests.
 Python is needed only when implementing/testing the thin Python client SDK.
 The current checks validate documentation and handoff integrity; application tests must be added with implementation.
 

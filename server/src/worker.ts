@@ -1,6 +1,6 @@
 /**
  * Worker entrypoint: same image as the API, separate process and resource layers. Runs
- * durable MySQL jobs (context, notes, recording assembly, batch ASR, memory, matching,
+ * durable database jobs (context, notes, recording assembly, batch ASR, memory, matching,
  * actions, WorkOS organization sync) that continue after browsers disconnect or the API restarts.
  */
 import { NodeRuntime } from '@effect/platform-node';
@@ -26,6 +26,6 @@ if (import.meta.main) {
     // `workos.sync` registers beside its layer: one more import in job-handlers.ts would make it a Sentrux god file.
     const handlers = { ...jobHandlers, 'workos.sync': syncWorkosEvents };
     const run = Effect.zipRight(requireCurrentSchema(loadMigrations()), Effect.zipRight(armWorkosSync, runWorker<WorkerServices | WorkosOrganizations>(handlers)));
-    return yield* Effect.provide(run, [dbLayer(config.mysql), PyannoteLive, MediaProvidersLive, LlmLive, PipedreamLive, WorkosOrganizationsFromEnv]);
+    return yield* Effect.provide(run, [dbLayer(config.db), PyannoteLive, MediaProvidersLive, LlmLive, PipedreamLive, WorkosOrganizationsFromEnv]);
   }).pipe(NodeRuntime.runMain);
 }

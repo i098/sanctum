@@ -1,12 +1,13 @@
 import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, type CaptureEpochId, type ListenerId, RecordingChunkId } from '@sanctum/contracts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { syntheticPcm } from '@sanctum/contracts/fixtures';
 import { randomUUID } from 'node:crypto';
 import { Effect, Layer } from 'effect';
 import { ObjectStore } from '../src/providers/object-store.ts';
 import { listCommittedChunks } from '../src/recordings.ts';
-import { api, chunk, claimListener, fakeSpeech, MigratedDatabase, newEpochId, openSocket, seedDevice, uploadChunk, serveApi, startMessage } from './support/media.ts';
+import { api, chunk, claimListener, fakeSpeech, MigratedDatabase, newEpochId, openSocket, seedDevice, uploadChunk, serveMediaApi, startMessage } from './support/media.ts';
 import { serverLayer } from '../src/main.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -32,7 +33,7 @@ function instrumentedStore() {
 const setup = Effect.gen(function* () {
   const tokens = new Map<string, AccessScope>();
   const store = instrumentedStore();
-  const host = yield* serveApi(serverLayer, tokens, Layer.merge(store.layer, fakeSpeech().layer));
+  const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(store.layer, fakeSpeech().layer));
   const device = yield* seedDevice('Room A');
   tokens.set('device', device);
   const { listener_id, lease_generation } = yield* claimListener(host, 'device');
@@ -65,7 +66,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('recording chunk uploads', it => {
       expect((yield* chunkState(first.manifest.chunk_id))[0]!.upload_state).toBe('committed');
 
       const [job] = yield* sql<{ work_key: string; is_delayed: number }>`
-        SELECT work_key, available_at > UTC_TIMESTAMP(6) + INTERVAL 50 SECOND AS is_delayed FROM jobs WHERE workspace_id = ${device.workspace_id} AND kind = 'transcript.reconcile'`;
+        SELECT work_key, available_at > ${addSeconds(now, 50)} AS is_delayed FROM jobs WHERE workspace_id = ${device.workspace_id} AND kind = 'transcript.reconcile'`;
       expect(job).toMatchObject({ work_key: `${epoch_id}:0:0` });
       expect(Number(job!.is_delayed)).toBe(1);
 

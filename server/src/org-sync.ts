@@ -17,7 +17,8 @@ import { engineeringDefaults, serverConfig } from './config.ts';
 import type { JobHandler } from './job-types.ts';
 import { enqueueJob } from './jobs.ts';
 import { makeWorkosClient, type OrganizationMembership, PAGE_LIMIT, type WorkosClient, type WorkosEvent, type WorkosOptions } from './providers/workos.ts';
-import { linkWorkspaceOrg, roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
+import { inList, now } from './sql-dialect.ts';
+import { roleFromSlugs, setMembership, workspaceForOrg } from './store.ts';
 
 interface WorkosOrganizationSettings {
   readonly client: WorkosClient;
@@ -106,7 +107,7 @@ const reconcileMemberships = ({ client, issuer }: WorkosOrganizationSettings, id
     const memberships = yield* client.listMemberships(identity.subject);
     const orgIds = memberships.map(membership => membership.organization_id);
     const links = orgIds.length === 0 ? [] : yield* sql<{ org_id: string; workspace_id: WorkspaceId }>`SELECT org_id, workspace_id FROM workspace_orgs
-      WHERE issuer = ${issuer} AND org_id IN ${sql.in(orgIds)}`;
+      WHERE issuer = ${issuer} AND ${inList(sql, 'org_id', orgIds)}`;
     const desired = new Map(links.map(link => [link.workspace_id, roleOf(memberships.find(membership => membership.organization_id === link.org_id)!)]));
     let principal = yield* identityPrincipal(identity);
     if (Option.isSome(principal)) {
@@ -150,11 +151,12 @@ const createSelfServeWorkspace = (settings: WorkosOrganizationSettings, identity
       Effect.gen(function* () {
         if (Option.isSome(yield* workspaceForOrg({ issuer, org_id: organization.id }))) return;
         const workspace_id = WorkspaceId.make(randomUUID());
-        yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${organization.name.slice(0, 200)}, ${request.timezone}, UTC_TIMESTAMP(6))`;
-        yield* linkWorkspaceOrg({ workspace_id, issuer, org_id: organization.id });
-        yield* armWorkosSync;
+        yield* sql`INSERT INTO workspaces (id, name, timezone, created_at) VALUES (${workspace_id}, ${organization.name.slice(0, 200)}, ${request.timezone}, ${now})`;
+        yield* sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES (${issuer}, ${organization.id}, ${workspace_id}, ${now})`;
       }),
     );
+    // After the commit: arming reads. Re-arming is idempotent, so a retry covers a failure here.
+    yield* armWorkosSync;
     yield* reconcileMemberships(settings, identity, name);
   });
 
@@ -172,7 +174,16 @@ export const linkExistingWorkspace = (settings: WorkosOrganizationSettings, work
     if (linked !== undefined) return;
     const [workspace] = yield* sql<{ name: string }>`SELECT name FROM workspaces WHERE id = ${workspace_id}`;
     const organization = yield* ownedOrganization(settings, identity, `sanctum-workspace:${workspace_id}`, workspace!.name);
-    yield* sql.withTransaction(Effect.zipRight(linkWorkspaceOrg({ workspace_id, issuer, org_id: organization.id }), armWorkosSync));
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const holder = yield* workspaceForOrg({ issuer, org_id: organization.id });
+        if (Option.isSome(holder) && holder.value !== workspace_id) {
+          return yield* Effect.dieMessage(`Organization ${organization.id} or workspace ${workspace_id} is already linked differently at ${issuer}`);
+        }
+        yield* sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at) VALUES (${issuer}, ${organization.id}, ${workspace_id}, ${now}) ON CONFLICT DO NOTHING`;
+      }),
+    );
+    yield* armWorkosSync;
     yield* reconcileMemberships(settings, identity, null);
   });
 
@@ -213,7 +224,8 @@ const applyEvent = (issuer: string, event: WorkosEvent) =>
 
 /**
  * `workos.sync`: re-arms itself first (so a failed run still schedules the next), then applies new
- * events in order, saving the cursor in the same transaction as each event's effect.
+ * events in order, saving the cursor after each event's effect. A transaction cannot read after its
+ * first write and an event can touch several memberships, so the effect and the cursor commit apart.
  */
 export const syncWorkosEvents: JobHandler<SqlClient.SqlClient | WorkosOrganizations> = job =>
   Effect.gen(function* () {
@@ -223,19 +235,15 @@ export const syncWorkosEvents: JobHandler<SqlClient.SqlClient | WorkosOrganizati
     const { intervalMs, pagesPerRun } = engineeringDefaults.workosSync;
     const sql = yield* SqlClient.SqlClient;
     yield* enqueueJob({ workspace_id: job.workspace_id, kind: 'workos.sync', work_key: SYNC_KEY, payload: {}, requested_by: null, delay_ms: intervalMs });
-    const [saved] = yield* sql<{ cursor: string }>`SELECT \`cursor\` FROM sync_cursors WHERE name = ${SYNC_CURSOR}`;
+    const [saved] = yield* sql<{ cursor: string }>`SELECT cursor FROM sync_cursors WHERE name = ${SYNC_CURSOR}`;
     let cursor = saved?.cursor ?? null;
     let applied = 0;
     for (let page = 0; page < pagesPerRun; page++) {
       const events = yield* client.listEvents(cursor);
       for (const event of events) {
-        yield* sql.withTransaction(
-          Effect.zipRight(
-            applyEvent(issuer, event),
-            sql`INSERT INTO sync_cursors (name, \`cursor\`, updated_at) VALUES (${SYNC_CURSOR}, ${event.id}, UTC_TIMESTAMP(6)) AS new
-              ON DUPLICATE KEY UPDATE \`cursor\` = new.\`cursor\`, updated_at = new.updated_at`,
-          ),
-        );
+        yield* applyEvent(issuer, event);
+        yield* sql`INSERT INTO sync_cursors (name, cursor, updated_at) VALUES (${SYNC_CURSOR}, ${event.id}, ${now})
+          ON CONFLICT (name) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`;
         cursor = event.id;
         applied++;
       }

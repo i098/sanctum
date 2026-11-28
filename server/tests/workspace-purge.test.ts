@@ -8,12 +8,13 @@ import { openSession } from '../src/auth.ts';
 import { addContextItem, reviseContextItem } from '../src/context.ts';
 import { claimJob, completeJob, type Lease, sweepJobs } from '../src/job-runner.ts';
 import type { ClaimedJob } from '../src/job-types.ts';
-import { enqueueJob } from '../src/jobs.ts';
 import { IntegrationFailure } from '../src/providers/pipedream.ts';
 import { addMember } from '../src/store.ts';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { PURGED_TABLES, purgeWorkspace } from '../src/workspaces.ts';
 import { migratedDatabase, seedMeeting, seedSegment } from './support/context.ts';
 import { seedWorkspace } from './support/fixtures.ts';
+import { enqueuedId } from './support/jobs.ts';
 import { type MemoryObjectStore, memoryObjectStore } from './support/object-store.ts';
 import { fixturePipedream, type PipedreamFixture } from './support/pipedream.ts';
 
@@ -25,7 +26,7 @@ const seed = (name: string, store: MemoryObjectStore) =>
     const sql = yield* SqlClient.SqlClient;
     const [owner, member, device] = yield* seedWorkspace(name, ['owner', 'member', 'device']);
     const workspace_id = owner!.workspace_id;
-    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES ('https://issuer.test', ${randomUUID()}, ${owner!.principal.id}, UTC_TIMESTAMP(6))`;
+    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES ('https://issuer.test', ${randomUUID()}, ${owner!.principal.id}, ${now})`;
     yield* openSession({ workspace_id, principal_id: member!.principal.id });
     yield* createAgent(owner!, researcher);
     const meeting = yield* seedMeeting(device!, { started_at: '2026-10-01 17:00:00' });
@@ -51,8 +52,8 @@ const seed = (name: string, store: MemoryObjectStore) =>
 const deleteNow = (owner: AccessScope) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* sql`UPDATE workspaces SET deleted_at = UTC_TIMESTAMP(6) - INTERVAL 8 DAY, purge_after = UTC_TIMESTAMP(6) - INTERVAL 1 DAY WHERE id = ${owner.workspace_id}`;
-    return yield* enqueueJob({ workspace_id: owner.workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: owner.principal.id }, requested_by: null });
+    yield* sql`UPDATE workspaces SET deleted_at = ${addSeconds(now, -8 * 86_400)}, purge_after = ${addSeconds(now, -86_400)} WHERE id = ${owner.workspace_id}`;
+    return yield* enqueuedId({ workspace_id: owner.workspace_id, kind: 'workspace.purge', work_key: 'purge', payload: { deleted_by: owner.principal.id }, requested_by: null });
   });
 
 const counts = (workspace_id: WorkspaceId) =>
@@ -74,7 +75,7 @@ const purge = (job: ClaimedJob, store: MemoryObjectStore, pipedream: PipedreamFi
 /** A stored Pipedream account of `owner` in its workspace, under the workspace's external user. */
 const storeAccount = (owner: AccessScope, provider_account_id: string) =>
   Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO integration_accounts (id, workspace_id, owner_principal_id, external_user_id, provider_account_id, app_slug, status, created_at, updated_at)
-    VALUES (${randomUUID()}, ${owner.workspace_id}, ${owner.principal.id}, ${`${owner.workspace_id}.${owner.principal.id}`}, ${provider_account_id}, 'google_drive', 'active', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`);
+    VALUES (${randomUUID()}, ${owner.workspace_id}, ${owner.principal.id}, ${`${owner.workspace_id}.${owner.principal.id}`}, ${provider_account_id}, 'google_drive', 'active', ${now}, ${now})`);
 
 layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
   it.effect('purges objects and rows exactly once across a worker restart and leaves other workspaces alone', () =>
@@ -95,7 +96,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       expect(yield* Effect.flip(run(first))).toMatchObject({ _tag: 'JobFailure', retryable: true });
       expect(store.deleted.length).toBeGreaterThanOrEqual(3);
       expect(store.deleted.length).toBeLessThan(a.keys.length);
-      yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${jobId}`;
+      yield* sql`UPDATE jobs SET lease_until = ${addSeconds(now, -1)} WHERE id = ${jobId}`;
       yield* sweepJobs;
 
       const second = yield* claim;
@@ -123,7 +124,8 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const [tombstone] = yield* sql<{ name: string }>`SELECT name FROM workspaces WHERE id = ${a.workspace_id}`;
       expect(tombstone!.name).toBe('');
       const [job] = yield* sql<{ status: string; result: unknown }>`SELECT status, result FROM jobs WHERE id = ${jobId}`;
-      expect(job).toMatchObject({ status: 'succeeded', result: outcome.status === 'succeeded' ? outcome.result : null });
+      // The result column is JSON text.
+      expect({ status: job!.status, result: JSON.parse(String(job!.result)) }).toEqual({ status: 'succeeded', result: outcome.status === 'succeeded' ? outcome.result : null });
     }),
   );
 
@@ -132,7 +134,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const sql = yield* SqlClient.SqlClient;
       const store = memoryObjectStore();
       const a = yield* seed('Anchor', store);
-      const sync = yield* enqueueJob({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
+      const sync = yield* enqueuedId({ workspace_id: a.workspace_id, kind: 'workos.sync', work_key: 'events', payload: {}, requested_by: null });
       yield* deleteNow(a.owner);
       const lease = yield* claim;
       expect(yield* purge(lease.job, store)).toMatchObject({ status: 'succeeded', result: { purged: true } });
@@ -148,14 +150,14 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       const a = yield* seed('Purged', store);
       const b = yield* seed('Kept', store);
       const user = randomUUID();
-      yield* sql`INSERT INTO auth_user (id, name, email, emailVerified) VALUES (${user}, 'Ada', ${`${user}@fixture.test`}, false)`;
+      yield* sql`INSERT INTO auth_user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (${user}, 'Ada', ${`${user}@fixture.test`}, 0, ${now}, ${now})`;
       for (const id of [a.workspace_id, b.workspace_id]) {
-        yield* sql`INSERT INTO auth_organization (id, name, slug, createdAt) VALUES (${id}, 'Team', ${id}, UTC_TIMESTAMP(3))`;
-        yield* sql`INSERT INTO auth_member (id, organizationId, userId, role, createdAt) VALUES (${randomUUID()}, ${id}, ${user}, 'owner', UTC_TIMESTAMP(3))`;
-        yield* sql`INSERT INTO auth_invitation (id, organizationId, email, role, status, expiresAt, inviterId)
-          VALUES (${randomUUID()}, ${id}, 'invitee@fixture.test', 'member', 'pending', UTC_TIMESTAMP(3) + INTERVAL 2 DAY, ${user})`;
-        yield* sql`INSERT INTO auth_session (id, expiresAt, token, updatedAt, userId, activeOrganizationId)
-          VALUES (${randomUUID()}, UTC_TIMESTAMP(3) + INTERVAL 1 DAY, ${randomUUID()}, UTC_TIMESTAMP(3), ${user}, ${id})`;
+        yield* sql`INSERT INTO auth_organization (id, name, slug, createdAt) VALUES (${id}, 'Team', ${id}, ${now})`;
+        yield* sql`INSERT INTO auth_member (id, organizationId, userId, role, createdAt) VALUES (${randomUUID()}, ${id}, ${user}, 'owner', ${now})`;
+        yield* sql`INSERT INTO auth_invitation (id, organizationId, email, role, status, expiresAt, createdAt, inviterId)
+          VALUES (${randomUUID()}, ${id}, 'invitee@fixture.test', 'member', 'pending', ${addSeconds(now, 2 * 86_400)}, ${now}, ${user})`;
+        yield* sql`INSERT INTO auth_session (id, expiresAt, token, createdAt, updatedAt, userId, activeOrganizationId)
+          VALUES (${randomUUID()}, ${addSeconds(now, 86_400)}, ${randomUUID()}, ${now}, ${now}, ${user}, ${id})`;
       }
       yield* deleteNow(a.owner);
       const lease = yield* claim;
@@ -206,7 +208,7 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
       // Nothing is deleted while a required disconnect fails, so the retry still finds every account.
       expect(store.deleted).toEqual([]);
       expect((yield* counts(a.workspace_id))['integration_accounts']).toBe(1);
-      yield* sql`UPDATE jobs SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${jobId}`;
+      yield* sql`UPDATE jobs SET lease_until = ${addSeconds(now, -1)} WHERE id = ${jobId}`;
       yield* sweepJobs;
 
       const second = yield* claim;
@@ -228,8 +230,9 @@ layer(migratedDatabase, { timeout: 120_000 })('workspace purge', it => {
   it.effect('covers every table holding workspace rows', () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const tables = yield* sql<{ name: string }>`SELECT table_name AS name FROM information_schema.columns
-        WHERE table_schema = DATABASE() AND column_name = 'workspace_id' ORDER BY table_name`;
+      // D1 refuses `pragma_table_info` on its own `_cf_*` tables with SQLITE_AUTH.
+      const tables = yield* sql<{ name: string }>`SELECT t.name FROM sqlite_master t, pragma_table_info(t.name) c
+        WHERE t.type = 'table' AND t.name NOT GLOB '_cf_*' AND c.name = 'workspace_id' ORDER BY t.name`;
       expect(tables.map(table => table.name).sort()).toEqual([...PURGED_TABLES, 'jobs', 'workspace_members'].sort());
     }),
   );

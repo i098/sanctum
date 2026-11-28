@@ -1,18 +1,26 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ClientMetadataResourceFetch } from '@better-auth/oauth-provider';
+import { HttpServer } from '@effect/platform';
 import { SqlClient } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { Effect, Option, Redacted } from 'effect';
+import { ConfigProvider, Context, Effect, Layer, Option, Redacted } from 'effect';
 import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTVerifyGetKey } from 'jose';
-import { inject } from 'vitest';
+import { type DbOptions, dbLayer } from '../src/db.ts';
 import { createIssuer, registerSanctumClient } from '../src/issuer.ts';
-import { freshDatabase, migrateDatabase, type TestDatabase } from './support/database.ts';
+import { serverLayer } from '../src/main.ts';
+import { McpAuthorizationServer } from '../src/mcp.ts';
+import { loadMigrations, migrate } from '../src/migrate.ts';
+import { now } from '../src/sql-dialect.ts';
+import { freshDatabase, migrateDatabase } from './support/database.ts';
+import { fakeApi, fakeDomain } from './support/fake-domain.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { serveFake } from './support/serve.ts';
-import { connectAdmin } from './support/mysql-server.ts';
 
 const ORIGIN = 'https://sanctum.fixture.test';
 const ISSUER = `${ORIGIN}/idp`;
@@ -46,9 +54,9 @@ const register = (send: Send, body: Record<string, unknown> = {}) =>
 
 const migratedDatabase = Effect.tap(freshDatabase, migrateDatabase);
 
-/** An issuer on `mysql` whose pool closes with the scope. */
-const openIssuer = (mysql: TestDatabase['mysql'], fetchMetadata?: ClientMetadataResourceFetch) =>
-  Effect.acquireRelease(Effect.sync(() => createIssuer(settings, mysql, fetchMetadata)), ({ pool }) => Effect.promise(() => pool.end()));
+/** An issuer on `db` whose connection closes with the scope. */
+const openIssuer = (db: DbOptions, fetchMetadata?: ClientMetadataResourceFetch) =>
+  Effect.acquireRelease(Effect.sync(() => createIssuer(settings, db, fetchMetadata)), ({ database }) => Effect.sync(() => database.close()));
 
 /** Registers a user and returns its subject plus the issuer session cookie a browser would hold. */
 async function signUp(send: Send) {
@@ -96,12 +104,12 @@ async function authorize(send: Send, cookie: string, client: string, params: Rec
 }
 
 describe('embedded Better Auth issuer', () => {
-  it.scoped('fits migrations 011 and 013: Better Auth finds no schema drift once Sanctum has migrated', () =>
+  it.scoped('fits migration 0002: Better Auth finds no schema drift once Sanctum has migrated', () =>
     Effect.gen(function* () {
       const database = yield* freshDatabase;
-      // Better Auth caches the result per pool, so each check uses its own issuer.
+      // Better Auth caches the result per connection, so each check uses its own issuer.
       const check = Effect.scoped(
-        Effect.flatMap(openIssuer(database.mysql), ({ auth }) => Effect.promise(async () => (await auth.$context).checkSchema!()!.then(() => 'current', (error: Error) => error.message))),
+        Effect.flatMap(openIssuer(database.db), ({ auth }) => Effect.promise(async () => (await auth.$context).checkSchema!()!.then(() => 'current', (error: Error) => error.message))),
       );
       expect(yield* check).toMatch(/Missing tables/);
       yield* migrateDatabase(database);
@@ -135,7 +143,7 @@ describe('embedded Better Auth issuer', () => {
       // Sign-in links the subject to a member; here the fixture does it directly.
       const [member] = yield* Effect.provide(seedWorkspace('Embedded', ['member']), db);
       yield* Effect.provide(
-        Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${user}, ${member!.principal.id}, UTC_TIMESTAMP(6))`),
+        Effect.flatMap(SqlClient.SqlClient, sql => sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at) VALUES (${ISSUER}, ${user}, ${member!.principal.id}, ${now})`),
         db,
       );
       const client = new Client({ name: 'issuer-test', version: '1.0.0' });
@@ -198,9 +206,9 @@ describe('embedded Better Auth issuer', () => {
     Effect.gen(function* () {
       const database = yield* migratedDatabase;
       const redirect = new URL('https://sanctum.fixture.test/auth/callback');
-      const clientId = yield* registerSanctumClient(settings, database.mysql, redirect);
-      const { auth, pool } = yield* openIssuer(database.mysql);
-      const [rows] = yield* Effect.promise(() => pool.query('SELECT clientId, clientSecret, skipConsent, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client'));
+      const clientId = yield* registerSanctumClient(settings, database.db, redirect);
+      const { auth, database: issuerDb } = yield* openIssuer(database.db);
+      const rows = issuerDb.prepare('SELECT clientId, clientSecret, skipConsent, tokenEndpointAuthMethod, redirectUris FROM auth_oauth_client').all();
       expect(rows).toHaveLength(1);
       const [row] = rows as Array<{ clientId: string; clientSecret: string | null; skipConsent: number; tokenEndpointAuthMethod: string; redirectUris: unknown }>;
       expect(row).toMatchObject({ clientId, clientSecret: null, skipConsent: 1, tokenEndpointAuthMethod: 'none' });
@@ -230,7 +238,7 @@ describe('embedded Better Auth issuer', () => {
       const database = yield* migratedDatabase;
       const document = { client_id: clientId, client_name: 'Fixture CIMD client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' };
       const fetchMetadata = async () => new Response(JSON.stringify(document), { headers: { 'content-type': 'application/json' } });
-      const { auth, pool } = yield* openIssuer(database.mysql, fetchMetadata);
+      const { auth, database: issuerDb } = yield* openIssuer(database.db, fetchMetadata);
       const send = sendTo(auth);
 
       const { user, cookie } = yield* Effect.promise(() => signUp(send));
@@ -239,28 +247,37 @@ describe('embedded Better Auth issuer', () => {
       expect(token.refresh_token).toBeDefined();
       // A resource-bound JWT access token is not stored; only the opaque one from a resource-less grant is.
       yield* Effect.promise(() => authorize(send, cookie, clientId, { scope: 'openid profile' }));
-      const stored = (table: string) => Effect.promise(() => pool.query(`SELECT DISTINCT clientId FROM ${table}`).then(([rows]) => rows));
+      const stored = (table: string) => Effect.sync(() => issuerDb.prepare(`SELECT DISTINCT clientId FROM ${table}`).all());
       for (const table of ['auth_oauth_consent', 'auth_oauth_access_token', 'auth_oauth_refresh_token']) {
         expect(yield* stored(table), table).toEqual([{ clientId }]);
       }
     }),
   );
 
-  it.effect('closes its own pool with the server scope', () =>
+  it('refuses to start on the D1 gateway or a memory database, which cannot hold the issuer tables', () => {
+    for (const url of ['http://d1.internal', 'https://d1.internal', ':memory:']) {
+      expect(() => createIssuer(settings, { url }), url).toThrow(/needs a file: SANCTUM_DB_URL/);
+    }
+  });
+
+  it.effect('closes its own connection with the server scope', () =>
     Effect.gen(function* () {
-      const database = yield* Effect.scoped(
+      const dir = mkdtempSync(join(tmpdir(), 'sanctum-issuer-'));
+      yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(dir, { recursive: true, force: true })));
+      const db = { url: `file:${join(dir, 'sanctum.db')}` };
+      yield* Effect.provide(migrate(loadMigrations()), dbLayer(db));
+      yield* Effect.scoped(
         Effect.gen(function* () {
-          const { url, db } = yield* serveIssuer;
-          // Touches the issuer's pool through a database read.
-          expect((yield* Effect.promise(() => fetch(`${url}/idp/jwks`))).status).toBe(200);
-          const rows = yield* Effect.provide(Effect.flatMap(SqlClient.SqlClient, sql => sql<{ name: string }>`SELECT DATABASE() AS name`), db);
-          return rows[0]!.name;
+          const domain = fakeDomain();
+          const layer = serverLayer({ apiPort: 0, db }, domain.authenticator, { api: fakeApi(domain), mcp: Layer.succeed(McpAuthorizationServer, Option.none()) });
+          const address = Context.get(yield* Layer.build(layer), HttpServer.HttpServer).address;
+          if (address._tag !== 'TcpAddress') throw new Error('expected TCP');
+          // Touches the issuer's connection through a database read.
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${address.port}/idp/jwks`))).status).toBe(200);
         }),
-      );
-      const admin = yield* Effect.promise(() => connectAdmin(inject('mysqlAdminUrl')));
-      const open = () => admin.query('SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE DB = ?', [database]).then(([rows]) => (rows as Array<{ n: number }>)[0]!.n);
-      yield* Effect.promise(() => expect.poll(open, { timeout: 5_000 }).toBe(0));
-      yield* Effect.promise(() => admin.end());
-    }),
+      ).pipe(Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env))).pipe(ConfigProvider.orElse(ConfigProvider.fromEnv))));
+      // SQLite deletes the write-ahead log when its last connection closes; a leaked issuer connection would leave it.
+      expect(readdirSync(dir)).toEqual(['sanctum.db']);
+    }).pipe(Effect.scoped),
   );
 });

@@ -18,6 +18,7 @@ import {
 } from '@sanctum/contracts';
 import { Effect, Option, Schema } from 'effect';
 import { DbSafeInt, DbUtc } from './db.ts';
+import { inList, now } from './sql-dialect.ts';
 import { onFinalSegments, refinalizeSealed } from './meetings.ts';
 import { workspaceIsLive } from './store.ts';
 
@@ -88,7 +89,7 @@ export const finalSegments = (access: AccessScope, source: SourceRange) =>
 
 /** Exact segment revisions by ID, for source validation; IDs outside the workspace are omitted. */
 export const getSegments = (access: AccessScope, ids: ReadonlyArray<TranscriptSegmentId>) =>
-  ids.length === 0 ? Effect.succeed([]) : segmentsWhere(sql => sql`workspace_id = ${access.workspace_id} AND ${sql.in('id', ids)}`);
+  ids.length === 0 ? Effect.succeed([]) : segmentsWhere(sql => sql`workspace_id = ${access.workspace_id} AND ${inList(sql, 'id', ids)}`);
 
 const CoverageRow = Schema.Struct({ sample_start: DbSafeInt, sample_end: DbSafeInt, origin: Schema.Literal('live', 'batch') });
 
@@ -140,38 +141,44 @@ export const recordFinalWindow = (input: FinalWindow) =>
           AND sample_start = ${span.sample_start} AND sample_end = ${span.sample_end}
         ORDER BY revision DESC LIMIT 1`,
     });
-    return yield* sql.withTransaction(
+    const recorded = yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`SELECT id FROM capture_epochs WHERE workspace_id = ${workspace_id} AND id = ${epoch_id} FOR UPDATE`;
-        if (!(yield* workspaceIsLive(workspace_id))) return [];
+        if (!(yield* workspaceIsLive(workspace_id))) return null;
         const covered = yield* coverageIn(workspace_id, epoch_id, track, input.window);
-        const inserted: Array<string> = [];
         // A segment whose midpoint another origin already covered duplicates live/replayed audio.
         const fresh = input.segments.filter(segment => {
           const midpoint = (segment.sample_start + segment.sample_end) / 2;
           const duplicate = covered.some(range => range.origin !== input.origin && range.sample_start <= midpoint && midpoint < range.sample_end);
           return !duplicate && segment.text.trim() !== '' && segment.sample_end > segment.sample_start;
         });
+        // Every read comes before the first write: the commit guard serializes concurrent windows of one epoch.
+        const changed: Array<{ readonly segment: (typeof fresh)[number]; readonly revision: number }> = [];
         for (const segment of fresh) {
           const latest = Option.getOrNull(yield* latestAt(segment).pipe(Effect.catchTag('ParseError', Effect.die)));
-          if (latest?.text === segment.text) continue;
+          if (latest?.text !== segment.text) changed.push({ segment, revision: (latest?.revision ?? 0) + 1 });
+        }
+        const inserted: Array<string> = [];
+        for (const { segment, revision } of changed) {
           const id = randomUUID();
           yield* sql`
             INSERT INTO transcript_segments (id, workspace_id, epoch_id, track, sample_start, sample_end, text, status, revision, origin, provider, model,
                                              provider_connection_id, speaker_label, confidence, created_at)
             VALUES (${id}, ${workspace_id}, ${epoch_id}, ${track}, ${segment.sample_start}, ${segment.sample_end}, ${segment.text}, 'final',
-                    ${(latest?.revision ?? 0) + 1}, ${input.origin}, ${input.provider}, ${input.model}, ${input.provider_connection_id},
-                    ${segment.speaker_label}, ${segment.confidence}, UTC_TIMESTAMP(6))`;
+                    ${revision}, ${input.origin}, ${input.provider}, ${input.model}, ${input.provider_connection_id},
+                    ${segment.speaker_label}, ${segment.confidence}, ${now})`;
           inserted.push(id);
         }
         yield* sql`
           INSERT INTO transcript_coverage (workspace_id, epoch_id, track, sample_start, sample_end, origin, created_at)
-          VALUES (${workspace_id}, ${epoch_id}, ${track}, ${input.window.sample_start}, ${input.window.sample_end}, ${input.origin}, UTC_TIMESTAMP(6)) AS new
-          ON DUPLICATE KEY UPDATE sample_end = GREATEST(transcript_coverage.sample_end, new.sample_end)`;
-        yield* refinalizeSealed(workspace_id, epoch_id, track, input.window);
-        return inserted.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${sql.in('id', inserted)}`);
+          VALUES (${workspace_id}, ${epoch_id}, ${track}, ${input.window.sample_start}, ${input.window.sample_end}, ${input.origin}, ${now})
+          ON CONFLICT (epoch_id, track, sample_start) DO UPDATE SET sample_end = max(transcript_coverage.sample_end, excluded.sample_end)`;
+        return inserted;
       }),
     );
+    if (recorded === null) return [];
+    // After the commit: scheduling reads meetings, and a transaction cannot read after its own writes. A replay of the window schedules again.
+    yield* refinalizeSealed(workspace_id, epoch_id, track, input.window);
+    return recorded.length === 0 ? [] : yield* segmentsWhere(sql => sql`workspace_id = ${workspace_id} AND ${inList(sql, 'id', recorded)}`);
   });
 
 /** Records a final window and hands any new segments to meeting assignment. */

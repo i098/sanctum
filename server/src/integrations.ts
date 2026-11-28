@@ -1,7 +1,7 @@
 /**
  * The model-facing integration gateways (plan section 10): search the catalog, inspect one
  * selected action, and execute a request the actions slice has already authorized and persisted.
- * The Pipedream catalog stays server-side, connected accounts come only from MySQL (never from
+ * The Pipedream catalog stays server-side, connected accounts come only from the database (never from
  * model output), and every model-facing result is bounded by an explicit byte budget.
  */
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,6 +23,7 @@ import { SanctumApi } from '@sanctum/contracts/api';
 import { Effect, Layer, Schema } from 'effect';
 import { engineeringDefaults, serverConfig } from './config.ts';
 import { DbSafeInt } from './db.ts';
+import { inList, now } from './sql-dialect.ts';
 import { type ActionComponent, type ActionProp, IntegrationFailure, PipedreamClient, makePipedreamClient } from './providers/pipedream.ts';
 
 export { IntegrationFailure };
@@ -52,7 +53,7 @@ const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string;
         ? sql`TRUE`
         : meetings.meeting_ids.length === 0
           ? sql`g.meeting_id IS NULL`
-          : sql`(g.meeting_id IS NULL OR ${sql.in('g.meeting_id', meetings.meeting_ids)})`;
+          : sql`(g.meeting_id IS NULL OR ${inList(sql, 'g.meeting_id', meetings.meeting_ids)})`;
     return yield* SqlSchema.findAll({
       Request: Schema.Void,
       Result: AccountRow,
@@ -61,7 +62,7 @@ const workspaceAccounts = (access: AccessScope, filter: { readonly app?: string;
           (${access.scopes.includes('actions:request')} AND (a.owner_principal_id = ${principal} OR EXISTS (
             SELECT 1 FROM action_grants g
             WHERE g.workspace_id = a.workspace_id AND g.account_id = a.id AND g.grantee_principal_id = ${principal}
-              AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6)) AND ${meetingVisible}
+              AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > ${now}) AND ${meetingVisible}
           ))) AS usable
         FROM integration_accounts a
         WHERE ${sql.and([

@@ -3,15 +3,20 @@
  * including the listener WebSocket, to the API container; the apex serves the
  * landing page and sends every other request to the app host.
  * A second container from the same image runs the job worker; the cron restarts it after a crash or
- * rollout, so jobs keep running while nobody has the site open. State lives in MySQL and R2, never
- * on container disk.
+ * rollout, so jobs keep running while nobody has the site open. State lives in D1 and R2, never
+ * on container disk; the containers reach D1 only through the gateway at `d1.internal` (src/d1-gate.ts).
  */
 import { Container, getContainer } from '@cloudflare/containers';
+import { d1Gate } from './d1-gate.ts';
 import { type AppSettings, containerEnv, retireStaleContainer } from './settings.ts';
+
+/** The library's proxy looks outbound handlers up by class name, so the entrypoint must export it. */
+export { ContainerProxy } from '@cloudflare/containers';
 
 interface Env extends AppSettings {
   readonly API: DurableObjectNamespace<SanctumApi>;
   readonly JOBS: DurableObjectNamespace<SanctumJobs>;
+  readonly DB: D1Database;
   /** The landing page build (web-app/landing); 404 for any path it does not contain. */
   readonly LANDING: Fetcher;
 }
@@ -41,7 +46,7 @@ async function landing(request: Request, env: Env): Promise<Response | undefined
 
 /** Both processes run the same image with the same settings, restarted when those settings change. */
 class SanctumContainer extends Container<Env> {
-  override envVars = { ...containerEnv(this.env), SANCTUM_DEVICE_PROXY: 'cloudflare' };
+  override envVars = { ...containerEnv(this.env), SANCTUM_DEVICE_PROXY: 'cloudflare', SANCTUM_DB_URL: 'http://d1.internal' };
   #envChecked = false;
 
   /** Once per object instance: a deploy or secret change starts a new instance with no open socket. */
@@ -72,6 +77,14 @@ export class SanctumJobs extends SanctumContainer {
   override entrypoint = ['node', 'server/dist/worker.js'];
   override async onActivityExpired() {}
 }
+
+/** Requests to `d1.internal` never leave Cloudflare: the Worker answers them with the D1 binding, so the container holds no token. */
+const d1Gateway = { 'd1.internal': (request: Request, env: Env) => d1Gate(request, env.DB) };
+
+// Through the inherited static setter, which fills the library's registry by class name. A class field named
+// `outboundByHost` would shadow that setter and leave the registry empty, so every `d1.internal` call would answer 530.
+SanctumApi.outboundByHost = d1Gateway;
+SanctumJobs.outboundByHost = d1Gateway;
 
 /** The apex: 308 to the same path and query on the app host, so old links keep working. MCP tokens issued for the apex resource no longer match the audience, so MCP clients must authorize again. */
 const apex = (request: Request) => {

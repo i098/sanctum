@@ -2,6 +2,7 @@ import { SqlClient } from '@effect/sql';
 import { expect, layer } from '@effect/vitest';
 import { type AccessScope, CaptureEpochId } from '@sanctum/contracts';
 import { Clock, Effect, Layer } from 'effect';
+import { addSeconds, now } from '../src/sql-dialect.ts';
 import { runWorker } from '../src/job-runner.ts';
 import type { JobHandlers } from '../src/job-types.ts';
 import { hear, jobsOf, meetingsOf } from './support/capture.ts';
@@ -18,7 +19,7 @@ import {
   pause,
   pcmFrame,
   seedDevice,
-  serveApi,
+  serveMediaApi,
   startMessage,
   upgradeStatus,
   uploadChunk,
@@ -31,13 +32,13 @@ const heartbeatBody = (lease_generation: number) => ({ lease_generation, state: 
 const setup = Effect.gen(function* () {
   const tokens = new Map<string, AccessScope>();
   const speech = fakeSpeech();
-  const host = yield* serveApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
+  const host = yield* serveMediaApi(serverLayer, tokens, Layer.merge(memoryObjectStore().layer, speech.layer));
   tokens.set('device', yield* seedDevice('Room A'));
   return { tokens, speech, host };
 });
 
 const epochRow = (epoch_id: string) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ live_sample_end: string; end_reason: string | null }>`SELECT live_sample_end, end_reason FROM capture_epochs WHERE id = ${epoch_id}`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql<{ live_sample_end: number; end_reason: string | null }>`SELECT live_sample_end, end_reason FROM capture_epochs WHERE id = ${epoch_id}`);
 
 /** Starts a live epoch captured now (a meeting it opens is not idle), streams 4 800 samples and drops the socket without a `stop`, as a killed browser would. */
 const streamThenDrop = (host: string, listener_id: string, lease_generation: number) =>
@@ -49,7 +50,7 @@ const streamThenDrop = (host: string, listener_id: string, lease_generation: num
     for (let sequence = 0; sequence < 3; sequence++) socket.send(pcmFrame(sequence, sequence * 1_600));
     for (let sequence = 0; sequence < 3; sequence++) yield* socket.take('ack');
     socket.close();
-    yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === '4800');
+    yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === 4800);
     return epoch_id;
   });
 
@@ -95,7 +96,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       socket.send(startMessage({ listener_id, epoch_id, lease_generation }));
       yield* socket.take('accepted');
 
-      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${listener_id}`;
       const takeover = yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(0));
       expect(takeover.body).toMatchObject({ owner: true, lease_generation: 2 });
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
@@ -141,7 +142,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       const { host } = yield* setup;
       const { listener_id, lease_generation } = yield* claimListener(host, 'device');
       const held = new Date(Date.now() - 60_000).toISOString();
-      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${listener_id}`;
       expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(0))).body).toMatchObject({ owner: true, lease_generation: 2 });
       yield* pause(20);
       const lost = new Date().toISOString();
@@ -178,7 +179,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       yield* first.take('ack');
       expect(yield* first.take('ack')).toMatchObject({ sequence: 2, sample_end: 4_800 });
       first.close();
-      yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === '4800');
+      yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === 4800);
 
       const second = yield* openSocket(host, listener_id, 'device');
       second.send(startMessage({ listener_id, epoch_id, lease_generation }));
@@ -263,7 +264,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       inside.close();
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBeNull();
 
-      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${listener_id}`;
       expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(lease_generation))).body).toMatchObject({ owner: true, lease_generation });
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
       const after = yield* openSocket(host, listener_id, 'device');
@@ -293,14 +294,14 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       yield* socket.take('accepted');
       socket.send(pcmFrame(0, 0));
       yield* socket.take('ack');
-      yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === '1600');
+      yield* eventually(epochRow(epoch_id), rows => rows[0]?.live_sample_end === 1600);
 
-      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${listener_id}`;
       expect((yield* api(host, 'device', 'POST', `/listeners/${listener_id}/heartbeat`, heartbeatBody(lease_generation))).body).toMatchObject({ owner: true, lease_generation });
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBe('interrupted');
       socket.send(pcmFrame(1, 1_600));
       expect(yield* socket.take('rejected')).toMatchObject({ reason: 'stale_generation' });
-      expect((yield* epochRow(epoch_id))[0]!.live_sample_end).toBe('1600');
+      expect((yield* epochRow(epoch_id))[0]!.live_sample_end).toBe(1600);
     }),
   );
 
@@ -317,7 +318,7 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       yield* pause(300);
       expect((yield* epochRow(epoch_id))[0]!.end_reason).toBeNull();
 
-      yield* sql`UPDATE listeners SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ${listener_id}`;
+      yield* sql`UPDATE listeners SET lease_expires_at = ${addSeconds(now, -1)} WHERE id = ${listener_id}`;
       yield* eventually(epochRow(epoch_id), rows => rows[0]?.end_reason === 'interrupted');
       const [listener] = yield* sql<{ current_epoch_id: string | null; state: string }>`SELECT current_epoch_id, state FROM listeners WHERE id = ${listener_id}`;
       expect(listener).toMatchObject({ current_epoch_id: null, state: 'stopped' });
@@ -348,8 +349,8 @@ layer(MigratedDatabase, { timeout: 120_000 })('listener registration and ownersh
       socketA.send(pcmFrame(0, 0));
       socketA.send(pcmFrame(1, 1_600));
       socketB.send(pcmFrame(0, 0));
-      yield* eventually(epochRow(epochA), rows => rows[0]?.live_sample_end === '3200');
-      yield* eventually(epochRow(epochB), rows => rows[0]?.live_sample_end === '1600');
+      yield* eventually(epochRow(epochA), rows => rows[0]?.live_sample_end === 3200);
+      yield* eventually(epochRow(epochB), rows => rows[0]?.live_sample_end === 1600);
 
       const crossed = yield* openSocket(host, a.listener_id, 'device');
       crossed.send(startMessage({ listener_id: b.listener_id, epoch_id: epochB, lease_generation: b.lease_generation }));

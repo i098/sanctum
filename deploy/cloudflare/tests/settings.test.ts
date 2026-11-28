@@ -3,8 +3,8 @@ import { containerEnv, retireStaleContainer } from '../src/settings.ts';
 
 describe('container environment', () => {
   it('forwards a provider key the Worker has, and omits one it lacks', () => {
-    expect(containerEnv({ WORKERS_AI_API_TOKEN: 'workers-ai-token', MYSQL_HOST: 'db' })).toEqual({ WORKERS_AI_API_TOKEN: 'workers-ai-token', MYSQL_HOST: 'db' });
-    expect(containerEnv({ MYSQL_HOST: 'db' })).not.toHaveProperty('WORKERS_AI_API_TOKEN');
+    expect(containerEnv({ WORKERS_AI_API_TOKEN: 'workers-ai-token', R2_BUCKET: 'recordings' })).toEqual({ WORKERS_AI_API_TOKEN: 'workers-ai-token', R2_BUCKET: 'recordings' });
+    expect(containerEnv({ R2_BUCKET: 'recordings' })).not.toHaveProperty('WORKERS_AI_API_TOKEN');
   });
 
   it('forwards the hosted seat limit to the container', () => {
@@ -12,8 +12,8 @@ describe('container environment', () => {
   });
 
   it('forwards the sign-in settings the Worker has and keeps Worker-only values out', () => {
-    const worker = { API: 'binding', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', MYSQL_HOST: 'db' };
-    expect(containerEnv(worker)).toEqual({ SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', MYSQL_HOST: 'db' });
+    const worker = { API: 'binding', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', R2_BUCKET: 'recordings' };
+    expect(containerEnv(worker)).toEqual({ SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', R2_BUCKET: 'recordings' });
   });
 });
 
@@ -42,7 +42,7 @@ const containerObject = () => {
 };
 
 describe('container start environment', () => {
-  const started = { MYSQL_HOST: 'db', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', SANCTUM_OIDC_CLIENT_SECRET: 'client-secret-1' };
+  const started = { R2_BUCKET: 'recordings', SANCTUM_OIDC_ISSUER: 'https://issuer.sanctum.test', SANCTUM_OIDC_CLIENT_SECRET: 'client-secret-1' };
 
   it('keeps a container that started with the current settings', async () => {
     const object = containerObject();

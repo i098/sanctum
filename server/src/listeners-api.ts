@@ -4,13 +4,12 @@ import { CurrentAccess, Unavailable } from '@sanctum/contracts';
 import { SanctumApi } from '@sanctum/contracts/api';
 import type { SqlError } from '@effect/sql';
 import { Effect } from 'effect';
-import { mysqlErrno, mysqlMessage } from './db.ts';
 import { heartbeat, registerListener } from './listeners.ts';
 import { putChunk } from './recordings.ts';
 
 /** The client sees only a retryable 503; the SQL failure goes to the server log. */
 const databaseUnavailable = (operation: string) => (error: SqlError.SqlError) =>
-  Effect.logError('Listener database request failed', { operation, errno: mysqlErrno(error), message: mysqlMessage(error) }).pipe(
+  Effect.logError('Listener database request failed', { operation, message: error.message }).pipe(
     Effect.zipRight(Effect.fail(new Unavailable({ message: 'Database unavailable', retryable: true }))),
   );
 

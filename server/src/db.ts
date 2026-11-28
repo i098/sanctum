@@ -1,189 +1,161 @@
 /**
- * The one MySQL boundary (plan section 07): bounded pool, UTC sessions, and column schemas
- * that turn mysql2 row values into wire-ready values. Domain code decodes rows with
- * `SqlSchema` from `@effect/sql` using these column schemas; nothing else touches raw rows.
+ * The one database boundary (plan section 07): a SQLite-dialect `SqlClient` over a pluggable
+ * backend (`node:sqlite` file or memory, or the D1 gateway), buffered transactions with a commit
+ * guard, and column schemas that turn row values into wire-ready values. Domain code decodes
+ * rows with `SqlSchema` from `@effect/sql` using these column schemas; nothing else touches raw rows.
+ *
+ * D1 cannot hold a transaction open between requests, so a transaction reads at once, buffers its
+ * writes and commits them in one atomic batch behind a guard on `tx_clock`. A transaction that
+ * lost the race is rerun, so its body must not have external side effects.
  */
 import * as Reactivity from '@effect/experimental/Reactivity';
-import { MysqlClient } from '@effect/sql-mysql2';
-import { SqlClient, type SqlConnection, SqlError } from '@effect/sql';
-import { Context, Effect, Exit, Fiber, Layer, ParseResult, type Redacted, Schema, Scope, Stream } from 'effect';
-import { Sha256Hex, UtcTimestamp, Unavailable, type WorkspaceId } from '@sanctum/contracts';
+import { SqlClient, type SqlConnection, SqlError, Statement } from '@effect/sql';
+import { Context, Duration, Effect, Layer, Option, ParseResult, Schedule, Schema, Stream } from 'effect';
+import { Sha256Hex, UtcTimestamp, type WorkspaceId } from '@sanctum/contracts';
+import { d1Backend } from './db-d1.ts';
+import type { DbBackend, DbOptions, DbResult, DbStatement } from './db-types.ts';
+import { sqliteBackend } from './db-sqlite.ts';
 
-/** Connection settings; config.ts reads them from the environment. */
-export interface MysqlOptions {
-  readonly host: string;
-  readonly port: number;
-  readonly database: string;
-  readonly username: string;
-  readonly password: Redacted.Redacted;
-  readonly maxConnections: number;
-  readonly queueLimit: number;
-  /** PEM CA certificate; when set, TLS is required and verified, including the server host name. */
-  readonly caCert?: string | undefined;
-}
+export type { DbOptions, DbResult } from './db-types.ts';
 
-/**
- * Pool options: DATETIME(6) and BIGINT/DECIMAL arrive as strings (no millisecond Date or
- * rounded Number), connection waits are gated and bounded in `gatedClient`; without `caCert`
- * the connection is unencrypted (local and test servers).
- */
-const pooledClient = (mysql: MysqlOptions) =>
-  MysqlClient.layer({
-    host: mysql.host,
-    port: mysql.port,
-    database: mysql.database,
-    username: mysql.username,
-    password: mysql.password,
-    maxConnections: mysql.maxConnections,
-    poolConfig: {
-      charset: 'utf8mb4_0900_ai_ci',
-      timezone: 'Z',
-      dateStrings: true,
-      supportBigNumbers: true,
-      bigNumberStrings: true,
-      decimalNumbers: false,
-      waitForConnections: true,
-      queueLimit: mysql.queueLimit,
-      connectTimeout: 10_000,
-      enableKeepAlive: true,
-      ...(mysql.caCert === undefined ? {} : { ssl: { ca: mysql.caCert, verifyIdentity: true } }),
-    },
+const fail = (message: string) => new SqlError.SqlError({ cause: new Error(message), message });
+const messageOf = (error: SqlError.SqlError) => {
+  const cause: unknown = error.cause;
+  return cause instanceof Error ? cause.message : String(cause ?? error.message);
+};
+
+/** The commit guard failed: another transaction committed after this one began. */
+const CONFLICT = /CHECK constraint failed: (tx_conflict_guard|v IS NULL)/;
+const isConflict = (error: unknown) => error instanceof SqlError.SqlError && CONFLICT.test(messageOf(error));
+
+export const isDuplicate = (error: SqlError.SqlError) => /UNIQUE constraint failed/.test(messageOf(error));
+export const isMissingReference = (error: SqlError.SqlError) => /FOREIGN KEY constraint failed/.test(messageOf(error));
+export const isCheckViolation = (error: SqlError.SqlError) => /CHECK constraint failed/.test(messageOf(error)) && !CONFLICT.test(messageOf(error));
+
+/** Statements that return rows run at once; every other statement waits for the commit. */
+// shortcut: a keyword inside a string literal can misclassify a WITH statement; upgrade if domain SQL needs that.
+const isRead = (sql: string) => {
+  const lead = sql.replace(/^(?:\s|\(|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/, '');
+  return /^(select|pragma|explain|values)\b/i.test(lead) || (/^with\b/i.test(lead) && !/\b(insert|update|delete|replace)\b/i.test(lead));
+};
+
+const backoff = Schedule.exponential('10 millis').pipe(Schedule.modifyDelay((_, delay) => Duration.min(delay, Duration.millis(200))), Schedule.jittered);
+
+/** Each lost race lets one rival commit, so N processes writing at once can cost one transaction N - 1 reruns; 24 covers 20 with slack. */
+const MAX_RERUNS = 24;
+
+/** A nested transaction joins its parent's buffer; when its body fails, its writes and counters are dropped. */
+const rollbackOnError = <A, E, R>(connection: SqlConnection.Connection, effect: Effect.Effect<A, E, R>) =>
+  Effect.suspend(() => {
+    const state = states.get(connection);
+    if (state === undefined) return effect;
+    const length = state.buffer.length;
+    const counters = new Map(state.counters);
+    return Effect.tapErrorCause(effect, () =>
+      Effect.sync(() => {
+        state.buffer.length = length;
+        state.counters.clear();
+        for (const [key, value] of counters) state.counters.set(key, value);
+      }),
+    );
   });
 
-/**
- * mysql2 cannot run per-connection init SQL through the Effect client, so the server (or its
- * host) must run in UTC; refuse to start otherwise. SQL uses UTC_TIMESTAMP(6), never NOW().
- */
-export const verifyUtcSession = Effect.gen(function*() {
-  const sql = yield* SqlClient.SqlClient;
-  const [row] = yield* sql<{ tz: string; system_tz: string }>`SELECT @@session.time_zone AS tz, @@system_time_zone AS system_tz`;
-  const utc = row?.tz === '+00:00' || row?.tz === 'UTC' || (row?.tz === 'SYSTEM' && row.system_tz === 'UTC');
-  if (!utc) {
-    return yield* new Unavailable({ message: `MySQL session time zone must be UTC, got ${row?.tz}/${row?.system_tz}`, retryable: false });
-  }
-});
+interface TransactionState {
+  readonly backend: DbBackend;
+  readonly clock: number;
+  readonly buffer: DbStatement[];
+  /** Counters this transaction already advanced, so a second `increment` reads no buffered write. */
+  readonly counters: Map<string, number>;
+}
+const states = new WeakMap<SqlConnection.Connection, TransactionState>();
 
-/**
- * TiDB speaks the MySQL protocol but has no `MATCH ... AGAINST`, FULLTEXT indexes or stored generated columns added by
- * ALTER. Set once per process by `dbLayer`; search and migrations take their TiDB path when it is false.
- */
-let fullTextAvailable = true;
-export const hasFullText = () => fullTextAvailable;
-export const setFullTextForTest = (available: boolean) => {
-  fullTextAvailable = available;
-};
-/** TiDB rejects `FOR SHARE` (it only has a no-op `LOCK IN SHARE MODE`), so there an exclusive lock keeps the same guarantee. */
-export const shareLock = () => (fullTextAvailable ? 'FOR SHARE' : 'FOR UPDATE');
-const detectDialect = Effect.gen(function*() {
-  const sql = yield* SqlClient.SqlClient;
-  const [row] = yield* sql<{ version: string }>`SELECT VERSION() AS version`;
-  fullTextAvailable = !/tidb/i.test(row?.version ?? '');
-});
+const asRows = (result: DbResult, transform: Parameters<SqlConnection.Connection['execute']>[2]) => (transform ? transform(result.rows as Array<object>) : result.rows);
 
-/**
- * TiDB lacks the MySQL 8.0.19 row alias (`VALUES (...) AS new ON DUPLICATE KEY UPDATE x = new.x`); `VALUES(x)` means the same there.
- * It also rejects a bound `LIMIT ?`/`OFFSET ?` because mysql2 sends every number as DOUBLE, so those integers are inlined.
- */
-const forDialect = (text: string, params: ReadonlyArray<unknown>): [string, ReadonlyArray<unknown>] => {
-  if (fullTextAvailable) return [text, params];
-  let out = text.replace(/\)\s*AS\s+(\w+)\s+ON DUPLICATE KEY UPDATE([\s\S]*)$/i, (_all, alias: string, update: string) =>
-    `) ON DUPLICATE KEY UPDATE${update.replace(new RegExp(`\\b${alias}\\.(\`?\\w+\`?)`, 'g'), 'VALUES($1)')}`);
-  const kept = [...params];
-  const hits = [...out.matchAll(/\b(?:LIMIT|OFFSET)\s+\?/gi)].reverse();
-  for (const hit of hits) {
-    const at = hit.index + hit[0].length - 1;
-    const slot = out.slice(0, at).split('?').length - 1;
-    const value = kept[slot];
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) continue;
-    out = `${out.slice(0, at)}${value}${out.slice(at + 1)}`;
-    kept.splice(slot, 1);
-  }
-  return [out, kept];
+/** Reads go to the backend; writes join the buffer. */
+const transactionConnection = (backend: DbBackend, state: TransactionState): SqlConnection.Connection => {
+  const execute = (sql: string, params: ReadonlyArray<unknown>): Effect.Effect<DbResult, SqlError.SqlError> => {
+    if (!isRead(sql)) {
+      if (/\breturning\b/i.test(sql)) return Effect.fail(fail(`RETURNING is not supported in a transaction: ${sql}`));
+      state.buffer.push({ sql, params });
+      return Effect.succeed({ rows: [], changes: 0 });
+    }
+    if (state.buffer.length > 0) return Effect.fail(fail(`Read after a buffered write in a transaction: ${sql}`));
+    return backend.run({ sql, params });
+  };
+  return connection(execute);
 };
 
-const translated = (c: SqlConnection.Connection): SqlConnection.Connection => ({
-  execute: (sql, params, transform) => c.execute(...forDialect(sql, params), transform),
-  executeRaw: (sql, params) => c.executeRaw(...forDialect(sql, params)),
-  executeValues: (sql, params) => c.executeValues(...forDialect(sql, params)),
-  executeUnprepared: (sql, params, transform) => c.executeUnprepared(...forDialect(sql, params), transform),
-  executeStream: (sql, params, transform) => c.executeStream(...forDialect(sql, params), transform),
-});
+const connection = (execute: (sql: string, params: ReadonlyArray<unknown>) => Effect.Effect<DbResult, SqlError.SqlError>): SqlConnection.Connection => {
+  const rows = (sql: string, params: ReadonlyArray<unknown>, transform: Parameters<SqlConnection.Connection['execute']>[2]) => Effect.map(execute(sql, params), result => asRows(result, transform));
+  return {
+    execute: rows,
+    executeUnprepared: rows,
+    executeRaw: execute,
+    executeValues: (sql, params) => Effect.map(execute(sql, params), result => result.rows.map(row => Object.values(row))),
+    executeStream: (sql, params, transform) => Stream.unwrap(Effect.map(rows(sql, params, transform), Stream.fromIterable)),
+  };
+};
 
-/**
- * The pool cannot drop a waiter: mysql2 keeps the queued callback of a cancelled request, and
- * @effect/sql-mysql2 then still dispatches that request's statement once a connection frees.
- * Waiting therefore happens here, in a FIFO semaphore whose waiters leave when interrupted;
- * a statement or transaction asks the pool for a connection only while holding one of its
- * `maxConnections` permits, so the pool's own queue never forms. A statement already dispatched
- * is not cancelled: MySQL runs it to completion and keeps its permit and connection until then.
- * As in mysql2, more than `queueLimit` waiters are refused (0 is unbounded).
- */
-const gatedClient = (mysql: MysqlOptions) =>
+const makeClient = (backend: DbBackend) =>
+  Effect.gen(function* () {
+    const client = yield* SqlClient.make({
+      acquirer: Effect.succeed(connection((sql, params) => backend.run({ sql, params }))),
+      compiler: Statement.makeCompilerSqlite(),
+      spanAttributes: [['db.system.name', 'sqlite']],
+    });
+    const attempt = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const [clock] = (yield* backend.run({ sql: 'SELECT v FROM tx_clock WHERE id = 1', params: [] })).rows;
+        const state: TransactionState = { backend, clock: Number(clock?.['v']), buffer: [], counters: new Map() };
+        const scoped = transactionConnection(backend, state);
+        states.set(scoped, state);
+        const result = yield* Effect.provideService(effect, SqlClient.TransactionConnection, [scoped, 0] as const);
+        if (state.buffer.length > 0) {
+          yield* backend.batch([
+            { sql: 'INSERT INTO tx_conflict (v) SELECT 1 WHERE (SELECT v FROM tx_clock WHERE id = 1) <> ?', params: [state.clock] },
+            { sql: 'UPDATE tx_clock SET v = v + 1 WHERE id = 1', params: [] },
+            ...state.buffer,
+          ]);
+        }
+        return result;
+      });
+    /**
+     * D1 has one writer, so a client runs one attempt at a time: its own transactions queue instead of
+     * racing and burning retries. Only rivals in other processes can still win a race; the backoff and
+     * the retry limit cover those. A body must not wait on another top-level transaction of the same
+     * client, because that one waits for this one.
+     */
+    const lane = Effect.unsafeMakeSemaphore(1);
+    const withTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError.SqlError, R> =>
+      Effect.flatMap(Effect.serviceOption(SqlClient.TransactionConnection), nested =>
+        Option.isSome(nested)
+          ? rollbackOnError(nested.value[0], effect)
+          : Effect.retry(lane.withPermits(1)(attempt(effect)), { schedule: backoff, times: MAX_RERUNS, while: isConflict }).pipe(
+              Effect.mapError(error => (isConflict(error) ? fail('Transaction conflict: retries exhausted, try again') : error)),
+            ),
+      );
+    return Object.assign(client, { withTransaction });
+  }).pipe(Effect.provide(Reactivity.layer));
+
+/** The backend named by `options.url`; API and worker each build their own process-scoped layer. */
+export const dbLayer = (options: DbOptions): Layer.Layer<SqlClient.SqlClient, SqlError.SqlError> =>
   Layer.scopedContext(
     Effect.gen(function* () {
-      const pooled = yield* MysqlClient.MysqlClient;
-      const permits = yield* Effect.makeSemaphore(mysql.maxConnections);
-      let busy = 0;
-      let waiting = 0;
-      const giveBack = Effect.suspend(() => {
-        busy--;
-        return permits.release(1);
-      });
-      // Waiting is interruptible only where the caller is: a cleanup write of an interrupted fiber still waits its turn.
-      const reserveRaw = Effect.uninterruptibleMask(restore =>
-        Effect.suspend(() => {
-          if (busy >= mysql.maxConnections && mysql.queueLimit > 0 && waiting >= mysql.queueLimit) return Effect.fail(new SqlError.SqlError({ cause: new Error('Queue limit reached.'), message: 'Failed to acquire connection' }));
-          waiting++;
-          return restore(permits.take(1)).pipe(Effect.onExit(exit => Effect.sync(() => { waiting--; if (Exit.isSuccess(exit)) busy++; })));
-        }).pipe(
-          // A failed acquisition leaves no finalizer behind and its scope may never close, so the permit goes back here.
-          Effect.zipRight(Effect.onError(pooled.reserve, () => giveBack)),
-          Effect.tap(() => Effect.addFinalizer(() => giveBack)),
-        ),
-      );
-      const reserve = Effect.map(reserveRaw, translated);
-      // An interrupted statement is not aborted: MySQL still runs it on its connection, which must not be handed out before it
-      // answers. A daemon therefore owns the permit and connection until then, while the caller may leave at once.
-      const held = <A>(use: (connection: SqlConnection.Connection) => Effect.Effect<A, SqlError.SqlError>) =>
-        Effect.uninterruptibleMask(restore =>
-          Effect.flatMap(Scope.make(), scope =>
-            restore(Scope.extend(reserve, scope)).pipe(
-              Effect.onError(cause => Scope.close(scope, Exit.failCause(cause))),
-              Effect.flatMap(connection => Effect.forkDaemon(Effect.onExit(use(connection), exit => Scope.close(scope, exit)))),
-              Effect.flatMap(statement => restore(Fiber.join(statement))),
-            ),
-          ),
-        );
-      const statements: SqlConnection.Connection = {
-        execute: (sql, params, transform) => held(c => c.execute(sql, params, transform)),
-        executeRaw: (sql, params) => held(c => c.executeRaw(sql, params)),
-        executeValues: (sql, params) => held(c => c.executeValues(sql, params)),
-        executeUnprepared: (sql, params, transform) => held(c => c.executeUnprepared(sql, params, transform)),
-        executeStream: (sql, params, transform) => Stream.unwrapScoped(Effect.map(reserve, c => c.executeStream(sql, params, transform))),
-      };
-      const client = yield* SqlClient.make({
-        acquirer: Effect.succeed(statements),
-        transactionAcquirer: reserve,
-        compiler: MysqlClient.makeCompiler(),
-        spanAttributes: [['db.system.name', 'mysql']],
-      });
-      return Context.make(SqlClient.SqlClient, client);
+      const backend = /^https?:\/\//.test(options.url) ? d1Backend(options.url) : yield* sqliteBackend(options.url);
+      return Context.make(SqlClient.SqlClient, yield* makeClient(backend));
     }),
-  ).pipe(Layer.provide(Reactivity.layer), Layer.provide(pooledClient(mysql)));
+  );
 
-/** Pool plus the UTC precondition; API and worker each build their own process-scoped layer. */
-export const dbLayer = (mysql: MysqlOptions) => Layer.effectDiscard(Effect.zipRight(verifyUtcSession, detectDialect)).pipe(Layer.provideMerge(gatedClient(mysql)));
+const DB_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
 
-const MYSQL_DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/;
-
-/** DATETIME(6) string `2026-09-26 17:08:16.123456` <-> UTC wire timestamp, preserving microseconds. */
-export const DbUtc = Schema.transform(Schema.String.pipe(Schema.pattern(MYSQL_DATETIME)), UtcTimestamp, {
+/** DATETIME text `2026-09-26 17:08:16.123456` <-> UTC wire timestamp, preserving microseconds. */
+export const DbUtc = Schema.transform(Schema.String.pipe(Schema.pattern(DB_DATETIME)), UtcTimestamp, {
   strict: true,
-  decode: value => value.replace(MYSQL_DATETIME, '$1T$2Z'),
+  decode: value => value.replace(DB_DATETIME, '$1T$2Z'),
   encode: value => value.slice(0, -1).replace('T', ' '),
 });
 
-/** BIGINT/DECIMAL string (or small number) -> exact safe integer; unsafe values fail instead of rounding. */
+/** INTEGER (or its string form) -> exact safe integer; unsafe values fail instead of rounding. */
 export const DbSafeInt = Schema.transformOrFail(Schema.Union(Schema.String, Schema.Number), Schema.Number, {
   strict: true,
   decode: (value, _, ast) => {
@@ -193,49 +165,52 @@ export const DbSafeInt = Schema.transformOrFail(Schema.Union(Schema.String, Sche
   encode: value => ParseResult.succeed(value),
 });
 
-/** TINYINT(1)/BOOLEAN -> boolean. */
+/** 0/1 integer -> boolean. */
 export const DbBool = Schema.transform(Schema.Literal(0, 1), Schema.Boolean, {
   strict: true,
   decode: value => value === 1,
   encode: value => (value ? 1 : 0),
 });
 
-/** Native JSON column: mysql2 returns parsed values; parameters are sent as JSON text. */
+/** JSON column stored as TEXT: rows return JSON text; parameters are sent as JSON text. */
 export const DbJson = <A, I>(schema: Schema.Schema<A, I>) => Schema.Union(Schema.parseJson(schema), schema);
 
-/** BINARY(32) SHA-256 <-> lowercase hex. */
+/** BLOB SHA-256 <-> lowercase hex. */
 export const DbSha256 = Schema.transform(Schema.Uint8ArrayFromSelf, Sha256Hex, {
   strict: true,
   decode: bytes => Buffer.from(bytes).toString('hex'),
   encode: hex => Buffer.from(hex, 'hex'),
 });
 
-/** MySQL server error number of a failed statement, e.g. 1062 duplicate key, 1452 foreign key. */
-export const mysqlErrno = (error: SqlError.SqlError): number | undefined => {
-  const cause: unknown = error.cause;
-  return typeof cause === 'object' && cause !== null && 'errno' in cause && typeof cause.errno === 'number' ? cause.errno : undefined;
-};
-
-/** The server's own message for a failed statement (never sent to clients; for server logs). */
-export const mysqlMessage = (error: SqlError.SqlError): string | undefined => {
-  const cause: unknown = error.cause;
-  return typeof cause === 'object' && cause !== null && 'sqlMessage' in cause && typeof cause.sqlMessage === 'string' ? cause.sqlMessage : error.message;
-};
-
-export const ER_DUP_ENTRY = 1062;
-export const ER_NO_REFERENCED_ROW = 1452;
-export const ER_CHECK_CONSTRAINT_VIOLATED = 3819;
-
 /**
- * `LAST_INSERT_ID(expr)` makes the increment and its read one statement; the row lock it takes
- * lasts until the caller's transaction commits, which serializes allocation per workspace.
+ * Advances a workspace counter and returns the new value. Outside a transaction one
+ * `UPDATE ... RETURNING` does it; inside, the read happens now and the write joins the commit,
+ * whose guard makes the read-then-write safe.
  */
 export const increment = (column: 'context_seq' | 'permission_revision') => (workspace_id: WorkspaceId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const result = (yield* sql`UPDATE workspaces SET ${sql(column)} = LAST_INSERT_ID(${sql(column)} + 1) WHERE id = ${workspace_id}`.raw) as { readonly affectedRows: number; readonly insertId: number | string };
-    if (result.affectedRows !== 1) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
-    return Schema.decodeUnknownSync(DbSafeInt)(result.insertId);
+    const open = yield* Effect.serviceOption(SqlClient.TransactionConnection);
+    const state = Option.isSome(open) ? states.get(open.value[0]) : undefined;
+    if (state === undefined) {
+      const [row] = yield* sql<{ value: unknown }>`UPDATE workspaces SET ${sql(column)} = ${sql(column)} + 1 WHERE id = ${workspace_id} RETURNING ${sql(column)} AS value`;
+      if (row === undefined) return yield* Effect.dieMessage(`Unknown workspace ${workspace_id}`);
+      return Schema.decodeUnknownSync(DbSafeInt)(row.value);
+    }
+    const key = `${column}:${workspace_id}`;
+    let current = state.counters.get(key);
+    if (current === undefined) {
+      // Straight from the backend, past the read-after-write check: this transaction has not written the counter.
+      const [row] = (yield* state.backend.run({ sql: `SELECT ${column} AS value FROM workspaces WHERE id = ?`, params: [workspace_id] })).rows;
+      if (row === undefined) return yield* fail(`Unknown workspace ${workspace_id}`);
+      current = Schema.decodeUnknownSync(DbSafeInt)(row.value);
+      // The commit guard watches tx_clock, which an autocommit increment does not bump: guard the counter itself.
+      yield* sql`INSERT INTO tx_conflict (v) SELECT 1 WHERE (SELECT ${sql(column)} FROM workspaces WHERE id = ${workspace_id}) <> ${current}`;
+    }
+    const next = current + 1;
+    state.counters.set(key, next);
+    yield* sql`UPDATE workspaces SET ${sql(column)} = ${next} WHERE id = ${workspace_id}`;
+    return next;
   });
 
 /** Next committed-order context sequence number; call inside the change's transaction. */

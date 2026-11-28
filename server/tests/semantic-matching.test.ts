@@ -4,6 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { type AccessScope, ProfileId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { MATCH_BATCH_SIZE, type EmbeddingKind, rankMatches, storeEmbedding } from '../src/matcher.ts';
+import { chunked, now } from '../src/sql-dialect.ts';
 import { withDatabase } from './support/database.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 
@@ -14,7 +15,7 @@ const addProfile = (access: AccessScope, name: string) =>
     const sql = yield* SqlClient.SqlClient;
     const id = ProfileId.make(randomUUID());
     yield* sql`INSERT INTO profiles (id, workspace_id, kind, display_name, details, created_at, updated_at)
-      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${access.workspace_id}, 'person', ${name}, '{}', ${now}, ${now})`;
     return id;
   });
 
@@ -146,7 +147,7 @@ describe('semantic matching', () => {
         yield* embed(owner!, seeker, 'needs', need!);
         const ids = offers.map(() => ProfileId.make(randomUUID()));
         const profiles = ids.map(id => ({ id, workspace_id: owner!.workspace_id, kind: 'person', display_name: 'Offer', details: '{}', created_at: '2026-09-29 00:00:00', updated_at: '2026-09-29 00:00:00' }));
-        yield* sql`INSERT INTO profiles ${sql.insert(profiles)}`;
+        yield* Effect.forEach(chunked(profiles, 7), chunk => sql`INSERT INTO profiles ${sql.insert(chunk)}`, { discard: true });
         yield* Effect.forEach(ids, (id, i) => embed(owner!, id, 'offers', offers[i]!), { concurrency: 4 });
         const ranked = yield* rankMatches(owner!, { profile_id: seeker, kind: 'needs', top_k: 25 });
         const reference = ids

@@ -13,7 +13,7 @@
 - Keep silent unless directly requested; allow research and previously authorized actions in the background.
 - Detect meeting boundaries automatically and provide manual split/merge.
 - Keep full meeting transcripts and private R2 recordings; memory selection is separate.
-- Use MySQL 8.4 LTS/InnoDB, not Postgres, for structured data.
+- Use SQLite-dialect SQL, not Postgres, for structured data: Cloudflare D1 in production, `node:sqlite` locally and in CI (see the database decision below).
 - Keep Pipedream's catalog server-side, with search/inspect/request gateways.
 - Expose one shared context model through website, SDKs, and MCP.
 - Limit seats (owner, admin, member; agents and devices are free) per workspace in Sanctum before self-serve opens: the hosted site sets `SANCTUM_DEFAULT_SEAT_LIMIT=5` (`deploy/cloudflare/wrangler.jsonc`), a small-team pilot that caps per-workspace recording and model cost; `workspaces.seat_limit` overrides it. With the variable unset, the server applies no limit, so self-hosted installs are unlimited unless the operator sets one.
@@ -354,6 +354,13 @@ Accepted: Sanctum runs on Cloudflare Containers behind a Worker in the 42nights 
 MySQL is an Aiven MySQL 8.4 service reached only over TLS verified with its project CA; recordings stay in a private R2 bucket in the same account.
 Anyone may open the site; visitors without a session are signed out.
 This selects no sign-in issuer or any other decision; the deployment runs in development mode ([operations.md](operations.md#cloudflare)).
+
+## Database decision — 2026-11-25
+
+Accepted on the D1 branch: the structured store is Cloudflare D1, reached through `SqlClient` over a SQLite-dialect layer in `server/src/db.ts`; local runs and CI use `node:sqlite`, so no database service is needed.
+D1 has no interactive transaction, so a transaction reads at once, buffers its writes and commits them in one batch behind a guard on `tx_clock`; a lost race reruns the body, which therefore has no external side effect.
+Each client runs one transaction attempt at a time, so its own transactions queue instead of racing, and a body never waits on another top-level transaction of the same client. Only rivals in other processes cause reruns, up to 24 per transaction.
+This supersedes the MySQL 8.4 and Aiven lines above for this branch. `main` keeps MySQL (TiDB) until the switch-over in [d1-switchover.md](d1-switchover.md).
 
 ## Hardware listener decision
 

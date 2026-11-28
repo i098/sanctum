@@ -9,6 +9,7 @@ import { assembleRecording, issueRecordingAccess } from '../src/playback.ts';
 import { ObjectStore } from '../src/providers/object-store.ts';
 import { claimed, commitChunk, hear, jobsOf, meetingsOf, RATE, seedEpoch, seedListener } from './support/capture.ts';
 import { withDatabase } from './support/database.ts';
+import { now } from '../src/sql-dialect.ts';
 import { seedWorkspace } from './support/fixtures.ts';
 import { memoryObjectStore } from './support/object-store.ts';
 
@@ -157,9 +158,9 @@ describe('meeting recording playback', () => {
         expect(contents(store.objects.get(object_key)!.body)).toEqual({
           1: 10 * RATE, 2: 10 * RATE, 3: 10 * RATE, 4: 10 * RATE, 5: 6 * RATE,
         });
-        expect(yield* sql`SELECT object_key, LOWER(HEX(sha256)) AS sha256 FROM meeting_recordings WHERE meeting_id = ${meeting}`)
+        expect(yield* sql`SELECT object_key, lower(hex(sha256)) AS sha256 FROM meeting_recordings WHERE meeting_id = ${meeting}`)
           .toEqual([{ object_key, sha256: recording.sha256 }]);
-        expect(yield* sql`SELECT processing->>'$.recording' AS recording FROM meetings WHERE id = ${meeting}`)
+        expect(yield* sql`SELECT json_extract(processing, '$.recording') AS recording FROM meetings WHERE id = ${meeting}`)
           .toEqual([{ recording: 'complete' }]);
         const access = yield* issueRecordingAccess(device!, meeting);
         expect(store.verifySignedUrl(access.url)).toBe(object_key);
@@ -268,26 +269,15 @@ describe('meeting recording playback', () => {
     );
   });
 
-  it.effect('a late-final transaction sees a cut published after its first read', () => {
+  it.effect('a late final after the cut is published moves the meeting to a new revision and a new cut', () => {
     const store = memoryObjectStore();
     return withDatabase(
       Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
         const { device, listener, epoch, meeting } = yield* setup(store);
         yield* closeMeeting(device, meeting, { epoch_id: epoch, fence_sample: 60 * RATE });
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
-        const snapshot = yield* Deferred.make<void>();
-        const published = yield* Deferred.make<void>();
-        const lateFinal = yield* sql.withTransaction(Effect.gen(function* () {
-          yield* sql`SELECT id FROM meeting_recordings WHERE meeting_id = ${meeting}`;
-          yield* Deferred.succeed(snapshot, undefined);
-          yield* Deferred.await(published);
-          yield* hear(listener, epoch, 56, 59, 'and include the revised deadline');
-        })).pipe(Effect.fork);
-        yield* Deferred.await(snapshot);
         yield* assemble(listener.workspace_id, meeting);
-        yield* Deferred.succeed(published, undefined);
-        yield* Fiber.join(lateFinal);
+        yield* hear(listener, epoch, 56, 59, 'and include the revised deadline');
         expect((yield* meetingsOf(listener.workspace_id)).map(row => row.boundary_revision)).toEqual([2]);
         yield* finalizeMeeting(claimed(listener.workspace_id, 'meeting.finalize', { meeting_id: meeting }));
         expect(yield* assemble(listener.workspace_id, meeting)).toMatchObject({ result: { boundary_revision: 2, status: 'partial' } });
@@ -338,7 +328,7 @@ describe('meeting recording playback', () => {
         yield* assemble(listener.workspace_id, meeting);
         expect(yield* Effect.flip(issueRecordingAccess(member, meeting))).toMatchObject({ _tag: 'NotFound' });
         yield* sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-          VALUES (${owner.workspace_id}, ${meeting}, ${member.principal.id}, 'read', ${owner.principal.id}, UTC_TIMESTAMP(6))`;
+          VALUES (${owner.workspace_id}, ${meeting}, ${member.principal.id}, 'read', ${owner.principal.id}, ${now})`;
         expect((yield* issueRecordingAccess(member, meeting)).boundary_revision).toBe(1);
         const writeOnlyAgent: AccessScope = { ...member, scopes: ['context:read', 'context:write'] };
         expect(yield* Effect.flip(issueRecordingAccess(writeOnlyAgent, meeting))).toMatchObject({ _tag: 'Forbidden', required_scope: 'recordings:read' });

@@ -3,6 +3,7 @@ import { SqlClient } from '@effect/sql';
 import type { ContextChangeKind, ContextItemId, MeetingId, PrincipalId, WorkspaceId } from '@sanctum/contracts';
 import { Effect } from 'effect';
 import { nextContextSeq } from './db.ts';
+import { now } from './sql-dialect.ts';
 
 /**
  * Appends one committed-order event inside the caller's transaction and returns its sequence.
@@ -24,7 +25,7 @@ export const appendContextEvent = (input: {
   const seq = yield* nextContextSeq(input.workspace_id);
   yield* sql`INSERT INTO context_events (workspace_id, seq, meeting_id, item_id, item_revision, change_kind, actor_principal_id, source_revision, permission_revision, created_at)
       SELECT id, ${seq}, ${input.meeting_id}, ${input.item?.id ?? null}, ${input.item?.revision ?? null}, ${input.change}, ${input.actor},
-        ${input.source_revision ?? null}, permission_revision, UTC_TIMESTAMP(6)
+        ${input.source_revision ?? null}, permission_revision, ${now}
       FROM workspaces WHERE id = ${input.workspace_id}`;
   return seq;
  });

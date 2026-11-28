@@ -3,7 +3,7 @@ name: changelog
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/d1-store]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:

@@ -25,6 +25,7 @@ import {
 } from '@sanctum/contracts';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { DbJson, DbSafeInt } from './db.ts';
+import { inList, now } from './sql-dialect.ts';
 
 export type CaptureAccess = AccessScope & { readonly device_id?: DeviceId; readonly credential_id?: string };
 
@@ -105,12 +106,12 @@ const sessionAccess = (request: HttpServerRequest.HttpServerRequest, workspace?:
     const Row = Schema.Struct({ ...MemberRow.fields, csrf_hash: Schema.Uint8ArrayFromSelf });
     const idHash = hashToken(token);
     const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.csrf_hash FROM browser_sessions x ${activeMember(sql, workspace?.(sql))}
-      WHERE x.id_hash = ${idHash} AND x.revoked_at IS NULL AND x.expires_at > UTC_TIMESTAMP(6) AND p.kind IN ('human', 'device')`);
+      WHERE x.id_hash = ${idHash} AND x.revoked_at IS NULL AND x.expires_at > ${now} AND p.kind IN ('human', 'device')`);
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Session is not valid' });
     if (csrfToken !== null && !timingSafeEqual(hashToken(csrfToken), row.value.csrf_hash)) {
       return yield* new Forbidden({ message: 'CSRF token is missing or invalid' });
     }
-    yield* sql`UPDATE browser_sessions SET last_seen_at = UTC_TIMESTAMP(6) WHERE id_hash = ${idHash}`;
+    yield* sql`UPDATE browser_sessions SET last_seen_at = ${now} WHERE id_hash = ${idHash}`;
     return toAccess(row.value, ROLE_SCOPES[row.value.role], null);
   });
 
@@ -121,9 +122,9 @@ const credentialAccess = (token: string) =>
     const row = yield* findOne(Row, sql`SELECT ${memberColumns(sql)}, x.id, x.scopes, x.meeting_allowlist, d.id AS device_id
       FROM agent_credentials x ${activeMember(sql)}
       LEFT JOIN devices d ON d.workspace_id = x.workspace_id AND d.credential_id = x.id
-      WHERE x.token_hash = ${hashToken(token)} AND x.revoked_at IS NULL AND (x.expires_at IS NULL OR x.expires_at > UTC_TIMESTAMP(6))`);
+      WHERE x.token_hash = ${hashToken(token)} AND x.revoked_at IS NULL AND (x.expires_at IS NULL OR x.expires_at > ${now})`);
     if (Option.isNone(row)) return yield* new Unauthenticated({ message: 'Credential is not valid' });
-    yield* sql`UPDATE agent_credentials SET last_used_at = UTC_TIMESTAMP(6) WHERE id = ${row.value.id}`;
+    yield* sql`UPDATE agent_credentials SET last_used_at = ${now} WHERE id = ${row.value.id}`;
     const access = toAccess(row.value, row.value.scopes, row.value.meeting_allowlist);
     const captured: CaptureAccess = row.value.device_id === null ? { ...access, credential_id: row.value.id } : { ...access, credential_id: row.value.id, device_id: row.value.device_id };
     return captured;
@@ -142,7 +143,7 @@ const authenticate = (request: HttpServerRequest.HttpServerRequest) => {
     : sessionAccess(request);
 };
 
-export const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > UTC_TIMESTAMP(6)))`;
+export const ownerUntilPurge = (sql: SqlClient.SqlClient) => sql`(w.deleted_at IS NULL OR (m.role = 'owner' AND w.purge_after > ${now}))`;
 
 /**
  * `WorkspaceOwner` middleware: an owner's browser session. Only an owner's session still reaches a
@@ -180,7 +181,7 @@ type MemberKey = { readonly workspace_id: WorkspaceId; readonly principal_id: Pr
 const findMember = (input: MemberKey, workspace?: (sql: SqlClient.SqlClient) => Statement.Fragment) =>
   Effect.flatMap(SqlClient.SqlClient, sql =>
     findOne(MemberRow, sql`SELECT ${memberColumns(sql)}
-      FROM (SELECT CAST(${input.workspace_id} AS CHAR(36) CHARACTER SET ascii) COLLATE ascii_bin AS workspace_id, CAST(${input.principal_id} AS CHAR(36) CHARACTER SET ascii) COLLATE ascii_bin AS principal_id) x ${activeMember(sql, workspace?.(sql))}`),
+      FROM (SELECT ${input.workspace_id} AS workspace_id, ${input.principal_id} AS principal_id) x ${activeMember(sql, workspace?.(sql))}`),
   );
 
 export const resolveAccess = (input: MemberKey) =>
@@ -194,7 +195,7 @@ export const resolveAccess = (input: MemberKey) =>
       Result: Schema.Struct({ scopes: Scopes, meeting_allowlist: Allowlist }),
       execute: () => sql`SELECT scopes, meeting_allowlist FROM agent_credentials
         WHERE workspace_id = ${input.workspace_id} AND principal_id = ${input.principal_id}
-        AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))`,
+        AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ${now})`,
     })(undefined).pipe(Effect.catchTag('ParseError', Effect.die));
     if (credentials.length === 0) return yield* new Forbidden({ message: 'Agent has no active credential' });
     const scopes = [...new Set(credentials.flatMap(credential => credential.scopes))];
@@ -225,8 +226,8 @@ export const openSession = (input: MemberKey) =>
     const csrf_token = newToken();
     const expires_at = new Date(Date.now() + SESSION_TTL_MS).toISOString();
     yield* sql`INSERT INTO browser_sessions (id_hash, workspace_id, principal_id, csrf_hash, created_at, expires_at, last_seen_at)
-      VALUES (${hashToken(token)}, ${input.workspace_id}, ${input.principal_id}, ${hashToken(csrf_token)}, UTC_TIMESTAMP(6),
-        ${expires_at.slice(0, -1).replace('T', ' ')}, UTC_TIMESTAMP(6))`;
+      VALUES (${hashToken(token)}, ${input.workspace_id}, ${input.principal_id}, ${hashToken(csrf_token)}, ${now},
+        ${`${expires_at.slice(0, -1).replace('T', ' ')}000`}, ${now})`;
     return { token, csrf_token, expires_at };
   });
 
@@ -243,17 +244,30 @@ export const identityPrincipal = (identity: { readonly issuer: string; readonly 
 
 /** Ends one browser session by its cookie token; the next request with that cookie answers 401. */
 export const revokeSession = (token: string) =>
-  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE browser_sessions SET revoked_at = UTC_TIMESTAMP(6) WHERE id_hash = ${hashToken(token)} AND revoked_at IS NULL`);
+  Effect.flatMap(SqlClient.SqlClient, sql => sql`UPDATE browser_sessions SET revoked_at = ${now} WHERE id_hash = ${hashToken(token)} AND revoked_at IS NULL`);
+
+const REFUSED_LINK = 'This sign-in is already linked to another principal';
+type IdentityInput = { readonly issuer: string; readonly subject: string; readonly principal_id: PrincipalId };
+
+const bindIdentity = (input: IdentityInput) =>
+  Effect.flatMap(SqlClient.SqlClient, sql =>
+    sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at)
+      VALUES (${input.issuer}, ${input.subject}, ${input.principal_id}, ${now})
+      ON CONFLICT (issuer, subject) DO UPDATE SET verified_at = iif(principal_identities.principal_id = excluded.principal_id, excluded.verified_at, principal_identities.verified_at)`,
+  );
 
 /** Binds a verified issuer/subject pair to a principal; a pair already bound to another principal is refused, never moved. */
-export const linkIdentity = (input: { readonly issuer: string; readonly subject: string; readonly principal_id: PrincipalId }) =>
+export const linkIdentity = (input: IdentityInput) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO principal_identities (issuer, subject, principal_id, verified_at)
-      VALUES (${input.issuer}, ${input.subject}, ${input.principal_id}, UTC_TIMESTAMP(6)) AS new
-      ON DUPLICATE KEY UPDATE verified_at = IF(principal_identities.principal_id = new.principal_id, new.verified_at, principal_identities.verified_at)`;
-    const owner = yield* identityPrincipal(input);
-    if (Option.getOrNull(owner) !== input.principal_id) return yield* new Forbidden({ message: 'This sign-in is already linked to another principal' });
+    // Read first: a transaction cannot read after its first write. A concurrent bind of the pair fails the commit guard and reruns this body.
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const owner = yield* identityPrincipal(input);
+        if (Option.isSome(owner) && owner.value !== input.principal_id) return yield* new Forbidden({ message: REFUSED_LINK });
+        yield* bindIdentity(input);
+      }),
+    );
   });
 
 /** A new human principal bound to a verified issuer/subject pair; its display name is the trimmed `name` (200 characters at most), else the subject. */
@@ -262,10 +276,11 @@ export const createHumanPrincipal = (input: { readonly issuer: string; readonly 
     const sql = yield* SqlClient.SqlClient;
     const principal_id = PrincipalId.make(randomUUID());
     yield* sql.withTransaction(
-      Effect.zipRight(
-        sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.name?.trim().slice(0, 200) || input.subject}, UTC_TIMESTAMP(6))`,
-        linkIdentity({ issuer: input.issuer, subject: input.subject, principal_id }),
-      ),
+      Effect.gen(function* () {
+        if (Option.isSome(yield* identityPrincipal(input))) return yield* new Forbidden({ message: REFUSED_LINK });
+        yield* sql`INSERT INTO principals (id, kind, display_name, created_at) VALUES (${principal_id}, 'human', ${input.name?.trim().slice(0, 200) || input.subject}, ${now})`;
+        yield* bindIdentity({ ...input, principal_id });
+      }),
     );
     return principal_id;
   });
@@ -296,7 +311,7 @@ export const listVisibleMeetingIds = (access: AccessScope) =>
     if (meetings.kind === 'allowlist' && meetings.meeting_ids.length === 0) return [];
     const visible =
       meetings.kind === 'allowlist'
-        ? sql`m.id IN ${sql.in(meetings.meeting_ids)}`
+        ? inList(sql, 'm.id', meetings.meeting_ids)
         : sql`(m.visibility = 'workspace' OR EXISTS (SELECT 1 FROM meeting_access a
             WHERE a.workspace_id = m.workspace_id AND a.meeting_id = m.id AND a.principal_id = ${access.principal.id}))`;
     const rows = yield* sql<{ id: MeetingId }>`SELECT m.id FROM meetings m WHERE m.workspace_id = ${access.workspace_id} AND ${visible} ORDER BY m.id`;

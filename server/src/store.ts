@@ -2,7 +2,7 @@
  * Workspace ownership repositories (plan sections 07 and 11). Every statement is parameterized
  * and names its workspace, so tenant isolation starts at this first query layer.
  *
- * Semantics: identifiers compare byte-for-byte (ascii_bin); membership and meeting grants are
+ * Semantics: identifiers compare by exact case; membership and meeting grants are
  * upserts that bump the workspace permission revision (cache keys include it); profile edits
  * are revision-checked and fail with the current revision instead of overwriting.
  */
@@ -19,26 +19,28 @@ import {
   type WorkspaceRole,
 } from '@sanctum/contracts';
 import { defaultSeatLimit } from './config.ts';
-import { DbSafeInt, increment, shareLock } from './db.ts';
+import { type DbResult, DbSafeInt, increment } from './db.ts';
+import { now } from './sql-dialect.ts';
 
-interface WriteResult { readonly affectedRows: number; readonly insertId: number | string }
-
-/** Runs DML and returns mysql2's result header (affected rows, LAST_INSERT_ID). */
-export const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
-  Effect.map(statement.raw, result => result as WriteResult);
+/**
+ * Runs DML and returns the rows it changed. Inside a transaction the write only joins the commit
+ * buffer and reports 0: count first, or put the expected state in `WHERE`.
+ */
+const write = (statement: { readonly raw: Effect.Effect<unknown, SqlError.SqlError> }) =>
+  Effect.map(statement.raw, result => ({ affectedRows: (result as DbResult).changes }));
 
 /** Invalidates every access-derived cache entry of the workspace; returns the new revision. */
 export const bumpPermissionRevision: (workspace_id: WorkspaceId) => Effect.Effect<number, SqlError.SqlError, SqlClient.SqlClient> =
   increment('permission_revision');
 
 /**
- * True while the workspace is not deleted. The lock (shared where the database has one) holds until the caller's transaction ends,
- * so a delete waits for the write in flight and a write after the delete sees it.
+ * True while the workspace is not deleted. Inside a transaction, the commit guard reruns the caller
+ * when a delete committed after this read, so a write never lands in a workspace deleted before it.
  */
 export const workspaceIsLive = (workspace_id: WorkspaceId) =>
   Effect.flatMap(
     SqlClient.SqlClient,
-    sql => sql`SELECT 1 FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NULL ${sql.literal(shareLock())}`,
+    sql => sql`SELECT 1 FROM workspaces WHERE id = ${workspace_id} AND deleted_at IS NULL`,
   ).pipe(Effect.map(rows => rows.length > 0));
 
 /** Roles that take a seat; agents and devices never count against the limit. */
@@ -51,19 +53,20 @@ const SeatRow = Schema.Struct({ seat_limit: Schema.NullOr(DbSafeInt), used: DbSa
 /**
  * Refuses a new seat once active seats reach the workspace's `seat_limit`, else the configured
  * default (NULL default: no limit). Holders keep their seat and may change role even over the limit;
- * a null principal holds none. Locks the workspace row, then its seated member rows, so concurrent
- * additions in one workspace cannot overshoot; outside `addMember`, run it in its own transaction
- * as a check.
+ * a null principal holds none. Concurrent additions in one workspace cannot overshoot: the commit
+ * guard reruns the loser; outside `addMember`, run it in its own transaction as a check.
  */
 export const claimSeat = (workspace_id: WorkspaceId, principal_id: PrincipalId | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const fallback = yield* Effect.orDie(defaultSeatLimit);
-    const [row] = yield* sql`SELECT seat_limit FROM workspaces WHERE id = ${workspace_id} FOR UPDATE`;
+    const seated = sql`m.workspace_id = w.id AND m.revoked_at IS NULL AND m.role IN ${sql.in(seatRoles)}`;
+    const [row] = yield* sql`SELECT w.seat_limit,
+        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated}) AS used,
+        (SELECT COUNT(*) FROM workspace_members m WHERE ${seated} AND m.principal_id = ${principal_id}) AS held
+      FROM workspaces w WHERE w.id = ${workspace_id}`;
     if (row === undefined) return;
-    // Locking read: TiDB serves a plain or subquery SELECT from the transaction snapshot, which misses seats committed while we waited for the workspace lock.
-    const seated = yield* sql`SELECT principal_id FROM workspace_members WHERE workspace_id = ${workspace_id} AND revoked_at IS NULL AND role IN ${sql.in(seatRoles)} FOR UPDATE`;
-    const seats = Schema.decodeUnknownSync(SeatRow)({ ...row, used: seated.length, held: seated.filter(m => m.principal_id === principal_id).length });
+    const seats = Schema.decodeUnknownSync(SeatRow)(row);
     const limit = seats.seat_limit ?? fallback;
     if (limit !== null && seats.held === 0 && seats.used >= limit) {
       return yield* new SeatLimitReached({ limit, message: `Workspace seat limit of ${limit} reached` });
@@ -79,12 +82,10 @@ export const addMember = (input: { readonly workspace_id: WorkspaceId; readonly 
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        // Workspace row first, then member rows: the order `setMembership` revoke follows, so the two cannot deadlock. An unknown workspace stays a foreign-key error at the INSERT.
-        yield* sql`SELECT id FROM workspaces WHERE id = ${input.workspace_id} FOR UPDATE`;
         if (seatRoles.includes(input.role)) yield* claimSeat(input.workspace_id, input.principal_id);
         yield* sql`INSERT INTO workspace_members (workspace_id, principal_id, role, org_issuer, created_at)
-          VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, UTC_TIMESTAMP(6)) AS new
-          ON DUPLICATE KEY UPDATE role = new.role, revoked_at = NULL, org_issuer = new.org_issuer`;
+          VALUES (${input.workspace_id}, ${input.principal_id}, ${input.role}, ${input.org_issuer ?? null}, ${now})
+          ON CONFLICT (workspace_id, principal_id) DO UPDATE SET role = excluded.role, revoked_at = NULL, org_issuer = excluded.org_issuer`;
         return yield* bumpPermissionRevision(input.workspace_id);
       }),
     );
@@ -108,8 +109,8 @@ export const setMembership = (issuer: string, workspace_id: WorkspaceId, princip
       if (active === undefined || active.org_issuer !== issuer) return;
       yield* sql.withTransaction(
         Effect.zipRight(
+          sql`UPDATE workspace_members SET revoked_at = ${now} WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
           bumpPermissionRevision(workspace_id),
-          sql`UPDATE workspace_members SET revoked_at = UTC_TIMESTAMP(6) WHERE workspace_id = ${workspace_id} AND principal_id = ${principal_id} AND revoked_at IS NULL`,
         ),
       );
       return;
@@ -131,8 +132,8 @@ export const linkWorkspaceOrg = (input: { readonly workspace_id: WorkspaceId; re
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO workspace_orgs (issuer, org_id, workspace_id, created_at)
-      VALUES (${input.issuer}, ${input.org_id}, ${input.workspace_id}, UTC_TIMESTAMP(6))
-      ON DUPLICATE KEY UPDATE issuer = issuer`;
+      VALUES (${input.issuer}, ${input.org_id}, ${input.workspace_id}, ${now})
+      ON CONFLICT DO NOTHING`;
     const linked = yield* workspaceForOrg(input);
     if (Option.getOrUndefined(linked) !== input.workspace_id) {
       return yield* Effect.dieMessage(`Organization ${input.org_id} or workspace ${input.workspace_id} is already linked differently at ${input.issuer}`);
@@ -151,8 +152,8 @@ export const grantMeetingAccess = (input: {
     const sql = yield* SqlClient.SqlClient;
     return yield* sql.withTransaction(
       sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-        VALUES (${input.workspace_id}, ${input.meeting_id}, ${input.principal_id}, ${input.access}, ${input.granted_by}, UTC_TIMESTAMP(6)) AS new
-        ON DUPLICATE KEY UPDATE access = new.access, granted_by = new.granted_by`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
+        VALUES (${input.workspace_id}, ${input.meeting_id}, ${input.principal_id}, ${input.access}, ${input.granted_by}, ${now})
+        ON CONFLICT (meeting_id, principal_id) DO UPDATE SET access = excluded.access, granted_by = excluded.granted_by`.pipe(Effect.zipRight(bumpPermissionRevision(input.workspace_id))),
     );
   });
 
@@ -169,7 +170,7 @@ export const createProfile = (
     const sql = yield* SqlClient.SqlClient;
     const id = ProfileId.make(randomUUID());
     yield* sql`INSERT INTO profiles (id, workspace_id, principal_id, kind, display_name, details, created_at, updated_at)
-      VALUES (${id}, ${workspace_id}, ${input.principal_id}, ${input.kind}, ${input.display_name}, ${JSON.stringify(input.details)}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
+      VALUES (${id}, ${workspace_id}, ${input.principal_id}, ${input.kind}, ${input.display_name}, ${JSON.stringify(input.details)}, ${now}, ${now})`;
     return id;
   });
 
@@ -178,7 +179,7 @@ export const reviseProfile = (workspace_id: WorkspaceId, input: ProfileFields & 
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const updated = yield* write(sql`UPDATE profiles
-      SET display_name = ${input.display_name}, details = ${JSON.stringify(input.details)}, revision = revision + 1, updated_at = UTC_TIMESTAMP(6)
+      SET display_name = ${input.display_name}, details = ${JSON.stringify(input.details)}, revision = revision + 1, updated_at = ${now}
       WHERE workspace_id = ${workspace_id} AND id = ${input.id} AND revision = ${input.expected_revision}`);
     if (updated.affectedRows === 1) return input.expected_revision + 1;
     const [current] = yield* sql<{ revision: number }>`SELECT revision FROM profiles WHERE workspace_id = ${workspace_id} AND id = ${input.id}`;

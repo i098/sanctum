@@ -1,156 +1,310 @@
-import { randomUUID } from 'node:crypto';
-import { rootCertificates } from 'node:tls';
+import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { SqlClient, type SqlError, SqlSchema } from '@effect/sql';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Exit, Layer, Schema } from 'effect';
-import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, dbLayer, ER_CHECK_CONSTRAINT_VIOLATED, ER_DUP_ENTRY, ER_NO_REFERENCED_ROW, mysqlErrno, verifyUtcSession } from '../src/db.ts';
-import { createTestDatabase, withDatabase } from './support/database.ts';
-import { seedWorkspace } from './support/fixtures.ts';
+import { Context, Deferred, Effect, Either, Exit, Fiber, type Layer, Schema } from 'effect';
+import type { WorkspaceId } from '@sanctum/contracts';
+import { DbBool, DbJson, DbSafeInt, DbSha256, DbUtc, dbLayer, increment, isCheckViolation, isDuplicate, isMissingReference } from '../src/db.ts';
+import { d1Backend } from '../src/db-d1.ts';
+import { sqliteBackend } from '../src/db-sqlite.ts';
+import { addSeconds, chunked, diffMicros, diffSeconds, now } from '../src/sql-dialect.ts';
 
-const errnoOf = <A>(effect: Effect.Effect<A, SqlError.SqlError, SqlClient.SqlClient>) =>
-  Effect.map(Effect.flip(effect), mysqlErrno);
+const workspace = 'w1' as WorkspaceId;
 
-const Row = Schema.Struct({
-  created_at: DbUtc,
-  context_seq: DbSafeInt,
-  capture_policy: Schema.NullOr(DbJson(Schema.Struct({ note: Schema.String, nested: Schema.NullOr(Schema.Array(Schema.Number)) }))),
-  name: Schema.String,
+/** The transaction guard tables plus two small tables; the baseline migration carries the real ones. */
+const schema = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  for (const statement of [
+    "CREATE TABLE tx_clock (id INTEGER PRIMARY KEY CHECK (id = 1), v INTEGER NOT NULL)",
+    "INSERT INTO tx_clock VALUES (1, 0)",
+    "CREATE TABLE tx_conflict (v INTEGER CONSTRAINT tx_conflict_guard CHECK (v IS NULL))",
+    "CREATE TABLE workspaces (id TEXT PRIMARY KEY, context_seq INTEGER NOT NULL DEFAULT 0, permission_revision INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL CHECK (length(name) > 0))",
+    "CREATE TABLE notes (id INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), body BLOB, flag INTEGER)",
+    "INSERT INTO workspaces (id, name) VALUES ('w1', 'one')",
+  ]) yield* sql.unsafe(statement);
 });
 
-describe('database boundary', () => {
-  it.effect('round-trips UTC microseconds, BIGINT, JSON and Unicode through one decoding boundary', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* verifyUtcSession;
-        const id = randomUUID();
-        const name = 'Café 会議 🎙️ Ωmega';
-        const policy = { note: 'straße ✓', nested: null };
-        yield* sql`INSERT INTO workspaces (id, name, timezone, context_seq, capture_policy, created_at)
-          VALUES (${id}, ${name}, 'Europe/Berlin', ${String(Number.MAX_SAFE_INTEGER)}, ${JSON.stringify(policy)}, ${'2026-03-29 01:59:59.999999'})`;
-        const find = SqlSchema.single({ Request: Schema.String, Result: Row, execute: key => sql`SELECT created_at, context_seq, capture_policy, name FROM workspaces WHERE id = ${key}` });
-        const row = yield* find(id);
-        expect(row).toEqual({ created_at: '2026-03-29T01:59:59.999999Z', context_seq: Number.MAX_SAFE_INTEGER, capture_policy: policy, name });
-        yield* sql`UPDATE workspaces SET context_seq = context_seq + 1 WHERE id = ${id}`;
-        const unsafe = yield* Effect.exit(find(id));
-        expect(Exit.isFailure(unsafe) && String(unsafe.cause)).toMatch(/not a safe integer/);
-      }),
-      { migrated: true },
-    ),
-  );
+const withRival = <A, E>(use: (rival: Layer.Layer<SqlClient.SqlClient, SqlError.SqlError>) => Effect.Effect<A, E, SqlClient.SqlClient>) => {
+  // One shared-cache memory database, so a second client is a rival process: it has its own transaction lane.
+  const db = { url: `file:db_t_${randomBytes(6).toString('hex')}?mode=memory&cache=shared` };
+  return Effect.provide(Effect.zipRight(schema, Effect.suspend(() => use(dbLayer(db)))), dbLayer(db));
+};
+const withDb = <A, E>(use: Effect.Effect<A, E, SqlClient.SqlClient>) => withRival(() => use);
+const writeNote = (flag?: number) => Effect.flatMap(SqlClient.SqlClient, sql => sql.withTransaction(sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, ${flag ?? null})`));
+const count = (table: string) => SqlClient.SqlClient.pipe(Effect.flatMap(sql => sql.unsafe<{ n: number }>(`SELECT count(*) AS n FROM ${table}`)), Effect.map(rows => rows[0]!.n));
+const failureOf = <A>(effect: Effect.Effect<A, SqlError.SqlError, SqlClient.SqlClient>) => Effect.flip(effect);
 
-  it('column schemas encode back to MySQL representations', () => {
+describe('column schemas', () => {
+  it('round-trip database representations', () => {
     expect(Schema.encodeSync(DbUtc)(Schema.decodeSync(DbUtc)('2026-09-26 17:08:16.000100'))).toBe('2026-09-26 17:08:16.000100');
     expect(() => Schema.decodeUnknownSync(DbUtc)('2026-09-26T17:08:16Z')).toThrow();
     expect(Schema.decodeSync(DbBool)(1)).toBe(true);
-    expect(Schema.encodeSync(DbBool)(false)).toBe(0);
     expect(Schema.decodeUnknownSync(DbSafeInt)('-42')).toBe(-42);
     expect(() => Schema.decodeUnknownSync(DbSafeInt)('1.5')).toThrow();
     const hash = 'ab'.repeat(32);
     expect(Schema.decodeSync(DbSha256)(Schema.encodeSync(DbSha256)(hash))).toBe(hash);
     expect(Schema.decodeUnknownSync(DbJson(Schema.Array(Schema.Number)))('[1,2]')).toEqual([1, 2]);
   });
-
-  it.effect('refuses a non-UTC session', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const exit = yield* Effect.exit(sql.withTransaction(Effect.zipRight(sql`SET time_zone = '+02:00'`, verifyUtcSession)));
-        expect(Exit.isFailure(exit) && String(exit.cause)).toMatch(/must be UTC/);
-      }),
-    ),
-  );
-
-  it.effect('with a CA configured, refuses a server it cannot verify instead of connecting in plain text', () =>
-    Effect.acquireUseRelease(
-      Effect.promise(createTestDatabase),
-      database => Effect.gen(function* () {
-        // Any public root CA: it did not issue the test server's self-signed certificate.
-        const error = yield* Effect.flip(Layer.build(dbLayer({ ...database.mysql, caCert: rootCertificates[0]! })).pipe(Effect.scoped));
-        expect(error._tag === 'SqlError' && String(error.cause)).toMatch(/certificate/i);
-      }),
-      database => Effect.promise(database.drop),
-    ),
-  );
 });
 
-describe('schema constraints', () => {
-  it.effect('composite keys stop rows pointing into another workspace', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const [alpha] = yield* seedWorkspace('Alpha');
-        const [beta] = yield* seedWorkspace('Beta');
-        const meeting = randomUUID();
-        yield* sql`INSERT INTO meetings (id, workspace_id, state, timezone, started_at, processing, created_at, updated_at)
-          VALUES (${meeting}, ${alpha!.workspace_id}, 'active', 'UTC', UTC_TIMESTAMP(6), '{}', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
-        const crossed = yield* errnoOf(sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-          VALUES (${beta!.workspace_id}, ${meeting}, ${beta!.principal.id}, 'read', ${beta!.principal.id}, UTC_TIMESTAMP(6))`);
-        expect(crossed).toBe(ER_NO_REFERENCED_ROW);
-        const foreignMember = yield* errnoOf(sql`INSERT INTO meeting_access (workspace_id, meeting_id, principal_id, access, granted_by, created_at)
-          VALUES (${alpha!.workspace_id}, ${meeting}, ${beta!.principal.id}, 'read', ${alpha!.principal.id}, UTC_TIMESTAMP(6))`);
-        expect(foreignMember).toBe(ER_NO_REFERENCED_ROW);
-      }),
-      { migrated: true },
-    ),
-  );
+describe('transactions', () => {
+  it.effect('commit applies buffered writes; reads before the first write see committed rows', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const seen = yield* sql.withTransaction(Effect.gen(function* () {
+        const before = yield* count('notes');
+        yield* sql`INSERT INTO notes (workspace_id, body, flag) VALUES (${workspace}, ${new Uint8Array([1, 2, 255])}, ${true})`;
+        return before;
+      }));
+      expect(seen).toBe(0);
+      const [row] = yield* sql<{ body: Uint8Array; flag: number }>`SELECT body, flag FROM notes`;
+      expect([...row!.body]).toEqual([1, 2, 255]);
+      expect(row!.flag).toBe(1);
+    })));
 
-  it.effect('recording chunks have one source identity and a valid WAV size', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const [device] = yield* seedWorkspace('Room', ['device']);
-        const ws = device!.workspace_id;
-        const listener = randomUUID();
-        const epoch = randomUUID();
-        yield* sql`INSERT INTO listeners (id, workspace_id, principal_id, name, mode, capabilities, created_at)
-          VALUES (${listener}, ${ws}, ${device!.principal.id}, 'Room 1', 'room', '{}', UTC_TIMESTAMP(6))`;
-        yield* sql`INSERT INTO capture_epochs (id, workspace_id, listener_id, lease_generation, sample_rate, channels, encoding, sample_start, captured_at, timezone, start_reason, started_at, live_sample_end)
-          VALUES (${epoch}, ${ws}, ${listener}, 1, 48000, 1, 'pcm_s16le', 0, UTC_TIMESTAMP(6), 'UTC', 'start', UTC_TIMESTAMP(6), 0)`;
-        const chunk = (sequence: number, byteLength: number) =>
-          sql`INSERT INTO recording_chunks (id, workspace_id, listener_id, epoch_id, track, sequence, sample_start, sample_count, sample_rate, captured_at, byte_length, sha256, object_key, upload_state, created_at)
-            VALUES (${randomUUID()}, ${ws}, ${listener}, ${epoch}, 0, ${sequence}, ${sequence * 1_440_000}, 1440000, 48000, UTC_TIMESTAMP(6), ${byteLength}, ${Buffer.alloc(32)}, ${`${epoch}/${sequence}-${byteLength}`}, 'pending', UTC_TIMESTAMP(6))`;
-        yield* chunk(0, 44 + 1_440_000 * 2);
-        expect(yield* errnoOf(chunk(0, 44 + 1_440_000 * 2))).toBe(ER_DUP_ENTRY);
-        expect(yield* errnoOf(chunk(1, 1_000))).toBe(ER_CHECK_CONSTRAINT_VIOLATED);
-      }),
-      { migrated: true },
-    ),
-  );
+  it.effect('a failed body rolls back: nothing is written', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const exit = yield* Effect.exit(sql.withTransaction(Effect.zipRight(sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`, Effect.fail('boom'))));
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(yield* count('notes')).toBe(0);
+    })));
 
-  it.effect('allows one active job per work key while keeping finished history', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const [owner] = yield* seedWorkspace('Jobs');
-        const enqueue = (id: string) =>
-          sql`INSERT INTO jobs (id, workspace_id, kind, work_key, status, payload, available_at, max_attempts, created_at, updated_at)
-            VALUES (${id}, ${owner!.workspace_id}, 'context.refresh', 'meeting:1', 'pending', '{}', UTC_TIMESTAMP(6), 3, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`;
-        const first = randomUUID();
-        yield* enqueue(first);
-        expect(yield* errnoOf(enqueue(randomUUID()))).toBe(ER_DUP_ENTRY);
-        yield* sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${first}`;
-        yield* enqueue(randomUUID());
-        const [count] = yield* sql<{ total: number }>`SELECT COUNT(*) AS total FROM jobs`;
-        expect(Number(count!.total)).toBe(2);
-      }),
-      { migrated: true },
-    ),
-  );
+  it.effect('a failing batch rolls every buffered write back', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(Effect.zipRight(sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`, sql`UPDATE workspaces SET name = '' WHERE id = ${workspace}`)));
+      expect(isCheckViolation(error)).toBe(true);
+      expect(yield* count('notes')).toBe(0);
+    })));
 
-  it.effect('treats identifiers and idempotency keys case-sensitively', () =>
-    withDatabase(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const [agent] = yield* seedWorkspace('Keys', ['agent']);
-        const add = (key: string) =>
-          sql`INSERT INTO context_items (id, revision, workspace_id, kind, text, state, derivation, sources, author_type, author_principal_id, idempotency_key, payload_sha256, created_at)
-            VALUES (${randomUUID()}, 1, ${agent!.workspace_id}, 'decision', 'x', 'provisional', 'spoken', '[]', 'agent', ${agent!.principal.id}, ${key}, ${Buffer.alloc(32)}, UTC_TIMESTAMP(6))`;
-        yield* add('Run-1');
-        yield* add('run-1');
-        expect(yield* errnoOf(add('Run-1'))).toBe(ER_DUP_ENTRY);
-      }),
-      { migrated: true },
-    ),
-  );
+  it.effect('reading after a buffered write is an error', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(Effect.zipRight(sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`, sql`SELECT * FROM notes`)));
+      expect(error.message).toMatch(/Read after a buffered write/);
+    })));
+
+  it.live('a transaction that lost the race reruns and commits once', () =>
+    withRival(rivalClient => Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const started = yield* Deferred.make<void>();
+      const rival = yield* Deferred.make<void>();
+      let attempts = 0;
+      const slow = yield* Effect.fork(sql.withTransaction(Effect.gen(function* () {
+        attempts++;
+        if (attempts === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(rival);
+        }
+        yield* sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 1)`;
+      })));
+      yield* Deferred.await(started);
+      yield* Effect.provide(writeNote(2), rivalClient);
+      yield* Deferred.succeed(rival, undefined);
+      yield* Fiber.join(slow);
+      expect(attempts).toBe(2);
+      expect(yield* count('notes')).toBe(2);
+      const [clock] = yield* sql<{ v: number }>`SELECT v FROM tx_clock`;
+      expect(clock!.v).toBe(2);
+    })));
+
+  it.effect('twenty parallel transactions on one row all commit with distinct numbers', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const numbers = yield* Effect.all(Array.from({ length: 20 }, () => sql.withTransaction(increment('context_seq')(workspace))), { concurrency: 'unbounded' });
+      expect(new Set(numbers).size).toBe(20);
+      expect(Math.max(...numbers)).toBe(20);
+    })));
+});
+
+describe('increment', () => {
+  it.effect('counts up outside a transaction and twice inside one', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      expect(yield* increment('permission_revision')(workspace)).toBe(1);
+      const pair = yield* sql.withTransaction(Effect.gen(function* () {
+        yield* sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`;
+        return [yield* increment('permission_revision')(workspace), yield* increment('permission_revision')(workspace)];
+      }));
+      expect(pair).toEqual([2, 3]);
+      const [row] = yield* sql<{ permission_revision: number }>`SELECT permission_revision FROM workspaces`;
+      expect(row!.permission_revision).toBe(3);
+    })));
+});
+
+describe('errors and dialect', () => {
+  it.effect('names duplicate, missing reference and check violations', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      expect(isDuplicate(yield* failureOf(sql`INSERT INTO workspaces (id, name) VALUES ('w1', 'x')`))).toBe(true);
+      expect(isMissingReference(yield* failureOf(sql`INSERT INTO notes (workspace_id) VALUES ('nope')`))).toBe(true);
+      expect(isCheckViolation(yield* failureOf(sql`UPDATE workspaces SET name = ''`))).toBe(true);
+    })));
+
+  it.effect('time helpers and chunking', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const [row] = yield* sql<{ a: string; b: string; s: number; m: number }>`SELECT ${now} AS a, ${addSeconds("'2026-01-01 00:00:00.000000'", 90.5)} AS b,
+        ${diffSeconds("'2026-01-01 00:00:00'", "'2026-01-01 00:01:30.9'")} AS s, ${diffMicros("'2026-01-01 00:00:00'", "'2026-01-01 00:00:01.25'")} AS m`;
+      expect(Schema.decodeUnknownSync(DbUtc)(row!.a)).toMatch(/Z$/);
+      expect(row!.b).toBe('2026-01-01 00:01:30.500000');
+      expect([row!.s, row!.m]).toEqual([90, 1_250_000]);
+      expect(chunked(Array.from({ length: 250 }, (_, i) => i), 3).map(chunk => chunk.length)).toEqual([33, 33, 33, 33, 33, 33, 33, 19]);
+    })));
+
+  it.effect('FTS5 prefix and hyphenated-word search', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe('CREATE VIRTUAL TABLE fts USING fts5(text)');
+      yield* sql.unsafe("INSERT INTO fts (text) VALUES ('quarterly well-known budget'), ('other')");
+      const find = (query: string) => SqlSchema.findAll({ Request: Schema.String, Result: Schema.Struct({ text: Schema.String }), execute: q => sql`SELECT text FROM fts WHERE fts MATCH ${q} ORDER BY bm25(fts)` })(query);
+      expect(yield* find('"budg"*')).toHaveLength(1);
+      expect(yield* find('"well-known"')).toHaveLength(1);
+    })));
+});
+
+describe('D1 backend', () => {
+  it.effect('posts statements as JSON with bytes in base64 and decodes the answer', () =>
+    Effect.gen(function* () {
+      const seen: Array<{ url: string; body: unknown }> = [];
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (url: URL, init: RequestInit) => {
+        seen.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return Response.json(String(url).endsWith('/run') ? { rows: [{ b: { $b: 'AQL/' } }], changes: 0 } : { error: 'D1_ERROR: UNIQUE constraint failed: t.id' }, { status: String(url).endsWith('/run') ? 200 : 400 });
+      }) as typeof fetch;
+      try {
+        const backend = d1Backend('http://d1.internal');
+        const result = yield* backend.run({ sql: 'SELECT ?', params: [new Uint8Array([1, 2, 255]), true] });
+        expect([...(result.rows[0]!['b'] as Uint8Array)]).toEqual([1, 2, 255]);
+        expect(seen[0]).toEqual({ url: 'http://d1.internal/run', body: { sql: 'SELECT ?', params: [{ $b: 'AQL/' }, 1] } });
+        const error = yield* Effect.flip(backend.batch([{ sql: 'x', params: [] }]));
+        expect(isDuplicate(error)).toBe(true);
+      } finally {
+        globalThis.fetch = original;
+      }
+    }));
+});
+
+describe('review fixes', () => {
+  it.live('an autocommit increment between a transaction read and its commit forces a rerun, so no number repeats', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const started = yield* Deferred.make<void>();
+      const rival = yield* Deferred.make<void>();
+      let attempts = 0;
+      const slow = yield* Effect.fork(sql.withTransaction(Effect.gen(function* () {
+        attempts++;
+        const mine = yield* increment('context_seq')(workspace);
+        if (attempts === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(rival);
+        }
+        return mine;
+      })));
+      yield* Deferred.await(started);
+      const other = yield* increment('context_seq')(workspace);
+      yield* Deferred.succeed(rival, undefined);
+      expect([other, yield* Fiber.join(slow)]).toEqual([1, 2]);
+      expect(attempts).toBe(2);
+    })));
+
+  it.effect('an increment of a workspace this transaction only buffered is a typed failure', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(Effect.zipRight(sql`INSERT INTO workspaces (id, name) VALUES ('w2', 'two')`, increment('context_seq')('w2' as WorkspaceId))));
+      expect(error.message).toMatch(/Unknown workspace w2/);
+    })));
+
+  it.effect('a nested transaction that fails drops its own writes only', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.withTransaction(Effect.gen(function* () {
+        yield* sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 1)`;
+        yield* Effect.ignore(sql.withTransaction(Effect.zipRight(sql`INSERT INTO notes (workspace_id, flag) VALUES (${workspace}, 2)`, Effect.fail('inner'))));
+      }));
+      const rows = yield* sql<{ flag: number }>`SELECT flag FROM notes`;
+      expect(rows.map(row => row.flag)).toEqual([1]);
+    })));
+
+  it.effect('a write with RETURNING inside a transaction fails loudly; a WITH select still reads', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const error = yield* failureOf(sql.withTransaction(sql`INSERT INTO notes (workspace_id) VALUES (${workspace}) RETURNING id`));
+      expect(error.message).toMatch(/RETURNING is not supported/);
+      const rows = yield* sql.withTransaction(sql<{ n: number }>`WITH c AS (SELECT 7 AS n) SELECT n FROM c`);
+      expect(rows).toEqual([{ n: 7 }]);
+    })));
+
+  it.live('conflicts that never clear end in a readable error after the retries', () =>
+    withRival(rivalClient => Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      let attempts = 0;
+      const error = yield* failureOf(sql.withTransaction(Effect.gen(function* () {
+        attempts++;
+        // Outside the transaction, so it commits and moves tx_clock under this attempt.
+        yield* Effect.provide(Effect.mapInputContext(writeNote(), (context: Context.Context<SqlClient.SqlClient>) => Context.omit(SqlClient.TransactionConnection)(context)), rivalClient);
+        yield* sql`INSERT INTO notes (workspace_id) VALUES (${workspace})`;
+      })));
+      expect(error.message).toBe('Transaction conflict: retries exhausted, try again');
+      expect(attempts).toBe(25);
+    })), 15_000);
+
+  it.effect('time helpers refuse fragments that carry values or identifiers', () =>
+    withDb(Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      expect(() => diffSeconds(sql`${'x'}`, now)).toThrow(/plain literals/);
+    })));
+
+  it.effect('the D1 backend reports the status of a non-JSON gateway answer', () =>
+    Effect.gen(function* () {
+      const original = globalThis.fetch;
+      globalThis.fetch = (async () => new Response('<html>Bad gateway</html>', { status: 502 })) as typeof fetch;
+      try {
+        const error = yield* Effect.flip(d1Backend('http://d1.internal').run({ sql: 'SELECT 1', params: [] }));
+        expect(error.message).toMatch(/answered 502: <html>Bad gateway/);
+      } finally {
+        globalThis.fetch = original;
+      }
+    }));
+
+  it.effect('a batch that already rolled back reports the real error', () =>
+    Effect.scoped(Effect.gen(function* () {
+      const backend = yield* sqliteBackend(':memory:');
+      const error = yield* Effect.flip(backend.batch([{ sql: 'ROLLBACK', params: [] }, { sql: 'SELECT * FROM missing_table', params: [] }]));
+      expect(error.message).toMatch(/no such table/);
+    })));
+});
+
+/** The flow 9 acceptance load. Each gateway call takes 15 to 60 ms of real time, because the overlap of transactions is what a conflict needs; fake timers cannot overlap them. */
+describe('contention over a D1 gateway', () => {
+  const gateway = Effect.gen(function* () {
+    const backend = yield* sqliteBackend(':memory:');
+    const original = globalThis.fetch;
+    let calls = 0;
+    yield* Effect.addFinalizer(() => Effect.sync(() => { globalThis.fetch = original; }));
+    globalThis.fetch = (async (url: URL, init: RequestInit) => {
+      await sleep(15 + (calls++ * 7) % 46);
+      const body = JSON.parse(String(init.body)) as { sql: string; params: unknown[]; statements: Array<{ sql: string; params: unknown[] }> };
+      const answer: Effect.Effect<unknown, SqlError.SqlError> = String(url).endsWith('/run') ? backend.run(body) : Effect.map(backend.batch(body.statements), results => ({ results }));
+      const result = await Effect.runPromise(Effect.either(answer));
+      return Either.isRight(result) ? Response.json(result.right) : Response.json({ error: result.left.message }, { status: 400 });
+    }) as typeof fetch;
+  });
+
+  /** `clients` independent clients, each running `per` parallel sequence allocations, as `clients` processes would. */
+  const allocateAll = (clients: number, per: number) =>
+    Effect.scoped(Effect.gen(function* () {
+      yield* gateway;
+      const db = { url: 'http://d1.internal' };
+      yield* Effect.provide(schema, dbLayer(db));
+      const perClient = Effect.flatMap(SqlClient.SqlClient, sql => Effect.all(Array.from({ length: per }, () => sql.withTransaction(increment('context_seq')(workspace))), { concurrency: 'unbounded' }));
+      const numbers = (yield* Effect.all(Array.from({ length: clients }, () => Effect.provide(perClient, dbLayer(db))), { concurrency: 'unbounded' })).flat();
+      expect(new Set(numbers).size).toBe(clients * per);
+      expect(Math.max(...numbers)).toBe(clients * per);
+    }));
+
+  it.live('one client commits twenty parallel transactions', () => allocateAll(1, 20), 30_000);
+  it.live('four clients commit five parallel transactions each', () => allocateAll(4, 5), 30_000);
+  it.live('twenty clients commit one transaction each', () => allocateAll(20, 1), 30_000);
 });
