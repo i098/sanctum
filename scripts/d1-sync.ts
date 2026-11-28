@@ -133,7 +133,7 @@ async function mysqlRows(url: string): Promise<{ read: ReadRows; close: () => Pr
     dateStrings: true,
     supportBigNumbers: true,
     bigNumberStrings: true,
-    typeCast: (field, next) => (field.type === 'JSON' ? field.string() : next()),
+    typeCast: (field, next) => (field.type === 'JSON' ? field.string('utf8') : next()),
   });
   const read: ReadRows = async table => {
     const order = table.selfReference ? ' ORDER BY created_at' : '';
