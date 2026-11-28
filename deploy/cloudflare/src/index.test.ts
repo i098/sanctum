@@ -2,8 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from './index.ts';
 
 const forwarded = vi.hoisted((): Request[] => []);
+/** The library's registry: `ContainerProxy` dispatches by class name, and only the inherited static setter fills it. */
+const registry = vi.hoisted(() => new Map<string, Record<string, OutboundHandler> | undefined>());
+type OutboundHandler = (request: Request, env: unknown) => Response | Promise<Response>;
 vi.mock('@cloudflare/containers', () => ({
-  Container: class {},
+  Container: class {
+    static get outboundByHost() {
+      return registry.get(this.name);
+    }
+    static set outboundByHost(handlers: Record<string, OutboundHandler> | undefined) {
+      registry.set(this.name, handlers);
+    }
+  },
+  ContainerProxy: class {},
   getContainer: () => ({ fetch: async (request: Request) => (forwarded.push(request), new Response('app')) }),
 }));
 
@@ -82,5 +93,24 @@ describe('Worker routing', () => {
       expect(await response.text()).toBe('app');
     }
     expect(forwarded.map(request => request.url)).toEqual(urls);
+  });
+});
+
+describe('d1.internal gateway', () => {
+  it('registers a handler for both containers through the inherited setter, so a container call reaches D1', async () => {
+    const db = {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          run: async () => ({ results: [{ sql }], meta: { changes: 0 }, success: true }),
+        }),
+      }),
+    };
+    for (const className of ['SanctumApi', 'SanctumJobs']) {
+      const run = registry.get(className)?.['d1.internal'];
+      expect(run, `${className} registers its outbound gateway`).toBeTypeOf('function');
+      const response = await run!(new Request('http://d1.internal/run', { method: 'POST', body: JSON.stringify({ sql: 'SELECT 1 AS one', params: [] }) }), { DB: db });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ rows: [{ sql: 'SELECT 1 AS one' }], changes: 0 });
+    }
   });
 });
